@@ -5,10 +5,12 @@ import {
   LayoutDashboard, GitCompareArrows, Grid3x3, BarChart3, Upload, Building2,
   Users, CreditCard, Settings as SettingsIcon, MoreHorizontal, X, ArrowLeft,
   CalendarDays, TrendingUp, Wallet, ClipboardList, Radio, FileSpreadsheet, LineChart, Table2,
+  ShieldCheck, ScrollText, LogOut, KeyRound,
 } from "lucide-react";
 import AIAssistant from "@/components/AIAssistant";
 import { GlobalFiltersProvider, useGlobalFilters } from "@/lib/useGlobalFilters";
 import GlobalControlBar from "@/components/GlobalControlBar";
+import { useAuth } from "@/lib/AuthContext";
 
 const NAV = [
   { to: "/", label: "Executive Hub", icon: LayoutDashboard, short: "Dashboard" },
@@ -26,6 +28,8 @@ const NAV = [
   { to: "/manual-entry", label: "Manual Entry", icon: Table2, short: "Manual" },
   { to: "/forecasting", label: "Forecasting", icon: LineChart, short: "Forecast" },
   { to: "/data-template", label: "Data Template", icon: FileSpreadsheet, short: "Template" },
+  { to: "/users", label: "User Management", icon: ShieldCheck, short: "Users" },
+  { to: "/audit-log", label: "Audit Log", icon: ScrollText, short: "Audit Log" },
   { to: "/settings", label: "Settings", icon: SettingsIcon, short: "Settings" },
 ];
 
@@ -50,10 +54,12 @@ function SidebarBrand() {
 export default function Layout() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
+  const { canAccessRoute, hasPermission, user, logout } = useAuth();
   const [moreOpen, setMoreOpen] = useState(false);
+  const visibleNav = NAV.filter((n) => canAccessRoute(n.to));
   const active = NAV.find((n) => n.to === pathname);
-  const isPrimary = PRIMARY.some((n) => n.to === pathname);
-  const inMore = MORE.some((n) => n.to === pathname);
+  const isPrimary = PRIMARY.some((n) => n.to === pathname && canAccessRoute(n.to));
+  const inMore = MORE.some((n) => n.to === pathname && canAccessRoute(n.to));
   const reduceMotion = useReducedMotion();
 
   useEffect(() => {
@@ -91,7 +97,7 @@ export default function Layout() {
         </div>
         <SidebarBrand />
         <nav className="mt-8 space-y-1">
-          {NAV.map(({ to, label, icon: Icon }) => {
+          {visibleNav.map(({ to, label, icon: Icon }) => {
             const a = pathname === to;
             return (
               <Link
@@ -107,6 +113,33 @@ export default function Layout() {
             );
           })}
         </nav>
+        <div className="absolute inset-x-6 bottom-6 space-y-3">
+          {user && (
+            <div className="flex items-center gap-3 rounded-xl border border-white/5 bg-white/5 px-3 py-2.5">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#6C63FF]/30 text-xs font-bold text-white">
+                {(user.full_name || user.username || "?").slice(0, 1).toUpperCase()}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-medium text-slate-200">{user.full_name || user.username}</p>
+                <p className="truncate text-[10px] uppercase tracking-wide text-slate-500">{user.role?.replace("_", " ") || ""}</p>
+              </div>
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <Link
+              to="/change-password"
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition-colors hover:bg-white/5"
+            >
+              <KeyRound className="h-3.5 w-3.5" /> Change Password
+            </Link>
+            <button
+              onClick={() => logout(true)}
+              className="flex items-center justify-center gap-2 rounded-xl border border-red-500/30 px-3 py-2 text-xs text-red-300 transition-colors hover:bg-red-500/10"
+            >
+              <LogOut className="h-3.5 w-3.5" /> Logout
+            </button>
+          </div>
+        </div>
       </aside>
 
       <div className="lg:pl-64">
@@ -154,7 +187,7 @@ export default function Layout() {
           className="fixed inset-x-0 bottom-0 z-30 flex items-stretch justify-around border-t border-white/10 bg-[#0A1628]/95 backdrop-blur lg:hidden"
           style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
         >
-          {PRIMARY.map(({ to, short, icon: Icon }) => (
+          {PRIMARY.filter((n) => canAccessRoute(n.to)).map(({ to, short, icon: Icon }) => (
             <button
               key={to}
               onClick={() => {
@@ -204,7 +237,7 @@ export default function Layout() {
                 </button>
               </div>
               <div className="grid grid-cols-3 gap-3">
-                {MORE.map(({ to, short, icon: Icon }) => (
+                {MORE.filter((n) => canAccessRoute(n.to)).map(({ to, short, icon: Icon }) => (
                   <Link
                     key={to}
                     to={to}

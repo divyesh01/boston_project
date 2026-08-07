@@ -15,7 +15,7 @@ const HORIZONS = [
 ];
 
 export default function Forecasting() {
-  const { property, properties, dateRange, months, year } = useGlobalFilters();
+  const { property, properties, accessibleProperties, dateRange, months, year } = useGlobalFilters();
   const { data: occ = [] } = useOccupancy(dateRange, property, months);
 
   const occRows = useMemo(() => occ.filter((r) => {
@@ -99,7 +99,7 @@ export default function Forecasting() {
     Forecast: d.forecast,
   }));
 
-  const propOpts = properties.map((p) => [p.id, p.name]);
+  const propOpts = (accessibleProperties.length ? accessibleProperties : properties).map((p) => [p.id, p.name]);
 
   return (
     <div className="space-y-6">

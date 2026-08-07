@@ -3,7 +3,7 @@ import { db } from '@/api/base44Client';
 import React, { useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, GitCompare, RotateCcw, Check, CalendarClock, FileDown, Building2 } from "lucide-react";
+import { GitCompare, RotateCcw, Check, CalendarClock, FileDown, Building2 } from "lucide-react";
 import { exportToPdf } from "@/lib/pdfExport";
 import {
   useGlobalFilters, PERIODS, MONTHS_SHORT, MONTHS_LONG, PAGE_FILTERS,

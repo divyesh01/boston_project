@@ -7,9 +7,8 @@ import { useSources, usePaymentData } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { exportToPdf } from "@/lib/pdfExport";
-import { C, money, money2, pct, num, sum, inRange, commissionFor } from "@/lib/hotel";
+import { C, money, money2, pct, num, inRange, commissionFor } from "@/lib/hotel";
 import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, COMMISSION_TYPES } from "@/lib/commissionRates";
-import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
 
 export default function OtaChannels() {
   const { dateRange, property, months } = useGlobalFilters();

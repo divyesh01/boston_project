@@ -6,7 +6,7 @@ import {
   AreaChart, Area, BarChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
 import { useOccupancy } from "@/lib/useHotelData";
-import { useGlobalFilters, MONTHS_LONG } from "@/lib/useGlobalFilters";
+import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { money, money2, num, pct, sum, inRange, C } from "@/lib/hotel";
 
 const METRICS = [
@@ -22,7 +22,7 @@ export default function MtdGrowth() {
   const { dateRange, compareDateRange, compareOn, property, properties, period, months, compareMonths } = useGlobalFilters();
 
   const { data: occ = [] } = useOccupancy(dateRange, property, months);
-  const { data: prevOcc = [] } = useOccupancy(compareOn ? compareDateRange : { from: "", to: "" }, property, compareOn ? compareMonths : []);
+  const { data: prevOcc = [] } = useOccupancy(compareOn ? compareDateRange : { from: "", to: "" }, property, compareOn ? compareMonths : [], compareOn);
 
   const curRows = useMemo(
     () => occ.filter((r) => inRange(r.date, dateRange.from, dateRange.to)),

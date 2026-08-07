@@ -18,6 +18,17 @@ const STATUS_LABEL = {
   error: "Failed",
 };
 
+// Flatten a scan result into plain rows usable by the Chart Builder's custom datasets
+function scanRawRows(scan) {
+  if (!scan) return [];
+  if (Array.isArray(scan.rowsToImport) && scan.rowsToImport.length) return scan.rowsToImport;
+  const combined = [];
+  for (const arr of [scan.payments, scan.drops, scan.clerkPayments]) {
+    if (Array.isArray(arr)) combined.push(...arr);
+  }
+  return combined.slice(0, 5000);
+}
+
 export default function Import() {
   const { data: uploads = [], refetch } = useUploads();
   const { data: properties = [] } = useProperties();
@@ -38,6 +49,7 @@ export default function Import() {
   const [driveError, setDriveError] = useState("");
   const [selectedFiles, setSelectedFiles] = useState(new Set());
   const [driveImporting, setDriveImporting] = useState(false);
+  const [clearing, setClearing] = useState(false);
 
   const propertyOpts = properties.map((p) => [p.id, p.name]);
   const selectedProperty = properties.find((p) => p.id === propertyId);
@@ -115,6 +127,7 @@ export default function Import() {
         property_name: selectedProperty?.name || "",
         import_id: item.importId,
         source_file: item.name,
+        raw_rows: scanRawRows(item.scan),
       });
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "done", count: result.count, excluded: result.excluded || 0 } : q)));
       return { name: item.name, ok: true, count: result.count, excluded: result.excluded || 0 };
@@ -141,6 +154,30 @@ export default function Import() {
   const handleRemoveFromQueue = (key) => {
     if (importing || busy) return;
     setQueue((prev) => prev.filter((q) => q.key !== key));
+  };
+
+  const IMPORT_TABLES = ["OccupancyDay", "SourceDay", "GrossRevenueDay", "PaymentDay", "ClerkShiftRecord", "UploadedReport"];
+
+  const handleClearAll = async () => {
+    if (clearing) return;
+    const ok = window.confirm(
+      "Delete ALL imported report data and import history?\n\nThis permanently removes every imported row from this browser (occupancy, sources, gross revenue, payments, clerk records). Properties and settings are kept.\n\nThis cannot be undone."
+    );
+    if (!ok) return;
+    setClearing(true);
+    try {
+      for (const table of IMPORT_TABLES) {
+        await db.entities[table].clear();
+      }
+      setQueue([]);
+      setResults([]);
+      refetch();
+    } catch (e) {
+      console.error("Failed to clear imported data:", e);
+      window.alert(`Could not clear data: ${e.message || "unknown error"}`);
+    } finally {
+      setClearing(false);
+    }
   };
 
   const readyCount = queue.filter((q) => q.status === "ready" && q.scan).length;
@@ -185,6 +222,7 @@ export default function Import() {
           import_id: meta.importId,
           source_file: fileName,
           drive_file_id: fileId,
+          raw_rows: scanRawRows(scan),
         });
         setResults((prev) => [...prev, { name: fileName, ok: true, count: result.count, excluded: result.excluded || 0 }]);
       } catch (e) {
@@ -524,7 +562,22 @@ export default function Import() {
         )}
       </Card>
 
-      <Card title="Import history" subtitle={`${uploads.length} total imports · ${filtered.length} matching`}>
+      <Card
+        title="Import history"
+        subtitle={`${uploads.length} total imports · ${filtered.length} matching`}
+        right={
+          uploads.length > 0 && (
+            <button
+              onClick={handleClearAll}
+              disabled={clearing || busy || importing}
+              className="flex shrink-0 items-center gap-2 rounded-lg border border-[#FF6B6B]/30 px-3 py-1.5 text-xs text-[#FF6B6B] transition-colors hover:bg-[#FF6B6B]/10 hover:border-[#FF6B6B]/60 disabled:opacity-50"
+            >
+              {clearing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              {clearing ? "Clearing…" : "Clear all imported data"}
+            </button>
+          )
+        }
+      >
         <div className="relative mb-4">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
           <input

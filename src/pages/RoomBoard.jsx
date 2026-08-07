@@ -3,7 +3,6 @@ import Card from "@/components/ui-exec/Card";
 import { useOccupancy } from "@/lib/useHotelData";
 import { C, num, pct, money2, avg } from "@/lib/hotel";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
-import { FileDown } from "lucide-react";
 
 export default function RoomBoard() {
   const { dateRange, property, properties, months } = useGlobalFilters();

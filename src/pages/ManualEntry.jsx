@@ -6,7 +6,7 @@ import Card from "@/components/ui-exec/Card";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
-import { downloadCsv, money } from "@/lib/hotel";
+import { downloadCsv } from "@/lib/hotel";
 import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
 
 const REPORT_CONFIGS = {
@@ -267,7 +267,14 @@ export default function ManualEntry() {
       config.fields.forEach((f) => {
         const val = row[f.key];
         if (val !== undefined && val !== "") {
-          record[f.key] = f.type === "number" ? (Number(val) || 0) : val;
+          if (f.type === "number") {
+            let n = Number(val) || 0;
+            // Match importer convention: occupancy stored as a 0-1 ratio
+            if (reportType === "occupancy" && f.key === "occupancy" && n > 1) n = n / 100;
+            record[f.key] = n;
+          } else {
+            record[f.key] = val;
+          }
         }
       });
       Object.assign(record, meta);

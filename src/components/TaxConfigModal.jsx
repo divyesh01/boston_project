@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { X, Percent, ToggleLeft, ToggleRight, Save } from "lucide-react";
-import { getTaxConfig, setTaxConfig, TAX_SOURCES, formatTaxRate } from "@/lib/taxConfig";
+import { getTaxConfig, setTaxConfig, formatTaxRate } from "@/lib/taxConfig";
 
 export default function TaxConfigModal({ open, onClose }) {
   const [config, setConfig] = useState(getTaxConfig());

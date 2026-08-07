@@ -24,10 +24,21 @@ export default function Dashboard() {
   const propName = isPortfolio ? (Array.isArray(property) ? `${property.length} Properties` : "All Properties / Portfolio") : (selectedProp?.name || "Property");
 
   const { data: occ = [], isLoading, refetch: refOcc } = useOccupancy(dateRange, property, months);
-  const { data: prevOcc = [] } = useOccupancy(compareOn ? compareDateRange : { from: "", to: "" }, property, compareOn ? compareMonths : []);
+  const { data: prevOcc = [] } = useOccupancy(compareOn ? compareDateRange : { from: "", to: "" }, property, compareOn ? compareMonths : [], compareOn);
   const { data: sources = [], refetch: refSrc } = useSources(dateRange, property, months);
   const { data: clerk = [], refetch: refClerk } = useClerkRecords(dateRange, property);
   const { data: gross = [], refetch: refGross } = useGrossRevenue(dateRange, property, months);
+
+  // Dedicated previous-period range for trend alerts (independent of the current filter)
+  const alertPrevRange = useMemo(() => {
+    if (!dateRange.from || !dateRange.to) return { from: "", to: "" };
+    const periodDays = Math.round((new Date(dateRange.to) - new Date(dateRange.from)) / 86400000) + 1;
+    if (periodDays <= 0) return { from: "", to: "" };
+    const prevTo = new Date(new Date(dateRange.from).getTime() - 86400000);
+    const prevFrom = new Date(prevTo.getTime() - (periodDays - 1) * 86400000);
+    return { from: prevFrom.toISOString().slice(0, 10), to: prevTo.toISOString().slice(0, 10) };
+  }, [dateRange]);
+  const { data: alertPrevOcc = [] } = useOccupancy(alertPrevRange, property, [], !!(alertPrevRange.from && alertPrevRange.to));
   const [exporting, setExporting] = useState(false);
   const contentRef = useRef(null);
 
@@ -104,24 +115,16 @@ export default function Dashboard() {
   const lowOccDays = useMemo(() => occRows.filter((r) => Number(r.occupancy || 0) < threshold), [occRows, threshold]);
 
   const alerts = useMemo(() => {
-    if (!dateRange.from || !dateRange.to || !occ.length) return [];
+    if (!dateRange.from || !dateRange.to || !occ.length || !alertPrevOcc.length) return [];
     const thresholds = getAlertThresholds();
-    const periodDays = Math.round((new Date(dateRange.to) - new Date(dateRange.from)) / 86400000) + 1;
-    if (periodDays <= 0) return [];
-    const prevTo = new Date(new Date(dateRange.from).getTime() - 86400000);
-    const prevFrom = new Date(prevTo.getTime() - (periodDays - 1) * 86400000);
-    const pf = prevFrom.toISOString().slice(0, 10);
-    const pt = prevTo.toISOString().slice(0, 10);
 
-    const prevRows = occ.filter((r) => inRange(r.date, pf, pt));
-    if (!prevRows.length) return [];
-
+    const prevRows = alertPrevOcc;
     const prevRev = sum(prevRows, "total_revenue");
     const prevRooms = sum(prevRows, "rooms_sold");
     const prevCap = isPortfolio
       ? Object.values(roomCounts).reduce((a, rooms) => a + rooms * (prevRows.length / properties.length), 0)
       : prevRows.length * propRooms;
-    const prevOcc = prevCap ? prevRooms / prevCap : 0;
+    const prevOccVal = prevCap ? prevRooms / prevCap : 0;
     const prevAdr = prevRooms ? prevRev / prevRooms : 0;
 
     const out = [];
@@ -130,10 +133,10 @@ export default function Dashboard() {
       if (ch <= -thresholds.revenueDecreasePct)
         out.push({ metric: "Revenue", current: revenue, previous: prevRev, pct: ch, sev: Math.abs(ch) >= 0.2 ? "Critical" : "Warning", fmt: money });
     }
-    if (prevOcc > 0) {
-      const ch = occupancy - prevOcc;
+    if (prevOccVal > 0) {
+      const ch = occupancy - prevOccVal;
       if (ch <= -thresholds.occupancyDecreasePoints)
-        out.push({ metric: "Occupancy", current: occupancy, previous: prevOcc, pct: ch, sev: Math.abs(ch) >= 0.2 ? "Critical" : "Warning", fmt: (v) => pct(v) });
+        out.push({ metric: "Occupancy", current: occupancy, previous: prevOccVal, pct: ch, sev: Math.abs(ch) >= 0.2 ? "Critical" : "Warning", fmt: (v) => pct(v) });
     }
     if (prevAdr > 0) {
       const ch = (adr - prevAdr) / prevAdr;
@@ -141,7 +144,7 @@ export default function Dashboard() {
         out.push({ metric: "ADR", current: adr, previous: prevAdr, pct: ch, sev: Math.abs(ch) >= 0.2 ? "Critical" : "Warning", fmt: money2 });
     }
     return out;
-  }, [occ, dateRange, revenue, occupancy, adr, isPortfolio, propRooms, roomCounts, properties.length]);
+  }, [occ, alertPrevOcc, dateRange, revenue, occupancy, adr, isPortfolio, propRooms, roomCounts, properties.length]);
 
   const miscCharges = useMemo(() => {
     const cats = [

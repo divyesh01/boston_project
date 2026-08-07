@@ -1,7 +1,7 @@
 import { db } from '@/api/base44Client';
 
 import React, { useState, useEffect } from "react";
-import { Save, Plus, CheckCircle2, RotateCcw, Trash2, UserPlus, AlertTriangle, Building2, RefreshCw } from "lucide-react";
+import { Save, Plus, CheckCircle2, RotateCcw, Trash2, UserPlus, Building2, RefreshCw } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, COMMISSION_TYPES } from "@/lib/commissionRates";
 import { getAlertThresholds, saveAlertThresholds } from "@/lib/alertThresholds";

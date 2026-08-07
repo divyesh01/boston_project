@@ -3,7 +3,7 @@ import { Users, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Info } from
 import Card from "@/components/ui-exec/Card";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import { useClerkRecords } from "@/lib/useHotelData";
-import { money, money2, num, C } from "@/lib/hotel";
+import { money2, num, C } from "@/lib/hotel";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 
 export default function Employees() {
@@ -11,35 +11,21 @@ export default function Employees() {
   const { data: records = [], isLoading } = useClerkRecords(dateRange, property);
   const [selected, setSelected] = useState(null);
 
-  // Clerk records imported from ClerkShift.csv have mixed content in the
-  // payment_type field: actual clerk names, dollar amounts from total rows,
-  // and drop timestamps like "2026-01-01 11:12 PM - CARLOS HERNANDEZ".
-  // We extract proper clerk names, filter out non-name values, and use
-  // the adjusted field as the amount.
-  function extractClerkName(rec) {
-    if (rec.clerk_name) return rec.clerk_name;
-    const pt = rec.payment_type || "";
-    if (!pt || pt.startsWith("$") || /^\d{4}-\d{2}-\d{2}$/.test(pt)) return null;
-    const m = pt.match(/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s*[AP]M\s*-\s*(.+)$/i);
-    if (m) return m[1].trim();
-    return pt;
-  }
-
+  // Clerk records imported from ClerkShift.csv come in three record types:
+  //  - "payment": payment method totals (CASH, CHECK, AMEX...), NOT clerks
+  //  - "clerk_payment": per-clerk payment activity with clerk_name + amount
+  //  - "drop": cash drops with clerk_name + shift_date + amount
+  // We only surface clerk_payment and drop records; payment methods are
+  // shown on the Payments page instead.
   const clerkRecords = useMemo(() => {
-    let r = records
-      .filter((x) => x.record_type === "payment")
-      .map((x) => ({ ...x, _clerkName: extractClerkName(x) }))
-      .filter((x) => x._clerkName);
-    if (employee !== "all") r = r.filter((x) => x._clerkName === employee);
+    let r = records.filter((x) => x.record_type === "clerk_payment");
+    if (employee !== "all") r = r.filter((x) => x.clerk_name === employee);
     return r;
   }, [records, employee]);
 
   const drops = useMemo(() => {
-    let r = records
-      .filter((x) => x.record_type === "drop")
-      .map((x) => ({ ...x, _clerkName: extractClerkName(x) }))
-      .filter((x) => x._clerkName);
-    if (employee !== "all") r = r.filter((x) => x._clerkName === employee);
+    let r = records.filter((x) => x.record_type === "drop");
+    if (employee !== "all") r = r.filter((x) => x.clerk_name === employee);
     return r;
   }, [records, employee]);
 
@@ -62,9 +48,9 @@ export default function Employees() {
     };
 
     clerkRecords.forEach((r) => {
-      const k = r._clerkName || "Unknown";
+      const k = r.clerk_name || "Unknown";
       const s = ensure(k);
-      const adj = Number(r.adjusted) || 0;
+      const adj = Number(r.amount) || 0;
       s.totalAdjusted += adj;
       if (adj > 0) s.positiveSum += adj;
       else if (adj < 0) s.negativeSum += adj;
@@ -73,14 +59,13 @@ export default function Employees() {
     });
 
     drops.forEach((d) => {
-      const k = d._clerkName || "Unknown";
+      const k = d.clerk_name || "Unknown";
       const s = ensure(k);
       s.dropCount += 1;
       s.cashDropped += Number(d.amount) || 0;
     });
 
     return [...map.values()].map((s) => {
-      const netCash = s.totalAdjusted;
       let status = "balanced";
       if (s.dropCount > 0) {
         const dropVariance = s.cashDropped - s.totalAdjusted;
@@ -135,21 +120,20 @@ export default function Employees() {
             <div>
               <p className="text-sm text-slate-200">Clerk Audit Data Quality Notice</p>
               <p className="mt-1 text-xs text-slate-400">
-                {stats.length} clerks detected from {totalTxns} adjustment records imported from ClerkShift.csv.
-                The report scanner detected clerk names in the payment_type column and adjustment amounts in the
-                adjusted column. Net adjustments shown below represent the difference between positive and negative
-                adjustments per clerk. Re-importing with an updated parser will map cash handling, beginning cash,
-                and payment method totals to their proper fields.
+                {stats.length} clerks detected from {totalTxns} payment records imported from ClerkShift.csv.
+                Clerk performance is derived from the per-clerk payment activity and cash deposit records in the
+                report. Net amounts shown represent the difference between positive and negative payment activity
+                per clerk.
               </p>
             </div>
           </div>
 
           {/* KPI Cards */}
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <KpiCard label="Clerks Detected" value={num(stats.length)} sub="from adjustment records" accent={C.purple} icon={Users} />
-            <KpiCard label="Total Records" value={num(totalTxns)} sub="adjustment entries" accent={C.cyan} />
+            <KpiCard label="Clerks Detected" value={num(stats.length)} sub="from payment records" accent={C.purple} icon={Users} />
+            <KpiCard label="Total Records" value={num(totalTxns)} sub="payment entries" accent={C.cyan} />
             <KpiCard
-              label="Net Adjustments"
+              label="Net Payments"
               value={money2(totalAdjusted)}
               sub={totalAdjusted >= 0 ? "Net positive" : "Net negative"}
               accent={totalAdjusted >= 0 ? C.green : C.coral}
@@ -219,25 +203,23 @@ export default function Employees() {
                         <tr className="border-t border-white/5">
                           <td colSpan={totalDrops > 0 ? 7 : 6} className="bg-[#0A1628]/40 px-8 py-4">
                             <p className="mb-3 text-[11px] uppercase tracking-widest text-slate-500">
-                              Adjustment details — {s.clerk} · {s.records.length} records
+                              Payment details — {s.clerk} · {s.records.length} records
                             </p>
                             <div className="max-h-60 overflow-auto">
                               <table className="w-full text-xs">
                                 <thead>
                                   <tr className="text-left text-slate-500">
-                                    <th className="pb-2 pr-4">Import ID</th>
-                                    <th className="pb-2 pr-4 text-right">Adjusted</th>
-                                    <th className="pb-2 pr-4 text-right">Actual</th>
-                                    <th className="pb-2 text-right">Net Today</th>
+                                    <th className="pb-2 pr-4">Payment Type</th>
+                                    <th className="pb-2 pr-4 text-right">Amount</th>
+                                    <th className="pb-2 text-right">Txns</th>
                                   </tr>
                                 </thead>
                                 <tbody>
                                   {s.records.slice(0, 100).map((r) => (
                                     <tr key={r.id} className="border-t border-white/5">
-                                      <td className="py-1.5 pr-4 text-slate-500">{r.import_id || "—"}</td>
-                                      <td className="py-1.5 pr-4 text-right tabular-nums text-slate-300">{money2(r.adjusted)}</td>
-                                      <td className="py-1.5 pr-4 text-right tabular-nums text-slate-500">{money2(r.actual)}</td>
-                                      <td className="py-1.5 text-right tabular-nums text-slate-500">{money2(r.net_today)}</td>
+                                      <td className="py-1.5 pr-4 text-slate-300">{r.payment_type || "—"}</td>
+                                      <td className="py-1.5 pr-4 text-right tabular-nums text-slate-300">{money2(r.amount)}</td>
+                                      <td className="py-1.5 text-right tabular-nums text-slate-500">{r.transaction_count || "—"}</td>
                                     </tr>
                                   ))}
                                 </tbody>

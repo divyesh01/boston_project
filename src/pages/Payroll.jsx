@@ -11,9 +11,16 @@ import { money, num, C } from "@/lib/hotel";
 
 function usePayroll(propertyId) {
   return useQuery({
-    queryKey: ["payroll", propertyId],
+    queryKey: ["payroll", Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
     queryFn: () => {
-      const filter = propertyId && propertyId !== "all" ? { property_id: propertyId } : {};
+      const filter = {};
+      if (propertyId && propertyId !== "all") {
+        if (Array.isArray(propertyId)) {
+          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
+        } else {
+          filter.property_id = propertyId;
+        }
+      }
       return db.entities.PayrollRun.filter(filter, "-pay_period_start", 500);
     },
   });

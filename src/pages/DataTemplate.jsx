@@ -1,7 +1,6 @@
 import React, { useState } from "react";
-import { FileSpreadsheet, Download, Table, Building2, Calendar, DollarSign, Users, CreditCard, Receipt, Info } from "lucide-react";
+import { Download, Table, Building2, Calendar, DollarSign, Users, CreditCard, Receipt, Info } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
-import { downloadCsv } from "@/lib/hotel";
 
 const REPORT_SPECS = [
   {

@@ -9,6 +9,7 @@ import { Eye, EyeOff, Loader2, KeyRound } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
 import db from "@/api/base44Client";
 import { isCryptoAvailable, validatePasswordStrength } from "@/lib/security";
+import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
 
 export default function ChangePassword() {
   const navigate = useNavigate();
@@ -27,6 +28,19 @@ export default function ChangePassword() {
       setError("Password hashing is not available in this browser.");
       return;
     }
+    // Rate limiting
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      setError(`Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
+      return;
+    }
+    // CSRF validation
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      setError("Invalid security token. Please refresh the page and try again.");
+      rotateCsrfToken();
+      return;
+    }
     if (next !== confirm) {
       setError("New passwords do not match.");
       return;
@@ -40,6 +54,7 @@ export default function ChangePassword() {
     try {
       await db.users.changeOwnPassword(user, current, next);
       toast({ title: "Password changed", description: "Your password has been updated." });
+      rotateCsrfToken();
       navigate("/");
     } catch (err) {
       setError(err.message || "Could not change password.");

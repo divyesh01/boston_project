@@ -11,6 +11,7 @@ import { db } from "@/api/base44Client";
 import { money, money2, pct, sum, inRange, C, CHART_COLORS, commissionFor } from "@/lib/hotel";
 import { getCcFeeRate, getCcFeeOnRefunds } from "@/lib/commissionRates";
 import { TAX_SOURCES } from "@/lib/taxConfig";
+import { getTaxConfig } from "@/lib/taxConfig";
 import { getEffectiveTaxRates } from "@/lib/taxSettings";
 import { expenseLabel, STANDARD_CATEGORY_KEYS } from "@/lib/expenseCategories";
 import { CARD_METHODS } from "@/lib/paymentNorm";
@@ -77,17 +78,17 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
   // Shared query keys so any write to payments/expenses/payroll elsewhere auto-refreshes this section
   const { data: payRecords = [] } = useQuery({
     queryKey: ["payments", dateRange?.from, dateRange?.to, property, ""],
-    queryFn: () => db.entities.PaymentDay.filter(propFilter, "date", 2000),
+    queryFn: () => db.entities.PaymentDay.filter(propFilter, "date", 100000),
   });
 
   const { data: expenses = [] } = useQuery({
     queryKey: ["expenses", propertyKey],
-    queryFn: () => db.entities.Expense.filter(propFilter, "-expense_date", 5000),
+    queryFn: () => db.entities.Expense.filter(propFilter, "-expense_date", 100000),
   });
 
   const { data: payroll = [] } = useQuery({
     queryKey: ["payroll", propertyKey],
-    queryFn: () => db.entities.PayrollRun.filter(propFilter, "-pay_period_start", 5000),
+    queryFn: () => db.entities.PayrollRun.filter(propFilter, "-pay_period_start", 100000),
   });
 
   const data = useMemo(() => {
@@ -149,6 +150,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     });
 
     // Resolve taxes per day: imported (pass-through) or estimated from configured rates (deducted)
+    const taxEnabled = getTaxConfig().taxEnabled;
     const ratesCache = new Map();
     const ratesFor = (d) => {
       if (!ratesCache.has(d)) ratesCache.set(d, getEffectiveTaxRates(property, d));
@@ -164,7 +166,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
         city = imp.city;
         other = imp.other;
         passTax = state + city + other;
-      } else {
+      } else if (taxEnabled) {
         const r = ratesFor(d.date);
         const base = taxBase.get(d.date) || d.gross;
         state = base * r.state;

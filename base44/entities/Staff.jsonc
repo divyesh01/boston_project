@@ -1,0 +1,61 @@
+{
+  "name": "Staff",
+  "type": "object",
+  "properties": {
+    "property_id": {
+      "type": "string"
+    },
+    "property_name": {
+      "type": "string"
+    },
+    "employee_id": {
+      "type": "string"
+    },
+    "employee_name": {
+      "type": "string"
+    },
+    "department": {
+      "type": "string"
+    },
+    "role_title": {
+      "type": "string"
+    },
+    "pay_type": {
+      "type": "string",
+      "enum": [
+        "hourly",
+        "salary"
+      ],
+      "default": "hourly"
+    },
+    "base_rate": {
+      "type": "number"
+    },
+    "hours": {
+      "type": "number"
+    },
+    "overtime_hours": {
+      "type": "number"
+    },
+    "overtime_rate": {
+      "type": "number"
+    },
+    "bonus": {
+      "type": "number"
+    },
+    "deductions": {
+      "type": "number"
+    },
+    "hire_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "active": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": [
+    "employee_name"
+  ]
+}

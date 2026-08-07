@@ -39,16 +39,17 @@ export function getEffectiveTaxRates(propertyId, dateStr) {
   const specific = recs.filter((r) => r.property_id === propertyId);
   const pool = specific.length ? specific : recs;
   if (!pool.length) {
-    const legacy = getTaxRate() || 0;
+    const legacy = Math.max(0, Math.min(1, getTaxRate() || 0));
     return { state: legacy, city: 0, other: 0, legacy: true };
   }
   const best = [...pool].sort((a, b) =>
     String(b.effective_start || "").localeCompare(String(a.effective_start || ""))
   )[0];
+  const clamp = (v) => Math.max(0, Math.min(1, num(v)));
   return {
-    state: num(best.state_rate),
-    city: num(best.city_rate),
-    other: num(best.other_rate),
+    state: clamp(best.state_rate),
+    city: clamp(best.city_rate),
+    other: clamp(best.other_rate),
     legacy: false,
   };
 }

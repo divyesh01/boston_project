@@ -38,7 +38,7 @@ export default function MtdGrowth() {
     if (!dateRange.from) return curRows;
     const from = new Date(dateRange.from);
     const to = new Date(dateRange.to);
-    const elapsedDays = Math.round((to - from) / 86400000) + 1;
+    const elapsedDays = Math.round((to.getTime() - from.getTime()) / 86400000) + 1;
     return curRows;
   }, [curRows, dateRange]);
 
@@ -47,7 +47,7 @@ export default function MtdGrowth() {
     // Match same number of days from previous period start
     const from = new Date(dateRange.from);
     const to = new Date(dateRange.to);
-    const elapsedDays = Math.round((to - from) / 86400000) + 1;
+    const elapsedDays = Math.round((to.getTime() - from.getTime()) / 86400000) + 1;
     const prevFrom = new Date(compareDateRange.from);
     const prevToDate = new Date(prevFrom);
     prevToDate.setDate(prevFrom.getDate() + elapsedDays - 1);

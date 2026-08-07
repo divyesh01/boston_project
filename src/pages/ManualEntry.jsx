@@ -8,6 +8,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { downloadCsv } from "@/lib/hotel";
 import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
+import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
 
 const REPORT_CONFIGS = {
   occupancy: {
@@ -96,7 +97,7 @@ function useManualEntries(reportType, propertyId) {
         if (Array.isArray(propertyId)) filter.property_id = { $in: propertyId };
         else filter.property_id = propertyId;
       }
-      return db.entities[config.entity].filter(filter, "-date", 500);
+      return db.entities[config.entity].filter(filter, "-date", 100000);
     },
   });
 }
@@ -247,11 +248,34 @@ export default function ManualEntry() {
   };
 
   const handleSave = async () => {
+    // Rate limiting for sensitive actions
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      setSaveMsg(`Rate limited. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
+      setSaving(false);
+      return;
+    }
+    // CSRF validation
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      setSaveMsg("Invalid security token. Please refresh the page and try again.");
+      rotateCsrfToken();
+      setSaving(false);
+      return;
+    }
+
     setSaving(true);
     setSaveMsg("");
     const prop = selectedProperty || properties[0];
     if (!prop) {
       setSaveMsg("Select a property first.");
+      setSaving(false);
+      return;
+    }
+    // Enforce property access: a restricted user can only save to their own properties.
+    const allowedIds = accessibleProperties.length ? new Set(accessibleProperties.map((p) => String(p.id))) : null;
+    if (allowedIds && !allowedIds.has(String(prop.id))) {
+      setSaveMsg("You do not have access to the selected property.");
       setSaving(false);
       return;
     }
@@ -263,29 +287,72 @@ export default function ManualEntry() {
       report_type: "manual_entry",
     };
     const entityName = config.entity;
-    let saved = 0;
+
+    // Build the dedupe key the same way report imports do so manual rows never
+    // double-count against imported report rows.
+    const dedupeKey = (rec) => {
+      if (reportType === "source") return `${rec.property_id}|${rec.date}|${rec.code || rec.source}`;
+      return `${rec.property_id}|${rec.date}`;
+    };
+    const existingKeys = new Set(existing.map(dedupeKey));
+
+    // Validate rows before writing anything.
+    const errors = [];
+    const prepared = [];
     for (const row of rows) {
       if (!row.date && !row.shift_date) continue;
+      const rawDate = String(row.date || row.shift_date || "").trim();
+      if (rawDate && !/^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
+        errors.push(`"${rawDate}" is not a valid date (use YYYY-MM-DD)`);
+        continue;
+      }
       const record = {};
-      config.fields.forEach((f) => {
+      for (const f of config.fields) {
         const val = row[f.key];
         if (val !== undefined && val !== "") {
           if (f.type === "number") {
-            let n = Number(val) || 0;
-            // Match importer convention: occupancy stored as a 0-1 ratio
-            if (reportType === "occupancy" && f.key === "occupancy" && n > 1) n = n / 100;
-            record[f.key] = n;
+            const n = Number(val);
+            if (Number.isNaN(n)) {
+              errors.push(`${f.label} must be a number`);
+              continue;
+            }
+            // Reject negative currency/count figures so balances can't be
+            // silently inflated (vacancy, rooms, revenue, payments, taxes).
+            if (f.key !== "closed_balance_folio" && f.key !== "loyalty_discount" && n < 0) {
+              errors.push(`${f.label} must be 0 or greater`);
+              continue;
+            }
+            let use = n;
+            if (reportType === "occupancy" && f.key === "occupancy" && use > 1) use = use / 100;
+            record[f.key] = use;
           } else {
             record[f.key] = val;
           }
         }
-      });
+      }
       Object.assign(record, meta);
+      prepared.push({ row, record });
+    }
+    if (errors.length) {
+      setSaveMsg(`Not saved — ${errors[0]}${errors.length > 1 ? ` (+${errors.length - 1} more)` : ""}`);
+      setSaving(false);
+      rotateCsrfToken();
+      return;
+    }
+
+    let saved = 0;
+    let skipped = 0;
+    for (const { row, record } of prepared) {
+      if (!row._id && existingKeys.has(dedupeKey(record))) {
+        skipped++; // already present via a prior import or manual save
+        continue;
+      }
       if (row._id) {
         await db.entities[entityName].update(row._id, record);
       } else {
         await db.entities[entityName].create(record);
       }
+      existingKeys.add(dedupeKey(record));
       saved++;
     }
     qc.invalidateQueries({ queryKey: ["manual-entries"] });
@@ -293,9 +360,11 @@ export default function ManualEntry() {
     qc.invalidateQueries({ queryKey: ["payments"] });
     qc.invalidateQueries({ queryKey: ["gross"] });
     qc.invalidateQueries({ queryKey: ["sources"] });
-    setSaveMsg(`${saved} records saved. All dashboards updated.`);
+    const extra = skipped ? ` · ${skipped} duplicate${skipped === 1 ? "" : "s"} skipped` : "";
+    setSaveMsg(`${saved} records saved. All dashboards updated.${extra}`);
     setHasDraft(false);
     setSaving(false);
+    rotateCsrfToken();
   };
 
   const filteredRows = useMemo(() => {

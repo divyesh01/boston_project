@@ -2,7 +2,9 @@ import React, { useState } from "react";
 import { Download, Copy, Check } from "lucide-react";
 import { exportChartPng, copyChartToClipboard } from "@/lib/chartExport";
 
-export default function ChartToolbar({ targetRef, title, dateRange }) {
+export default function ChartToolbar(
+  /** @type {{ targetRef: any; title?: any; dateRange?: any }} */
+  { targetRef, title, dateRange }) {
   const [busy, setBusy] = useState(null);
   const [copied, setCopied] = useState(false);
 

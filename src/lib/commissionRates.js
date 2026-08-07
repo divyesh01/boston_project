@@ -31,9 +31,13 @@ const DEFAULT_CC_FEE = 0.025; // 2.5%
 
 // Normalize old format (plain number) to new format
 function normalizeRate(val) {
-  if (typeof val === "number") return { type: "percentage", rate: val, taxExempt: false };
-  if (val && typeof val === "object") return { type: val.type || "percentage", rate: val.rate || 0, taxExempt: !!val.taxExempt };
-  return { type: "none", rate: 0, taxExempt: false };
+  let r;
+  if (typeof val === "number") r = { type: "percentage", rate: val, taxExempt: false };
+  else if (val && typeof val === "object") r = { type: val.type || "percentage", rate: val.rate || 0, taxExempt: !!val.taxExempt };
+  else r = { type: "none", rate: 0, taxExempt: false };
+  // Clamp percentage rates to [0,1); other types (fixed $, actual) keep raw value.
+  if (r.type === "percentage") r.rate = Math.max(0, Math.min(0.9999, Number(r.rate) || 0));
+  return r;
 }
 
 export function getCommissionRates() {
@@ -56,14 +60,19 @@ export function setCommissionRates(rates) {
 export function getCcFeeRate() {
   try {
     const v = localStorage.getItem(CC_FEE_KEY);
-    return v ? parseFloat(v) : DEFAULT_CC_FEE;
+    if (v === null) return DEFAULT_CC_FEE;
+    const n = parseFloat(v);
+    if (Number.isNaN(n)) return DEFAULT_CC_FEE;
+    return Math.max(0, Math.min(0.9999, n));
   } catch {
     return DEFAULT_CC_FEE;
   }
 }
 
 export function setCcFeeRate(rate) {
-  localStorage.setItem(CC_FEE_KEY, String(rate));
+  let n = Number(rate);
+  if (Number.isNaN(n)) n = DEFAULT_CC_FEE;
+  localStorage.setItem(CC_FEE_KEY, String(Math.max(0, Math.min(0.9999, n))));
 }
 
 // Whether the card processing fee also applies to card refunds

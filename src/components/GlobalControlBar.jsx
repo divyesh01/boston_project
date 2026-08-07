@@ -29,7 +29,7 @@ function useFilterOptions(propertyId) {
           filter.property_id = propertyId;
         }
       }
-      const rows = await db.entities.ClerkShiftRecord.filter(filter, "-created_date", 2000);
+      const rows = await db.entities.ClerkShiftRecord.filter(filter, "-created_date", 100000);
       return [...new Set(
         rows.map((r) => {
           let name = r.clerk_name || "";
@@ -57,7 +57,7 @@ function useFilterOptions(propertyId) {
           filter.property_id = propertyId;
         }
       }
-      const rows = await db.entities.SourceDay.filter(filter, "date", 5000);
+      const rows = await db.entities.SourceDay.filter(filter, "date", 100000);
       return [...new Set(rows.map((r) => r.source).filter(Boolean))].sort();
     },
     staleTime: 60 * 1000,

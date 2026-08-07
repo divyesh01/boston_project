@@ -91,6 +91,27 @@ function findMonthTokens(question) {
   return out;
 }
 
+// Find two month periods with their own year markers (e.g. "January 2026 with January 2025"); months without explicit years pair with the year markers around them
+function findMonthPeriodPairs(question) {
+  const q = String(question);
+  const toks = q.toLowerCase().match(/[a-z]+/g) || [];
+  const years = [...q.matchAll(/\b(20\d{2})\b/g)].map((m) => +m[1]);
+  if (years.length < 2) return null;
+  const hits = [];
+  for (const tok of toks) {
+    if (tok.length < 3) continue;
+    const idx = monthIndex(tok);
+    if (idx >= 0) hits.push({ idx, token: tok });
+  }
+  if (hits.length < 2) return null;
+  const a = hits[0];
+  const b = hits.slice(1).find((h) => h.token !== a.token) || hits[1];
+  return [
+    { idx: a.idx, year: years[0] },
+    { idx: b.idx, year: years[1] ?? years[0] },
+  ];
+}
+
 function lastDayOfMonth(year, m) {
   return new Date(year, m + 1, 0).getDate();
 }
@@ -218,12 +239,6 @@ function resolveRange(question, defaults = {}) {
     return { from: `${y}-01-01`, to: latest || iso(now), single: false, label: `Year to date (${y})`, specified: true };
   }
 
-  const yearMatch = q.match(/\b(20\d{2})\b/);
-  if (yearMatch) {
-    const y = +yearMatch[1];
-    return { from: `${y}-01-01`, to: `${y}-12-31`, single: false, label: String(y), specified: true };
-  }
-
   const months = findMonthTokens(q);
   if (months.length > 0) {
     const yMatch = q.match(/\b(20\d{2})\b/);
@@ -233,6 +248,12 @@ function resolveRange(question, defaults = {}) {
       return { ...res[0], label: `${MONTH_LONG[months[0].idx]} ${y}`, specified: true };
     }
     return { from: res[0].from, to: res[res.length - 1].to, single: false, label: `${months.map(({ idx }) => `${MONTH_LONG[idx]} ${y}`).join(" + ")}`, specified: true };
+  }
+
+  const yearMatch = q.match(/\b(20\d{2})\b/);
+  if (yearMatch) {
+    const y = +yearMatch[1];
+    return { from: `${y}-01-01`, to: `${y}-12-31`, single: false, label: String(y), specified: true };
   }
 
   if (defaults.from && defaults.to) {
@@ -247,15 +268,25 @@ function propertyTokens(p) {
   return { words, code, long: String(p.name || "").toLowerCase() };
 }
 
-async function resolveProperty(question, defaultFilter) {
-  const props = await localDb.Property.toArray();
+async function resolveProperty(question, defaultFilter, allowedPropertyIds = null) {
+  const allProps = await localDb.Property.toArray();
+  const restricted = Array.isArray(allowedPropertyIds);
+  const props = restricted
+    ? allProps.filter((p) => allowedPropertyIds.includes(String(p.id)))
+    : allProps;
   const q = String(question).toLowerCase();
 
+  const scopeAll = () => ({
+    ids: restricted ? new Set(props.map((p) => String(p.id))) : null,
+    label: restricted ? (props.length === 1 ? props[0].name : "All Properties") : "All Properties",
+    isAll: true,
+  });
+
   if (/\b(all properties|all\b.*portfolio|portfolio|everywhere)\b/i.test(q) && /all/i.test(q)) {
-    return { ids: null, label: "All Properties", isAll: true };
+    return scopeAll();
   }
   if (/\ball\b/i.test(q)) {
-    return { ids: null, label: "All Properties", isAll: true };
+    return scopeAll();
   }
 
   const codeMatch = q.match(CODE_RE);
@@ -286,9 +317,13 @@ async function resolveProperty(question, defaultFilter) {
   if (defaultFilter && defaultFilter !== "all") {
     const ids = Array.isArray(defaultFilter) ? defaultFilter : [defaultFilter];
     const picked = props.filter((p) => ids.includes(String(p.id)));
-    return { ids: new Set(ids.map(String)), label: picked.length ? picked.map((p) => p.name).join(" + ") : `${ids.length} selected`, isAll: false };
+    const scoped = picked.map((p) => String(p.id));
+    if (!scoped.length && ids.length) {
+      return { ids: new Set(), label: `${ids.length} selected (no access)`, isAll: false };
+    }
+    return { ids: new Set(scoped), label: picked.length ? picked.map((p) => p.name).join(" + ") : `${ids.length} selected`, isAll: false };
   }
-  return { ids: null, label: "All Properties", isAll: true };
+  return scopeAll();
 }
 
 async function load(table, prop, from, to, dateField = "date") {
@@ -303,10 +338,12 @@ async function load(table, prop, from, to, dateField = "date") {
   });
 }
 
-async function latestDate() {
+async function latestDate(allowedPropertyIds = null) {
   const rows = await localDb.OccupancyDay.toArray();
+  const allowed = Array.isArray(allowedPropertyIds) ? new Set(allowedPropertyIds.map(String)) : null;
   let max = "";
   rows.forEach((r) => {
+    if (allowed && !allowed.has(String(r.property_id || ""))) return;
     const d = String(r.date || "").slice(0, 10);
     if (d > max) max = d;
   });
@@ -596,8 +633,11 @@ async function intentBestDay({ prop, range, question }) {
   };
 }
 
-async function intentCompareProps({ q, range }) {
-  const props = await localDb.Property.toArray();
+async function intentCompareProps({ q, range, allowedPropertyIds = null }) {
+  const allProps = await localDb.Property.toArray();
+  const props = Array.isArray(allowedPropertyIds)
+    ? allProps.filter((p) => allowedPropertyIds.includes(String(p.id)))
+    : allProps;
   const seen = new Map();
   const ql = String(q).toLowerCase();
   const add = (p, score) => {
@@ -676,11 +716,11 @@ async function intentClerk({ prop, range }) {
   return { heading: "", lines, noData: null };
 }
 
-async function intentForecast({ prop, range, question }) {
+async function intentForecast({ prop, range, question, allowedPropertyIds }) {
   const today = new Date();
   let occRows = await load("OccupancyDay", prop, range.from, range.to);
   if (!occRows.length) {
-    const end = range.to || (await latestDate()) || iso(today);
+    const end = range.to || (await latestDate(allowedPropertyIds)) || iso(today);
     const start = iso(new Date(new Date(`${end}T00:00:00`).getTime() - 29 * 86400000));
     occRows = await load("OccupancyDay", prop, start, end);
   }
@@ -708,20 +748,23 @@ async function intentForecast({ prop, range, question }) {
   };
 }
 
-async function intentCompare({ prop, range, q, question }) {
+async function intentCompare({ prop, range, q, question, allowedPropertyIds }) {
+  const pairs = findMonthPeriodPairs(q);
   const monthTok = findMonthTokens(q);
-  if (monthTok.length >= 2) {
+  if (pairs || monthTok.length >= 2) {
+    const last = await latestDate(allowedPropertyIds);
     const yMatch = q.match(/\b(20\d{2})\b/);
     const y = yMatch ? +yMatch[1] : new Date().getFullYear();
-    const last = await latestDate();
-    const ranges = monthTok.slice(0, 2).map(({ idx }) => monthRange(y, idx, last));
+    const ranges = pairs
+      ? pairs.slice(0, 2).map(({ idx, year }) => monthRange(year, idx, last))
+      : monthTok.slice(0, 2).map(({ idx }) => monthRange(y, idx, last));
     const aRows = await load("OccupancyDay", prop, ranges[0].from, ranges[0].to);
     const bRows = await load("OccupancyDay", prop, ranges[1].from, ranges[1].to);
     if (!aRows.length && !bRows.length) return { heading: "", lines: [], noData: "occupancy" };
     const a = aRows.length ? occTotals(aRows) : null;
     const b = bRows.length ? occTotals(bRows) : null;
-    const aLabel = `${MONTH_LONG[monthTok[0].idx]} ${y}`;
-    const bLabel = `${MONTH_LONG[monthTok[1].idx]} ${y}`;
+    const aLabel = pairs ? `${MONTH_LONG[pairs[0].idx]} ${pairs[0].year}` : `${MONTH_LONG[monthTok[0].idx]} ${y}`;
+    const bLabel = pairs ? `${MONTH_LONG[pairs[1].idx]} ${pairs[1].year}` : `${MONTH_LONG[monthTok[1].idx]} ${y}`;
     const row = (name, af, bf, delta) => {
       const av = a && af(a) != null ? af(a) : "—";
       const bv = b && bf(b) != null ? bf(b) : "—";
@@ -743,23 +786,23 @@ async function intentCompare({ prop, range, q, question }) {
   return null;
 }
 
-async function answerQuestion({ question, propertyId, from, to }) {
+async function answerQuestion({ question, propertyId, from, to, allowedPropertyIds = null }) {
   const q = String(question || "").trim();
   if (!q) return { answer: "Please ask a question about your hotel data.", summary: null };
 
-  const latest = await latestDate();
+  const latest = await latestDate(allowedPropertyIds);
   const defaultFilter = propertyId && propertyId !== "all" ? propertyId : null;
 
-  const prop = await resolveProperty(q, defaultFilter);
+  const prop = await resolveProperty(q, defaultFilter, allowedPropertyIds);
   const range = resolveRange(q, { from, to, latestDate: latest, year: new Date().getFullYear() });
 
-  const ctx = { prop, range, q, question: q };
+  const ctx = { prop, range, q, question: q, allowedPropertyIds };
 
   let result = null;
 
   if (/\b(compare|versus|vs\.?|vs)\b/i.test(q)) {
     result = await intentCompare(ctx);
-    if (!result) result = await intentCompareProps({ q, range });
+    if (!result) result = await intentCompareProps({ q, range, allowedPropertyIds });
   }
 
   if (!result) {
@@ -773,6 +816,7 @@ async function answerQuestion({ question, propertyId, from, to }) {
     if (!result && has(/highest|lowest|best|worst|biggest|least\b|\bpeak/i)) result = await intentBestDay(ctx);
     if (!result && has(/most|top|biggest|which\b.*(ota|channel)/i)) result = await intentTopOta(ctx);
     if (!result && has(/(^|\b)ota|channel|expedia|booking\.com|airbnb|direct|walk\s*in/i)) result = await intentOta(ctx);
+    if (!result && has(/rooms?\s+sold|how\s+many\s+rooms|rooms\s+did/i)) result = await intentRooms(ctx);
     if (!result && has(/adr\b/i)) result = await intentMetric({ prop, range, metric: "adr", question: q });
     if (!result && has(/revpar|rev\s*par/i)) result = await intentMetric({ prop, range, metric: "revpar", question: q });
     if (!result && has(/occupanc/i)) result = await intentMetric({ prop, range, metric: "occupancy", question: q });

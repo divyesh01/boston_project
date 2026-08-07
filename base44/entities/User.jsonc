@@ -2,15 +2,88 @@
   "properties": {
     "role": {
       "type": "string",
-      "description": "The role of the user in the app",
+      "description": "Highest privilege in the app. `owner` (app admin) and `admin` (manager) bypass per-property restrictions; `user` is restricted to `property_access`.",
       "enum": [
         "admin",
+        "owner",
         "user"
       ]
+    },
+    "property_access": {
+      "type": [
+        "string",
+        "array"
+      ],
+      "description": "Which properties this user may view or edit. \"all\" (or null) = unrestricted; an array of property IDs restricts access. Anything else (or an empty array) grants no property access.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "description": "Optional per-feature capability flags (e.g. { \"import\": true, \"delete\": false })",
+      "properties": {}
+    },
+    "is_active": {
+      "type": "boolean",
+      "description": "Disabled users cannot sign in or use sessions."
+    },
+    "is_locked": {
+      "type": "boolean",
+      "description": "Locked users are forced through the admin unlock flow."
+    },
+    "must_change_password": {
+      "type": "boolean",
+      "description": "Forced password change on next login (temp passwords)."
+    },
+    "mfa_enabled": {
+      "type": "boolean",
+      "description": "Whether a second factor is required at sign-in."
+    },
+    "email_confirmed": {
+      "type": "boolean",
+      "description": "Whether the email address has been verified."
+    },
+    "email": {
+      "type": "string"
+    },
+    "username": {
+      "type": "string"
+    },
+    "display_name": {
+      "type": "string"
+    },
+    "password_hash": {
+      "type": "string",
+      "description": "PBKDF2 hash (never the plaintext password)."
+    },
+    "salt": {
+      "type": "string"
+    },
+    "last_login": {
+      "type": "string"
+    },
+    "failed_login_count": {
+      "type": "integer"
+    },
+    "locked_until": {
+      "type": "string"
+    },
+    "session_created": {
+      "type": "string"
+    },
+    "session_expires": {
+      "type": "string"
+    },
+    "created_date": {
+      "type": "string"
+    },
+    "updated_date": {
+      "type": "string"
     }
   },
   "required": [
-    "role"
+    "username"
   ],
   "name": "User",
   "type": "object"

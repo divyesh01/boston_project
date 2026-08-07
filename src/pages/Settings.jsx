@@ -8,6 +8,7 @@ import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, get
 import { getAlertThresholds, saveAlertThresholds } from "@/lib/alertThresholds";
 import { getRevenueThresholds, saveRevenueThresholds } from "@/lib/revenueThresholds";
 import { getTaxSettings, saveTaxSettings } from "@/lib/taxSettings";
+import { toast } from "@/components/ui/use-toast";
 
 import { useAuth } from "@/lib/AuthContext";
 import { useProperties } from "@/lib/useHotelData";
@@ -16,6 +17,7 @@ import {
   AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogHeader,
   AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
+import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeText, sanitizeAlphanumeric } from "@/lib/securityUtils";
 
 export default function Settings() {
   const { user: me, logout, hasPermission } = useAuth();
@@ -38,6 +40,7 @@ export default function Settings() {
   const [newPropName, setNewPropName] = useState("");
   const [newPropRooms, setNewPropRooms] = useState("100");
   const [propMsg, setPropMsg] = useState("");
+  const [propDeleteTarget, setPropDeleteTarget] = useState(null);
 
   const handleChange = (key, field, val) => {
     const cur = rates[key] || { type: "percentage", rate: 0, taxExempt: false };
@@ -64,6 +67,17 @@ export default function Settings() {
   };
 
   const handleSave = async () => {
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
+      return;
+    }
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      toast({ variant: "destructive", title: "Security Error", description: "Invalid security token. Please refresh the page and try again." });
+      rotateCsrfToken();
+      return;
+    }
     setCommissionRates(rates);
     setCcFeeRate(ccFee);
     setCcFeeOnRefunds(ccRefunds);
@@ -80,6 +94,7 @@ export default function Settings() {
     queryClientInstance.invalidateQueries({ queryKey: ["payments"] });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+    rotateCsrfToken();
   };
 
   const handleReset = () => {
@@ -113,6 +128,17 @@ export default function Settings() {
   };
 
   const handleSaveTax = async () => {
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
+      return;
+    }
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      toast({ variant: "destructive", title: "Security Error", description: "Invalid security token. Please refresh the page and try again." });
+      rotateCsrfToken();
+      return;
+    }
     const clean = taxRows.map(({ _key, ...rest }) => rest);
     saveTaxSettings(clean);
     try {
@@ -134,46 +160,123 @@ export default function Settings() {
     queryClientInstance.invalidateQueries({ queryKey: ["payroll"] });
     setTaxSaved(true);
     setTimeout(() => setTaxSaved(false), 2000);
+    rotateCsrfToken();
   };
 
   const handleSaveThresholds = () => {
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
+      return;
+    }
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      toast({ variant: "destructive", title: "Security Error", description: "Invalid security token. Please refresh the page and try again." });
+      rotateCsrfToken();
+      return;
+    }
     saveAlertThresholds(thresholds);
     setThresholdSaved(true);
     setTimeout(() => setThresholdSaved(false), 2000);
+    rotateCsrfToken();
   };
 
   const handleSaveRevThresholds = () => {
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
+      return;
+    }
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      toast({ variant: "destructive", title: "Security Error", description: "Invalid security token. Please refresh the page and try again." });
+      rotateCsrfToken();
+      return;
+    }
     saveRevenueThresholds(revThresholds);
     setRevSaved(true);
     setTimeout(() => setRevSaved(false), 2000);
+    rotateCsrfToken();
   };
 
   const handleAddProperty = async () => {
     if (!newPropCode.trim() || !newPropName.trim()) return;
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
+      return;
+    }
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      toast({ variant: "destructive", title: "Security Error", description: "Invalid security token. Please refresh the page and try again." });
+      rotateCsrfToken();
+      return;
+    }
     setPropMsg("");
     try {
+      const sanitizedCode = sanitizeAlphanumeric(newPropCode.trim()).toUpperCase();
+      const sanitizedName = sanitizeText(newPropName.trim());
+      const sanitizedRooms = Math.max(1, Math.min(10000, Number(newPropRooms) || 100));
       await db.entities.Property.create({
-        code: newPropCode.trim().toUpperCase(),
-        name: newPropName.trim(),
-        rooms: Number(newPropRooms) || 100,
+        code: sanitizedCode,
+        name: sanitizedName,
+        rooms: sanitizedRooms,
         active: true,
       });
-      setPropMsg(`Property "${newPropName.trim()}" added.`);
+      setPropMsg(`Property "${sanitizedName}" added.`);
       setNewPropCode("");
       setNewPropName("");
       setNewPropRooms("100");
       refetchProps();
       queryClientInstance.invalidateQueries({ queryKey: ["properties"] });
+      rotateCsrfToken();
     } catch (e) {
       setPropMsg(e.message || "Could not add property.");
     }
   };
 
   const handleDeleteProperty = async (id) => {
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
+      return;
+    }
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      toast({ variant: "destructive", title: "Security Error", description: "Invalid security token. Please refresh the page and try again." });
+      rotateCsrfToken();
+      return;
+    }
     try {
+      // Cascade-delete every record referencing this property so no orphaned
+      // rows silently appear in other properties' totals or the DB health checks.
+      const propertyTables = [
+        "OccupancyDay", "SourceDay", "GrossRevenueDay", "PaymentDay",
+        "ClerkShiftRecord", "UploadedReport", "Expense", "PayrollRun", "Staff",
+      ];
+      for (const tableName of propertyTables) {
+        try {
+          const rows = await db.entities[tableName].filter({ property_id: id }, "-created_date", 100000);
+          const ids = rows.map((r) => r.id).filter(Boolean);
+          if (ids.length) await db.entities[tableName].bulkDelete(ids);
+        } catch (e) {
+          // Some tables may not exist or have different schemas — continue.
+          if (!/does not exist/i.test(String(e.message)) && !/Unknown entity/i.test(String(e.message))) {
+            console.warn(`[settings] cleanup ${tableName}:`, e);
+          }
+        }
+      }
       await db.entities.Property.delete(id);
+      setPropDeleteTarget(null);
       refetchProps();
       queryClientInstance.invalidateQueries({ queryKey: ["properties"] });
+      queryClientInstance.invalidateQueries({ queryKey: ["occupancy"] });
+      queryClientInstance.invalidateQueries({ queryKey: ["sources"] });
+      queryClientInstance.invalidateQueries({ queryKey: ["gross"] });
+      queryClientInstance.invalidateQueries({ queryKey: ["payments"] });
+      queryClientInstance.invalidateQueries({ queryKey: ["expenses"] });
+      queryClientInstance.invalidateQueries({ queryKey: ["payroll"] });
+      rotateCsrfToken();
     } catch (e) {
       setPropMsg(e.message || "Could not delete property.");
     }
@@ -517,7 +620,7 @@ export default function Settings() {
                   {p.active ? "Active" : "Inactive"}
                 </span>
                 <button
-                  onClick={() => handleDeleteProperty(p.id)}
+                  onClick={() => setPropDeleteTarget(p)}
                   className="text-xs text-slate-500 transition-colors hover:text-[#FF6B6B]"
                 >
                   Remove
@@ -527,6 +630,31 @@ export default function Settings() {
           ))}
           {!properties.length && <p className="text-sm text-slate-500">No properties yet. Add your first property below.</p>}
         </div>
+
+        <AlertDialog open={!!propDeleteTarget} onOpenChange={(open) => { if (!open) setPropDeleteTarget(null); }}>
+          <AlertDialogContent className="border-white/10 bg-[#0F1F35]">
+            <AlertDialogHeader>
+              <AlertDialogTitle className="text-white">Remove property “{propDeleteTarget?.name}”?</AlertDialogTitle>
+              <AlertDialogDescription className="text-slate-400">
+                This permanently deletes the property and <span className="text-[#FF6B6B]">all</span> of its imported
+                report rows (occupancy, sources, gross revenue, payments, clerk records, expenses, payroll, and uploaded
+                report history). This cannot be undone.
+              </AlertDialogDescription>
+              {propMsg.includes("Could not delete") && <p className="text-sm text-[#FF6B6B]">{propMsg}</p>}
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel className="border-white/10 bg-[#0A1628] text-slate-300 hover:bg-[#1a2a40] hover:text-white">
+                Cancel
+              </AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => propDeleteTarget && handleDeleteProperty(propDeleteTarget.id)}
+                className="bg-[#FF6B6B] text-white hover:bg-[#e55555]"
+              >
+                Yes, delete everything for this property
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         <div className="mt-4 grid gap-2 sm:grid-cols-4">
           <input

@@ -2,7 +2,7 @@ import React, { createContext, useState, useContext, useEffect, useCallback, use
 import db from '@/api/base44Client';
 import { canUser, ROUTE_PERMISSIONS } from '@/lib/permissions';
 
-const AuthContext = createContext();
+const AuthContext = /** @type {import('react').Context<any>} */ (createContext(null));
 
 const IDLE_CHECK_MS = 30 * 1000;
 
@@ -138,7 +138,7 @@ export const AuthProvider = ({ children }) => {
   const canAccessProperty = useCallback((propertyId) => {
     if (!user) return false;
     if (user.role === 'owner' || user.role === 'admin') return true;
-    if (!user.property_access || user.property_access === 'all') return true;
+    if (user.property_access === 'all') return true;
     if (Array.isArray(user.property_access) && user.property_access.includes(propertyId)) return true;
     return false;
   }, [user]);

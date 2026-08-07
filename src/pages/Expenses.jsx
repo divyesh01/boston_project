@@ -10,6 +10,7 @@ import { useOccupancy, usePaymentData } from "@/lib/useHotelData";
 import { money, sum, inRange, pct, C } from "@/lib/hotel";
 import { toast } from "sonner";
 import { EXPENSE_CATEGORIES, EXPENSE_FREQUENCIES, EXPENSE_STATUSES, expenseLabel, frequencyLabel, isStandardCategory, slugifyCategory } from "@/lib/expenseCategories";
+import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
 
 function useExpenses(propertyId) {
   return useQuery({
@@ -23,7 +24,7 @@ function useExpenses(propertyId) {
           filter.property_id = propertyId;
         }
       }
-      return db.entities.Expense.filter(filter, "-expense_date", 500);
+      return db.entities.Expense.filter(filter, "-expense_date", 100000);
     },
   });
 }
@@ -40,7 +41,7 @@ function usePayroll(propertyId) {
           filter.property_id = propertyId;
         }
       }
-      return db.entities.PayrollRun.filter(filter, "-pay_period_start", 500);
+      return db.entities.PayrollRun.filter(filter, "-pay_period_start", 100000);
     },
   });
 }
@@ -108,6 +109,20 @@ export default function Expenses() {
   const propName = property === "all" ? "All Properties" : (Array.isArray(property) ? `${property.length} Properties` : (properties.find((p) => p.id === property)?.name || "Property"));
 
   const handleAdd = async () => {
+    // Rate limiting for sensitive actions
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      toast.error(`Rate limited. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
+      return;
+    }
+    // CSRF validation
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      toast.error("Invalid security token. Please refresh the page and try again.");
+      rotateCsrfToken();
+      return;
+    }
+
     if (!form.expense_name || !form.amount) {
       toast.error("Expense name and amount are required.");
       return;
@@ -149,6 +164,7 @@ export default function Expenses() {
     setForm({ expense_name: "", vendor: "", category: "other", customCat: "", frequency: "one_time", amount: "", expense_date: new Date().toISOString().slice(0, 10), payment_status: "unpaid", taxable: true });
     qc.invalidateQueries({ queryKey: ["expenses"] });
     setShowForm(false);
+    rotateCsrfToken();
   };
 
   const handleToggleTaxable = async (id, current) => {
@@ -180,6 +196,20 @@ export default function Expenses() {
   const exemptAmount = exemptExpenses.reduce((a, e) => a + (e.amount || 0), 0);
 
   const handleAddPayroll = async () => {
+    // Rate limiting for sensitive actions
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      toast.error(`Rate limited. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
+      return;
+    }
+    // CSRF validation
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      toast.error("Invalid security token. Please refresh the page and try again.");
+      rotateCsrfToken();
+      return;
+    }
+
     if (!payrollForm.employee_name) return;
     const prop = properties.find((p) => p.id === (Array.isArray(property) ? property[0] : property));
     const reg = (Number(payrollForm.base_rate) || 0) * (Number(payrollForm.hours) || 0);
@@ -201,9 +231,24 @@ export default function Expenses() {
     setPayrollForm({ employee_name: "", department: "Front Desk", pay_type: "hourly", base_rate: "", hours: "40", overtime_hours: "0", bonus: "0", deductions: "0", pay_period_start: new Date().toISOString().slice(0, 10), pay_period_end: new Date().toISOString().slice(0, 10) });
     qc.invalidateQueries({ queryKey: ["payroll"] });
     setShowPayrollForm(false);
+    rotateCsrfToken();
   };
 
   const handleDelete = async (id) => {
+    // Rate limiting for sensitive actions
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      toast.error(`Rate limited. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
+      return;
+    }
+    // CSRF validation
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      toast.error("Invalid security token. Please refresh the page and try again.");
+      rotateCsrfToken();
+      return;
+    }
+
     try {
       await db.entities.Expense.delete(id);
       toast.success("Expense deleted.");
@@ -212,11 +257,27 @@ export default function Expenses() {
       return;
     }
     qc.invalidateQueries({ queryKey: ["expenses"] });
+    rotateCsrfToken();
   };
 
   const handleDeletePayroll = async (id) => {
+    // Rate limiting for sensitive actions
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      toast.error(`Rate limited. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
+      return;
+    }
+    // CSRF validation
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      toast.error("Invalid security token. Please refresh the page and try again.");
+      rotateCsrfToken();
+      return;
+    }
+
     await db.entities.PayrollRun.delete(id);
     qc.invalidateQueries({ queryKey: ["payroll"] });
+    rotateCsrfToken();
   };
 
   const handleStatusChange = async (id, status) => {

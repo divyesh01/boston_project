@@ -49,7 +49,7 @@ export function usePullToRefresh(refetch) {
       window.removeEventListener("touchmove", onTouchMove);
       window.removeEventListener("touchend", onTouchEnd);
     };
-  }, [refetch, refreshing]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [refetch, refreshing]);  
 
   return { pullDist, refreshing };
 }

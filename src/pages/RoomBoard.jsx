@@ -55,7 +55,7 @@ export default function RoomBoard() {
         ].map(([label, value, color, custom]) => (
           <div key={label} className="rounded-2xl border border-white/5 bg-[#0F1F35]/80 p-4">
             <p className="text-[11px] uppercase tracking-widest text-slate-400">{label}</p>
-            <p className="mt-2 font-heading text-2xl font-semibold" style={{ color }}>
+            <p className="mt-2 font-heading text-2xl font-semibold" style={{ color: String(color) }}>
               {custom !== undefined ? custom : num(value)}
             </p>
           </div>

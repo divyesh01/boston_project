@@ -4,7 +4,23 @@ import { Minus } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
-const InputOTP = React.forwardRef(({ className, containerClassName, ...props }, ref) => (
+const InputOTP = React.forwardRef(
+  (
+    /** @type {{
+     *   value?: string;
+     *   onChange?: (newValue: string) => unknown;
+     *   maxLength: number;
+     *   autoFocus?: boolean;
+     *   autoComplete?: string;
+     *   placeholder?: string;
+     *   className?: string;
+     *   containerClassName?: string;
+     *   onComplete?: (...args: any[]) => unknown;
+     *   children: import('react').ReactNode;
+     * }} */
+    { className, containerClassName, ...props },
+    ref
+  ) => (
   <OTPInput
     ref={ref}
     containerClassName={cn("flex items-center gap-2 has-[:disabled]:opacity-50", containerClassName)}
@@ -13,12 +29,22 @@ const InputOTP = React.forwardRef(({ className, containerClassName, ...props }, 
 ))
 InputOTP.displayName = "InputOTP"
 
-const InputOTPGroup = React.forwardRef(({ className, ...props }, ref) => (
+const InputOTPGroup = React.forwardRef(
+  (
+    /** @type {import('react').ComponentPropsWithoutRef<'div'>} */
+    { className, ...props },
+    ref
+  ) => (
   <div ref={ref} className={cn("flex items-center", className)} {...props} />
 ))
 InputOTPGroup.displayName = "InputOTPGroup"
 
-const InputOTPSlot = React.forwardRef(({ index, className, ...props }, ref) => {
+const InputOTPSlot = React.forwardRef(
+  (
+    /** @type {{ index: number; className?: string; children?: import('react').ReactNode }} */
+    { index, className, ...props },
+    ref
+  ) => {
   const inputOTPContext = React.useContext(OTPInputContext)
   const { char, hasFakeCaret, isActive } = inputOTPContext.slots[index]
 
@@ -43,7 +69,12 @@ const InputOTPSlot = React.forwardRef(({ index, className, ...props }, ref) => {
 })
 InputOTPSlot.displayName = "InputOTPSlot"
 
-const InputOTPSeparator = React.forwardRef(({ ...props }, ref) => (
+const InputOTPSeparator = React.forwardRef(
+  (
+    /** @type {import('react').ComponentPropsWithoutRef<'div'>} */
+    { ...props },
+    ref
+  ) => (
   <div ref={ref} role="separator" {...props}>
     <Minus />
   </div>

@@ -3,6 +3,8 @@ import { getAlertThresholds } from "@/lib/alertThresholds";
 import { getRevenueColor, getRevenueGroup } from "@/lib/revenueThresholds";
 export { getRevenueColor, getRevenueGroup };
 
+import { toCents, fromCents, toRate, fromRate, add, subtract, multiply, divide, divideRate, sumCents, formatCents, formatRate, portfolioOccupancy, portfolioAdr, portfolioRevpar } from '@/lib/decimal';
+
 // Default property — used as fallback when no Property records exist yet
 export const PROPERTY = { name: "Red Roof Inn & Suites Middleborough", code: "RRI1416", rooms: 100 };
 
@@ -34,15 +36,13 @@ export function commissionFor(source = "") {
   return best || { type: "none", rate: 0, taxExempt: false };
 }
 
-export const money = (v) =>
-  `$${Number(v || 0).toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
-export const money2 = (v) =>
-  `$${Number(v || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-export const pct = (v, digits = 1) => `${(Number(v || 0) * 100).toFixed(digits)}%`;
+export const money = (v) => formatCents(toCents(v), 0);
+export const money2 = (v) => formatCents(toCents(v), 2);
+export const pct = (v, digits = 1) => formatRate(toRate(v), digits);
 export const num = (v) => Number(v || 0).toLocaleString("en-IN");
 
-export const sum = (rows, key) => rows.reduce((a, r) => a + (Number(r[key]) || 0), 0);
-export const avg = (rows, key) => (rows.length ? sum(rows, key) / rows.length : 0);
+export const sum = (rows, key) => fromCents(sumCents(rows.map(r => r[key])));
+export const avg = (rows, key) => rows.length ? sum(rows, key) / rows.length : 0;
 
 export function inRange(dateStr, from, to) {
   if (!dateStr) return false;
@@ -54,27 +54,34 @@ export function aggregate(rows, groupKey, valueKey, agg) {
   const map = new Map();
   rows.forEach((r) => {
     const k = r[groupKey] === undefined || r[groupKey] === null || r[groupKey] === "" ? "(blank)" : String(r[groupKey]).slice(0, 40);
-    const v = Number(r[valueKey]);
+    const v = toCents(r[valueKey]);
     if (!map.has(k)) map.set(k, []);
-    map.get(k).push(Number.isFinite(v) ? v : 0);
+    map.get(k).push(v);
   });
   const out = [];
   map.forEach((vals, name) => {
     let value = 0;
-    if (agg === "sum") value = vals.reduce((a, b) => a + b, 0);
-    else if (agg === "avg") value = vals.reduce((a, b) => a + b, 0) / vals.length;
+    if (agg === "sum") value = fromCents(vals.reduce((a, b) => a + b, 0));
+    else if (agg === "avg") value = fromCents(Math.round(vals.reduce((a, b) => a + b, 0) / vals.length));
     else if (agg === "count") value = vals.length;
-    else if (agg === "max") value = Math.max(...vals);
-    else if (agg === "min") value = Math.min(...vals);
+    else if (agg === "max") value = fromCents(Math.max(...vals));
+    else if (agg === "min") value = fromCents(Math.min(...vals));
     out.push({ name, value: Math.round(value * 100) / 100 });
   });
   return out.sort((a, b) => b.value - a.value);
 }
 
+// Neutralize CSV formula injection (cells beginning with =, +, -, @, tab, CR)
+function csvCell(value) {
+  let s = String(value ?? "");
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
 export function toCsv(rows) {
   if (!rows.length) return "";
   const keys = Object.keys(rows[0]);
-  return [keys.join(","), ...rows.map((r) => keys.map((k) => `"${String(r[k] ?? "")}"`).join(","))].join("\n");
+  return [keys.join(","), ...rows.map((r) => keys.map((k) => csvCell(r[k])).join(","))].join("\n");
 }
 
 export function downloadCsv(rows, name = "export.csv") {
@@ -94,9 +101,8 @@ export function normalizeName(name) {
 
 // Weighted portfolio calculations — never average property percentages
 export function portfolioStats(occRows, roomCounts) {
-  // roomCounts: { [property_id]: number_of_rooms } — fallback to total_rooms from rows
-  const revenue = sum(occRows, "total_revenue");
-  const roomsSold = sum(occRows, "rooms_sold");
+  const revenue = sumCents(occRows.map(r => r.total_revenue));
+  const roomsSold = sumCents(occRows.map(r => r.rooms_sold));
 
   // Calculate total capacity using per-property room counts
   const daysPerProp = new Map();
@@ -107,13 +113,13 @@ export function portfolioStats(occRows, roomCounts) {
   let capacity = 0;
   daysPerProp.forEach((days, pid) => {
     const rooms = roomCounts?.[pid] ?? PROPERTY.rooms;
-    capacity += days * rooms;
+    capacity += days * rooms * 100; // Scale to cents
   });
 
-  const occupancy = capacity ? roomsSold / capacity : 0;
-  const adr = roomsSold ? revenue / roomsSold : 0;
-  const revpar = capacity ? revenue / capacity : 0;
-  return { revenue, roomsSold, capacity, occupancy, adr, revpar };
+  const occupancy = capacity ? divideRate(roomsSold, capacity) : 0;
+  const adr = roomsSold ? divide(revenue, roomsSold) : 0;
+  const revpar = capacity ? divide(revenue, capacity) : 0;
+  return { revenue: fromCents(revenue), roomsSold: fromCents(roomsSold), capacity: fromCents(capacity), occupancy: fromRate(occupancy), adr: fromCents(adr), revpar: fromCents(revpar) };
 }
 
 // Group occupancy rows by property_id and compute per-property stats
@@ -129,17 +135,17 @@ export function perPropertyStats(occRows, properties) {
   byProp.forEach((rows, pid) => {
     const prop = properties.find((p) => p.id === pid);
     const rooms = prop?.rooms || PROPERTY.rooms;
-    const revenue = sum(rows, "total_revenue");
-    const roomsSold = sum(rows, "rooms_sold");
-    const capacity = rows.length * rooms;
+    const revenue = sumCents(rows.map(r => r.total_revenue));
+    const roomsSold = sumCents(rows.map(r => r.rooms_sold));
+    const capacity = rows.length * rooms * 100; // Scale to cents
     results.push({
       property_id: pid,
       property_name: prop?.name || rows[0]?.property_name || "Unknown",
-      revenue,
-      roomsSold,
-      occupancy: capacity ? roomsSold / capacity : 0,
-      adr: roomsSold ? revenue / roomsSold : 0,
-      revpar: capacity ? revenue / capacity : 0,
+      revenue: fromCents(revenue),
+      roomsSold: fromCents(roomsSold),
+      occupancy: capacity ? fromRate(divideRate(roomsSold, capacity)) : 0,
+      adr: roomsSold ? fromCents(divide(revenue, roomsSold)) : 0,
+      revpar: capacity ? fromCents(divide(revenue, capacity)) : 0,
       days: rows.length,
       rooms,
     });

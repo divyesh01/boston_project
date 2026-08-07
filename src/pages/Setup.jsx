@@ -8,6 +8,7 @@ import AuthLayout from "@/components/AuthLayout";
 import { useAuth } from "@/lib/AuthContext";
 import db from "@/api/base44Client";
 import { isCryptoAvailable, validatePasswordStrength } from "@/lib/security";
+import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeAlphanumeric, sanitizeEmail, sanitizeText } from "@/lib/securityUtils";
 
 export default function Setup() {
   const navigate = useNavigate();
@@ -53,6 +54,19 @@ export default function Setup() {
       setError("Password hashing is not available in this browser. Open the app via localhost or HTTPS.");
       return;
     }
+    // Rate limiting
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      setError(`Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
+      return;
+    }
+    // CSRF validation
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      setError("Invalid security token. Please refresh the page and try again.");
+      rotateCsrfToken();
+      return;
+    }
     if (password !== confirm) {
       setError("Passwords do not match.");
       return;
@@ -62,14 +76,22 @@ export default function Setup() {
       setError(strengthError);
       return;
     }
+    // Input sanitization
+    const sanitizedUsername = sanitizeAlphanumeric(username);
+    const sanitizedEmail = sanitizeEmail(email);
+    const sanitizedFullName = sanitizeText(fullName);
+    if (sanitizedUsername !== username || sanitizedEmail !== email) {
+      setError("Invalid characters in username or email.");
+      return;
+    }
     setLoading(true);
     try {
       await db.users.create(
-        { id: "setup", username: username || "owner", email: email || "owner", role: "owner", is_active: true },
+        { id: "setup", username: sanitizedUsername || "owner", email: sanitizedEmail || "owner", role: "owner", is_active: true },
         {
-          username,
-          email,
-          full_name: fullName,
+          username: sanitizedUsername,
+          email: sanitizedEmail,
+          full_name: sanitizedFullName,
           role: "owner",
           permissions: "all",
           property_access: "all",
@@ -78,7 +100,8 @@ export default function Setup() {
           must_change_password: false,
         }
       );
-      await login(username, password, true);
+      await login(sanitizedUsername, password, true);
+      rotateCsrfToken();
       window.location.href = "/";
     } catch (err) {
       setError(err.message || "Could not create the Owner account.");

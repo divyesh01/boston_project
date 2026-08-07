@@ -1,9 +1,70 @@
-import { db } from '@/api/base44Client';
+import { db, runInTransaction, createImportSession, completeImportSession } from '@/api/base44Client';
+import localDb from '@/api/localDb';
 
 
 import {
   fetchCsvRows, rowsToObjects, convertDate, isIsoDate, parseAmount, isCsvFile, detectSections,
 } from "@/lib/csvParser";
+
+// Serialize report imports to prevent double-click/parallel duplicate writes.
+let importQueue = Promise.resolve();
+async function serial(target) {
+  const run = importQueue.then(
+    () => target,
+    () => target
+  );
+  importQueue = run.catch(() => {});
+  return run;
+}
+
+// Post-import integrity pass: remove duplicate rows (same entity key) within a
+// property, keeping the earliest-created copy. Fixes duplicates from past
+// imports, double-clicks, and files imported twice under different names.
+async function dedupePropertyRows(entity, propertyId, keyFn) {
+  try {
+    const all = await db.entities[entity].filter(propertyId ? { property_id: propertyId } : {}, "created_date", 100000);
+    const seen = new Map();
+    const removeIds = [];
+    for (const r of all) {
+      const k = keyFn(r);
+      const cur = seen.get(k);
+      if (!cur) {
+        seen.set(k, r);
+        continue;
+      }
+      const curCreated = new Date(cur.created_date || 0).getTime();
+      const rCreated = new Date(r.created_date || 0).getTime();
+      if (rCreated < curCreated || (rCreated === curCreated && Number(r.id) < Number(cur.id))) {
+        removeIds.push(cur.id);
+        seen.set(k, r);
+      } else {
+        removeIds.push(r.id);
+      }
+    }
+    if (removeIds.length) {
+      await db.entities[entity].bulkDelete(removeIds);
+    }
+    return removeIds.length;
+  } catch (e) {
+    console.warn('[reportParsers] cleanup pass skipped:', e.message);
+    return 0;
+  }
+}
+
+// Track IDs of created records for precise rollback
+async function recordCreatedIds(entity, propertyId, importId, ids) {
+  try {
+    await localDb.ImportSession.add({
+      import_id: importId,
+      property_id: propertyId || "",
+      entity,
+      record_ids: ids,
+      created_date: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.warn('[reportParsers] failed to record import IDs:', e.message);
+  }
+}
 
 export const REPORT_TYPES = [
   { key: "auto", label: "Auto-detect (recommended)" },
@@ -118,9 +179,21 @@ function dedupByKey(rows, keyFn) {
 
 async function skipExisting(entity, rows, keyFn, propertyId) {
   const filter = propertyId ? { property_id: propertyId } : {};
-  const existing = await db.entities[entity].filter(filter, "date", 5000);
+  const existing = await db.entities[entity].filter(filter, "date", 100000);
   const seen = new Set(existing.map(keyFn));
-  return rows.filter((r) => !seen.has(keyFn(r)));
+  
+  // Also track import_ids to prevent cross-session duplicates
+  const seenImportIds = new Set(
+    existing.filter(r => r.import_id).map(r => r.import_id)
+  );
+  
+  return rows.filter((r) => {
+    // Check business key duplicate
+    if (seen.has(keyFn(r))) return false;
+    // Check import_id duplicate (prevent re-importing same session)
+    if (r.import_id && seenImportIds.has(r.import_id)) return false;
+    return true;
+  });
 }
 
 async function getRowsArray(type, fileUrl) {
@@ -355,8 +428,38 @@ function scanClerkReport(rawRows, meta, objects = []) {
 }
 
 export async function importReport(scanResult, meta = {}) {
+  // Create import session for tracking and rollback capability
+  const importSession = await createImportSession({
+    sourceFile: meta.sourceFile,
+    propertyId: meta.propertyId,
+    propertyName: meta.propertyName,
+    reportType: scanResult.type,
+  });
+  
+  try {
+    const [result] = await runInTransaction([async () => {
+      return await doImport(scanResult, meta, importSession.importId);
+    }]);
+    
+    // Track row counts per table for potential rollback
+    const rowCounts = {};
+    if (scanResult.type === "clerk") {
+      rowCounts["ClerkShiftRecord"] = result.count;
+    } else if (scanResult.type !== "generic") {
+      rowCounts[ENTITY[scanResult.type]] = result.count;
+    }
+    
+    await completeImportSession(importSession.importId, rowCounts);
+    return result;
+  } catch (e) {
+    // Import failed - session remains as 'in_progress' for debugging
+    throw e;
+  }
+}
+
+async function doImport(scanResult, meta, importId) {
   const { type } = scanResult;
-  const addMetaFn = (obj) => addMeta(obj, { ...meta, type });
+  const addMetaFn = (obj) => addMeta(obj, { ...meta, type, importId });
 
   if (type === "clerk") {
     const all = [];
@@ -377,12 +480,20 @@ export async function importReport(scanResult, meta = {}) {
     const seen = new Set(existing.map(keyFn));
     const newRows = deduped.filter((r) => !seen.has(keyFn(r)));
 
+    let createdIds = [];
     if (newRows.length) {
       for (let i = 0; i < newRows.length; i += 400) {
-        await db.entities.ClerkShiftRecord.bulkCreate(newRows.slice(i, i + 400));
+        const batch = newRows.slice(i, i + 400);
+        const ids = await db.entities.ClerkShiftRecord.bulkCreate(batch);
+        createdIds.push(...ids);
       }
     }
-    return { count: newRows.length, excluded: deduped.length - newRows.length };
+    // Record created IDs for potential rollback
+    if (createdIds.length) {
+      await recordCreatedIds("ClerkShiftRecord", meta.propertyId, importId, createdIds);
+    }
+    const cleaned = await dedupePropertyRows("ClerkShiftRecord", meta.propertyId, keyFn);
+    return { count: newRows.length, excluded: deduped.length - newRows.length, cleaned };
   }
 
   if (type === "generic") {
@@ -398,10 +509,46 @@ export async function importReport(scanResult, meta = {}) {
   const deduped = dedupByKey(rows, keyFn);
   const newRows = await skipExisting(ENTITY[type], deduped, keyFn, meta.propertyId);
 
+  let createdIds = [];
   for (let i = 0; i < newRows.length; i += 400) {
-    await db.entities[ENTITY[type]].bulkCreate(newRows.slice(i, i + 400));
+    const batch = newRows.slice(i, i + 400);
+    const ids = await db.entities[ENTITY[type]].bulkCreate(batch);
+    createdIds.push(...ids);
   }
-  return { count: newRows.length, excluded: deduped.length - newRows.length };
+  // Record created IDs for potential rollback
+  if (createdIds.length) {
+    await recordCreatedIds(ENTITY[type], meta.propertyId, importId, createdIds);
+  }
+  const cleaned = await dedupePropertyRows(ENTITY[type], meta.propertyId, keyFn);
+  return { count: newRows.length, excluded: deduped.length - newRows.length, cleaned };
+}
+
+// Rollback an import by deleting all records created during that import
+export async function rollbackImport(importId) {
+  try {
+    const sessions = await localDb.ImportSession.where('import_id').equals(importId).toArray();
+    if (!sessions.length) {
+      return { success: false, error: 'Import session not found' };
+    }
+
+    let totalDeleted = 0;
+    for (const session of sessions) {
+      if (session.record_ids && session.record_ids.length) {
+        await db.entities[session.entity].bulkDelete(session.record_ids);
+        totalDeleted += session.record_ids.length;
+      }
+    }
+
+    // Mark session as rolled back
+    for (const session of sessions) {
+      await localDb.ImportSession.update(session.id, { status: 'rolled_back', rolled_back_at: new Date().toISOString() });
+    }
+
+    return { success: true, deletedCount: totalDeleted, message: `Rolled back ${totalDeleted} records from import ${importId}` };
+  } catch (e) {
+    console.error('[reportParsers] rollback failed:', e);
+    return { success: false, error: e.message };
+  }
 }
 
 // Backward-compatible convenience: scan + import in one call
@@ -409,4 +556,4 @@ export async function parseReport(type, fileUrl, meta = {}) {
   const scan = await scanReport(type, fileUrl, meta);
   const result = await importReport(scan, meta);
   return { ...result, scan };
-}
+}// SENTINEL123

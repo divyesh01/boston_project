@@ -1,12 +1,11 @@
-import React, { useState, useMemo, useEffect } from "react";
-import { TrendingUp, Calendar, DollarSign, Percent, Building2, ArrowRight, BarChart3 } from "lucide-react";
+import React, { useState, useMemo } from "react";
+import { TrendingUp, DollarSign, Percent, Building2, BarChart3 } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import { useOccupancy } from "@/lib/useHotelData";
-import { useGlobalFilters, MONTHS_LONG } from "@/lib/useGlobalFilters";
-import { money, money2, sum, avg, C, portfolioStats } from "@/lib/hotel";
-import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, AreaChart, Area } from "recharts";
+import { useGlobalFilters } from "@/lib/useGlobalFilters";
+import { money, money2, sum, C } from "@/lib/hotel";
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts";
 
 const HORIZONS = [
   { key: "day", label: "Next Day", days: 1 },

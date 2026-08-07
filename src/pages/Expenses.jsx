@@ -1,14 +1,13 @@
 import { db } from '@/api/base44Client';
 
 import React, { useState, useMemo } from "react";
-import { Plus, Trash2, TrendingUp, TrendingDown, Wallet, Receipt, Building2, Users, DollarSign } from "lucide-react";
+import { Plus, Trash2, TrendingUp, TrendingDown, Wallet, Receipt, Users, DollarSign } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
-import KpiCard from "@/components/ui-exec/KpiCard";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useGlobalFilters, MONTHS_LONG } from "@/lib/useGlobalFilters";
 import { useOccupancy, usePaymentData } from "@/lib/useHotelData";
-import { money, money2, sum, inRange, pct, C, getRevenueColor } from "@/lib/hotel";
+import { money, sum, inRange, pct, C } from "@/lib/hotel";
 
 const CATEGORIES = ["utilities", "payroll", "housekeeping", "maintenance", "insurance", "supplies", "marketing", "ota_commission", "taxes", "rent", "other"];
 const FREQUENCIES = ["one_time", "weekly", "monthly", "quarterly", "yearly"];
@@ -43,7 +42,7 @@ function usePayroll(propertyId) {
           filter.property_id = propertyId;
         }
       }
-      return db.entities.PayrollRun.filter(filter, "-payroll_date", 500);
+      return db.entities.PayrollRun.filter(filter, "-pay_period_start", 500);
     },
   });
 }
@@ -81,9 +80,17 @@ export default function Expenses() {
   const refundsAndAdjustments = Math.abs(sum(payRows, "closed_balance_folio")) + Math.abs(sum(payRows, "loyalty_discount"));
   const netRevenue = grossRevenue - refundsAndAdjustments;
 
-  // Cost calculations
-  const totalPayroll = sum(payroll, "total_pay");
-  const operatingExpenses = expenses
+  // Cost calculations (scoped to the selected period so they match the revenue window)
+  const expensesInPeriod = useMemo(
+    () => expenses.filter((e) => inRange(e.expense_date, dateRange.from, dateRange.to)),
+    [expenses, dateRange]
+  );
+  const payrollInPeriod = useMemo(
+    () => payroll.filter((p) => inRange(p.pay_period_start, dateRange.from, dateRange.to)),
+    [payroll, dateRange]
+  );
+  const totalPayroll = sum(payrollInPeriod, "total_pay");
+  const operatingExpenses = expensesInPeriod
     .filter((e) => e.category !== "payroll")
     .reduce((a, e) => a + (e.amount || 0), 0);
   const totalCosts = totalPayroll + operatingExpenses;
@@ -233,7 +240,7 @@ export default function Expenses() {
               <Users className="h-4 w-4 text-slate-600" />
             </div>
             <p className="mt-2 font-heading text-2xl font-semibold text-white">{money(totalPayroll)}</p>
-            <p className="mt-1 text-xs text-slate-500">{payroll.length} payroll records</p>
+            <p className="mt-1 text-xs text-slate-500">{payrollInPeriod.length} payroll records</p>
           </div>
           <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">
             <div className="flex items-center justify-between">
@@ -241,7 +248,7 @@ export default function Expenses() {
               <Receipt className="h-4 w-4 text-slate-600" />
             </div>
             <p className="mt-2 font-heading text-2xl font-semibold text-white">{money(operatingExpenses)}</p>
-            <p className="mt-1 text-xs text-slate-500">{expenses.length} expense entries</p>
+            <p className="mt-1 text-xs text-slate-500">{expensesInPeriod.length} expense entries</p>
           </div>
           <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">
             <div className="flex items-center justify-between">

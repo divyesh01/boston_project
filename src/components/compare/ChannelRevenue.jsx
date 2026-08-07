@@ -3,7 +3,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import Card from "@/components/ui-exec/Card";
 import ChartToolbar from "@/components/charts/ChartToolbar";
 import UniversalChart from "@/components/charts/UniversalChart";
-import { commissionFor, money, money2, num, pct, C, CHART_COLORS } from "@/lib/hotel";
+import { commissionFor, money, num, pct, C, CHART_COLORS } from "@/lib/hotel";
 
 export default function ChannelRevenue({ rows, dateRange }) {
   const chartRef = useRef(null);

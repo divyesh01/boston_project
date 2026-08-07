@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import Card from "@/components/ui-exec/Card";
-import { money, money2, C } from "@/lib/hotel";
+import { money2, C } from "@/lib/hotel";
 import { AlertTriangle, CheckCircle2, Filter } from "lucide-react";
 
 export default function ClerkAudit({ records }) {

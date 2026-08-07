@@ -1,7 +1,7 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useMemo } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
 import Card from "@/components/ui-exec/Card";
-import { CHART_COLORS, money, money2, pct } from "@/lib/hotel";
+import { CHART_COLORS, money2, pct } from "@/lib/hotel";
 import { getCcFeeRate } from "@/lib/commissionRates";
 
 export default function PaymentMethodChart({ payRows }) {

@@ -1,15 +1,15 @@
 import React, { useMemo, useRef, useState } from "react";
-import { CreditCard, DollarSign, Receipt, RefreshCw, AlertTriangle, TrendingUp, Percent, Settings } from "lucide-react";
+import { CreditCard, DollarSign, Receipt, RefreshCw, AlertTriangle, Percent, Settings } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import UniversalChart from "@/components/charts/UniversalChart";
 import ChartToolbar from "@/components/charts/ChartToolbar";
 import TaxConfigModal from "@/components/TaxConfigModal";
-import { usePaymentData, useOccupancy, useClerkRecords } from "@/lib/useHotelData";
+import { usePaymentData, useOccupancy, useClerkRecords, useSources } from "@/lib/useHotelData";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
-import { money, money2, num, sum, inRange, C } from "@/lib/hotel";
+import { money, money2, sum, inRange, C } from "@/lib/hotel";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
-import { formatPaymentMethod, PAYMENT_METHOD_FIELDS, CARD_METHODS } from "@/lib/paymentNorm";
+import { PAYMENT_METHOD_FIELDS, CARD_METHODS } from "@/lib/paymentNorm";
 import { getTaxConfig, calculateTax, formatTaxRate, TAX_SOURCES } from "@/lib/taxConfig";
 
 export default function Payments() {
@@ -17,6 +17,7 @@ export default function Payments() {
   const { data: payRecords = [], isLoading, refetch } = usePaymentData(dateRange, property, months);
   const { data: occ = [] } = useOccupancy(dateRange, property, months);
   const { data: clerk = [] } = useClerkRecords(dateRange, property);
+  const { data: sourceRows = [] } = useSources(dateRange, property, months);
   const chartRef = useRef(null);
   const { pullDist, refreshing } = usePullToRefresh(refetch);
 
@@ -27,6 +28,10 @@ export default function Payments() {
   const occRows = useMemo(
     () => occ.filter((r) => inRange(r.date, dateRange.from, dateRange.to)),
     [occ, dateRange]
+  );
+  const srcRows = useMemo(
+    () => sourceRows.filter((r) => inRange(r.date, dateRange.from, dateRange.to)),
+    [sourceRows, dateRange]
   );
 
   // Aggregate payment methods from PaymentDay columns
@@ -69,24 +74,16 @@ export default function Payments() {
   // Clerk drops (from ClerkShiftRecord, if any exist)
   const drops = useMemo(() => clerk.filter((x) => x.record_type === "drop"), [clerk]);
 
-  // Clerk adjustments with drill-down — extract clerk names from payment_type
+  // Clerk payment activity (real per-clerk records from ClerkShift.csv)
   const [expandedClerk, setExpandedClerk] = useState(null);
   const clerkAdjustments = useMemo(() => {
-    const payments = clerk.filter((x) => x.record_type === "payment");
+    const payments = clerk.filter((x) => x.record_type === "clerk_payment");
     const map = new Map();
     payments.forEach((r) => {
-      let name = r.clerk_name || "";
-      if (!name && r.payment_type) {
-        const pt = r.payment_type;
-        if (pt.startsWith("$")) return;
-        const m = pt.match(/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s*[AP]M\s*-\s*(.+)$/i);
-        if (m) name = m[1].trim();
-        else if (!/^\d{4}-/.test(pt)) name = pt;
-      }
-      if (!name) return;
+      const name = r.clerk_name || "Unknown";
       const cur = map.get(name) || { clerk: name, adjusted: 0, actual: 0, count: 0, records: [] };
-      cur.adjusted += Number(r.adjusted) || 0;
-      cur.actual += Number(r.actual) || 0;
+      cur.adjusted += Number(r.amount) || 0;
+      cur.actual += Number(r.amount) || 0;
       cur.count += 1;
       cur.records.push(r);
       map.set(name, cur);
@@ -100,25 +97,31 @@ export default function Payments() {
   // Tax configuration
   const [taxModalOpen, setTaxModalOpen] = useState(false);
   const [taxConfig, setTaxConfig] = useState(getTaxConfig());
-  const roomRentTotal = useMemo(() => sum(occRows, "room_revenue"), [occRows]);
+
+  // Classify booking-source rows (SourceDay) into the configured tax buckets.
+  // Matching is based on the source/code text since the imported reports
+  // carry channel names like "EXPEDIA HOTEL COLLECT", "WALK-IN", "PRP"...
+  const classifySource = (r) => {
+    const text = `${r.source || ""} ${r.code || ""}`.toUpperCase();
+    if (/EXPEDIA.*HOTEL COLLECT|EHC/.test(text)) return "EXPEDIA_HC";
+    if (/BOOKING\.?COM.*HOTEL COLLECT|BHC/.test(text)) return "BOOKING_HC";
+    if (/WALK|WIN/.test(text)) return "WALK_IN";
+    if (/PROPERTY BOOKING|PRP|RR WEBSITE|WEB|RED ROOF APP|APP|CONTACT CENTER|CRS/.test(text)) return "PROPERTY_BOOKING";
+    return "OTHER_OTA";
+  };
+
   const taxCalculations = useMemo(() => {
+    const buckets = {};
+    srcRows.forEach((r) => {
+      const key = classifySource(r);
+      buckets[key] = (buckets[key] || 0) + (Number(r.net_revenue) || 0);
+    });
     return TAX_SOURCES.map((src) => {
-      const sourceRows = occRows.filter((r) => {
-        const s = String(r.report_type || r.source_file || "").toUpperCase();
-        return s.includes(src.key.replace("_", " ")) || s.includes(src.label.toUpperCase().split("(")[0].trim());
-      });
-      const rent = src.key === "OTHER_OTA"
-        ? roomRentTotal - occRows.filter((r) => {
-            const s = String(r.report_type || r.source_file || "").toUpperCase();
-            return TAX_SOURCES.filter((x) => x.key !== "OTHER_OTA").some((x) =>
-              s.includes(x.key.replace("_", " ")) || s.includes(x.label.toUpperCase().split("(")[0].trim())
-            );
-          }).reduce((a, r) => a + (Number(r.room_revenue) || 0), 0)
-        : sum(sourceRows, "room_revenue");
+      const rent = buckets[src.key] || 0;
       const tax = calculateTax(rent, src.key);
       return { ...src, rent, tax };
     });
-  }, [occRows, roomRentTotal, taxConfig]);
+  }, [srcRows, taxConfig]);
   const totalTaxCollected = taxCalculations.reduce((a, c) => a + c.tax, 0);
 
   if (isLoading) return <p className="text-slate-500">Loading payment data…</p>;
@@ -211,7 +214,7 @@ export default function Payments() {
                 <tfoot>
                   <tr className="border-t-2 border-white/10 bg-[#040D1A]/80">
                     <td className="py-3 pr-4 font-semibold text-white">TOTAL</td>
-                    <td className="py-3 pr-4 text-right tabular-nums text-slate-300">{money2(roomRentTotal)}</td>
+                    <td className="py-3 pr-4 text-right tabular-nums text-slate-300">{money2(taxCalculations.reduce((a, c) => a + c.rent, 0))}</td>
                     <td className="py-3 pr-4 text-right text-slate-500">—</td>
                     <td className="py-3 pr-4 text-right font-heading text-lg font-semibold text-[#00D4FF]">{money2(totalTaxCollected)}</td>
                     <td className="py-3 text-center text-xs text-slate-500">{taxConfig.taxEnabled ? "Active" : "Off"}</td>
@@ -373,9 +376,9 @@ export default function Payments() {
             </Card>
           )}
 
-          {/* Adjustment Audit with drill-down */}
+          {/* Payment Audit with drill-down */}
           {clerkAdjustments.length > 0 && (
-            <Card title="Adjustment Audit" subtitle="Click a clerk to expand individual adjustment records">
+            <Card title="Payment Audit" subtitle="Click a clerk to expand individual payment records">
               <div className="space-y-2">
                 {clerkAdjustments.map((c) => (
                   <div key={c.clerk}>
@@ -385,23 +388,22 @@ export default function Payments() {
                     >
                       <div className="text-left">
                         <p className="text-sm text-white">{c.clerk}</p>
-                        <p className="text-xs text-slate-500">{c.count} adjustment{c.count === 1 ? "" : "s"}</p>
+                        <p className="text-xs text-slate-500">{c.count} payment{c.count === 1 ? "" : "s"}</p>
                       </div>
                       <div className="text-right">
                         <p className="font-heading text-base tabular-nums text-[#00D4FF]">{money(c.adjusted)}</p>
-                        <p className="text-xs text-slate-500">vs {money(c.actual)} actual</p>
                       </div>
                     </button>
                     {expandedClerk === c.clerk && (
                       <div className="mt-1 space-y-1 rounded-xl border border-white/5 bg-[#040D1A] p-3">
                         {c.records.slice(0, 50).map((r, i) => (
                           <div key={i} className="flex items-center justify-between py-1.5 text-xs">
-                            <span className="text-slate-400">{r.source_file || r.import_id || "—"}</span>
-                            <span className="tabular-nums text-slate-300">{money2(Number(r.adjusted) || 0)}</span>
+                            <span className="text-slate-400">{r.payment_type || "—"}</span>
+                            <span className="tabular-nums text-slate-300">{money2(Number(r.amount) || 0)}</span>
                           </div>
                         ))}
                         <div className="mt-2 flex items-center justify-between border-t border-white/5 pt-2">
-                          <span className="text-xs font-medium text-slate-300">Total Adjustments</span>
+                          <span className="text-xs font-medium text-slate-300">Total</span>
                           <span className="font-heading text-sm tabular-nums text-[#00D4FF]">{money(c.adjusted)}</span>
                         </div>
                       </div>

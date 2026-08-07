@@ -1,4 +1,3 @@
-import { db } from '@/api/base44Client';
 
 import React, { useEffect, useState } from "react";
 import { appParams } from "@/lib/app-params";

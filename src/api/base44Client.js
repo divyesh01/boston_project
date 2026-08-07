@@ -81,6 +81,11 @@ function createEntityProxy(tableName) {
       await table.bulkAdd(records);
       return records;
     },
+
+    async clear() {
+      await table.clear();
+      return { success: true };
+    },
   };
 }
 

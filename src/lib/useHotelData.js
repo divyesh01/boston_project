@@ -29,9 +29,10 @@ function filterByMonths(rows, months) {
   });
 }
 
-export function useOccupancy(dateRange, propertyId, months = []) {
+export function useOccupancy(dateRange, propertyId, months = [], enabled = true) {
   return useQuery({
     queryKey: ["occupancy", dateRange?.from, dateRange?.to, propertyId, (months || []).join(",")],
+    enabled,
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
       let rows;

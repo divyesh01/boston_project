@@ -1,13 +1,13 @@
 import React, { useMemo, useState } from "react";
 import {
-  DollarSign, Percent, Gauge, TrendingUp, TrendingDown, ChevronLeft, ChevronRight, X,
+  DollarSign, Percent, Gauge, TrendingUp, TrendingDown, X,
 } from "lucide-react";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import Card from "@/components/ui-exec/Card";
 import { useOccupancy, useSources } from "@/lib/useHotelData";
 import { useGlobalFilters, MONTHS_LONG } from "@/lib/useGlobalFilters";
 import { money, money2, pct, num, sum, inRange, C } from "@/lib/hotel";
-import { getRevenueColor, getRevenueGroup, getRevenueGroupLabel, getRevenueThresholds } from "@/lib/revenueThresholds";
+import { getRevenueColor, getRevenueGroup, getRevenueGroupLabel } from "@/lib/revenueThresholds";
 
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 

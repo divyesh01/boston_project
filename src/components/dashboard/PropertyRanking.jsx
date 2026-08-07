@@ -1,7 +1,7 @@
 import React from "react";
 import { Trophy, TrendingDown } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
-import { money, money2, pct, num, perPropertyStats } from "@/lib/hotel";
+import { money, money2, pct, perPropertyStats } from "@/lib/hotel";
 
 export default function PropertyRanking({ occRows, properties }) {
   const stats = perPropertyStats(occRows, properties);

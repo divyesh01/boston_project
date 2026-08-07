@@ -8,6 +8,7 @@ import { useUploads, useProperties } from "@/lib/useHotelData";
 import { num } from "@/lib/hotel";
 import { REPORT_TYPES, scanReport, importReport } from "@/lib/reportParsers";
 import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
+import { useAuth } from "@/lib/AuthContext";
 
 const STATUS_LABEL = {
   pending: "Queued",
@@ -32,6 +33,7 @@ function scanRawRows(scan) {
 export default function Import() {
   const { data: uploads = [], refetch } = useUploads();
   const { data: properties = [] } = useProperties();
+  const { canAccessProperty } = useAuth();
   const [type, setType] = useState("auto");
   const [propertyId, setPropertyId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -51,7 +53,7 @@ export default function Import() {
   const [driveImporting, setDriveImporting] = useState(false);
   const [clearing, setClearing] = useState(false);
 
-  const propertyOpts = properties.map((p) => [p.id, p.name]);
+  const propertyOpts = properties.filter((p) => canAccessProperty(p.id)).map((p) => [p.id, p.name]);
   const selectedProperty = properties.find((p) => p.id === propertyId);
 
   const importMeta = (sourceFile) => ({

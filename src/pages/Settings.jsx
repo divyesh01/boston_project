@@ -1,12 +1,14 @@
 import { db } from '@/api/base44Client';
 
-import React, { useState, useEffect } from "react";
-import { Save, Plus, CheckCircle2, RotateCcw, Trash2, UserPlus, Building2, RefreshCw } from "lucide-react";
+import React, { useState } from "react";
+import { Link } from "react-router-dom";
+import { Save, Plus, CheckCircle2, RotateCcw, Trash2, Building2, RefreshCw, UserCog, LogOut } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, COMMISSION_TYPES } from "@/lib/commissionRates";
 import { getAlertThresholds, saveAlertThresholds } from "@/lib/alertThresholds";
 import { getRevenueThresholds, saveRevenueThresholds } from "@/lib/revenueThresholds";
 
+import { useAuth } from "@/lib/AuthContext";
 import { useProperties } from "@/lib/useHotelData";
 import { queryClientInstance } from "@/lib/query-client";
 import {
@@ -15,6 +17,7 @@ import {
 } from "@/components/ui/alert-dialog";
 
 export default function Settings() {
+  const { user: me, logout, hasPermission } = useAuth();
   const [rates, setRates] = useState(() => getCommissionRates());
   const [ccFee, setCcFee] = useState(() => getCcFeeRate());
   const [newSource, setNewSource] = useState("");
@@ -26,23 +29,11 @@ export default function Settings() {
   const [thresholdSaved, setThresholdSaved] = useState(false);
   const [revThresholds, setRevThresholds] = useState(() => getRevenueThresholds());
   const [revSaved, setRevSaved] = useState(false);
-  const [users, setUsers] = useState([]);
-  const [usersError, setUsersError] = useState("");
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState("user");
-  const [inviting, setInviting] = useState(false);
-  const [inviteMsg, setInviteMsg] = useState("");
   const { data: properties = [], refetch: refetchProps } = useProperties();
   const [newPropCode, setNewPropCode] = useState("");
   const [newPropName, setNewPropName] = useState("");
   const [newPropRooms, setNewPropRooms] = useState("100");
   const [propMsg, setPropMsg] = useState("");
-
-  useEffect(() => {
-    db.entities.User.list()
-      .then((res) => setUsers(res))
-      .catch(() => setUsersError("Only admins can manage users."));
-  }, []);
 
   const handleChange = (key, field, val) => {
     const cur = rates[key] || { type: "percentage", rate: 0, taxExempt: false };
@@ -91,22 +82,6 @@ export default function Settings() {
     saveRevenueThresholds(revThresholds);
     setRevSaved(true);
     setTimeout(() => setRevSaved(false), 2000);
-  };
-
-  const handleInvite = async () => {
-    if (!inviteEmail.trim()) return;
-    setInviting(true);
-    setInviteMsg("");
-    try {
-      await db.users.inviteUser(inviteEmail.trim(), inviteRole);
-      setInviteMsg(`Invitation sent to ${inviteEmail.trim()}`);
-      setInviteEmail("");
-      const res = await db.entities.User.list();
-      setUsers(res);
-    } catch (e) {
-      setInviteMsg(e.message || "Could not invite user");
-    }
-    setInviting(false);
   };
 
   const handleAddProperty = async () => {
@@ -430,55 +405,50 @@ export default function Settings() {
         </div>
       </Card>
 
-      <Card title="User management" subtitle="Invite team members and control access">
-        {usersError ? (
-          <p className="text-sm text-slate-500">{usersError}</p>
-        ) : (
-          <>
-            <div className="space-y-2">
-              {users.map((u) => (
-                <div key={u.id} className="flex items-center justify-between rounded-xl border border-white/5 bg-[#0A1628]/60 px-4 py-3">
-                  <div>
-                    <p className="text-sm text-white">{u.email}</p>
-                    <p className="text-xs text-slate-500">{u.full_name || "—"}</p>
-                  </div>
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs ${
-                      u.role === "admin" ? "bg-[#6C63FF]/15 text-[#6C63FF]" : "bg-white/5 text-slate-400"
-                    }`}
-                  >
-                    {u.role || "user"}
-                  </span>
-                </div>
-              ))}
-              {!users.length && <p className="text-sm text-slate-500">No users found.</p>}
+      <Card title="User management" subtitle="Create accounts, assign roles, permissions, and property access">
+        <div className="space-y-3">
+          <p className="text-sm text-slate-400">
+            Manage logins, roles, permissions, and property-level access from the User Management page.
+          </p>
+          <Link
+            to="/users"
+            className="inline-flex items-center gap-2 rounded-lg bg-[#6C63FF] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#5b52e8]"
+          >
+            <UserCog className="h-4 w-4" /> Open User Management
+          </Link>
+        </div>
+      </Card>
+
+      <Card title="My account" subtitle="Your profile, role, and session">
+        {me && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 rounded-xl border border-white/5 bg-[#0A1628]/60 px-4 py-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#6C63FF]/30 text-base font-bold text-white">
+                {(me.full_name || me.username || "?").slice(0, 1).toUpperCase()}
+              </div>
+              <div>
+                <p className="text-sm font-medium text-white">{me.full_name || me.username}</p>
+                <p className="text-xs text-slate-400">{me.email}</p>
+                <p className="mt-0.5 text-[10px] uppercase tracking-wide text-[#6C63FF]">
+                  {me.role?.replace("_", " ") || "user"}
+                </p>
+              </div>
             </div>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <input
-                type="email"
-                value={inviteEmail}
-                onChange={(e) => setInviteEmail(e.target.value)}
-                placeholder="employee@email.com"
-                className="flex-1 rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]"
-              />
-              <select
-                value={inviteRole}
-                onChange={(e) => setInviteRole(e.target.value)}
-                className="min-h-[44px] rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]"
+            <div className="flex flex-wrap gap-2">
+              <Link
+                to="/change-password"
+                className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-4 py-2.5 text-sm text-slate-300 transition-colors hover:border-[#6C63FF]/60 hover:text-white"
               >
-                <option value="user">User</option>
-                <option value="admin">Admin</option>
-              </select>
+                Change Password
+              </Link>
               <button
-                onClick={handleInvite}
-                disabled={inviting || !inviteEmail.trim()}
-                className="flex h-11 items-center gap-2 rounded-lg bg-[#6C63FF] px-4 text-sm font-medium text-white transition-colors hover:bg-[#5b52e8] disabled:opacity-50"
+                onClick={() => logout(true)}
+                className="inline-flex items-center gap-2 rounded-lg border border-[#FF6B6B]/30 bg-[#FF6B6B]/10 px-4 py-2.5 text-sm font-medium text-[#FF6B6B] transition-colors hover:bg-[#FF6B6B]/20"
               >
-                <UserPlus className="h-4 w-4" /> {inviting ? "…" : "Invite"}
+                <LogOut className="h-4 w-4" /> Log out
               </button>
             </div>
-            {inviteMsg && <p className="mt-2 text-sm text-[#00E096]">{inviteMsg}</p>}
-          </>
+          </div>
         )}
       </Card>
 

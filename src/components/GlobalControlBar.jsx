@@ -179,7 +179,7 @@ export default function GlobalControlBar() {
         <Field label="Property">
           <MultiPropertySelect
             selectedIds={f.selectedPropertyIds}
-            properties={f.properties}
+            properties={f.accessibleProperties}
             onToggle={f.toggleProperty}
             onClear={() => f.setPropertyMulti([])}
           />

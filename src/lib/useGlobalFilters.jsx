@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useMemo, useCallback } from "react";
 import { useProperties, useLatestDate } from "@/lib/useHotelData";
+import { useAuth } from "@/lib/AuthContext";
 
 const Ctx = createContext(null);
 
@@ -132,13 +133,27 @@ export function GlobalFiltersProvider({ children }) {
   const [customTo, setCustomTo] = useState("");
 
   const { data: properties = [] } = useProperties();
+  const { canAccessProperty } = useAuth();
+
+  // Property-level access: non-owner/admin users only see their assigned properties
+  const accessibleProperties = useMemo(
+    () => properties.filter((p) => canAccessProperty(p.id)),
+    [properties, canAccessProperty]
+  );
+
+  // Constrain selections to accessible properties
+  const effectiveProperties = useMemo(() => {
+    const sel = selectedPropertyIds.filter((id) => accessibleProperties.some((p) => p.id === id));
+    // Owner/admin with no selection = all; restricted users with no selection = all accessible
+    return sel;
+  }, [selectedPropertyIds, accessibleProperties]);
 
   // Backward-compat: property as string or array for hooks
-  const property = selectedPropertyIds.length === 0
+  const property = effectiveProperties.length === 0
     ? "all"
-    : selectedPropertyIds.length === 1
-    ? selectedPropertyIds[0]
-    : selectedPropertyIds;
+    : effectiveProperties.length === 1
+    ? effectiveProperties[0]
+    : effectiveProperties;
 
   const { data: latestDate = "" } = useLatestDate(property);
 
@@ -247,6 +262,7 @@ export function GlobalFiltersProvider({ children }) {
     // Backward compat
     property, setProperty,
     properties,
+    accessibleProperties,
     // Period
     period, setPeriod,
     year, setYear,

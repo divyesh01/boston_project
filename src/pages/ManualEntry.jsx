@@ -99,7 +99,7 @@ function useManualEntries(reportType, propertyId) {
 }
 
 export default function ManualEntry() {
-  const { property, properties } = useGlobalFilters();
+  const { property, properties, accessibleProperties } = useGlobalFilters();
   const qc = useQueryClient();
   const [reportType, setReportType] = useState("occupancy");
   const [search, setSearch] = useState("");
@@ -115,7 +115,7 @@ export default function ManualEntry() {
   const selectedProperty = properties.find((p) => p.id === (Array.isArray(property) ? property[0] : property));
   const { data: existing = [] } = useManualEntries(reportType, property);
 
-  const propertyOpts = properties.map((p) => [p.id, p.name]);
+  const propertyOpts = (accessibleProperties.length ? accessibleProperties : properties).map((p) => [p.id, p.name]);
 
   const pushHistory = useCallback((newRows) => {
     setHistory((prev) => {

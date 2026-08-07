@@ -1,0 +1,78 @@
+{
+  "name": "Expense",
+  "type": "object",
+  "properties": {
+    "property_id": {
+      "type": "string"
+    },
+    "property_name": {
+      "type": "string"
+    },
+    "expense_name": {
+      "type": "string"
+    },
+    "vendor": {
+      "type": "string"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "utilities",
+        "payroll",
+        "housekeeping",
+        "maintenance",
+        "insurance",
+        "supplies",
+        "marketing",
+        "ota_commission",
+        "taxes",
+        "rent",
+        "other"
+      ],
+      "default": "other"
+    },
+    "frequency": {
+      "type": "string",
+      "enum": [
+        "one_time",
+        "weekly",
+        "monthly",
+        "quarterly",
+        "yearly"
+      ],
+      "default": "one_time"
+    },
+    "amount": {
+      "type": "number"
+    },
+    "expense_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "payment_status": {
+      "type": "string",
+      "enum": [
+        "unpaid",
+        "scheduled",
+        "paid",
+        "overdue"
+      ],
+      "default": "unpaid"
+    },
+    "recurring": {
+      "type": "boolean",
+      "default": false
+    },
+    "taxable": {
+      "type": "boolean",
+      "default": true
+    },
+    "notes": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "expense_name",
+    "amount"
+  ]
+}

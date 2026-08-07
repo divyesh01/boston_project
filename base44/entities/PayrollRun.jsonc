@@ -1,0 +1,78 @@
+{
+  "name": "PayrollRun",
+  "type": "object",
+  "properties": {
+    "property_id": {
+      "type": "string"
+    },
+    "property_name": {
+      "type": "string"
+    },
+    "employee_name": {
+      "type": "string"
+    },
+    "department": {
+      "type": "string"
+    },
+    "pay_type": {
+      "type": "string",
+      "enum": [
+        "hourly",
+        "salary"
+      ],
+      "default": "hourly"
+    },
+    "base_rate": {
+      "type": "number"
+    },
+    "hours": {
+      "type": "number"
+    },
+    "regular_pay": {
+      "type": "number"
+    },
+    "overtime_hours": {
+      "type": "number"
+    },
+    "overtime_rate": {
+      "type": "number"
+    },
+    "overtime_pay": {
+      "type": "number"
+    },
+    "bonus": {
+      "type": "number"
+    },
+    "deductions": {
+      "type": "number"
+    },
+    "total_pay": {
+      "type": "number"
+    },
+    "pay_period_start": {
+      "type": "string",
+      "format": "date"
+    },
+    "pay_period_end": {
+      "type": "string",
+      "format": "date"
+    },
+    "payroll_status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "pending_review",
+        "approved",
+        "paid"
+      ],
+      "default": "draft"
+    },
+    "payroll_date": {
+      "type": "string",
+      "format": "date"
+    }
+  },
+  "required": [
+    "employee_name"
+  ]
+}

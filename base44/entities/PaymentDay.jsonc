@@ -1,0 +1,76 @@
+{
+  "name": "PaymentDay",
+  "type": "object",
+  "properties": {
+    "property_id": {
+      "type": "string"
+    },
+    "property_name": {
+      "type": "string"
+    },
+    "report_type": {
+      "type": "string"
+    },
+    "import_id": {
+      "type": "string"
+    },
+    "source_file": {
+      "type": "string"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "day_of_week": {
+      "type": "string"
+    },
+    "cash": {
+      "type": "number"
+    },
+    "check": {
+      "type": "number"
+    },
+    "closed_balance_folio": {
+      "type": "number"
+    },
+    "corpay": {
+      "type": "number"
+    },
+    "direct_bill": {
+      "type": "number"
+    },
+    "loyalty_certificate": {
+      "type": "number"
+    },
+    "loyalty_discount": {
+      "type": "number"
+    },
+    "vip_pass": {
+      "type": "number"
+    },
+    "wire_transfer": {
+      "type": "number"
+    },
+    "amex": {
+      "type": "number"
+    },
+    "discover": {
+      "type": "number"
+    },
+    "master": {
+      "type": "number"
+    },
+    "other": {
+      "type": "number"
+    },
+    "visa": {
+      "type": "number"
+    },
+    "total": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "date"
+  ]
+}

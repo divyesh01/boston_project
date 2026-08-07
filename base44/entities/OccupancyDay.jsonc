@@ -1,0 +1,97 @@
+{
+  "name": "OccupancyDay",
+  "type": "object",
+  "properties": {
+    "property_id": {
+      "type": "string"
+    },
+    "property_name": {
+      "type": "string"
+    },
+    "report_type": {
+      "type": "string"
+    },
+    "import_id": {
+      "type": "string"
+    },
+    "source_file": {
+      "type": "string"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "day_of_week": {
+      "type": "string"
+    },
+    "room_revenue": {
+      "type": "number"
+    },
+    "other_room_revenue": {
+      "type": "number"
+    },
+    "total_revenue": {
+      "type": "number"
+    },
+    "total_rooms": {
+      "type": "number"
+    },
+    "rooms_sold": {
+      "type": "number"
+    },
+    "rooms_sold_without_comp": {
+      "type": "number"
+    },
+    "down_rooms": {
+      "type": "number"
+    },
+    "vacant_rooms": {
+      "type": "number"
+    },
+    "clean_rooms": {
+      "type": "number"
+    },
+    "dirty_rooms": {
+      "type": "number"
+    },
+    "stayover_rooms": {
+      "type": "number"
+    },
+    "same_day_bookings": {
+      "type": "number"
+    },
+    "comp_rooms": {
+      "type": "number"
+    },
+    "house_rooms": {
+      "type": "number"
+    },
+    "zero_rate_rooms": {
+      "type": "number"
+    },
+    "day_use_rooms": {
+      "type": "number"
+    },
+    "no_shows": {
+      "type": "number"
+    },
+    "cancellations": {
+      "type": "number"
+    },
+    "total_guests": {
+      "type": "number"
+    },
+    "adr": {
+      "type": "number"
+    },
+    "occupancy": {
+      "type": "number"
+    },
+    "revpar": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "date"
+  ]
+}

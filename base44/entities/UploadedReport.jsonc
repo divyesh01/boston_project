@@ -1,0 +1,51 @@
+{
+  "name": "UploadedReport",
+  "type": "object",
+  "properties": {
+    "property_id": {
+      "type": "string"
+    },
+    "property_name": {
+      "type": "string"
+    },
+    "report_type": {
+      "type": "string"
+    },
+    "import_id": {
+      "type": "string"
+    },
+    "source_file": {
+      "type": "string"
+    },
+    "drive_file_id": {
+      "type": "string"
+    },
+    "drive_backup_status": {
+      "type": "string"
+    },
+    "file_name": {
+      "type": "string"
+    },
+    "rows_imported": {
+      "type": "number"
+    },
+    "file_url": {
+      "type": "string"
+    },
+    "columns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "raw_rows": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": [
+    "file_name"
+  ]
+}

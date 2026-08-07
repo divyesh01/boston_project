@@ -1,0 +1,57 @@
+{
+  "name": "ClerkShiftRecord",
+  "type": "object",
+  "properties": {
+    "property_id": {
+      "type": "string"
+    },
+    "property_name": {
+      "type": "string"
+    },
+    "report_type": {
+      "type": "string"
+    },
+    "import_id": {
+      "type": "string"
+    },
+    "source_file": {
+      "type": "string"
+    },
+    "record_type": {
+      "type": "string",
+      "enum": [
+        "payment",
+        "drop",
+        "clerk_payment"
+      ],
+      "default": "payment"
+    },
+    "payment_type": {
+      "type": "string"
+    },
+    "clerk_name": {
+      "type": "string"
+    },
+    "shift_date": {
+      "type": "string"
+    },
+    "actual": {
+      "type": "number"
+    },
+    "adjusted": {
+      "type": "number"
+    },
+    "net_today": {
+      "type": "number"
+    },
+    "amount": {
+      "type": "number"
+    },
+    "transaction_count": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "record_type"
+  ]
+}

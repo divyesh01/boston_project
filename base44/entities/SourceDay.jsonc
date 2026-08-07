@@ -1,0 +1,52 @@
+{
+  "name": "SourceDay",
+  "type": "object",
+  "properties": {
+    "property_id": {
+      "type": "string"
+    },
+    "property_name": {
+      "type": "string"
+    },
+    "report_type": {
+      "type": "string"
+    },
+    "import_id": {
+      "type": "string"
+    },
+    "source_file": {
+      "type": "string"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "day_of_week": {
+      "type": "string"
+    },
+    "code": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "net_revenue": {
+      "type": "number"
+    },
+    "stays": {
+      "type": "number"
+    },
+    "adr": {
+      "type": "number"
+    },
+    "occupancy_contribution": {
+      "type": "number"
+    },
+    "revpar_contribution": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "date"
+  ]
+}

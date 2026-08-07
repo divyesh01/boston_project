@@ -1,0 +1,67 @@
+{
+  "name": "GrossRevenueDay",
+  "type": "object",
+  "properties": {
+    "property_id": {
+      "type": "string"
+    },
+    "property_name": {
+      "type": "string"
+    },
+    "report_type": {
+      "type": "string"
+    },
+    "import_id": {
+      "type": "string"
+    },
+    "source_file": {
+      "type": "string"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "day_of_week": {
+      "type": "string"
+    },
+    "room_rent": {
+      "type": "number"
+    },
+    "misc_charge": {
+      "type": "number"
+    },
+    "system_charge": {
+      "type": "number"
+    },
+    "food": {
+      "type": "number"
+    },
+    "event": {
+      "type": "number"
+    },
+    "bar": {
+      "type": "number"
+    },
+    "laundry": {
+      "type": "number"
+    },
+    "phone": {
+      "type": "number"
+    },
+    "other": {
+      "type": "number"
+    },
+    "non_revenue": {
+      "type": "number"
+    },
+    "advance_deposit": {
+      "type": "number"
+    },
+    "beverage": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "date"
+  ]
+}

@@ -8,10 +8,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useGlobalFilters, MONTHS_LONG } from "@/lib/useGlobalFilters";
 import { useOccupancy, usePaymentData } from "@/lib/useHotelData";
 import { money, sum, inRange, pct, C } from "@/lib/hotel";
-
-const CATEGORIES = ["utilities", "payroll", "housekeeping", "maintenance", "insurance", "supplies", "marketing", "ota_commission", "taxes", "rent", "other"];
-const FREQUENCIES = ["one_time", "weekly", "monthly", "quarterly", "yearly"];
-const STATUSES = ["unpaid", "scheduled", "paid", "overdue"];
+import { toast } from "sonner";
+import { EXPENSE_CATEGORIES, EXPENSE_FREQUENCIES, EXPENSE_STATUSES, expenseLabel, frequencyLabel, isStandardCategory, slugifyCategory } from "@/lib/expenseCategories";
 
 function useExpenses(propertyId) {
   return useQuery({
@@ -58,10 +56,12 @@ export default function Expenses() {
   const [showPayrollForm, setShowPayrollForm] = useState(false);
   const [targetMargin, setTargetMargin] = useState(15);
   const [form, setForm] = useState({
-    expense_name: "", vendor: "", category: "other", frequency: "one_time",
+    expense_name: "", vendor: "", category: "other", customCat: "", frequency: "one_time",
     amount: "", expense_date: new Date().toISOString().slice(0, 10), payment_status: "unpaid",
     taxable: true,
   });
+  const customSelected = !isStandardCategory(form.category);
+  const customCategory = customSelected ? "__custom__" : form.category;
   const [expSearch, setExpSearch] = useState("");
   const [expFilterCat, setExpFilterCat] = useState("all");
   const [expFilterTax, setExpFilterTax] = useState("all");
@@ -108,17 +108,45 @@ export default function Expenses() {
   const propName = property === "all" ? "All Properties" : (Array.isArray(property) ? `${property.length} Properties` : (properties.find((p) => p.id === property)?.name || "Property"));
 
   const handleAdd = async () => {
-    if (!form.expense_name || !form.amount) return;
+    if (!form.expense_name || !form.amount) {
+      toast.error("Expense name and amount are required.");
+      return;
+    }
+    if (Number(form.amount) <= 0) {
+      toast.error("Amount must be greater than zero.");
+      return;
+    }
+    let category = form.category;
+    if (customSelected) {
+      if (form.category === "__custom__") {
+        if (!String(form.customCat || "").trim()) {
+          toast.error("Enter a name for the custom category.");
+          return;
+        }
+        category = slugifyCategory(form.customCat);
+      }
+    }
     const prop = properties.find((p) => p.id === (Array.isArray(property) ? property[0] : property));
-    await db.entities.Expense.create({
-      ...form,
-      amount: Number(form.amount) || 0,
-      recurring: form.frequency !== "one_time",
-      taxable: form.taxable !== false,
-      property_id: property !== "all" ? (Array.isArray(property) ? property[0] : property) : "",
-      property_name: prop?.name || "",
-    });
-    setForm({ expense_name: "", vendor: "", category: "other", frequency: "one_time", amount: "", expense_date: new Date().toISOString().slice(0, 10), payment_status: "unpaid", taxable: true });
+    try {
+      await db.entities.Expense.create({
+        expense_name: form.expense_name,
+        vendor: form.vendor || "",
+        category,
+        frequency: form.frequency,
+        expense_date: form.expense_date,
+        payment_status: form.payment_status,
+        amount: Number(form.amount) || 0,
+        recurring: form.frequency !== "one_time",
+        taxable: form.taxable !== false,
+        property_id: property !== "all" ? (Array.isArray(property) ? property[0] : property) : "",
+        property_name: prop?.name || "",
+      });
+      toast.success(`Expense "${form.expense_name}" saved.`);
+    } catch {
+      toast.error("Could not save the expense. Please try again.");
+      return;
+    }
+    setForm({ expense_name: "", vendor: "", category: "other", customCat: "", frequency: "one_time", amount: "", expense_date: new Date().toISOString().slice(0, 10), payment_status: "unpaid", taxable: true });
     qc.invalidateQueries({ queryKey: ["expenses"] });
     setShowForm(false);
   };
@@ -127,6 +155,8 @@ export default function Expenses() {
     await db.entities.Expense.update(id, { taxable: !current });
     qc.invalidateQueries({ queryKey: ["expenses"] });
   };
+
+  const customCats = useMemo(() => [...new Set(expenses.map((e) => e.category).filter((c) => c && !isStandardCategory(c)))].sort(), [expenses]);
 
   // Filtered expenses
   const filteredExpenses = useMemo(() => {
@@ -174,7 +204,13 @@ export default function Expenses() {
   };
 
   const handleDelete = async (id) => {
-    await db.entities.Expense.delete(id);
+    try {
+      await db.entities.Expense.delete(id);
+      toast.success("Expense deleted.");
+    } catch {
+      toast.error("Could not delete the expense.");
+      return;
+    }
     qc.invalidateQueries({ queryKey: ["expenses"] });
   };
 
@@ -337,11 +373,26 @@ export default function Expenses() {
             <div className="mb-4 grid gap-3 rounded-xl border border-white/10 bg-[#0A1628] p-4 sm:grid-cols-2 lg:grid-cols-3">
               <input value={form.expense_name} onChange={(e) => setForm({ ...form, expense_name: e.target.value })} placeholder="Expense name" className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
               <input value={form.vendor} onChange={(e) => setForm({ ...form, vendor: e.target.value })} placeholder="Vendor" className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
-              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]">
-                {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              <select
+                value={customCategory}
+                onChange={(e) => setForm({ ...form, category: e.target.value === "__custom__" ? "__custom__" : e.target.value, customCat: "" })}
+                className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]"
+                aria-label="Expense category"
+              >
+                {EXPENSE_CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                <option value="__custom__">Custom category…</option>
               </select>
+              {customSelected && (
+                <input
+                  value={form.customCat}
+                  onChange={(e) => setForm({ ...form, customCat: e.target.value })}
+                  placeholder={form.category === "__custom__" ? "e.g. Snow Removal" : "Custom category name"}
+                  className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]"
+                  aria-label="Custom category name"
+                />
+              )}
               <select value={form.frequency} onChange={(e) => setForm({ ...form, frequency: e.target.value })} className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]">
-                {FREQUENCIES.map((f) => <option key={f} value={f}>{f}</option>)}
+                {EXPENSE_FREQUENCIES.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
               </select>
               <input type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="Amount $" className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
               <input type="date" value={form.expense_date} onChange={(e) => setForm({ ...form, expense_date: e.target.value })} className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
@@ -358,7 +409,8 @@ export default function Expenses() {
             <input type="text" value={expSearch} onChange={(e) => setExpSearch(e.target.value)} placeholder="Search expenses…" className="flex-1 rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
             <select value={expFilterCat} onChange={(e) => setExpFilterCat(e.target.value)} className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-xs text-slate-200">
               <option value="all">All Categories</option>
-              {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              {EXPENSE_CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+              {customCats.map((c) => <option key={c} value={c}>{expenseLabel(c)}</option>)}
             </select>
             <select value={expFilterTax} onChange={(e) => setExpFilterTax(e.target.value)} className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-xs text-slate-200">
               <option value="all">All Tax</option>
@@ -387,7 +439,7 @@ export default function Expenses() {
                 <div className="flex items-center gap-3">
                   <div>
                     <p className="text-sm text-white">{e.expense_name}</p>
-                    <p className="text-xs text-slate-500">{e.vendor || "—"} · {e.category} · {e.frequency}</p>
+                    <p className="text-xs text-slate-500">{e.vendor || "—"} · {expenseLabel(e.category)} · {frequencyLabel(e.frequency)}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
@@ -404,7 +456,7 @@ export default function Expenses() {
                     onChange={(ev) => handleStatusChange(e.id, ev.target.value)}
                     className={`rounded-lg border border-white/10 bg-[#040D1A] px-2 py-1 text-xs ${statusColor(e.payment_status)}`}
                   >
-                    {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                    {EXPENSE_STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
                   </select>
                   <button onClick={() => handleDelete(e.id)} className="text-slate-500 hover:text-[#FF6B6B]">
                     <Trash2 className="h-4 w-4" />

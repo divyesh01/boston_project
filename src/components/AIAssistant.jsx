@@ -3,17 +3,21 @@ import { db } from '@/api/base44Client';
 import React, { useState, useRef, useEffect } from "react";
 import { Bot, X, Send, Sparkles, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import ReactMarkdown from "react-markdown";
 
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 
 const SUGGESTIONS = [
-  "How much revenue did we make this month?",
+  "Show today's executive summary",
+  "What was my ADR in March for RRI1416?",
+  "Show Middleboro on April 26, 2026",
+  "How many rooms were sold and vacant this week?",
+  "How much revenue did Expedia generate this month?",
   "Which OTA generated the most revenue?",
-  "What was occupancy last week?",
-  "Show revenue by payment method",
-  "Which day had the highest ADR?",
-  "What are my biggest expenses?",
-  "Generate today's executive summary",
+  "What were today's payments and refunds?",
+  "Which clerk had the largest cash variance?",
+  "What were last week's expenses?",
+  "Compare March vs April",
 ];
 
 export default function AIAssistant() {
@@ -123,7 +127,36 @@ export default function AIAssistant() {
                         : "bg-[#0A1628] text-slate-200"
                     }`}
                   >
-                    <p className="whitespace-pre-wrap break-words">{msg.text}</p>
+                    {msg.role === "assistant" ? (
+                      <div className="space-y-2">
+                        <div className="whitespace-pre-wrap break-words">
+                          <ReactMarkdown
+                            components={{
+                              ul: ({ node: _node, ...p }) => <ul className="list-disc space-y-1 pl-4" {...p} />,
+                              ol: ({ node: _node, ...p }) => <ol className="list-decimal space-y-1 pl-4" {...p} />,
+                              li: ({ node: _node, ...p }) => <li className="text-slate-300" {...p} />,
+                              p: ({ node: _node, ...p }) => <p className="my-1" {...p} />,
+                            }}
+                          >
+                            {msg.text}
+                          </ReactMarkdown>
+                        </div>
+                        {msg.summary && msg.summary.intent === "answer" && (
+                          <div className="flex flex-wrap gap-1 border-t border-white/5 pt-2 text-[10px] text-slate-500">
+                            <span className="rounded-full bg-[#6C63FF]/10 px-2 py-0.5 text-[#9B8CFF]">{msg.summary.property}</span>
+                            <span className="rounded-full bg-white/5 px-2 py-0.5">{msg.summary.range}</span>
+                            {msg.summary.single && <span className="rounded-full bg-[#00D4FF]/10 px-2 py-0.5 text-[#00D4FF]">Daily</span>}
+                          </div>
+                        )}
+                        {msg.summary && msg.summary.intent === "missing" && (
+                          <div className="rounded-lg border border-[#FF6B6B]/20 bg-[#FF6B6B]/[0.06] px-2 py-1.5 text-[10px] text-[#FF6B6B]">
+                            Missing report: {msg.summary.missing}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="whitespace-pre-wrap break-words">{msg.text}</p>
+                    )}
                   </div>
                 </div>
               ))}

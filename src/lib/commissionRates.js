@@ -4,6 +4,7 @@
 
 const RATES_KEY = "rri_commission_rates_v2";
 const CC_FEE_KEY = "rri_cc_fee_rate";
+const CC_REFUNDS_KEY = "rri_cc_fee_refunds_v1";
 
 const DEFAULT_RATES = {
   "EXPEDIA": { type: "percentage", rate: 0.15, taxExempt: false },
@@ -63,6 +64,19 @@ export function getCcFeeRate() {
 
 export function setCcFeeRate(rate) {
   localStorage.setItem(CC_FEE_KEY, String(rate));
+}
+
+// Whether the card processing fee also applies to card refunds
+export function getCcFeeOnRefunds() {
+  try {
+    return localStorage.getItem(CC_REFUNDS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function setCcFeeOnRefunds(enabled) {
+  localStorage.setItem(CC_REFUNDS_KEY, enabled ? "1" : "0");
 }
 
 export const COMMISSION_TYPES = [

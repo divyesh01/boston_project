@@ -56,6 +56,30 @@ function parseDate(s) {
   return null;
 }
 
+function extractDate(q) {
+  let m;
+  m = q.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/);
+  if (m) return { date: parseDate(m[0]), explicitYear: true };
+  m = q.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/);
+  if (m) return { date: parseDate(m[0]), explicitYear: true };
+  m = q.match(/\b([a-zA-Z]{3,})\s+(\d{1,2})(?:st|nd|rd|th)?[,]?\s+(\d{4})\b/i);
+  if (m) {
+    const d = parseDate(`${m[1]} ${m[2]}, ${m[3]}`);
+    if (d) return { date: d, explicitYear: true };
+  }
+  m = q.match(/\b(\d{1,2})\s+(?:of\s+)?([a-zA-Z]{3,})\s+(\d{4})\b/i);
+  if (m) {
+    const mi = monthIndex(m[2]);
+    if (mi >= 0) return { date: `${m[3]}-${pad(mi + 1)}-${pad(+m[1])}`, explicitYear: true };
+  }
+  m = q.match(/\b([a-zA-Z]{3,})\s+(\d{1,2})(?:st|nd|rd|th)?\b/i);
+  if (m) {
+    const mi = monthIndex(m[1]);
+    if (mi >= 0) return { date: null, explicitYear: false, month: mi, day: +m[2] };
+  }
+  return null;
+}
+
 function findMonthTokens(question) {
   const tokens = String(question).toLowerCase().match(/[a-z]+/g) || [];
   const out = [];
@@ -101,17 +125,24 @@ function resolveRange(question, defaults = {}) {
 
   const custom = q.match(/\b(?:between|from)\s+([^,\n]+?)\s+(?:and|to)\s+(.+?)\s*(?:[.,]|$|\?)/i);
   if (custom) {
-    const a = parseDate(custom[1]);
-    const b = parseDate(custom[2]);
-    if (a && b) {
-      const [from, to] = a < b ? [a, b] : [b, a];
-      return { from, to, single: false, label: `${from} → ${to}`, specified: true };
+    const a = extractDate(custom[1]);
+    const b = extractDate(custom[2]);
+    if (a?.date && b?.date) {
+      const [f, t] = a.date < b.date ? [a.date, b.date] : [b.date, a.date];
+      return { from: f, to: t, single: false, label: `${f} → ${t}`, specified: true };
     }
   }
 
-  const dateMatch = parseDate(q);
-  if (dateMatch && (/\bon\b|\bshow\b|\bshow\b.*\d|date/i.test(q))) {
-    return { from: dateMatch, to: dateMatch, single: true, label: dateMatch, specified: true };
+  const ex = extractDate(q);
+  if (ex && ex.explicitYear && !/\b(between|from)\b.*\b(and|to)\b/i.test(q) && !/\b(quarter|week|month|year|ytd|compare|vs\.?)\b/i.test(q)) {
+    return { from: ex.date, to: ex.date, single: true, label: ex.date, specified: true };
+  }
+  if (ex && !ex.explicitYear && ex.day && /\b(on|show|date)\b/i.test(q)) {
+    const d = new Date();
+    let y = defaults.year ?? new Date().getFullYear();
+    if (latest) y = +String(latest).slice(0, 4);
+    const dd = `${y}-${pad(ex.month + 1)}-${pad(ex.day)}`;
+    return { from: dd, to: dd, single: true, label: dd, specified: true };
   }
 
   if (/\byesterday\b/i.test(q)) {
@@ -513,16 +544,107 @@ async function intentPayments({ prop, range }) {
   return { heading: "", lines, noData: null };
 }
 
-async function intentOta({ prop, range }) {
+async function intentOta({ prop, range, question }) {
   const rows = await load("SourceDay", prop, range.from, range.to);
-  const channels = channelTotals(rows);
+  let channels = channelTotals(rows);
   if (!channels.length) return { heading: "", lines: [], noData: "sources" };
+  const ql = String(question || "").toLowerCase();
+  const named = channels.find((c) => ql.includes(String(c.name).toLowerCase()) && String(c.name).toLowerCase().length >= 3);
+  if (named) channels = [named];
   const total = channels.reduce((a, c) => a + c.gross, 0);
   const lines = [`**Channel revenue — ${prop.label} · ${fmtRange(range)}**`];
   channels.forEach((c, i) => {
     const share = total ? (c.gross / total) * 100 : 0;
     lines.push(`${i + 1}. ${c.name}: **${money(c.gross)}** (${c.stays} stays · ${share.toFixed(1)}%)`);
   });
+  return { heading: "", lines, noData: null };
+}
+
+async function intentBestDay({ prop, range, question }) {
+  const rows = await load("OccupancyDay", prop, range.from, range.to);
+  if (!rows.length) return null;
+  const q = String(question || "");
+  const metric = /adr\b/i.test(q)
+    ? "adr"
+    : /revpar\b/i.test(q)
+    ? "revpar"
+    : /occupanc/i.test(q)
+    ? "occupancy"
+    : "revenue";
+  const isLowest = /lowest|least|worst/i.test(q);
+  const value = (r) => {
+    if (metric === "adr") return Number(r.adr) || (r.rooms_sold ? (Number(r.total_revenue) || 0) / r.rooms_sold : 0);
+    if (metric === "revpar") return Number(r.revpar) || (r.total_rooms ? (Number(r.total_revenue) || 0) / r.total_rooms : 0);
+    if (metric === "occupancy") return Number(r.occupancy) || (r.total_rooms ? (Number(r.rooms_sold) || 0) / r.total_rooms : 0);
+    return Number(r.total_revenue) || 0;
+  };
+  const pick = (a, b) => (isLowest ? value(a) - value(b) : value(b) - value(a));
+  const sorted = [...rows].sort(pick);
+  const top = sorted[0];
+  const label = { adr: "ADR", revpar: "RevPAR", occupancy: "Occupancy", revenue: "Revenue" }[metric];
+  const rawVal = value(top);
+  const val = metric === "occupancy" ? pct(rawVal) : money(rawVal, 2);
+  return {
+    heading: "",
+    lines: [
+      `**${isLowest ? "Lowest" : "Highest"} ${label} day — ${prop.label}**`,
+      `- ${String(top.date || "").slice(0, 10) || "—"}: **${val}**`,
+      `- Rooms sold: ${num(Number(top.rooms_sold) || 0)} · Revenue: ${money(top.total_revenue)}`,
+      `- Over ${fmtRange(range)}`,
+    ],
+    noData: null,
+  };
+}
+
+async function intentCompareProps({ q, range }) {
+  const props = await localDb.Property.toArray();
+  const seen = new Map();
+  const ql = String(q).toLowerCase();
+  const add = (p, score) => {
+    if (!seen.has(String(p.id)) || seen.get(String(p.id)).score < score) seen.set(String(p.id), { p, score });
+  };
+  const cm = q.match(CODE_RE);
+  if (cm) {
+    const hit = props.find((p) => String(p.code || "").toUpperCase() === cm[1].toUpperCase());
+    if (hit) add(hit, 999);
+  }
+  props.forEach((p) => {
+    const { words } = propertyTokens(p);
+    let score = 0;
+    words.filter((w) => w.length >= 4 && !STOPWORDS.has(w)).forEach((w) => {
+      if (ql.includes(w)) score = Math.max(score, w.length);
+    });
+    if (score) add(p, score);
+  });
+  const sorted = [...seen.values()].sort((a, b) => b.score - a.score);
+  if (sorted.length < 2) return null;
+  const [a, b] = sorted;
+  const fa = { ids: new Set([String(a.p.id)]), label: a.p.name, isAll: false };
+  const fb = { ids: new Set([String(b.p.id)]), label: b.p.name, isAll: false };
+  const aRows = await load("OccupancyDay", fa, range.from, range.to);
+  const bRows = await load("OccupancyDay", fb, range.from, range.to);
+  if (!aRows.length && !bRows.length) return { heading: "", lines: [], noData: "occupancy" };
+  const A = aRows.length ? occTotals(aRows) : null;
+  const B = bRows.length ? occTotals(bRows) : null;
+  const pctChange = (x, y) => (y ? ((x - y) / y) * 100 : null);
+  const row = (name, f) => {
+    const av = A ? f(A) : "—";
+    const bv = B ? f(B) : "—";
+    let d = "";
+    if (A && B) {
+      const p = pctChange(f(A), f(B));
+      if (p != null) d = ` · ${p >= 0 ? "+" : ""}${p.toFixed(1)}%`;
+    }
+    return `- ${name}: ${av} vs ${bv}${d}`;
+  };
+  const lines = [
+    `**Compare ${a.p.name} vs ${b.p.name} — ${fmtRange(range)}**`,
+    row("Revenue", (o) => money(o.revenue)),
+    row("Rooms sold", (o) => num(o.roomsSold)),
+    row("Occupancy", (o) => pct(o.occupancy)),
+    row("ADR", (o) => money(o.adr, 2)),
+    row("RevPAR", (o) => money(o.revpar, 2)),
+  ];
   return { heading: "", lines, noData: null };
 }
 
@@ -555,7 +677,13 @@ async function intentClerk({ prop, range }) {
 }
 
 async function intentForecast({ prop, range, question }) {
-  const occRows = await load("OccupancyDay", prop, range.from, range.to);
+  const today = new Date();
+  let occRows = await load("OccupancyDay", prop, range.from, range.to);
+  if (!occRows.length) {
+    const end = range.to || (await latestDate()) || iso(today);
+    const start = iso(new Date(new Date(`${end}T00:00:00`).getTime() - 29 * 86400000));
+    occRows = await load("OccupancyDay", prop, start, end);
+  }
   if (!occRows.length) return { heading: "", lines: [], noData: "occupancy" };
   const occ = occTotals(occRows);
   const days = occ.days || 1;
@@ -585,7 +713,8 @@ async function intentCompare({ prop, range, q, question }) {
   if (monthTok.length >= 2) {
     const yMatch = q.match(/\b(20\d{2})\b/);
     const y = yMatch ? +yMatch[1] : new Date().getFullYear();
-    const ranges = monthTok.slice(0, 2).map(({ idx }) => monthRange(y, idx, await latestDate()));
+    const last = await latestDate();
+    const ranges = monthTok.slice(0, 2).map(({ idx }) => monthRange(y, idx, last));
     const aRows = await load("OccupancyDay", prop, ranges[0].from, ranges[0].to);
     const bRows = await load("OccupancyDay", prop, ranges[1].from, ranges[1].to);
     if (!aRows.length && !bRows.length) return { heading: "", lines: [], noData: "occupancy" };
@@ -597,7 +726,7 @@ async function intentCompare({ prop, range, q, question }) {
       const av = a && af(a) != null ? af(a) : "—";
       const bv = b && bf(b) != null ? bf(b) : "—";
       let d = "";
-      if (a && b && delta != null) d = ` · ${delta}`;
+      if (a && b && delta) d = ` · ${delta}`;
       return `- ${name}: ${av} vs ${bv}${d}`;
     };
     const pctChange = (x, y) => (y ? `${(((x - y) / y) * 100).toFixed(1)}%` : "");
@@ -630,6 +759,7 @@ async function answerQuestion({ question, propertyId, from, to }) {
 
   if (/\b(compare|versus|vs\.?|vs)\b/i.test(q)) {
     result = await intentCompare(ctx);
+    if (!result) result = await intentCompareProps({ q, range });
   }
 
   if (!result) {
@@ -640,8 +770,9 @@ async function answerQuestion({ question, propertyId, from, to }) {
     if (!result && has(/payment|refund|paid|received|tender/i)) result = await intentPayments(ctx);
     if (!result && has(/clerk|variance|short|over|audit/i)) result = await intentClerk(ctx);
     if (!result && has(/forecast|project|predict|next\s+week|next\s+month/i)) result = await intentForecast(ctx);
-    if (!result && has(/most|top|biggest|best|which\b.*(ota|channel)/i)) result = await intentTopOta(ctx);
-    if (!result && has(/(^|\b)ota|channel|expedia|booking\.com|airbnb|direct/i)) result = await intentOta(ctx);
+    if (!result && has(/highest|lowest|best|worst|biggest|least\b|\bpeak/i)) result = await intentBestDay(ctx);
+    if (!result && has(/most|top|biggest|which\b.*(ota|channel)/i)) result = await intentTopOta(ctx);
+    if (!result && has(/(^|\b)ota|channel|expedia|booking\.com|airbnb|direct|walk\s*in/i)) result = await intentOta(ctx);
     if (!result && has(/adr\b/i)) result = await intentMetric({ prop, range, metric: "adr", question: q });
     if (!result && has(/revpar|rev\s*par/i)) result = await intentMetric({ prop, range, metric: "revpar", question: q });
     if (!result && has(/occupanc/i)) result = await intentMetric({ prop, range, metric: "occupancy", question: q });

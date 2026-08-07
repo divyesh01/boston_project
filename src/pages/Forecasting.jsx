@@ -1,10 +1,12 @@
 import React, { useState, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { TrendingUp, DollarSign, Percent, Building2, BarChart3 } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import KpiCard from "@/components/ui-exec/KpiCard";
+import { db } from "@/api/base44Client";
 import { useOccupancy } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
-import { money, money2, sum, C } from "@/lib/hotel";
+import { money, money2, sum, inRange, C } from "@/lib/hotel";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts";
 
 const HORIZONS = [
@@ -14,9 +16,30 @@ const HORIZONS = [
   { key: "quarter", label: "Next Quarter", days: 90 },
 ];
 
+function buildPropertyFilter(property) {
+  const filter = {};
+  if (property && property !== "all") {
+    if (Array.isArray(property)) {
+      if (property.length > 0) filter.property_id = { $in: property };
+    } else {
+      filter.property_id = property;
+    }
+  }
+  return filter;
+}
+
 export default function Forecasting() {
   const { property, properties, accessibleProperties, dateRange, months, year } = useGlobalFilters();
   const { data: occ = [] } = useOccupancy(dateRange, property, months);
+  const propertyKey = Array.isArray(property) ? property.join(",") : property;
+  const { data: expenses = [] } = useQuery({
+    queryKey: ["expenses", propertyKey],
+    queryFn: () => db.entities.Expense.filter(buildPropertyFilter(property), "-expense_date", 500),
+  });
+  const { data: payroll = [] } = useQuery({
+    queryKey: ["payroll", propertyKey],
+    queryFn: () => db.entities.PayrollRun.filter(buildPropertyFilter(property), "-pay_period_start", 500),
+  });
 
   const occRows = useMemo(() => occ.filter((r) => {
     if (!r.date) return false;
@@ -34,8 +57,17 @@ export default function Forecasting() {
     const adr = roomsSold > 0 ? revenue / roomsSold : 0;
     const revpar = totalRooms > 0 ? revenue / totalRooms : 0;
     const days = occRows.length || 1;
-    return { revenue, roomsSold, totalRooms, occupancy, adr, revpar, days, dailyRevenue: revenue / days };
-  }, [occRows]);
+    const expInPeriod = expenses.filter((e) => inRange(e.expense_date, dateRange.from, dateRange.to));
+    const payInPeriod = payroll.filter((p) => inRange(p.pay_period_start, dateRange.from, dateRange.to));
+    const expenseTotal = sum(payInPeriod, "total_pay") + sum(expInPeriod, "amount");
+    const dailyRevenue = revenue / days;
+    const dailyExpense = days > 0 ? expenseTotal / days : 0;
+    return {
+      revenue, roomsSold, totalRooms, occupancy, adr, revpar, days,
+      dailyRevenue, dailyExpense,
+      hasExpenseData: payInPeriod.length + expInPeriod.length > 0,
+    };
+  }, [occRows, expenses, payroll, dateRange]);
 
   const [horizon, setHorizon] = useState("month");
   const [adjustments, setAdjustments] = useState({
@@ -57,7 +89,7 @@ export default function Forecasting() {
     const projectedRoomsSold = Math.round(availableRooms * adjOcc * horizonDays);
     const projectedRevenue = projectedRoomsSold * adjAdr;
     const otaCommissionAmount = projectedRevenue * (adjustments.otaCommission || 0) / 100;
-    const baseExpenses = (histStats.dailyRevenue || 0) * horizonDays * 0.65;
+    const baseExpenses = histStats.hasExpenseData ? histStats.dailyExpense * horizonDays : (histStats.dailyRevenue || 0) * horizonDays * 0.65;
     const projectedExpenses = baseExpenses * (1 + (adjustments.expenseAdjust || 0) / 100);
     const netProfit = projectedRevenue - projectedExpenses - otaCommissionAmount;
     const projectedRevpar = availableRooms > 0 ? projectedRevenue / (availableRooms * horizonDays) : 0;
@@ -80,7 +112,7 @@ export default function Forecasting() {
     const histOcc = histStats.occupancy;
     const histAdr = histStats.adr;
     const histRevpar = histStats.revpar;
-    const histExpenses = histRevenue * 0.65;
+    const histExpenses = histStats.hasExpenseData ? histStats.dailyExpense * horizonDays : histRevenue * 0.65;
 
     return [
       { metric: "Revenue", historical: Math.round(histRevenue), forecast: Math.round(forecast.revenue), diff: forecast.revenue - histRevenue },
@@ -109,7 +141,12 @@ export default function Forecasting() {
         <p className="mt-1 text-sm text-slate-400">
           Project future performance based on historical data. Adjust assumptions to model scenarios.
         </p>
-        <p className="mt-2 text-xs text-slate-500">{propName} · Based on {histStats.days} days of historical data</p>
+        <p className="mt-2 text-xs text-slate-500">
+          {propName} · Based on {histStats.days} days of historical data ·{" "}
+          {histStats.hasExpenseData
+            ? `expenses from actual records (${money(histStats.dailyExpense)}/day)`
+            : "no expense data yet — expenses assumed at 65% of revenue"}
+        </p>
       </header>
 
       {/* Historical baseline */}

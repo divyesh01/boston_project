@@ -4,9 +4,10 @@ import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { Save, Plus, CheckCircle2, RotateCcw, Trash2, Building2, RefreshCw, UserCog, LogOut } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
-import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, COMMISSION_TYPES } from "@/lib/commissionRates";
+import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, getCcFeeOnRefunds, setCcFeeOnRefunds, COMMISSION_TYPES } from "@/lib/commissionRates";
 import { getAlertThresholds, saveAlertThresholds } from "@/lib/alertThresholds";
 import { getRevenueThresholds, saveRevenueThresholds } from "@/lib/revenueThresholds";
+import { getTaxSettings, saveTaxSettings } from "@/lib/taxSettings";
 
 import { useAuth } from "@/lib/AuthContext";
 import { useProperties } from "@/lib/useHotelData";
@@ -20,6 +21,9 @@ export default function Settings() {
   const { user: me, logout, hasPermission } = useAuth();
   const [rates, setRates] = useState(() => getCommissionRates());
   const [ccFee, setCcFee] = useState(() => getCcFeeRate());
+  const [ccRefunds, setCcRefunds] = useState(() => getCcFeeOnRefunds());
+  const [taxRows, setTaxRows] = useState(() => getTaxSettings());
+  const [taxSaved, setTaxSaved] = useState(false);
   const [newSource, setNewSource] = useState("");
   const [saved, setSaved] = useState(false);
   const [deletePhrase, setDeletePhrase] = useState("");
@@ -59,9 +63,21 @@ export default function Settings() {
     setRates(next);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     setCommissionRates(rates);
     setCcFeeRate(ccFee);
+    setCcFeeOnRefunds(ccRefunds);
+    try {
+      await db.audit.log({
+        username: me?.username || "settings",
+        action: "Commission rates updated",
+        detail: `${Object.keys(rates).length} source rate(s) · CC fee ${(ccFee * 100).toFixed(2)}% · fee on refunds ${ccRefunds ? "on" : "off"}`,
+      });
+    } catch (e) {
+      console.error("[audit] commission rates:", e);
+    }
+    queryClientInstance.invalidateQueries({ queryKey: ["sources"] });
+    queryClientInstance.invalidateQueries({ queryKey: ["payments"] });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -70,6 +86,54 @@ export default function Settings() {
     const fresh = getCommissionRates();
     setRates(fresh);
     setCcFee(getCcFeeRate());
+    setCcRefunds(getCcFeeOnRefunds());
+  };
+
+  const updateTaxRow = (i, patch) => {
+    setTaxRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  };
+
+  const addTaxRow = () => {
+    setTaxRows((prev) => [
+      ...prev,
+      {
+        _key: `${Date.now()}_${prev.length}`,
+        property_id: "*",
+        state_rate: 0,
+        city_rate: 0,
+        other_rate: 0,
+        effective_start: new Date().toISOString().slice(0, 10),
+        effective_end: "",
+      },
+    ]);
+  };
+
+  const removeTaxRow = (i) => {
+    setTaxRows((prev) => prev.filter((_, idx) => idx !== i));
+  };
+
+  const handleSaveTax = async () => {
+    const clean = taxRows.map(({ _key, ...rest }) => rest);
+    saveTaxSettings(clean);
+    try {
+      await db.audit.log({
+        username: me?.username || "settings",
+        action: "Tax settings updated",
+        detail: `${clean.length} tax period(s): ${clean
+          .map((r) => `${r.property_id || "*"} S${((r.state_rate || 0) * 100).toFixed(2)}% C${((r.city_rate || 0) * 100).toFixed(2)}% O${((r.other_rate || 0) * 100).toFixed(2)}% (${r.effective_start || "open"}${r.effective_end ? ` → ${r.effective_end}` : ""})`)
+          .join("; ")}`,
+      });
+    } catch (e) {
+      console.error("[audit] tax settings:", e);
+    }
+    queryClientInstance.invalidateQueries({ queryKey: ["payments"] });
+    queryClientInstance.invalidateQueries({ queryKey: ["sources"] });
+    queryClientInstance.invalidateQueries({ queryKey: ["occupancy"] });
+    queryClientInstance.invalidateQueries({ queryKey: ["gross"] });
+    queryClientInstance.invalidateQueries({ queryKey: ["expenses"] });
+    queryClientInstance.invalidateQueries({ queryKey: ["payroll"] });
+    setTaxSaved(true);
+    setTimeout(() => setTaxSaved(false), 2000);
   };
 
   const handleSaveThresholds = () => {
@@ -200,6 +264,15 @@ export default function Settings() {
               <span className="text-sm text-slate-400">%</span>
             </div>
           </div>
+          <label className="mt-3 flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={ccRefunds}
+              onChange={(e) => setCcRefunds(e.target.checked)}
+              className="h-4 w-4 rounded border-white/20"
+            />
+            Apply the processing fee to refunds too (refunds also incur the card fee)
+          </label>
         </div>
 
         <div className="mt-4 flex gap-2">
@@ -233,6 +306,98 @@ export default function Settings() {
           >
             <RotateCcw className="h-4 w-4" /> Reset to defaults
           </button>
+        </div>
+      </Card>
+
+      <Card title="Tax settings (per property)" subtitle="State, city/local, and other tax rates with effective dates. Imported PMS tax lines are always used when available; these rates only estimate taxes when reports don't include them. New settings apply to future dates only.">
+        <div className="space-y-2">
+          {taxRows.map((row, i) => (
+            <div
+              key={row._key || i}
+              className="grid gap-2 rounded-xl border border-white/5 bg-[#0A1628]/60 px-4 py-3 sm:grid-cols-2 lg:grid-cols-7"
+            >
+              <div className="lg:col-span-2">
+                <label className="mb-1 block text-[10px] uppercase tracking-widest text-slate-500">Property</label>
+                <select
+                  value={row.property_id || "*"}
+                  onChange={(e) => updateTaxRow(i, { property_id: e.target.value })}
+                  className="w-full rounded-lg border border-white/10 bg-[#040D1A] px-2 py-1.5 text-xs text-slate-200 outline-none focus:border-[#00D4FF]"
+                >
+                  <option value="*">All properties (default)</option>
+                  {properties.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+              {[
+                ["state_rate", "State Tax %"],
+                ["city_rate", "City/Local Tax %"],
+                ["other_rate", "Other Tax % (opt.)"],
+              ].map(([key, label]) => (
+                <div key={key}>
+                  <label className="mb-1 block text-[10px] uppercase tracking-widest text-slate-500">{label}</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="50"
+                    step="0.01"
+                    value={((row[key] || 0) * 100).toFixed(2)}
+                    onChange={(e) => updateTaxRow(i, { [key]: Number(e.target.value) / 100 })}
+                    className="w-full rounded-lg border border-white/10 bg-[#040D1A] px-2 py-1.5 text-right text-xs text-slate-200 outline-none focus:border-[#00D4FF]"
+                  />
+                </div>
+              ))}
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-widest text-slate-500">Effective Start</label>
+                <input
+                  type="date"
+                  value={row.effective_start || ""}
+                  onChange={(e) => updateTaxRow(i, { effective_start: e.target.value })}
+                  className="w-full rounded-lg border border-white/10 bg-[#040D1A] px-2 py-1.5 text-xs text-slate-200 outline-none focus:border-[#00D4FF]"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-widest text-slate-500">Effective End (opt.)</label>
+                <input
+                  type="date"
+                  value={row.effective_end || ""}
+                  onChange={(e) => updateTaxRow(i, { effective_end: e.target.value })}
+                  className="w-full rounded-lg border border-white/10 bg-[#040D1A] px-2 py-1.5 text-xs text-slate-200 outline-none focus:border-[#00D4FF]"
+                />
+              </div>
+              <div className="flex items-end">
+                <button
+                  onClick={() => removeTaxRow(i)}
+                  className="rounded-lg border border-white/10 p-2 text-slate-500 transition-colors hover:border-[#FF6B6B]/60 hover:text-[#FF6B6B]"
+                  title="Remove this tax period"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+          {!taxRows.length && (
+            <p className="text-sm text-slate-500">
+              No tax rates configured — taxes are estimated from the combined default rate until you add property-specific settings.
+            </p>
+          )}
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <button
+            onClick={addTaxRow}
+            className="flex items-center gap-2 rounded-lg border border-white/10 px-4 py-2.5 text-sm text-slate-300 transition-colors hover:border-[#6C63FF]/60 hover:text-white"
+          >
+            <Plus className="h-4 w-4" /> Add tax period
+          </button>
+          <button
+            onClick={handleSaveTax}
+            className="flex items-center gap-2 rounded-lg bg-[#6C63FF] px-6 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#5b52e8]"
+          >
+            {taxSaved ? <CheckCircle2 className="h-4 w-4 text-[#00E096]" /> : <Save className="h-4 w-4" />}
+            {taxSaved ? "Saved!" : "Save Tax Settings"}
+          </button>
+          <span className="text-xs text-slate-500">Changes are recorded in the audit log and update the Executive Hub instantly.</span>
         </div>
       </Card>
 

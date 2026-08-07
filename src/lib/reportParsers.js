@@ -41,6 +41,10 @@ const COLUMN_MAP = {
   "Room Rent": "room_rent", "Misc Charge": "misc_charge",
   System: "system_charge", Food: "food", Event: "event", Bar: "bar",
   Laundry: "laundry", Phone: "phone", Other: "other",
+  "State Tax": "state_tax", "state tax": "state_tax",
+  "City Tax": "city_tax", "city tax": "city_tax",
+  "City/County Tax": "city_tax", "Local Tax": "city_tax", "Local City Tax": "city_tax",
+  "Other Tax": "other_tax", "other tax": "other_tax",
   "Non Revenue": "non_revenue", "Advance Deposit": "advance_deposit", Beverage: "beverage",
   CASH: "cash", CHECK: "check",
   "CLOSED BALANCE FOLIO": "closed_balance_folio", CORPAY: "corpay",
@@ -62,6 +66,7 @@ const NUMERIC_FIELDS = new Set([
   "actual", "adjusted", "net_today", "amount", "transaction_count",
   "cash", "check", "closed_balance_folio", "corpay", "direct_bill", "amex", "discover",
   "master", "visa", "loyalty_certificate", "loyalty_discount", "vip_pass", "wire_transfer",
+  "state_tax", "city_tax", "other_tax",
   "total",
 ]);
 

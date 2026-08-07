@@ -7,6 +7,7 @@ import ClerkAudit from "@/components/dashboard/ClerkAudit";
 import YieldAdvisor from "@/components/dashboard/YieldAdvisor";
 import RevenueTrend from "@/components/dashboard/RevenueTrend";
 import ExecutiveCharts from "@/components/dashboard/ExecutiveCharts";
+import MoneyKept from "@/components/dashboard/MoneyKept";
 import PropertyRanking from "@/components/dashboard/PropertyRanking";
 import LowOccAlert from "@/components/dashboard/LowOccAlert";
 import { useOccupancy, useSources, useClerkRecords, useGrossRevenue } from "@/lib/useHotelData";
@@ -232,6 +233,9 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+
+        {/* Estimated Money Kept — net profit after all deductions */}
+        <MoneyKept occRows={occRows} srcRows={srcRows} dateRange={dateRange} property={property} />
 
         {/* Four fixed executive charts — always visible */}
         <ExecutiveCharts rows={occRows} />

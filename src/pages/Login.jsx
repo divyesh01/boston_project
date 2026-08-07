@@ -10,6 +10,7 @@ import AuthLayout from "@/components/AuthLayout";
 import { safeReturnTo } from "@/lib/authReturnTo";
 import { useAuth } from "@/lib/AuthContext";
 import db from "@/api/base44Client";
+import { getCsrfToken, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
 
 export default function Login() {
   const { login, isAuthenticated } = useAuth();
@@ -52,9 +53,17 @@ export default function Login() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
+    // CSRF validation
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      setError("Invalid security token. Please refresh the page and try again.");
+      rotateCsrfToken();
+      return;
+    }
     setLoading(true);
     try {
       await login(identifier, password, remember);
+      rotateCsrfToken();
       window.location.href = returnTo;
     } catch (err) {
       setError(err.message || "Invalid username/email or password");

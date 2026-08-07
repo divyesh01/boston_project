@@ -5,8 +5,9 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { RefreshCw, Search } from "lucide-react";
+import { RefreshCw, Search, ShieldCheck, ShieldAlert } from "lucide-react";
 import db from "@/api/base44Client";
+import { verifyAuditChain } from "@/lib/securityUtils";
 
 const ACTION_BADGE = (action) => {
   const cls = "border ";
@@ -24,12 +25,19 @@ export default function AuditLog() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [result, setResult] = useState("all");
+  const [chain, setChain] = useState(null);
+
+  const verify = async () => {
+    const res = await verifyAuditChain();
+    setChain(res);
+  };
 
   const load = async () => {
     setLoading(true);
     try {
-      const list = await db.audit.list({}, 1000);
+      const list = await db.audit.list({}, 100000);
       setLogs(list);
+      await verify();
     } catch (e) {
       toast({ variant: "destructive", title: "Error", description: e.message });
     } finally {
@@ -66,6 +74,19 @@ export default function AuditLog() {
           </Button>
         </CardHeader>
         <CardContent className="space-y-4">
+          {chain && (
+            <div className={`flex items-center gap-3 rounded-xl border p-3 text-sm ${chain.valid ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : "border-red-500/30 bg-red-500/10 text-red-300"}`}>
+              {chain.valid ? <ShieldCheck className="h-4 w-4 shrink-0" /> : <ShieldAlert className="h-4 w-4 shrink-0" />}
+              <div>
+                {chain.valid ? (
+                  <p className="font-medium">Audit chain verified — {chain.count} log{chain.count === 1 ? "" : "s"} hash-linked and untampered.</p>
+                ) : (
+                  <p className="font-medium">Audit chain verification failed ({chain.tamperedAt ? `tampering detected at log #${chain.tamperedAt}` : chain.reason || chain.error}).</p>
+                )}
+              </div>
+              <button onClick={() => setChain(null)} className="ml-auto text-xs opacity-60 hover:opacity-100">×</button>
+            </div>
+          )}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <div className="relative max-w-sm flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />

@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useRef } from "react";
-import { DollarSign, BedDouble, Percent, Gauge, RefreshCw, FileDown, TrendingDown } from "lucide-react";
+import { DollarSign, BedDouble, Percent, Gauge, RefreshCw, FileDown, TrendingDown, Lightbulb, AlertTriangle, TrendingUp } from "lucide-react";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import Card from "@/components/ui-exec/Card";
 import OtaMatrix from "@/components/dashboard/OtaMatrix";
@@ -10,12 +10,17 @@ import ExecutiveCharts from "@/components/dashboard/ExecutiveCharts";
 import MoneyKept from "@/components/dashboard/MoneyKept";
 import PropertyRanking from "@/components/dashboard/PropertyRanking";
 import LowOccAlert from "@/components/dashboard/LowOccAlert";
-import { useOccupancy, useSources, useClerkRecords, useGrossRevenue } from "@/lib/useHotelData";
+import ModuleCards from "@/components/dashboard/ModuleCards";
+import { useOccupancy, useSources, useClerkRecords, useGrossRevenue, usePaymentData } from "@/lib/useHotelData";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { exportToPdf } from "@/lib/pdfExport";
 import { money, money2, num, pct, sum, inRange, C, getOccThreshold } from "@/lib/hotel";
 import { getAlertThresholds } from "@/lib/alertThresholds";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
+import { CalculationService } from "@/lib/calculationService";
+import { OwnerIntelligenceService } from "@/lib/ownerIntelligence";
+import { useQuery } from "@tanstack/react-query";
+import { db } from "@/api/base44Client";
 
 export default function Dashboard() {
   const { dateRange, property, properties, compareOn, compareDateRange, compareMonths, employee, paymentType, channel, months } = useGlobalFilters();
@@ -29,11 +34,28 @@ export default function Dashboard() {
   const { data: sources = [], refetch: refSrc } = useSources(dateRange, property, months);
   const { data: clerk = [], refetch: refClerk } = useClerkRecords(dateRange, property);
   const { data: gross = [], refetch: refGross } = useGrossRevenue(dateRange, property, months);
+  const { data: payRows = [] } = usePaymentData(dateRange, property, months);
+  
+  // Fetch expenses and payroll for owner intelligence
+  const propertyKey = Array.isArray(property) ? property.join(",") : property;
+  const propFilter = property && property !== "all" 
+    ? (Array.isArray(property) ? { property_id: { $in: property } } : { property_id: property })
+    : {};
+  
+  const { data: expenses = [] } = useQuery({
+    queryKey: ["expenses", propertyKey],
+    queryFn: () => db.entities.Expense.filter(propFilter, "-expense_date", 100000),
+  });
+  
+  const { data: payroll = [] } = useQuery({
+    queryKey: ["payroll", propertyKey],
+    queryFn: () => db.entities.PayrollRun.filter(propFilter, "-pay_period_start", 100000),
+  });
 
   // Dedicated previous-period range for trend alerts (independent of the current filter)
   const alertPrevRange = useMemo(() => {
     if (!dateRange.from || !dateRange.to) return { from: "", to: "" };
-    const periodDays = Math.round((new Date(dateRange.to) - new Date(dateRange.from)) / 86400000) + 1;
+    const periodDays = Math.round((new Date(dateRange.to).getTime() - new Date(dateRange.from).getTime()) / 86400000) + 1;
     if (periodDays <= 0) return { from: "", to: "" };
     const prevTo = new Date(new Date(dateRange.from).getTime() - 86400000);
     const prevFrom = new Date(prevTo.getTime() - (periodDays - 1) * 86400000);
@@ -72,45 +94,15 @@ export default function Dashboard() {
     return { [property]: propRooms };
   }, [isPortfolio, properties, property, propRooms]);
 
-  const uniqueDays = new Set(occRows.map((r) => String(r.date).slice(0, 10))).size;
-  const revenue = sum(occRows, "total_revenue");
-  const roomsSold = sum(occRows, "rooms_sold");
-
-  const capacity = useMemo(() => {
-    if (isPortfolio) {
-      const daysPerProp = new Map();
-      occRows.forEach((r) => {
-        const pid = r.property_id || "_default";
-        daysPerProp.set(pid, (daysPerProp.get(pid) || 0) + 1);
-      });
-      let cap = 0;
-      daysPerProp.forEach((days, pid) => {
-        const rooms = roomCounts[pid] ?? 100;
-        cap += days * rooms;
-      });
-      return cap;
-    }
-    return occRows.length * propRooms;
-  }, [occRows, isPortfolio, propRooms, roomCounts]);
-
-  const occupancy = capacity ? roomsSold / capacity : 0;
-  const adr = roomsSold ? revenue / roomsSold : 0;
-  const revpar = capacity ? revenue / capacity : 0;
-
+  // Use centralized calculation service for all financial metrics
+  const currentStats = useMemo(() => CalculationService.calculateOccupancyMetrics(occRows, roomCounts), [occRows, roomCounts]);
   const prevStats = useMemo(() => {
     if (!compareOn || !prevOcc.length) return null;
-    const prevRev = sum(prevOcc, "total_revenue");
-    const prevRooms = sum(prevOcc, "rooms_sold");
-    const prevCap = isPortfolio
-      ? Object.values(roomCounts).reduce((a, rooms) => a + rooms * (prevOcc.length / properties.length), 0)
-      : prevOcc.length * propRooms;
-    return {
-      revenue: prevRev,
-      roomsSold: prevRooms,
-      occupancy: prevCap ? prevRooms / prevCap : 0,
-      adr: prevRooms ? prevRev / prevRooms : 0,
-    };
-  }, [compareOn, prevOcc, isPortfolio, propRooms, roomCounts, properties.length]);
+    return CalculationService.calculateOccupancyMetrics(prevOcc, roomCounts);
+  }, [compareOn, prevOcc, roomCounts]);
+
+  const { revenue, roomsSold, capacity, occupancy, adr, revpar } = currentStats;
+  const uniqueDays = new Set(occRows.map((r) => String(r.date).slice(0, 10))).size;
 
   const threshold = getOccThreshold();
   const lowOccDays = useMemo(() => occRows.filter((r) => Number(r.occupancy || 0) < threshold), [occRows, threshold]);
@@ -119,14 +111,10 @@ export default function Dashboard() {
     if (!dateRange.from || !dateRange.to || !occ.length || !alertPrevOcc.length) return [];
     const thresholds = getAlertThresholds();
 
-    const prevRows = alertPrevOcc;
-    const prevRev = sum(prevRows, "total_revenue");
-    const prevRooms = sum(prevRows, "rooms_sold");
-    const prevCap = isPortfolio
-      ? Object.values(roomCounts).reduce((a, rooms) => a + rooms * (prevRows.length / properties.length), 0)
-      : prevRows.length * propRooms;
-    const prevOccVal = prevCap ? prevRooms / prevCap : 0;
-    const prevAdr = prevRooms ? prevRev / prevRooms : 0;
+    const alertPrevStats = CalculationService.calculateOccupancyMetrics(alertPrevOcc, roomCounts);
+    const prevRev = alertPrevStats.revenue;
+    const prevOccVal = alertPrevStats.occupancy;
+    const prevAdr = alertPrevStats.adr;
 
     const out = [];
     if (prevRev > 0) {
@@ -145,7 +133,7 @@ export default function Dashboard() {
         out.push({ metric: "ADR", current: adr, previous: prevAdr, pct: ch, sev: Math.abs(ch) >= 0.2 ? "Critical" : "Warning", fmt: money2 });
     }
     return out;
-  }, [occ, alertPrevOcc, dateRange, revenue, occupancy, adr, isPortfolio, propRooms, roomCounts, properties.length]);
+  }, [occ, alertPrevOcc, dateRange, revenue, occupancy, adr, roomCounts, threshold]);
 
   const miscCharges = useMemo(() => {
     const cats = [
@@ -198,6 +186,9 @@ export default function Dashboard() {
         </button>
       </header>
 
+      {/* Color-coded glowing module cards */}
+      <ModuleCards />
+
       <div ref={contentRef} className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <KpiCard label="Total Revenue" value={money(revenue)} sub={`${uniqueDays} unique days`} accent={C.purple} icon={DollarSign} />
@@ -235,7 +226,7 @@ export default function Dashboard() {
         )}
 
         {/* Estimated Money Kept — net profit after all deductions */}
-        <MoneyKept occRows={occRows} srcRows={srcRows} dateRange={dateRange} property={property} />
+        <MoneyKept occRows={occRows} srcRows={srcRows} grossRows={grossRows} dateRange={dateRange} property={property} />
 
         {/* Four fixed executive charts — always visible */}
         <ExecutiveCharts rows={occRows} />
@@ -270,6 +261,48 @@ export default function Dashboard() {
             </span>
           </div>
         ))}
+
+        {/* Owner Intelligence Insights */}
+        {(() => {
+          const insights = OwnerIntelligenceService.generateExecutiveInsights(
+            occRows, payRows, expenses, payroll, srcRows, grossRows, properties, dateRange
+          );
+          if (insights.length === 0) return null;
+          return (
+            <Card title="🧠 Owner Intelligence" subtitle="AI-detected patterns, risks, and opportunities">
+              <div className="space-y-3">
+                {insights.map((insight, i) => (
+                  <div key={i} className="flex items-start gap-3 rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">
+                    <div className="flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center"
+                         style={{ background: insight.category === 'Risk' || insight.category === 'Profit' ? '#FF6B6B20' : insight.category === 'Expenses' ? '#FFB54720' : '#00E09620' }}>
+                      {insight.category === 'Revenue' && <TrendingUp className="h-5 w-5 text-[#00E096]" />}
+                      {insight.category === 'Portfolio' && <TrendingUp className="h-5 w-5 text-[#00D4FF]" />}
+                      {insight.category === 'Channels' && <Lightbulb className="h-5 w-5 text-[#FFB547]" />}
+                      {insight.category === 'Expenses' && <AlertTriangle className="h-5 w-5 text-[#FFB547]" />}
+                      {insight.category === 'Risk' && <AlertTriangle className="h-5 w-5 text-[#FF6B6B]" />}
+                      {insight.category === 'Profit' && <AlertTriangle className="h-5 w-5 text-[#FF6B6B]" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-white">{insight.title}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">{insight.detail}</p>
+                      <div className="mt-2 flex items-center gap-2">
+                        <span className="text-lg font-heading font-semibold tabular-nums"
+                              style={{ color: insight.category === 'Risk' || insight.category === 'Profit' ? '#FF6B6B' : '#00E096' }}>
+                          {insight.metric}
+                        </span>
+                        <span className="text-[10px] uppercase tracking-widest text-slate-500 px-2 py-0.5 rounded"
+                              style={{ background: insight.category === 'Risk' || insight.category === 'Profit' ? '#FF6B6B20' : '#00D4FF20', 
+                                      color: insight.category === 'Risk' || insight.category === 'Profit' ? '#FF6B6B' : '#00D4FF' }}>
+                          {insight.category}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          );
+        })()}
 
         {/* Portfolio breakdown — only when All Properties selected */}
         {isPortfolio && occRows.length > 0 && (

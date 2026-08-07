@@ -15,7 +15,7 @@ export default async function(req) {
 
     const { accessToken } = await db.asServiceRole.connectors.getConnection("googledrive");
 
-    const driveRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+    const driveRes = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
 

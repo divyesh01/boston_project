@@ -4,7 +4,40 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 
 const DRIVE_API = "https://www.googleapis.com/drive/v3";
 
-async function findOrCreateFolder(accessToken, name, parentId) {
+// Reject URLs targeting local/private networks to prevent SSRF.
+function isBlockedUrl(raw) {
+  if (typeof raw !== "string" || !raw) return true;
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return true;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return true;
+  const host = url.hostname.toLowerCase();
+  // IPv6 literals: loopback (::1, ::), unique-local (fc/fd), link-local (fe8-feb)
+  if (host.startsWith("[::") || host.startsWith("[fc") || host.startsWith("[fd") || /^\[fe[89ab]/.test(host)) return true;
+  // IPv4 literals: private/loopback/link-local/metadata ranges
+  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4) {
+    const a = +ipv4[1], b = +ipv4[2];
+    if (a === 127 || a === 0 || a === 10 || (a === 169 && b === 254)) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    return false;
+  }
+  // Reserved hostnames
+  if (host === "localhost" || host === "0.0.0.0" || host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".localdomain") || host.endsWith(".localhost")) return true;
+  return false;
+}
+
+async function sanitizeDriveFolder(name) {
+  // Drive query strings can't escape single quotes; restrict to safe characters.
+  return String(name || "").replace(/[^\w\-. ]/gu, "_").slice(0, 120);
+}
+
+async function findOrCreateFolder(accessToken, rawName, parentId) {
+  const name = await sanitizeDriveFolder(rawName);
   const query = parentId
     ? `name='${name}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`
     : `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
@@ -36,6 +69,9 @@ export default async function(req) {
     const body = await req.json();
     const { fileUrl, fileName, propertyName, year, month, reportType, uploadedReportId } = body;
     if (!fileUrl || !fileName) return Response.json({ error: "fileUrl and fileName required" }, { status: 400 });
+    if (isBlockedUrl(fileUrl)) {
+      return Response.json({ error: "fileUrl is not an allowed http(s) URL" }, { status: 400 });
+    }
 
     const { accessToken } = await db.asServiceRole.connectors.getConnection("googledrive");
 

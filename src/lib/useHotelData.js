@@ -37,9 +37,9 @@ export function useOccupancy(dateRange, propertyId, months = [], enabled = true)
       const filter = buildFilter(dateRange, propertyId);
       let rows;
       if (filter.date) {
-        rows = await db.entities.OccupancyDay.filter(filter, "date", 2000);
+        rows = await db.entities.OccupancyDay.filter(filter, "date", 100000);
       } else {
-        rows = await db.entities.OccupancyDay.list("date", 2000);
+        rows = await db.entities.OccupancyDay.list("date", 100000);
       }
       return filterByMonths(rows, months);
     },
@@ -53,9 +53,9 @@ export function useSources(dateRange, propertyId, months = []) {
       const filter = buildFilter(dateRange, propertyId);
       let rows;
       if (filter.date) {
-        rows = await db.entities.SourceDay.filter(filter, "date", 5000);
+        rows = await db.entities.SourceDay.filter(filter, "date", 100000);
       } else {
-        rows = await db.entities.SourceDay.list("date", 5000);
+        rows = await db.entities.SourceDay.list("date", 100000);
       }
       return filterByMonths(rows, months);
     },
@@ -69,9 +69,9 @@ export function useGrossRevenue(dateRange, propertyId, months = []) {
       const filter = buildFilter(dateRange, propertyId);
       let rows;
       if (filter.date) {
-        rows = await db.entities.GrossRevenueDay.filter(filter, "date", 2000);
+        rows = await db.entities.GrossRevenueDay.filter(filter, "date", 100000);
       } else {
-        rows = await db.entities.GrossRevenueDay.list("date", 2000);
+        rows = await db.entities.GrossRevenueDay.list("date", 100000);
       }
       return filterByMonths(rows, months);
     },
@@ -80,10 +80,14 @@ export function useGrossRevenue(dateRange, propertyId, months = []) {
 
 export function useClerkRecords(dateRange, propertyId) {
   return useQuery({
-    queryKey: ["clerk", propertyId],
+    queryKey: ["clerk", dateRange?.from, dateRange?.to, propertyId],
     queryFn: () => {
-      // Clerk records don't have reliable shift_date fields — filter by property only
+      // ClerkShiftRecord carries an indexed shift_date (YYYY-MM-DD); scope by
+      // the selected period so the Clerk Audit agrees with the dashboard range.
       const filter = {};
+      if (dateRange?.from && dateRange?.to) {
+        filter.shift_date = { $gte: dateRange.from, $lte: dateRange.to };
+      }
       if (propertyId && propertyId !== "all") {
         if (Array.isArray(propertyId)) {
           if (propertyId.length > 0) filter.property_id = { $in: propertyId };
@@ -91,7 +95,7 @@ export function useClerkRecords(dateRange, propertyId) {
           filter.property_id = propertyId;
         }
       }
-      return db.entities.ClerkShiftRecord.filter(filter, "-created_date", 5000);
+      return db.entities.ClerkShiftRecord.filter(filter, "-shift_date", 100000);
     },
   });
 }
@@ -103,9 +107,9 @@ export function usePaymentData(dateRange, propertyId, months = []) {
       const filter = buildFilter(dateRange, propertyId);
       let rows;
       if (filter.date) {
-        rows = await db.entities.PaymentDay.filter(filter, "date", 2000);
+        rows = await db.entities.PaymentDay.filter(filter, "date", 100000);
       } else {
-        rows = await db.entities.PaymentDay.list("date", 2000);
+        rows = await db.entities.PaymentDay.list("date", 100000);
       }
       return filterByMonths(rows, months);
     },

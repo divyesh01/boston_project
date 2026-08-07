@@ -1,4 +1,5 @@
 import { db } from '@/api/base44Client';
+import { serverAiQueryRateLimiter } from '@/api/base44Client';
 
 import React, { useState, useRef, useEffect } from "react";
 import { Bot, X, Send, Sparkles, Loader2 } from "lucide-react";
@@ -6,6 +7,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
+import { useAuth } from "@/lib/AuthContext";
 
 const SUGGESTIONS = [
   "Show today's executive summary",
@@ -22,6 +24,7 @@ const SUGGESTIONS = [
 
 export default function AIAssistant() {
   const { property, dateRange } = useGlobalFilters();
+  const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -37,16 +40,37 @@ export default function AIAssistant() {
   const handleAsk = async (question) => {
     if (!question.trim() || loading) return;
     const q = question.trim();
+    
+    // Rate limiting for AI queries
+    const rateLimit = await serverAiQueryRateLimiter.check();
+    if (!rateLimit.allowed) {
+      setMessages((prev) => [...prev, { 
+        role: "assistant", 
+        text: `Too many AI queries. Please try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` 
+      }]);
+      return;
+    }
+    
     setMessages((prev) => [...prev, { role: "user", text: q }]);
     setInput("");
     setLoading(true);
     try {
       const propertyId = Array.isArray(property) ? property : (property === "all" ? "all" : property);
+      // Scope AI to the properties this user is permitted to access.
+      // owner/admin or property_access 'all' => unrestricted (null); otherwise only their property_access ids.
+      const isRoot = user && (user.role === "owner" || user.role === "admin");
+      const allowedPropertyIds =
+        !user || isRoot || user.property_access === "all"
+          ? null
+          : Array.isArray(user.property_access)
+          ? user.property_access
+          : [];
       const res = await db.functions.invoke("aiAssistant", {
         question: q,
         propertyId,
         dateFrom: dateRange.from || "",
         dateTo: dateRange.to || "",
+        allowedPropertyIds,
       });
       setMessages((prev) => [...prev, { role: "assistant", text: res.data.answer || "I couldn't process that question.", summary: res.data.summary }]);
     } catch (e) {

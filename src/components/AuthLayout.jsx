@@ -1,6 +1,14 @@
 import React from "react";
 
-export default function AuthLayout({ icon: Icon, title, subtitle, footer, children }) {
+export default function AuthLayout(
+  /** @type {{
+   *   icon: import('react').ComponentType<{ className?: string }>;
+   *   title: string;
+   *   subtitle?: import('react').ReactNode;
+   *   footer?: import('react').ReactNode;
+   *   children?: import('react').ReactNode;
+   * }} */
+  { icon: Icon, title, subtitle, footer, children }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-[#040D1A] px-4">
       <div className="w-full max-w-md">

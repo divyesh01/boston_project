@@ -113,6 +113,29 @@
   ::-webkit-scrollbar-thumb { background: #1e2f4a; border-radius: 8px; }
 }
 
+@layer utilities {
+  /* Tactile press feedback for every interactive element */
+  .fx-clickable {
+    -webkit-tap-highlight-color: transparent;
+  }
+  @media (hover: none) {
+    .fx-clickable:active { transform: scale(0.97); transition: transform 0.1s ease-out; }
+  }
+  button:active, a:active, [role="button"]:active, select:active {
+    transform: translateY(1px) scale(0.985);
+  }
+
+  /* Pulsing status badge glow */
+  .status-pulse {
+    animation: statusPulse 1.8s ease-in-out infinite;
+  }
+}
+
+@keyframes statusPulse {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.35); }
+}
+
 @media (max-width: 1023px) {
   ::-webkit-scrollbar {
     display: none;

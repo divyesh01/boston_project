@@ -1,6 +1,14 @@
 import React from "react";
 
-export default function KpiCard({ label, value, sub, accent = "#6C63FF", icon: Icon }) {
+export default function KpiCard(
+  /** @type {{
+   *   label: string;
+   *   value: string | number;
+   *   sub?: string;
+   *   accent?: string;
+   *   icon?: import('react').ComponentType<{ className?: string; style?: import('react').CSSProperties }>;
+   * }} */
+  { label, value, sub, accent = "#6C63FF", icon: Icon }) {
   return (
     <div className="group relative overflow-hidden rounded-2xl border border-white/5 bg-[#0F1F35]/80 p-5 transition-all duration-300 hover:-translate-y-0.5 hover:border-white/10">
       <div

@@ -12,6 +12,30 @@ import AuthLayout from "@/components/AuthLayout";
 // the categories of access being granted, and posts the approve/deny decision.
 // Do not change the fetch calls, headers, or the `ctx` handle handling — styling
 // and copy are safe to edit.
+// Validate a login_path from the platform: must be a local, same-origin path
+// (never an external URL, protocol-relative "//host", or a script: scheme).
+function safeLoginPath(p) {
+  if (typeof p !== "string" || !p) return "/login";
+  if (/^[a-z][a-z0-9+.-]*:/i.test(p)) return "/login"; // any scheme
+  if (p.startsWith("//")) return "/login";
+  if (!p.startsWith("/")) return "/login";
+  if (/[\r\n\x00]/.test(p)) return "/login";
+  return p;
+}
+
+// Restrict post-consent redirects to http(s) URLs or known app/device schemes.
+function safeRedirectPath(url) {
+  if (typeof url !== "string" || !url) return null;
+  const knownSchemes = new Set(["http:", "https:", "cursor:", "vscode:", "windsurf:", "claude:", "continue:"]);
+  try {
+    const u = new URL(url);
+    if (!knownSchemes.has(u.protocol)) return null;
+  } catch {
+    return null;
+  }
+  return url;
+}
+
 export default function OAuthConsent() {
   const ctx = new URLSearchParams(window.location.search).get("ctx");
   const [info, setInfo] = useState(null);
@@ -35,7 +59,7 @@ export default function OAuthConsent() {
         // bearer token) so the server can list the granted tools for a
         // signed-in user — the same auth the approve/deny call sends; without
         // it the display request is anonymous and shows no tools.
-        const infoHeaders = {};
+        const infoHeaders = /** @type {Record<string, string>} */ ({});
         if (appParams.token) infoHeaders.Authorization = "Bearer " + appParams.token;
         const res = await fetch(
           `/api/apps/${appParams.appId}/mcp/consent-info?handle=${encodeURIComponent(ctx)}`,
@@ -55,20 +79,13 @@ export default function OAuthConsent() {
         if (!data.authenticated) {
           // The short handle rides back in returnTo; login_path is
           // owner-configured and validated server-side as a same-origin path.
-          // Send from_url too: a custom-auth app coerced to platform auth (e.g.
-          // public_without_login under workspace SSO) serves the platform login,
-          // which honors from_url rather than returnTo. Rebuild the query from
-          // `ctx` alone — never forward window.location.search raw: the platform
-          // resume returns from_url verbatim, so crafted extras on the consent
-          // link (app_base_url, access_token, …) would ride through the login
-          // round-trip and app-params.js would persist them into the freshly
-          // authenticated session.
+          // Defense-in-depth: re-validate it as a local path on the client.
           const returnTo =
             window.location.pathname + "?ctx=" + encodeURIComponent(ctx);
           const encoded = encodeURIComponent(returnTo);
           redirecting = true; // keep the spinner while the browser navigates
           window.location.href =
-            (data.login_path || "/login") + "?returnTo=" + encoded + "&from_url=" + encoded;
+            safeLoginPath(data.login_path) + "?returnTo=" + encoded + "&from_url=" + encoded;
           return;
         }
         setInfo(data);
@@ -104,7 +121,7 @@ export default function OAuthConsent() {
           const returnTo = window.location.pathname + "?ctx=" + encodeURIComponent(ctx);
           const encoded = encodeURIComponent(returnTo);
           window.location.href =
-            ((info && info.login_path) || "/login") + "?returnTo=" + encoded + "&from_url=" + encoded;
+            safeLoginPath((info && info.login_path) || "/login") + "?returnTo=" + encoded + "&from_url=" + encoded;
           return;
         }
         // These all come AFTER the single-use handle is atomically consumed
@@ -121,11 +138,18 @@ export default function OAuthConsent() {
         throw new Error("Could not complete authorization. Please try again.");
       }
       const data = await res.json();
-      window.location.href = data.redirect_url;
-      if (!/^https?:/i.test(data.redirect_url)) {
-        // Custom-scheme redirect (native AI clients, e.g. cursor://): browsers
-        // may block or not visibly navigate, so show a terminal state instead
-        // of an eternal spinner.
+      const target = safeRedirectPath(data.redirect_url);
+      if (target) {
+        window.location.href = target;
+        if (!/^https?:/i.test(target)) {
+          // Custom-scheme redirect (native AI clients, e.g. cursor://): browsers
+          // may block or not visibly navigate, so show a terminal state instead
+          // of an eternal spinner.
+          setDecided(action);
+          setSubmitting(false);
+        }
+      } else {
+        setError("The authorization completed but the redirect target was invalid.");
         setDecided(action);
         setSubmitting(false);
       }

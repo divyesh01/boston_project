@@ -4,7 +4,16 @@ import { Select as RadixSelect, SelectTrigger, SelectContent, SelectItem, Select
 import { Drawer, DrawerContent } from "@/components/ui/drawer";
 import { Check, ChevronDown } from "lucide-react";
 
-export default function ResponsiveSelect({ value, onValueChange, options, label, placeholder, disabled }) {
+export default function ResponsiveSelect(
+  /** @type {{
+   *   value?: string;
+   *   onValueChange?: (v: string) => void;
+   *   options?: Array<[string, string, { disabled?: boolean }?]>;
+   *   label?: string;
+   *   placeholder?: string;
+   *   disabled?: boolean;
+   * }} */
+  { value, onValueChange, options, label, placeholder, disabled }) {
   const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
 

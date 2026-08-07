@@ -7,6 +7,7 @@ import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import ScrollToTop from './components/ScrollToTop';
 import Layout from '@/components/Layout';
+import { attachClickSounds } from '@/lib/sound';
 
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
 const Compare = lazy(() => import('@/pages/Compare'));
@@ -175,6 +176,7 @@ const AuthenticatedApp = () => {
 
 function App() {
   useEffect(() => {
+    attachClickSounds();
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const update = () => {
       if (mq.matches) document.documentElement.classList.add("dark");

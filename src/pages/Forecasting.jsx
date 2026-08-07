@@ -34,11 +34,11 @@ export default function Forecasting() {
   const propertyKey = Array.isArray(property) ? property.join(",") : property;
   const { data: expenses = [] } = useQuery({
     queryKey: ["expenses", propertyKey],
-    queryFn: () => db.entities.Expense.filter(buildPropertyFilter(property), "-expense_date", 500),
+    queryFn: () => db.entities.Expense.filter(buildPropertyFilter(property), "-expense_date", 100000),
   });
   const { data: payroll = [] } = useQuery({
     queryKey: ["payroll", propertyKey],
-    queryFn: () => db.entities.PayrollRun.filter(buildPropertyFilter(property), "-pay_period_start", 500),
+    queryFn: () => db.entities.PayrollRun.filter(buildPropertyFilter(property), "-pay_period_start", 100000),
   });
 
   const occRows = useMemo(() => occ.filter((r) => {

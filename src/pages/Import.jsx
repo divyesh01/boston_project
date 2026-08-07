@@ -1,7 +1,7 @@
-import { db } from '@/api/base44Client';
+import { db, listImportSessions } from '@/api/base44Client';
 
 import React, { useState } from "react";
-import { UploadCloud, CheckCircle2, FileSpreadsheet, XCircle, Search, Building2, Loader2, Eye, Trash2, ArrowDownToLine } from "lucide-react";
+import { UploadCloud, CheckCircle2, FileSpreadsheet, XCircle, Search, Building2, Loader2, Eye, Trash2, ArrowDownToLine, RefreshCw, X } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 
 import { useUploads, useProperties } from "@/lib/useHotelData";
@@ -9,6 +9,7 @@ import { num } from "@/lib/hotel";
 import { REPORT_TYPES, scanReport, importReport } from "@/lib/reportParsers";
 import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
 import { useAuth } from "@/lib/AuthContext";
+import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
 
 const STATUS_LABEL = {
   pending: "Queued",
@@ -52,6 +53,8 @@ export default function Import() {
   const [selectedFiles, setSelectedFiles] = useState(new Set());
   const [driveImporting, setDriveImporting] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [incompleteImports, setIncompleteImports] = useState([]);
+  const [checkingImports, setCheckingImports] = useState(false);
 
   const propertyOpts = properties.filter((p) => canAccessProperty(p.id)).map((p) => [p.id, p.name]);
   const selectedProperty = properties.find((p) => p.id === propertyId);
@@ -62,6 +65,21 @@ export default function Import() {
     importId: `imp_${Date.now()}`,
     sourceFile: sourceFile || "",
   });
+
+  // Check for incomplete import sessions that can be resumed
+  const checkIncompleteImports = async () => {
+    try {
+      const sessions = await listImportSessions();
+      const incomplete = sessions.filter(s => 
+        s.status === 'in_progress' && 
+        s.propertyId === propertyId &&
+        Date.now() - new Date(s.startedAt).getTime() > 5 * 60 * 1000 // Older than 5 minutes
+      );
+      return incomplete;
+    } catch {
+      return [];
+    }
+  };
 
   const handleFiles = async (fileList) => {
     const files = Array.from(fileList).filter((f) => /\.(csv|xlsx|xls)$/i.test(f.name));
@@ -112,6 +130,19 @@ export default function Import() {
 
   const importSingle = async (item) => {
     if (!item.scan || !propertyId || item.status === "done") return null;
+    // Rate limiting for imports
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: `Rate limited. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` } : q)));
+      return null;
+    }
+    // CSRF validation
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: "Invalid security token. Please refresh and try again." } : q)));
+      rotateCsrfToken();
+      return null;
+    }
     setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "importing" } : q)));
     try {
       const result = await importReport(item.scan, {
@@ -132,6 +163,7 @@ export default function Import() {
         raw_rows: scanRawRows(item.scan),
       });
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "done", count: result.count, excluded: result.excluded || 0 } : q)));
+      rotateCsrfToken();
       return { name: item.name, ok: true, count: result.count, excluded: result.excluded || 0 };
     } catch (e) {
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: e.message || "Import failed" } : q)));
@@ -142,15 +174,36 @@ export default function Import() {
   const handleImportAll = async () => {
     const pending = queue.filter((q) => q.status === "ready" && q.scan);
     if (!pending.length || importing) return;
+    // Rate limiting
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      alert(`Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
+      return;
+    }
+    // CSRF validation
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      alert("Invalid security token. Please refresh the page and try again.");
+      rotateCsrfToken();
+      return;
+    }
     setImporting(true);
     const newResults = [];
-    for (const item of pending) {
-      const r = await importSingle(item);
-      if (r) newResults.push(r);
+    try {
+      for (const item of pending) {
+        const r = await importSingle(item);
+        if (r) newResults.push(r);
+      }
+      setResults(newResults);
+    } catch (e) {
+      setImporting(false);
+      alert(`Import failed: ${e.message || "unknown error"}.`);
+      return;
+    } finally {
+      setImporting(false);
     }
-    setResults(newResults);
-    setImporting(false);
     refetch();
+    rotateCsrfToken();
   };
 
   const handleRemoveFromQueue = (key) => {
@@ -162,6 +215,19 @@ export default function Import() {
 
   const handleClearAll = async () => {
     if (clearing) return;
+    // Rate limiting
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      alert(`Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
+      return;
+    }
+    // CSRF validation
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      alert("Invalid security token. Please refresh the page and try again.");
+      rotateCsrfToken();
+      return;
+    }
     const ok = window.confirm(
       "Delete ALL imported report data and import history?\n\nThis permanently removes every imported row from this browser (occupancy, sources, gross revenue, payments, clerk records). Properties and settings are kept.\n\nThis cannot be undone."
     );
@@ -174,6 +240,7 @@ export default function Import() {
       setQueue([]);
       setResults([]);
       refetch();
+      rotateCsrfToken();
     } catch (e) {
       console.error("Failed to clear imported data:", e);
       window.alert(`Could not clear data: ${e.message || "unknown error"}`);
@@ -365,6 +432,21 @@ export default function Import() {
                     {importing ? "Importing…" : `Import All (${readyCount})`}
                   </button>
                 )}
+                {!importing && !busy && (
+                  <button
+                    onClick={async () => {
+                      setCheckingImports(true);
+                      const incomplete = await checkIncompleteImports();
+                      setIncompleteImports(incomplete);
+                      setCheckingImports(false);
+                    }}
+                    disabled={checkingImports}
+                    className="flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm text-slate-400 transition-colors hover:border-[#FFB547]/60 hover:text-[#FFB547] disabled:opacity-50"
+                  >
+                    {checkingImports ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                    {checkingImports ? "Checking…" : "Check Interrupted"}
+                  </button>
+                )}
                 {errorItems.length > 0 && (
                   <button
                     onClick={() => setQueue((prev) => prev.filter((q) => q.status !== "error"))}
@@ -482,6 +564,29 @@ export default function Import() {
                     <span className="text-[#FFB547]"> · {batchExcluded} zero-revenue duplicate rows excluded</span>
                   )}
                 </p>
+              </div>
+            )}
+
+            {incompleteImports.length > 0 && (
+              <div className="mt-4 rounded-xl border border-[#FFB547]/20 bg-[#FFB547]/[0.06] px-4 py-3">
+                <div className="flex items-center gap-3">
+                  <span className="h-5 w-5 shrink-0 text-[#FFB547]">⚠</span>
+                  <div className="flex-1">
+                    <p className="text-sm text-slate-300">
+                      Found {incompleteImports.length} interrupted import session{incompleteImports.length === 1 ? "" : "s"}.
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      These imports were started but never completed. They may have been interrupted by browser refresh, power loss, or network issues.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setIncompleteImports([])}
+                    className="text-slate-500 hover:text-white"
+                    title="Dismiss"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
             )}
           </div>

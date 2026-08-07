@@ -20,6 +20,7 @@ import db from "@/api/base44Client";
 import { useProperties } from "@/lib/useHotelData";
 import { ROLES, PERMISSIONS, PERMISSION_KEYS, defaultPermissionsForRole } from "@/lib/permissions";
 import { isCryptoAvailable, validatePasswordStrength, generateTemporaryPassword } from "@/lib/security";
+import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeEmail, sanitizeAlphanumeric, sanitizeText } from "@/lib/securityUtils";
 
 const ROLE_BADGE = {
   owner: "bg-purple-500/20 text-purple-300 border-purple-500/40",
@@ -39,7 +40,7 @@ const STATUS_BADGE = (u) => {
 
 const EMPTY_FORM = {
   username: "", email: "", full_name: "", role: "front_desk",
-  permissions: {}, property_mode: "all", property_ids: [],
+  permissions: {}, property_mode: "all", property_ids: [], must_change_password: true,
 };
 
 export default function Users() {
@@ -102,6 +103,19 @@ export default function Users() {
       toast({ variant: "destructive", title: "Error", description: "Password hashing unavailable. Open via localhost/HTTPS." });
       return;
     }
+    // Rate limiting for sensitive actions
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
+      return;
+    }
+    // CSRF validation
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      toast({ variant: "destructive", title: "Security Error", description: "Invalid security token. Please refresh the page and try again." });
+      rotateCsrfToken();
+      return;
+    }
     if (password !== confirmPassword) {
       toast({ variant: "destructive", title: "Error", description: "Passwords do not match." });
       return;
@@ -111,12 +125,20 @@ export default function Users() {
       toast({ variant: "destructive", title: "Error", description: strength });
       return;
     }
+    // Input sanitization
+    const sanitizedUsername = sanitizeAlphanumeric(form.username);
+    const sanitizedEmail = sanitizeEmail(form.email);
+    const sanitizedFullName = sanitizeText(form.full_name);
+    if (sanitizedUsername !== form.username || sanitizedEmail !== form.email) {
+      toast({ variant: "destructive", title: "Error", description: "Invalid characters in username or email." });
+      return;
+    }
     setActionBusy(true);
     try {
       await db.users.create(me, {
-        username: form.username,
-        email: form.email,
-        full_name: form.full_name,
+        username: sanitizedUsername,
+        email: sanitizedEmail,
+        full_name: sanitizedFullName,
         role: form.role,
         permissions: form.permissions,
         property_access: form.property_mode === "all" ? "all" : form.property_ids,
@@ -124,10 +146,11 @@ export default function Users() {
         password,
         must_change_password: true,
       });
-      toast({ title: "User created", description: `${form.username} can now log in. They will be asked to set a password on first login.` });
+      toast({ title: "User created", description: `${sanitizedUsername} can now log in. They will be asked to set a password on first login.` });
       setCreateOpen(false);
       setForm({ ...EMPTY_FORM, permissions: defaultPermissionsForRole("front_desk") });
       setPassword(""); setConfirmPassword(""); setShowPassword(false);
+      rotateCsrfToken();
       await load();
     } catch (e) {
       toast({ variant: "destructive", title: "Error", description: e.message });
@@ -147,18 +170,42 @@ export default function Users() {
   };
 
   const handleEditSave = async () => {
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
+      return;
+    }
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      toast({ variant: "destructive", title: "Security Error", description: "Invalid security token. Please refresh the page and try again." });
+      rotateCsrfToken();
+      return;
+    }
+    // Input sanitization
+    const sanitizedUsername = sanitizeAlphanumeric(editForm.username);
+    const sanitizedEmail = sanitizeEmail(editForm.email);
+    const sanitizedFullName = sanitizeText(editForm.full_name);
+    if (sanitizedUsername !== editForm.username || sanitizedEmail !== editForm.email) {
+      toast({ variant: "destructive", title: "Error", description: "Invalid characters in username or email." });
+      return;
+    }
     setActionBusy(true);
     try {
-      await db.users.update(me, editUser.id, {
-        username: editForm.username,
-        email: editForm.email,
-        full_name: editForm.full_name,
-        role: editForm.role,
-        permissions: editForm.permissions,
-        property_access: editForm.property_mode === "all" ? "all" : editForm.property_ids,
-      });
+      const isSelf = me && String(me.id) === String(editUser.id);
+      const patch = {
+        username: sanitizedUsername,
+        email: sanitizedEmail,
+        full_name: sanitizedFullName,
+      };
+      if (!isSelf) {
+        patch.role = editForm.role;
+        patch.permissions = editForm.permissions;
+        patch.property_access = editForm.property_mode === "all" ? "all" : editForm.property_ids;
+      }
+      await db.users.update(me, editUser.id, patch);
       toast({ title: "User updated", description: "Changes take effect immediately." });
       setEditUser(null);
+      rotateCsrfToken();
       await load();
     } catch (e) {
       toast({ variant: "destructive", title: "Error", description: e.message });
@@ -170,6 +217,17 @@ export default function Users() {
   const handleResetPassword = async () => {
     if (!isCryptoAvailable()) {
       toast({ variant: "destructive", title: "Error", description: "Password hashing unavailable. Open via localhost/HTTPS." });
+      return;
+    }
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
+      return;
+    }
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      toast({ variant: "destructive", title: "Security Error", description: "Invalid security token. Please refresh the page and try again." });
+      rotateCsrfToken();
       return;
     }
     setActionBusy(true);
@@ -190,6 +248,7 @@ export default function Users() {
       }
       setResetUser(null);
       setResetPassword(""); setResetAction("temp");
+      rotateCsrfToken();
     } catch (e) {
       toast({ variant: "destructive", title: "Error", description: e.message });
     } finally {
@@ -198,6 +257,17 @@ export default function Users() {
   };
 
   const runConfirm = async () => {
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
+      return;
+    }
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      toast({ variant: "destructive", title: "Security Error", description: "Invalid security token. Please refresh the page and try again." });
+      rotateCsrfToken();
+      return;
+    }
     const { type, user: u } = confirmAction;
     setActionBusy(true);
     try {
@@ -218,6 +288,7 @@ export default function Users() {
         toast({ title: "User unlocked", description: `${u.username} can log in again.` });
       }
       setConfirmAction(null);
+      rotateCsrfToken();
       await load();
     } catch (e) {
       toast({ variant: "destructive", title: "Error", description: e.message });
@@ -227,6 +298,7 @@ export default function Users() {
   };
 
   const isSelf = (u) => me && String(me.id) === String(u.id);
+  const isSelfEdit = editUser && isSelf(editUser);
 
   return (
     <div className="space-y-6">
@@ -394,7 +466,9 @@ export default function Users() {
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Edit User — {editUser.username}</DialogTitle>
-              <DialogDescription>Changes to permissions and property access take effect immediately.</DialogDescription>
+              <DialogDescription>
+                {isSelf(editUser) ? "You can only update your own profile fields here." : "Changes to permissions and property access take effect immediately."}
+              </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-2">
               <div className="grid grid-cols-2 gap-3">
@@ -411,6 +485,7 @@ export default function Users() {
                 <Label>Full name</Label>
                 <Input value={editForm.full_name} onChange={(e) => setEditForm((f) => ({ ...f, full_name: e.target.value }))} />
               </div>
+              {!isSelfEdit && (<>
               <div className="space-y-1.5">
                 <Label>Role</Label>
                 <Select value={editForm.role} onValueChange={(v) => {
@@ -474,6 +549,13 @@ export default function Users() {
                   </div>
                 )}
               </div>
+              </>)}
+
+              {isSelfEdit && (
+                <div className="rounded-lg border border-muted px-4 py-3 text-xs text-muted-foreground">
+                  Role, permissions, and property access for your own account are managed by another Owner/Admin. Use the Users list to edit other accounts.
+                </div>
+              )}
             </div>
             <DialogFooter>
               <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>

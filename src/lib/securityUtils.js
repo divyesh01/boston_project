@@ -101,7 +101,7 @@ export const loginRateLimiter = new RateLimiter('login', {
 
 export const sensitiveActionRateLimiter = new RateLimiter('sensitive_action', {
   windowMs: 60 * 60 * 1000, // 1 hour
-  maxRequests: 20,          // 20 sensitive actions per hour
+  maxRequests: 10000,        // effectively unlimited for now
   blockDurationMs: 60 * 60 * 1000,
 });
 

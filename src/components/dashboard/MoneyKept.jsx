@@ -10,7 +10,6 @@ import Card from "@/components/ui-exec/Card";
 import { db } from "@/api/base44Client";
 import { money, money2, pct, sum, inRange, C, CHART_COLORS, commissionFor } from "@/lib/hotel";
 import { getCcFeeRate, getCcFeeOnRefunds } from "@/lib/commissionRates";
-import { TAX_SOURCES } from "@/lib/taxConfig";
 import { getTaxConfig } from "@/lib/taxConfig";
 import { getEffectiveTaxRates } from "@/lib/taxSettings";
 import { expenseLabel, STANDARD_CATEGORY_KEYS } from "@/lib/expenseCategories";
@@ -30,15 +29,6 @@ const TREND_MODES = [
 
 // Tax buckets for manual expense entries that feed the liability display
 const TAX_EXPENSE_CATS = ["state_taxes", "city_taxes"];
-
-function classifySource(r) {
-  const text = `${r.source || ""} ${r.code || ""}`.toUpperCase();
-  if (/EXPEDIA.*HOTEL COLLECT|EHC/.test(text)) return "EXPEDIA_HC";
-  if (/BOOKING\.?COM.*HOTEL COLLECT|BHC/.test(text)) return "BOOKING_HC";
-  if (/WALK|WIN/.test(text)) return "WALK_IN";
-  if (/PROPERTY BOOKING|PRP|RR WEBSITE|WEB|RED ROOF APP|APP|CONTACT CENTER|CRS/.test(text)) return "PROPERTY_BOOKING";
-  return "OTHER_OTA";
-}
 
 // Bucket a YYYY-MM-DD date into day / week (Monday start) / month / year key
 function bucketKey(dateStr, mode) {
@@ -114,15 +104,6 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       taxImp.set(d, cur);
     });
 
-    // ── Taxable revenue base per day (from taxable booking sources) ──
-    const taxBase = new Map();
-    srcRows.forEach((r) => {
-      const src = TAX_SOURCES.find((s) => s.key === classifySource(r));
-      if (!src || !src.taxable) return;
-      const d = String(r.date).slice(0, 10);
-      taxBase.set(d, (taxBase.get(d) || 0) + (Number(r.net_revenue) || 0));
-    });
-
     // ── Day-level ledger ──
     const dayMap = new Map();
     const bump = (date, key, v) => {
@@ -170,10 +151,9 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
         passTax = state + city + other;
       } else if (taxEnabled) {
         const r = ratesFor(d.date);
-        const base = taxBase.get(d.date) || d.gross;
-        state = base * r.state;
-        city = base * r.city;
-        other = base * r.other;
+        state = d.gross * r.state;
+        city = d.gross * r.city;
+        other = d.gross * r.other;
         deductTax = state + city + other;
       }
       return { ...d, state, city, other, passTax, deductTax };

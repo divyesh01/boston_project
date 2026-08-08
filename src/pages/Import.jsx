@@ -37,6 +37,7 @@ export default function Import() {
   const { canAccessProperty } = useAuth();
   const [type, setType] = useState("auto");
   const [propertyId, setPropertyId] = useState("");
+  const [forceImport, setForceImport] = useState(false);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentFile, setCurrentFile] = useState("");
@@ -156,6 +157,7 @@ export default function Import() {
         propertyName: selectedProperty?.name || "",
         importId: item.importId,
         sourceFile: item.name,
+        forceImport,
       });
       await db.entities.UploadedReport.create({
         file_name: item.name,
@@ -277,7 +279,7 @@ export default function Import() {
   const handleImportDrive = async () => {
     if (!selectedFiles.size || !type) return;
     setDriveImporting(true);
-    const meta = importMeta();
+    const meta = { ...importMeta(), forceImport };
     for (const fileId of selectedFiles) {
       const fileInfo = driveFiles.find((f) => f.id === fileId);
       const fileName = fileInfo?.name || fileId;
@@ -376,6 +378,19 @@ export default function Import() {
               {r.label}
             </button>
           ))}
+        </div>
+
+        <div className="mt-4 flex items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={forceImport}
+              onChange={(e) => setForceImport(e.target.checked)}
+              className="h-4 w-4 rounded border-white/20"
+            />
+            Force import (bypass duplicate check — re-import already loaded data)
+          </label>
+          {forceImport && <span className="text-xs text-[#FFB547]">⚠ Will create duplicates if data already exists</span>}
         </div>
 
         <label
@@ -531,32 +546,52 @@ export default function Import() {
 
                   {q.status === "error" && <p className="mt-1 text-xs text-[#FF6B6B]">{q.error}</p>}
 
-                  {expandedKey === q.key && q.scan && (
-                    <div className="mt-3 space-y-2 border-t border-white/5 pt-3">
-                      <div className="flex items-center gap-4 text-xs text-slate-400">
-                        <span>
-                          Report type:{" "}
-                          <span className="text-white">{REPORT_TYPES.find((r) => r.key === (q.scan?.type || type))?.label || q.scan?.type || type}</span>
-                        </span>
-                        <span>
-                          Total rows: <span className="text-white">{q.scan.totalRows || 0} detected</span>
-                        </span>
-                      </div>
-                      {(q.scan.sections || []).map((s, i) => (
-                        <div key={i} className="flex items-center justify-between rounded-lg border border-white/5 bg-[#040D1A]/60 px-3 py-2">
-                          <p className="text-xs text-slate-300">{s.name}</p>
-                          <span className={`rounded-full px-2.5 py-0.5 text-xs ${s.rows > 0 ? "bg-[#00E096]/15 text-[#00E096]" : "bg-[#FFB547]/15 text-[#FFB547]"}`}>
-                            {s.rows > 0 ? `${s.rows} rows` : "0 rows"}
-                          </span>
-                        </div>
-                      ))}
-                      {q.scan.sections?.some((s) => s.rows > 0) && (
-                        <pre className="max-h-40 overflow-auto rounded-lg border border-white/10 bg-[#040D1A]/60 p-3 text-xs text-slate-300">
-                          {JSON.stringify(q.scan.sections.find((s) => s.rows > 0)?.preview?.slice(0, 3) || [], null, 2)}
-                        </pre>
-                      )}
-                    </div>
-                  )}
+{expandedKey === q.key && q.scan && (
+  <div className="mt-3 space-y-2 border-t border-white/5 pt-3">
+    <div className="flex items-center gap-4 text-xs text-slate-400">
+      <span>
+        Report type:{" "}
+        <span className="text-white">{REPORT_TYPES.find((r) => r.key === (q.scan?.type || type))?.label || q.scan?.type || type}</span>
+      </span>
+      <span>
+        Total rows: <span className="text-white">{q.scan.totalRows || 0} detected</span>
+      </span>
+      {q.scan.debug && (
+        <>
+          <span className="text-[#FFB547]">Raw: {q.scan.debug.rawRowCount}</span>
+          <span className="text-[#FFB547]">Objects: {q.scan.debug.objectCount}</span>
+          {q.scan.debug.dateParseErrors && (
+            <span className="text-[#FF6B6B]">Date parse errors: {q.scan.debug.dateParseErrors}</span>
+          )}
+          {q.scan.debug.sampleHeaders.length > 0 && (
+            <span className="text-slate-500">Headers: {q.scan.debug.sampleHeaders.slice(0, 8).join(", ")}</span>
+          )}
+        </>
+      )}
+    </div>
+    {(q.scan.sections || []).map((s, i) => (
+      <div key={i} className="flex items-center justify-between rounded-lg border border-white/5 bg-[#040D1A]/60 px-3 py-2">
+        <p className="text-xs text-slate-300">{s.name}</p>
+        <span className={`rounded-full px-2.5 py-0.5 text-xs ${s.rows > 0 ? "bg-[#00E096]/15 text-[#00E096]" : "bg-[#FFB547]/15 text-[#FFB547]"}`}>
+          {s.rows > 0 ? `${s.rows} rows` : "0 rows"}
+        </span>
+      </div>
+    ))}
+    {q.scan.sections?.some((s) => s.rows > 0) && (
+      <pre className="max-h-40 overflow-auto rounded-lg border border-white/10 bg-[#040D1A]/60 p-3 text-xs text-slate-300">
+        {JSON.stringify(q.scan.sections.find((s) => s.rows > 0)?.preview?.slice(0, 3) || [], null, 2)}
+      </pre>
+    )}
+    {q.scan.debug && q.scan.debug.sampleObject && (
+      <details className="mt-2">
+        <summary className="text-xs text-slate-500 cursor-pointer">Show raw first row</summary>
+        <pre className="mt-1 max-h-32 overflow-auto rounded-lg border border-white/10 bg-[#040D1A]/60 p-2 text-[10px] text-slate-300">
+          {JSON.stringify(q.scan.debug.sampleObject, null, 2)}
+        </pre>
+      </details>
+    )}
+  </div>
+)}
                 </div>
               ))}
             </div>

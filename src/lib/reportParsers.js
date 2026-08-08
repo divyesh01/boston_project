@@ -280,6 +280,15 @@ export async function scanReport(type, fileUrl, meta = {}) {
   const resolvedType = !type || type === "auto" ? detectReportType(fileUrl, rawRows, meta) : type;
   const fullMeta = { ...meta, type: resolvedType };
 
+  // Debug info for troubleshooting
+  const debugInfo = {
+    rawRowCount: rawRows?.length || 0,
+    objectCount: objects?.length || 0,
+    detectedType: resolvedType,
+    sampleHeaders: rawRows?.[0] || [],
+    sampleObject: objects?.[0] || null,
+  };
+
   if (resolvedType === "generic") {
     const rows = objects.filter((r) => Object.values(r).some((v) => v !== null && v !== ""));
     return {
@@ -288,6 +297,7 @@ export async function scanReport(type, fileUrl, meta = {}) {
       totalRows: rows.length,
       rowsToImport: rows,
       meta: fullMeta,
+      debug: debugInfo,
     };
   }
 
@@ -306,7 +316,12 @@ export async function scanReport(type, fileUrl, meta = {}) {
   const processed = mapped
     .map((r) => {
       if (r.date) {
-        r.date = convertDate(r.date);
+        const converted = convertDate(r.date);
+        if (!converted || !isIsoDate(converted)) {
+          // Track failed date conversions for debugging
+          r._dateParseError = r.date;
+        }
+        r.date = converted;
       }
       // For occupancy: calculate occupancy ratio from rooms_sold/total_rooms if occupancy not set or > 1
       if (resolvedType === "occupancy") {
@@ -320,7 +335,13 @@ export async function scanReport(type, fileUrl, meta = {}) {
       }
       return r;
     })
-    .filter((r) => r.date && isIsoDate(r.date));
+    .filter((r) => {
+      const valid = r.date && isIsoDate(r.date);
+      if (!valid && r._dateParseError) {
+        debugInfo.dateParseErrors = (debugInfo.dateParseErrors || 0) + 1;
+      }
+      return valid;
+    });
 
   return {
     type: resolvedType,
@@ -328,6 +349,7 @@ export async function scanReport(type, fileUrl, meta = {}) {
     totalRows: processed.length,
     rowsToImport: processed,
     meta: fullMeta,
+    debug: debugInfo,
   };
 }
 
@@ -522,17 +544,19 @@ function scanClerkReport(rawRows, meta, objects = []) {
 }
 
 export async function importReport(scanResult, meta = {}) {
+  const { forceImport = false, sourceFile = "", propertyId = "", propertyName = "", ...restMeta } = meta;
+  
   // Create import session for tracking and rollback capability
   const importSession = await createImportSession({
-    sourceFile: meta.sourceFile,
-    propertyId: meta.propertyId,
-    propertyName: meta.propertyName,
+    sourceFile,
+    propertyId,
+    propertyName,
     reportType: scanResult.type,
   });
   
   try {
     const [result] = await runInTransaction([async () => {
-      return await doImport(scanResult, meta, importSession.importId);
+      return await doImport(scanResult, { ...restMeta, forceImport, sourceFile, propertyId, propertyName }, importSession.importId);
     }]);
     
     // Track row counts per table for potential rollback
@@ -553,7 +577,8 @@ export async function importReport(scanResult, meta = {}) {
 
 async function doImport(scanResult, meta, importId) {
   const { type } = scanResult;
-  const addMetaFn = (obj) => addMeta(obj, { ...meta, type, importId });
+  const { forceImport = false, ...restMeta } = meta;
+  const addMetaFn = (obj) => addMeta(obj, { ...restMeta, type, importId });
 
   if (type === "clerk") {
     const all = [];
@@ -568,11 +593,11 @@ async function doImport(scanResult, meta, importId) {
     };
 
     const deduped = dedupByKey(all, keyFn);
-    const existing = meta.propertyId
-      ? await db.entities.ClerkShiftRecord.filter({ property_id: meta.propertyId })
+    const existing = restMeta.propertyId
+      ? await db.entities.ClerkShiftRecord.filter({ property_id: restMeta.propertyId })
       : [];
     const seen = new Set(existing.map(keyFn));
-    const newRows = deduped.filter((r) => !seen.has(keyFn(r)));
+    const newRows = forceImport ? deduped : deduped.filter((r) => !seen.has(keyFn(r)));
 
     let createdIds = [];
     if (newRows.length) {
@@ -582,36 +607,29 @@ async function doImport(scanResult, meta, importId) {
         createdIds.push(...ids);
       }
     }
-    // Record created IDs for potential rollback
     if (createdIds.length) {
-      await recordCreatedIds("ClerkShiftRecord", meta.propertyId, importId, createdIds);
+      await recordCreatedIds("ClerkShiftRecord", restMeta.propertyId, importId, createdIds);
     }
-    const cleaned = await dedupePropertyRows("ClerkShiftRecord", meta.propertyId, keyFn);
+    const cleaned = await dedupePropertyRows("ClerkShiftRecord", restMeta.propertyId, keyFn);
     return { count: newRows.length, excluded: deduped.length - newRows.length, cleaned };
   }
 
   if (type === "hotel_statistics") {
-    // Use the pre-parsed metrics from scanResult
     const metrics = scanResult.metrics || scanResult.rowsToImport || [];
     
-    // Key: property_id | business_date | section | metric_name | period | import_id
-    // This prevents duplicate imports of the same file
     const keyFn = (r) => `${r.property_id}|${r.business_date}|${r.section}|${r.metric_name}|${r.period}|${r.import_id}`;
     
     const deduped = dedupByKey(metrics, keyFn);
     
-    // Check for existing records with same file_hash + property + business_date (file-level dedup)
     const fileHash = scanResult.fileHash;
-    const businessDate = meta.businessDate || meta.business_date || '';
-    const fileDedupKey = fileHash ? `${fileHash}|${meta.propertyId}|${businessDate}` : null;
+    const businessDate = restMeta.businessDate || restMeta.business_date || '';
+    const fileDedupKey = fileHash ? `${fileHash}|${restMeta.propertyId}|${businessDate}` : null;
     
     let newRows = deduped;
-    if (fileDedupKey) {
-      // Check if this file was already imported
+    if (fileDedupKey && !forceImport) {
       const existingImports = await db.entities.HotelMetric
-        .filter({ file_hash: fileHash, property_id: meta.propertyId, business_date: businessDate });
+        .filter({ file_hash: fileHash, property_id: restMeta.propertyId, business_date: businessDate });
       if (existingImports.length > 0) {
-        // File already imported - skip all rows
         newRows = [];
       }
     }
@@ -624,9 +642,8 @@ async function doImport(scanResult, meta, importId) {
         createdIds.push(...ids);
       }
     }
-    // Record created IDs for potential rollback
     if (createdIds.length) {
-      await recordCreatedIds("HotelMetric", meta.propertyId, importId, createdIds);
+      await recordCreatedIds("HotelMetric", restMeta.propertyId, importId, createdIds);
     }
     return { count: newRows.length, excluded: deduped.length - newRows.length, cleaned: 0 };
   }
@@ -642,7 +659,7 @@ async function doImport(scanResult, meta, importId) {
 
   const rows = (scanResult.rowsToImport || []).map((r) => addMetaFn(r));
   const deduped = dedupByKey(rows, keyFn);
-  const newRows = await skipExisting(ENTITY[type], deduped, keyFn, meta.propertyId);
+  const newRows = forceImport ? deduped : await skipExisting(ENTITY[type], deduped, keyFn, restMeta.propertyId);
 
   let createdIds = [];
   for (let i = 0; i < newRows.length; i += 400) {
@@ -650,11 +667,10 @@ async function doImport(scanResult, meta, importId) {
     const ids = await db.entities[ENTITY[type]].bulkCreate(batch);
     createdIds.push(...ids);
   }
-  // Record created IDs for potential rollback
   if (createdIds.length) {
-    await recordCreatedIds(ENTITY[type], meta.propertyId, importId, createdIds);
+    await recordCreatedIds(ENTITY[type], restMeta.propertyId, importId, createdIds);
   }
-  const cleaned = await dedupePropertyRows(ENTITY[type], meta.propertyId, keyFn);
+  const cleaned = await dedupePropertyRows(ENTITY[type], restMeta.propertyId, keyFn);
   return { count: newRows.length, excluded: deduped.length - newRows.length, cleaned };
 }
 

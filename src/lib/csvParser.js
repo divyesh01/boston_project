@@ -33,6 +33,15 @@ export function convertDate(s) {
     const mon = MONTH_MAP[m4[1].toLowerCase()];
     if (mon) return `${m4[3]}-${mon}-${m4[2].padStart(2, "0")}`;
   }
+  // "Apr 01, 2026" with day of week prefix like "Wed, Apr 01, 2026"
+  const m5 = s.match(/^[A-Za-z]{3},\s*([A-Za-z]{3})\s+(\d{1,2}),\s+(\d{4})$/);
+  if (m5) {
+    const mon = MONTH_MAP[m5[1].toLowerCase()];
+    if (mon) return `${m5[3]}-${mon}-${m5[2].padStart(2, "0")}`;
+  }
+  // "2026-03-07 03:21 PM" - datetime format
+  const m6 = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (m6) return m6[1];
   return s;
 }
 

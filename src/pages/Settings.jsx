@@ -5,6 +5,7 @@ import { Link } from "react-router-dom";
 import { Save, Plus, CheckCircle2, RotateCcw, Trash2, Building2, RefreshCw, UserCog, LogOut } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, getCcFeeOnRefunds, setCcFeeOnRefunds, COMMISSION_TYPES } from "@/lib/commissionRates";
+import { useEffect } from "react";
 import { getAlertThresholds, saveAlertThresholds } from "@/lib/alertThresholds";
 import { getRevenueThresholds, saveRevenueThresholds } from "@/lib/revenueThresholds";
 import { getTaxSettings, saveTaxSettings } from "@/lib/taxSettings";
@@ -42,9 +43,41 @@ export default function Settings() {
   const [propMsg, setPropMsg] = useState("");
   const [propDeleteTarget, setPropDeleteTarget] = useState(null);
 
+  // Auto-save commission rates & CC fee to localStorage on change
+  useEffect(() => {
+    setCommissionRates(rates);
+    setCcFeeRate(ccFee);
+    setCcFeeOnRefunds(ccRefunds);
+  }, [rates, ccFee, ccRefunds]);
+
+  // Auto-save alert thresholds
+  useEffect(() => {
+    saveAlertThresholds(thresholds);
+  }, [thresholds]);
+
+  // Auto-save revenue thresholds
+  useEffect(() => {
+    saveRevenueThresholds(revThresholds);
+  }, [revThresholds]);
+
+  // Auto-save tax settings
+  useEffect(() => {
+    const clean = taxRows.map(({ _key, ...rest }) => rest);
+    saveTaxSettings(clean);
+  }, [taxRows]);
+
   const handleChange = (key, field, val) => {
     const cur = rates[key] || { type: "percentage", rate: 0, taxExempt: false };
-    setRates({ ...rates, [key]: { ...cur, [field]: field === "rate" ? Number(val) : val } });
+    if (field === "rate") {
+      // Enter plain percentages for percentage types (e.g. 15 → 15%, not 0.15).
+      // Fixed $ / actual values are stored as-is.
+      const n = Number(val);
+      const numVal = Number.isFinite(n) ? Math.max(0, n) : 0;
+      const stored = cur.type === "percentage" ? Math.min(0.9999, numVal / 100) : numVal;
+      setRates({ ...rates, [key]: { ...cur, rate: stored } });
+    } else {
+      setRates({ ...rates, [key]: { ...cur, [field]: val } });
+    }
   };
 
   const handleCcFeeChange = (val) => {
@@ -326,8 +359,8 @@ export default function Settings() {
                   <input
                     type="number"
                     min="0"
-                    step="0.5"
-                    value={r.rate}
+                    step={r.type === "percentage" ? "0.01" : "0.5"}
+                    value={r.type === "percentage" ? Math.round((r.rate || 0) * 10000) / 100 : r.rate}
                     disabled={r.type === "none"}
                     onChange={(e) => handleChange(key, "rate", e.target.value)}
                     className="w-20 rounded-lg border border-white/10 bg-[#040D1A] px-3 py-1.5 text-right text-sm text-slate-200 outline-none focus:border-[#00D4FF] disabled:opacity-30"
@@ -450,6 +483,11 @@ export default function Settings() {
                   />
                 </div>
               ))}
+              <div className="flex items-end">
+                <div className="w-full rounded-lg border border-[#00D4FF]/30 bg-[#00D4FF]/10 px-3 py-2 text-center text-sm font-medium text-[#00D4FF]">
+                  Combined: {(((row.state_rate || 0) + (row.city_rate || 0) + (row.other_rate || 0)) * 100).toFixed(2)}%
+                </div>
+              </div>
               <div>
                 <label className="mb-1 block text-[10px] uppercase tracking-widest text-slate-500">Effective Start</label>
                 <input

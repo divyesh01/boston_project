@@ -5,7 +5,7 @@ import {
   LayoutDashboard, GitCompareArrows, Grid3x3, BarChart3, Upload, Building2,
   Users, CreditCard, Settings as SettingsIcon, MoreHorizontal, X, ArrowLeft,
   CalendarDays, TrendingUp, Wallet, ClipboardList, Radio, FileSpreadsheet, LineChart, Table2,
-  ShieldCheck, ScrollText, LogOut, KeyRound,
+  ShieldCheck, ScrollText, LogOut, KeyRound, BrainCircuit,
 } from "lucide-react";
 import AIAssistant from "@/components/AIAssistant";
 import { GlobalFiltersProvider, useGlobalFilters } from "@/lib/useGlobalFilters";
@@ -18,6 +18,7 @@ const NAV = [
   { to: "/mtd", label: "MTD Growth", icon: TrendingUp, short: "MTD" },
   { to: "/calendar", label: "Monthly Calendar", icon: CalendarDays, short: "Calendar" },
   { to: "/compare", label: "Period Compare", icon: GitCompareArrows, short: "Compare" },
+  { to: "/data-intelligence", label: "Data Intelligence", icon: BrainCircuit, short: "Data AI" },
   { to: "/rooms", label: "Room Board", icon: Grid3x3, short: "Rooms" },
   { to: "/employees", label: "Clerk Audit", icon: Users, short: "Employees" },
   { to: "/payments", label: "Payments", icon: CreditCard, short: "Payments" },

@@ -1,10 +1,11 @@
 import { db, runInTransaction, createImportSession, completeImportSession } from '@/api/base44Client';
 import localDb from '@/api/localDb';
 
-
 import {
-  fetchCsvRows, rowsToObjects, convertDate, isIsoDate, parseAmount, isCsvFile, detectSections,
+  fetchCsvRows, rowsToObjects, convertDate, isIsoDate, parseAmount, isCsvFile, detectSections, parseCsvText,
 } from "@/lib/csvParser";
+
+import { parseHotelReport, makeFileDedupKey, generateFileHash } from '@/lib/universalParser';
 
 // Serialize report imports to prevent double-click/parallel duplicate writes.
 let importQueue = Promise.resolve();
@@ -73,6 +74,7 @@ export const REPORT_TYPES = [
   { key: "gross", label: "Gross Revenue" },
   { key: "payments", label: "Payments Summary" },
   { key: "clerk", label: "Clerk Shift & Cash Audit" },
+  { key: "hotel_statistics", label: "Hotel Statistics (Universal)" },
   { key: "generic", label: "Any other spreadsheet" },
 ];
 
@@ -136,6 +138,7 @@ const ENTITY = {
   source: "SourceDay",
   gross: "GrossRevenueDay",
   payments: "PaymentDay",
+  hotel_statistics: "HotelMetric",
 };
 const REVENUE_COL = {
   occupancy: "total_revenue",
@@ -196,8 +199,16 @@ async function skipExisting(entity, rows, keyFn, propertyId) {
   });
 }
 
-async function getRowsArray(type, fileUrl) {
-  if (isCsvFile(fileUrl)) {
+async function getRowsArray(type, fileUrl, meta) {
+  // If CSV text was pre-read from the File object, parse it directly (no fetch needed)
+  if (meta?.csvText) {
+    const rawRows = parseCsvText(meta.csvText);
+    const objects = rowsToObjects(rawRows);
+    return { objects, rawRows };
+  }
+  // Use sourceFile for detection if available, fallback to fileUrl
+  const checkUrl = meta?.sourceFile || fileUrl;
+  if (isCsvFile(checkUrl)) {
     const rawRows = await fetchCsvRows(fileUrl);
     const objects = rowsToObjects(rawRows);
     return { objects, rawRows };
@@ -217,40 +228,56 @@ async function getRowsArray(type, fileUrl) {
   return { objects: Array.isArray(res.output) ? res.output : [], rawRows: [] };
 }
 
-function detectReportType(fileUrl, rawRows) {
-  const fileName = decodeURIComponent(String(fileUrl || "").split("#").pop() || "").toLowerCase();
-  const firstRow = (rawRows || []).find((r) => r.some((c) => String(c).trim() !== "")) || [];
-  const header = firstRow.map((c) => String(c).trim().toLowerCase());
-  const has = (kw) => header.some((h) => h.includes(kw));
+function detectReportType(fileUrl, rawRows, meta) {
+  const checkUrl = meta?.sourceFile || fileUrl;
+  const fileName = decodeURIComponent(String(checkUrl || "").split("#").pop() || "").toLowerCase();
+  
+  // Scan the first 20 rows for signature headers
+  for (let i = 0; i < Math.min(20, (rawRows || []).length); i++) {
+    const row = rawRows[i];
+    if (!row || !row.length) continue;
+    
+    const header = row.map((c) => String(c).trim().toLowerCase());
+    const has = (kw) => header.some((h) => h.includes(kw));
 
-  // Clerk Shift & Cash Audit (stacked sections)
-  if (has("payment type") && has("actual") && has("net today")) return "clerk";
-  if (has("username") && has("start time")) return "clerk";
-  if (/clerk|shift|cash audit/i.test(fileName)) return "clerk";
+    // Hotel Statistics (universal parser)
+    if (has("description") && (has("actual today") || has("m-t-d") || has("mtd") || has("y-t-d") || has("ytd"))) {
+      return "hotel_statistics";
+    }
 
-  // Payments Summary — tender columns
-  if ((has("cash") && (has("check") || has("amex") || has("visa") || has("master"))) || /payments? summary/i.test(fileName)) {
-    return "payments";
+    // Clerk Shift & Cash Audit
+    if (has("payment type") && has("actual") && has("net today")) return "clerk";
+    if (has("username") && has("start time")) return "clerk";
+
+    // Payments Summary
+    if ((has("cash") && (has("check") || has("amex") || has("visa") || has("master")))) {
+      return "payments";
+    }
+
+    // Source Summary
+    if (has("code") && has("source") && has("net revenue")) return "source";
+
+    // Gross Revenue
+    if (has("room rent") && (has("misc charge") || has("advance deposit") || has("beverage"))) return "gross";
+
+    // Occupancy Summary
+    if (has("total sold rooms") || (has("room revenue") && (has("revpar") || has("occupancy")))) return "occupancy";
   }
 
-  // Source Summary — code/source breakdown
-  if (has("code") && has("source") && has("net revenue")) return "source";
+  // Fallbacks by filename
+  if (/hotel.?stat/i.test(fileName)) return "hotel_statistics";
+  if (/clerk|shift|cash audit/i.test(fileName)) return "clerk";
+  if (/payments? summary/i.test(fileName)) return "payments";
   if (/source summary/i.test(fileName)) return "source";
-
-  // Gross Revenue — room rent / misc charge / advance deposit
-  if (has("room rent") && (has("misc charge") || has("advance deposit") || has("beverage"))) return "gross";
   if (/gross revenue/i.test(fileName)) return "gross";
-
-  // Occupancy Summary — room revenue / total sold rooms / revpar
-  if (has("total sold rooms") || (has("room revenue") && (has("revpar") || has("occupancy")))) return "occupancy";
   if (/occupancy/i.test(fileName)) return "occupancy";
 
   return "generic";
 }
 
 export async function scanReport(type, fileUrl, meta = {}) {
-  const { objects, rawRows } = await getRowsArray(type, fileUrl);
-  const resolvedType = !type || type === "auto" ? detectReportType(fileUrl, rawRows) : type;
+  const { objects, rawRows } = await getRowsArray(type, fileUrl, meta);
+  const resolvedType = !type || type === "auto" ? detectReportType(fileUrl, rawRows, meta) : type;
   const fullMeta = { ...meta, type: resolvedType };
 
   if (resolvedType === "generic") {
@@ -262,6 +289,10 @@ export async function scanReport(type, fileUrl, meta = {}) {
       rowsToImport: rows,
       meta: fullMeta,
     };
+  }
+
+  if (resolvedType === "hotel_statistics") {
+    return scanHotelStatistics(rawRows, fileUrl, fullMeta);
   }
 
   if (resolvedType === "clerk") {
@@ -312,6 +343,69 @@ const CLERK_SKIP_LABELS = new Set([
 ]);
 
 const DROP_LINE_RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2} [AP]M)\s*-\s*(.+)$/i;
+
+async function scanHotelStatistics(rawRows, fileUrl, meta) {
+  // Use pre-read CSV text if available, otherwise reconstruct from rawRows
+  const csvText = meta.csvText || rawRows.map(row => row.map(cell => {
+    if (cell === null || cell === undefined) return '';
+    const str = String(cell);
+    if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+      return '"' + str.replace(/"/g, '""') + '"';
+    }
+    return str;
+  }).join(',')).join('\n');
+  
+  // Parse using universal parser
+  const importId = meta.importId || `imp_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  const parseResult = await parseHotelReport(csvText, {
+    propertyId: meta.propertyId || '',
+    propertyName: meta.propertyName || '',
+    businessDate: meta.businessDate || '',
+    sourceFile: meta.sourceFile || fileUrl,
+    importId,
+  });
+  
+  // Convert metrics to preview format
+  const preview = parseResult.metrics.slice(0, 20).map(m => ({
+    section: m.section,
+    metric: m.metric_name,
+    category: m.metric_category,
+    period: m.period_label,
+    value: m.value,
+    unit: m.unit,
+    original: m.original_value,
+  }));
+
+  // Map parsed sections into the uniform { name, rows, preview } shape the UI renders.
+  const sections = parseResult.sections.map(s => {
+    const metrics = parseResult.metrics.filter(m => m.section === s.name);
+    return {
+      name: s.name,
+      rows: s.rowCount,
+      metricCount: metrics.length,
+      periodHeaders: s.periodHeaders || [],
+      preview: metrics.slice(0, 5).map(m => ({
+        metric: m.metric_name,
+        category: m.metric_category,
+        period: m.period_label,
+        value: m.value,
+        unit: m.unit,
+      })),
+    };
+  });
+
+  return {
+    type: "hotel_statistics",
+    sections,
+    totalRows: parseResult.metrics.length,
+    rowsToImport: parseResult.metrics,
+    metrics: parseResult.metrics,
+    unknownMetrics: parseResult.unknownMetrics,
+    errors: parseResult.errors,
+    fileHash: parseResult.fileHash,
+    meta,
+  };
+}
 
 function scanClerkReport(rawRows, meta, objects = []) {
   const payments = [];
@@ -494,6 +588,47 @@ async function doImport(scanResult, meta, importId) {
     }
     const cleaned = await dedupePropertyRows("ClerkShiftRecord", meta.propertyId, keyFn);
     return { count: newRows.length, excluded: deduped.length - newRows.length, cleaned };
+  }
+
+  if (type === "hotel_statistics") {
+    // Use the pre-parsed metrics from scanResult
+    const metrics = scanResult.metrics || scanResult.rowsToImport || [];
+    
+    // Key: property_id | business_date | section | metric_name | period | import_id
+    // This prevents duplicate imports of the same file
+    const keyFn = (r) => `${r.property_id}|${r.business_date}|${r.section}|${r.metric_name}|${r.period}|${r.import_id}`;
+    
+    const deduped = dedupByKey(metrics, keyFn);
+    
+    // Check for existing records with same file_hash + property + business_date (file-level dedup)
+    const fileHash = scanResult.fileHash;
+    const businessDate = meta.businessDate || meta.business_date || '';
+    const fileDedupKey = fileHash ? `${fileHash}|${meta.propertyId}|${businessDate}` : null;
+    
+    let newRows = deduped;
+    if (fileDedupKey) {
+      // Check if this file was already imported
+      const existingImports = await db.entities.HotelMetric
+        .filter({ file_hash: fileHash, property_id: meta.propertyId, business_date: businessDate });
+      if (existingImports.length > 0) {
+        // File already imported - skip all rows
+        newRows = [];
+      }
+    }
+    
+    let createdIds = [];
+    if (newRows.length) {
+      for (let i = 0; i < newRows.length; i += 400) {
+        const batch = newRows.slice(i, i + 400);
+        const ids = await db.entities.HotelMetric.bulkCreate(batch);
+        createdIds.push(...ids);
+      }
+    }
+    // Record created IDs for potential rollback
+    if (createdIds.length) {
+      await recordCreatedIds("HotelMetric", meta.propertyId, importId, createdIds);
+    }
+    return { count: newRows.length, excluded: deduped.length - newRows.length, cleaned: 0 };
   }
 
   if (type === "generic") {

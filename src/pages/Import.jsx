@@ -109,12 +109,18 @@ export default function Import() {
       setCurrentFile(item.name);
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "scanning" } : q)));
       try {
+        // Read CSV files directly into memory to avoid blob URL fetch issues
+        let csvText = null;
+        if (/\.csv$/i.test(item.name)) {
+          csvText = await item.file.text();
+        }
         const { file_url } = await db.integrations.Core.UploadFile({ file: item.file });
         const scan = await scanReport(type, file_url, {
           propertyId,
           propertyName: selectedProperty?.name || "",
           importId: item.importId,
           sourceFile: item.name,
+          csvText,
         });
         setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "ready", scan, file_url } : q)));
       } catch (e) {

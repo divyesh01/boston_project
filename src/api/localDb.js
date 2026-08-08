@@ -15,6 +15,7 @@ import Dexie from 'dexie';
  *   AuditLog: import('dexie').Table<any, number>;
  *   Staff: import('dexie').Table<any, number>;
  *   ImportSession: import('dexie').Table<any, number>;
+ *   ScanResult: import('dexie').Table<any, number>;
  * }} */
 // @ts-ignore — augment the non-generic Dexie interface with the app's tables.
 const localDb = new Dexie('RedRoofIntelligence');
@@ -78,6 +79,16 @@ localDb.version(6).stores({
   AuditLog:         '++id, user_id, username, action, performed_by_id, result, created_date, hash, previous_hash',
   Staff:            '++id, property_id, employee_name, department, active, [property_id+employee_name], import_id, created_date',
   ImportSession:    '++id, import_id, property_id, status, started_at, completed_at, row_counts, created_date',
+});
+
+// v7 — add ScanResult table for the Data Intelligence module
+localDb.version(7).stores({
+  ScanResult: '++id, file_id, property_id, scanned_at, created_date, health_score',
+});
+
+// v8 — add HotelMetric table for universal hotel data ingestion
+localDb.version(8).stores({
+  HotelMetric: '++id, property_id, business_date, section, metric_name, period, import_id, file_hash, [property_id+business_date], [property_id+business_date+section+metric_name+period], created_date',
 });
 
 export default localDb;

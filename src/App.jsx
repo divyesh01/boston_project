@@ -11,6 +11,7 @@ import { attachClickSounds } from '@/lib/sound';
 
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
 const Compare = lazy(() => import('@/pages/Compare'));
+const DataIntelligence = lazy(() => import('@/pages/DataIntelligence'));
 const RoomBoard = lazy(() => import('@/pages/RoomBoard'));
 const ChartBuilder = lazy(() => import('@/pages/ChartBuilder'));
 const Import = lazy(() => import('@/pages/Import'));
@@ -141,8 +142,9 @@ const ProtectedRoutes = () => {
         }
       >
         <Route path="/" element={<Suspended><Dashboard /></Suspended>} />
-        <Route path="/compare" element={<Suspended><Compare /></Suspended>} />
-        <Route path="/rooms" element={<Suspended><RoomBoard /></Suspended>} />
+         <Route path="/compare" element={<Suspended><Compare /></Suspended>} />
+         <Route path="/data-intelligence" element={<Suspended><DataIntelligence /></Suspended>} />
+         <Route path="/rooms" element={<Suspended><RoomBoard /></Suspended>} />
         <Route path="/charts" element={<Suspended><ChartBuilder /></Suspended>} />
         <Route path="/employees" element={<Suspended><Employees /></Suspended>} />
         <Route path="/payments" element={<Suspended><Payments /></Suspended>} />

@@ -1,0 +1,10 @@
+{
+  "plugin": [
+    [
+      "opencode-free-usage-monitor",
+      {
+        "enabled": true
+      }
+    ]
+  ]
+}

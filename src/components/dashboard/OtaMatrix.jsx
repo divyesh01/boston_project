@@ -2,8 +2,10 @@ import React from "react";
 import Card from "@/components/ui-exec/Card";
 import { commissionFor, money, pct, C } from "@/lib/hotel";
 import { Lightbulb } from "lucide-react";
+import { useSettingsVersion } from "@/hooks/useSettingsVersion";
 
 export default function OtaMatrix({ rows }) {
+  useSettingsVersion();
   const map = new Map();
   rows.forEach((r) => {
     const key = r.source || r.code || "UNKNOWN";

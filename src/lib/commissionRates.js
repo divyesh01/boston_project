@@ -2,6 +2,8 @@
 // Each source can be tax-exempt (OTA pre-deducts) or taxable (walk-in/direct)
 // Global CC/debit card processing fee applies to card charges and refunds
 
+import { notifySettingsChanged } from "@/lib/settingsBus";
+
 const RATES_KEY = "rri_commission_rates_v2";
 const CC_FEE_KEY = "rri_cc_fee_rate";
 const CC_REFUNDS_KEY = "rri_cc_fee_refunds_v1";
@@ -55,6 +57,7 @@ export function getCommissionRates() {
 
 export function setCommissionRates(rates) {
   localStorage.setItem(RATES_KEY, JSON.stringify(rates));
+  notifySettingsChanged();
 }
 
 export function getCcFeeRate() {
@@ -73,6 +76,7 @@ export function setCcFeeRate(rate) {
   let n = Number(rate);
   if (Number.isNaN(n)) n = DEFAULT_CC_FEE;
   localStorage.setItem(CC_FEE_KEY, String(Math.max(0, Math.min(0.9999, n))));
+  notifySettingsChanged();
 }
 
 // Whether the card processing fee also applies to card refunds
@@ -86,6 +90,7 @@ export function getCcFeeOnRefunds() {
 
 export function setCcFeeOnRefunds(enabled) {
   localStorage.setItem(CC_REFUNDS_KEY, enabled ? "1" : "0");
+  notifySettingsChanged();
 }
 
 export const COMMISSION_TYPES = [

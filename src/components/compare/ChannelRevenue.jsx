@@ -4,8 +4,10 @@ import Card from "@/components/ui-exec/Card";
 import ChartToolbar from "@/components/charts/ChartToolbar";
 import UniversalChart from "@/components/charts/UniversalChart";
 import { commissionFor, money, num, pct, C, CHART_COLORS } from "@/lib/hotel";
+import { useSettingsVersion } from "@/hooks/useSettingsVersion";
 
 export default function ChannelRevenue({ rows, dateRange }) {
+  const settingsVersion = useSettingsVersion();
   const chartRef = useRef(null);
 
   const channels = useMemo(() => {
@@ -14,8 +16,11 @@ export default function ChannelRevenue({ rows, dateRange }) {
       const src = r.source || "Unknown";
       const net = Number(r.net_revenue || 0);
       const stays = Number(r.stays || 0);
-      const rate = commissionFor(src);
-      const gross = rate > 0 ? net / (1 - rate) : net;
+      const info = commissionFor(src);
+      let gross = 0;
+      if (info.type === "percentage" && info.rate > 0) gross = net / (1 - info.rate);
+      else if (info.type === "fixed") gross = net + info.rate * stays;
+      else gross = net;
       const commission = gross - net;
       const cur = map.get(src) || { source: src, gross: 0, net: 0, stays: 0, commission: 0, adr: 0 };
       cur.gross += gross;
@@ -26,7 +31,7 @@ export default function ChannelRevenue({ rows, dateRange }) {
       map.set(src, cur);
     });
     return [...map.values()].sort((a, b) => b.net - a.net);
-  }, [rows]);
+  }, [rows, settingsVersion]);
 
   const totalGross = channels.reduce((a, c) => a + c.gross, 0);
   const totalNet = channels.reduce((a, c) => a + c.net, 0);

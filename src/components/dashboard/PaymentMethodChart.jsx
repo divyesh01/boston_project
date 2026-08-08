@@ -3,9 +3,11 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recha
 import Card from "@/components/ui-exec/Card";
 import { CHART_COLORS, money2, pct } from "@/lib/hotel";
 import { getCcFeeRate } from "@/lib/commissionRates";
+import { useSettingsVersion } from "@/hooks/useSettingsVersion";
 
 export default function PaymentMethodChart({ payRows }) {
   const ccFee = getCcFeeRate();
+  useSettingsVersion();
 
   const data = useMemo(() => {
     if (!payRows?.length) return { chart: [], totals: {} };

@@ -5,6 +5,7 @@
 // precedence; these rates are only used to estimate taxes when reports don't provide them.
 
 import { getTaxRate } from "@/lib/taxConfig";
+import { notifySettingsChanged } from "@/lib/settingsBus";
 
 const TAX_SETTINGS_KEY = "rri_tax_settings_v1";
 
@@ -24,6 +25,7 @@ export function getTaxSettings() {
 
 export function saveTaxSettings(list) {
   localStorage.setItem(TAX_SETTINGS_KEY, JSON.stringify(list || []));
+  notifySettingsChanged();
 }
 
 // Resolve the tax rates that apply to a property on a specific date.

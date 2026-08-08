@@ -15,6 +15,7 @@ import { getTaxConfig } from "@/lib/taxConfig";
 import { getEffectiveTaxRates } from "@/lib/taxSettings";
 import { expenseLabel, STANDARD_CATEGORY_KEYS } from "@/lib/expenseCategories";
 import { CARD_METHODS } from "@/lib/paymentNorm";
+import { useSettingsVersion } from "@/hooks/useSettingsVersion";
 
 const tip = { background: "#0A1628", border: "1px solid #ffffff14", borderRadius: 12, color: "#e2e8f0" };
 const axis = { fill: "#64748b", fontSize: 10 };
@@ -69,6 +70,7 @@ function propKey(property) {
 export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, property }) {
   const ccFee = getCcFeeRate();
   const ccFeeRefunds = getCcFeeOnRefunds();
+  const settingsVersion = useSettingsVersion();
   const [active, setActive] = useState(null);
   const [trendMode, setTrendMode] = useState("week");
 
@@ -419,7 +421,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
         otherRecords: taxRecords["Other Taxes"],
       },
     };
-  }, [occRows, srcRows, grossRows, payRecords, expenses, payroll, dateRange, property, ccFee, ccFeeRefunds, trendMode]);
+  }, [occRows, srcRows, grossRows, payRecords, expenses, payroll, dateRange, property, ccFee, ccFeeRefunds, trendMode, settingsVersion]);
 
   const { gross, items, totalDeductions, kept, pieData, barData, trendData, from, to, tax } = data;
   const keepRate = gross > 0 ? kept / gross : 0;

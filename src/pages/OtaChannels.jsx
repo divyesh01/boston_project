@@ -54,7 +54,14 @@ export default function OtaChannels() {
   const updateRate = (source, field, value) => {
     const updated = { ...rates };
     if (!updated[source]) updated[source] = { type: "percentage", rate: 0, taxExempt: false };
-    updated[source] = { ...updated[source], [field]: value };
+    let next = value;
+    if (field === "rate") {
+      // Enter plain percentages for percentage types (e.g. 15 → 15%, not 0.15).
+      const n = Number(value);
+      const numVal = Number.isFinite(n) ? Math.max(0, n) : 0;
+      next = updated[source].type === "percentage" ? Math.min(0.9999, numVal / 100) : numVal;
+    }
+    updated[source] = { ...updated[source], [field]: next };
     setRates(updated);
     setCommissionRates(updated);
   };
@@ -77,8 +84,9 @@ export default function OtaChannels() {
 
   const updateCcFee = (v) => {
     const val = parseFloat(v) || 0;
-    setCcFee(val);
-    setCcFeeRate(val);
+    const frac = Math.min(0.9999, Math.max(0, val / 100));
+    setCcFee(frac);
+    setCcFeeRate(frac);
   };
 
   const handleExport = async () => {
@@ -145,8 +153,8 @@ export default function OtaChannels() {
                       <td className="py-2.5 pr-3 text-right">
                         <input
                           type="number"
-                          step="0.01"
-                          value={rateInfo.rate}
+                          step={rateInfo.type === "percentage" ? "0.01" : "0.5"}
+                          value={rateInfo.type === "percentage" ? Math.round((rateInfo.rate || 0) * 10000) / 100 : rateInfo.rate}
                           disabled={rateInfo.type === "none"}
                           onChange={(e) => updateRate(c.source, "rate", parseFloat(e.target.value) || 0)}
                           className="h-8 w-20 rounded-lg border border-white/10 bg-[#0A1628] px-2 text-right text-xs tabular-nums text-slate-200 disabled:opacity-30"
@@ -198,8 +206,8 @@ export default function OtaChannels() {
           <div className="flex items-center gap-4">
             <input
               type="number"
-              step="0.001"
-              value={ccFee}
+              step="0.01"
+              value={Math.round((ccFee || 0) * 10000) / 100}
               onChange={(e) => updateCcFee(e.target.value)}
               className="h-10 w-28 rounded-lg border border-white/10 bg-[#0A1628] px-3 text-right text-sm tabular-nums text-slate-200"
             />

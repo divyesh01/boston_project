@@ -161,7 +161,10 @@ export function detectSections(rawRows) {
 }
 
 export async function fetchCsvRows(fileUrl) {
-  const res = await fetch(fileUrl);
+  // Strip the hash fragment from the URL before fetching to prevent fetch errors with blob URLs in some environments
+  const cleanUrl = fileUrl.split('#')[0];
+  const res = await fetch(cleanUrl);
+  if (!res.ok) throw new Error(`Failed to fetch CSV: ${res.statusText}`);
   const text = await res.text();
   return parseCsvText(text);
 }

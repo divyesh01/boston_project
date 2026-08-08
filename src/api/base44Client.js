@@ -8,7 +8,7 @@ import { recalculationService } from '@/lib/recalculationService';
 // ─── Tables that trigger recalculation when modified ───
 const RECALCULATION_TABLES = new Set([
   'OccupancyDay', 'SourceDay', 'GrossRevenueDay', 'PaymentDay',
-  'ClerkShiftRecord', 'Expense', 'PayrollRun', 'Staff'
+  'ClerkShiftRecord', 'Expense', 'PayrollRun', 'Staff', 'HotelMetric'
 ]);
 
 // Helper to notify recalculation service
@@ -206,7 +206,7 @@ function createEntityProxy(tableName) {
   // Tables that have property_id and should enforce isolation
   const PROPERTY_TABLES = new Set([
     'OccupancyDay', 'SourceDay', 'GrossRevenueDay', 'PaymentDay',
-    'ClerkShiftRecord', 'UploadedReport', 'Expense', 'PayrollRun', 'Staff'
+    'ClerkShiftRecord', 'UploadedReport', 'Expense', 'PayrollRun', 'Staff', 'HotelMetric'
   ]);
 
   // Get current user's property access from session

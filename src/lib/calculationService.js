@@ -15,7 +15,7 @@ function inRange(dateStr, from, to) {
 }
 
 function sum(rows, key) {
-  return fromCents(sumCents(rows.map(r => toCents(r[key]))));
+  return fromCents(sumCents(rows.map(r => r[key])));
 }
 
 function avg(rows, key) {
@@ -34,8 +34,8 @@ function classifySource(r) {
 
 export class CalculationService {
   static calculateOccupancyMetrics(occRows, propertyRoomCounts) {
-    const revenue = sumCents(occRows.map(r => toCents(r.total_revenue)));
-    const roomsSold = sumCents(occRows.map(r => toCents(r.rooms_sold)));
+    const revenue = sumCents(occRows.map(r => r.total_revenue));
+    const roomsSold = sumCents(occRows.map(r => r.rooms_sold));
 
     const daysPerProp = new Map();
     occRows.forEach((r) => {
@@ -75,17 +75,17 @@ export class CalculationService {
     byProp.forEach((rows, pid) => {
       const prop = properties.find((p) => p.id === pid);
       const rooms = prop?.rooms || 100;
-      const revenue = sumCents(rows.map(r => toCents(r.total_revenue)));
-      const roomsSold = sumCents(rows.map(r => toCents(r.rooms_sold)));
+      const revenue = sumCents(rows.map(r => r.total_revenue));
+      const roomsSold = sumCents(rows.map(r => r.rooms_sold));
       const capacity = rows.length * rooms * 100;
       results.push({
         property_id: pid,
         property_name: prop?.name || rows[0]?.property_name || 'Unknown',
         revenue: fromCents(revenue),
         roomsSold: fromCents(roomsSold),
-        occupancy: capacity ? divideRate(roomsSold, capacity) : 0,
-        adr: roomsSold ? divide(revenue, roomsSold) : 0,
-        revpar: capacity ? divide(revenue, capacity) : 0,
+        occupancy: capacity ? fromRate(divideRate(roomsSold, capacity)) : 0,
+        adr: roomsSold ? fromCents(divide(revenue, roomsSold)) : 0,
+        revpar: capacity ? fromCents(divide(revenue, capacity)) : 0,
         days: rows.length,
         rooms,
       });

@@ -37,7 +37,8 @@ const PageFallback = () => (
   </div>
 );
 
-class ErrorBoundary extends Component {
+// Top-level error boundary to catch AuthProvider errors
+class TopLevelErrorBoundary extends Component {
   constructor(props) {
     super(props);
     this.state = { error: null, info: null };
@@ -47,14 +48,14 @@ class ErrorBoundary extends Component {
   }
   componentDidCatch(error, info) {
     this.setState({ info });
-    console.error('[error-boundary]', error, info);
+    console.error('[top-level-error-boundary]', error, info);
   }
   render() {
     if (this.state.error) {
       return (
         <div className="flex min-h-screen items-center justify-center bg-[#040D1A] p-6">
           <div className="w-full max-w-2xl rounded-2xl border border-red-500/30 bg-[#0F1F35] p-6">
-            <h1 className="text-lg font-semibold text-red-300">Something went wrong</h1>
+            <h1 className="text-lg font-semibold text-red-300">Application Error</h1>
             <p className="mt-1 text-sm text-slate-400">{this.state.error.message}</p>
             <pre className="mt-4 max-h-64 overflow-auto rounded-lg bg-black/40 p-3 text-xs text-red-200">
               {this.state.info?.componentStack}
@@ -188,17 +189,19 @@ function App() {
   }, []);
 
   return (
-    <AuthProvider>
-      <QueryClientProvider client={queryClientInstance}>
-        <Router>
-          <ErrorBoundary>
-            <ScrollToTop />
-            <AuthenticatedApp />
-          </ErrorBoundary>
-        </Router>
-        <Toaster />
-      </QueryClientProvider>
-    </AuthProvider>
+    <TopLevelErrorBoundary>
+      <AuthProvider>
+        <QueryClientProvider client={queryClientInstance}>
+          <Router>
+            <TopLevelErrorBoundary>
+              <ScrollToTop />
+              <AuthenticatedApp />
+            </TopLevelErrorBoundary>
+          </Router>
+          <Toaster />
+        </QueryClientProvider>
+      </AuthProvider>
+    </TopLevelErrorBoundary>
   )
 }
 

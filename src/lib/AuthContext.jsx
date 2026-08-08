@@ -17,10 +17,15 @@ export const AuthProvider = ({ children }) => {
   const activityEvents = useRef(0);
   const authenticatedRef = useRef(false);
 
+  console.log('[AuthProvider] Component mounted, initial state:', { isLoadingAuth, authChecked, isAuthenticated });
+
   const refreshUser = useCallback(async () => {
+    console.log('[AuthProvider] refreshUser called');
     try {
       const ok = await db.auth.isAuthenticated();
+      console.log('[AuthProvider] isAuthenticated result:', ok);
       if (!ok) {
+        console.log('[AuthProvider] Not authenticated, resetting state');
         setUser(null);
         setIsAuthenticated(false);
         authenticatedRef.current = false;
@@ -29,14 +34,16 @@ export const AuthProvider = ({ children }) => {
         return false;
       }
       const me = await db.auth.me();
+      console.log('[AuthProvider] me() result:', me ? 'user found' : 'no user');
       setUser(me);
       setIsAuthenticated(true);
       authenticatedRef.current = true;
       setAuthChecked(true);
       setIsLoadingAuth(false);
+      console.log('[AuthProvider] Authentication complete, state updated');
       return true;
     } catch (e) {
-      console.error('[auth] refreshUser error:', e);
+      console.error('[AuthProvider] refreshUser error:', e);
       setUser(null);
       setIsAuthenticated(false);
       authenticatedRef.current = false;
@@ -47,8 +54,10 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const checkUserAuth = useCallback(async () => {
+    console.log('[AuthProvider] checkUserAuth called');
     setIsLoadingAuth(true);
     await refreshUser();
+    console.log('[AuthProvider] checkUserAuth completed');
   }, [refreshUser]);
 
   const checkAppState = useCallback(async () => {
@@ -73,6 +82,7 @@ export const AuthProvider = ({ children }) => {
 
   // Initial auth check + idle polling
   useEffect(() => {
+    console.log('[AuthProvider] Initial auth check useEffect running');
     checkUserAuth();
     const interval = setInterval(async () => {
       const ok = await db.auth.isAuthenticated();
@@ -142,6 +152,8 @@ export const AuthProvider = ({ children }) => {
     if (Array.isArray(user.property_access) && user.property_access.includes(propertyId)) return true;
     return false;
   }, [user]);
+
+  console.log('[AuthProvider] Rendering context provider, state:', { isLoadingAuth, authChecked, isAuthenticated, hasUser: !!user });
 
   return (
     <AuthContext.Provider value={{

@@ -17,6 +17,8 @@ const ChartBuilder = lazy(() => import('@/pages/ChartBuilder'));
 const Import = lazy(() => import('@/pages/Import'));
 const Employees = lazy(() => import('@/pages/Employees'));
 const Payments = lazy(() => import('@/pages/Payments'));
+const Transactions = lazy(() => import('@/pages/Transactions'));
+const Statistics = lazy(() => import('@/pages/Statistics'));
 const SettingsPage = lazy(() => import('@/pages/Settings'));
 const MonthlyCalendar = lazy(() => import('@/pages/MonthlyCalendar'));
 const MtdGrowth = lazy(() => import('@/pages/MtdGrowth'));
@@ -26,6 +28,7 @@ const OtaChannels = lazy(() => import('@/pages/OtaChannels'));
 const DataTemplate = lazy(() => import('@/pages/DataTemplate'));
 const ManualEntry = lazy(() => import('@/pages/ManualEntry'));
 const Forecasting = lazy(() => import('@/pages/Forecasting'));
+const ActionCenterPage = lazy(() => import('@/pages/ActionCenter'));
 const Login = lazy(() => import('@/pages/Login'));
 const Setup = lazy(() => import('@/pages/Setup'));
 const Users = lazy(() => import('@/pages/Users'));
@@ -142,12 +145,15 @@ const ProtectedRoutes = () => {
         }
       >
         <Route path="/" element={<Suspended><Dashboard /></Suspended>} />
+         <Route path="/action-center" element={<Suspended><ActionCenterPage /></Suspended>} />
          <Route path="/compare" element={<Suspended><Compare /></Suspended>} />
          <Route path="/data-intelligence" element={<Suspended><DataIntelligence /></Suspended>} />
          <Route path="/rooms" element={<Suspended><RoomBoard /></Suspended>} />
         <Route path="/charts" element={<Suspended><ChartBuilder /></Suspended>} />
         <Route path="/employees" element={<Suspended><Employees /></Suspended>} />
         <Route path="/payments" element={<Suspended><Payments /></Suspended>} />
+        <Route path="/transactions" element={<Suspended><Transactions /></Suspended>} />
+        <Route path="/statistics" element={<Suspended><Statistics /></Suspended>} />
         <Route path="/settings" element={<Suspended><SettingsPage /></Suspended>} />
         <Route path="/upload" element={<Suspended><Import /></Suspended>} />
         <Route path="/calendar" element={<Suspended><MonthlyCalendar /></Suspended>} />

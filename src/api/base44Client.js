@@ -84,6 +84,8 @@ export async function checkReferentialIntegrity() {
 }
 
 // ─── Import Session Tracking (for rollback capability) ───
+// Lifecycle tracking (UI display) uses secureStore. Rollback ledger uses Dexie ImportRecordIds table.
+
 const IMPORT_SESSION_KEY = 'rri_import_sessions';
 
 async function getImportSessions() {
@@ -134,37 +136,83 @@ export async function completeImportSession(importId, results) {
   }
 }
 
+// The one rollback implementation. `rollbackImport` in lib/reportParsers.js is a
+// thin re-export of this; do not add a third.
+//
+// Deletes through the entity proxy rather than `localDb[entity]` directly. The
+// proxy enforces property isolation and fires notifyRecalculation, so cached
+// KPIs refresh after an undo. Raw table deletes skip both, which left the
+// dashboard showing revenue from rows that no longer existed.
 export async function rollbackImportSession(importId) {
-  const session = await getImportSession(importId);
-  if (!session) return { success: false, error: 'Import session not found' };
-  if (session.status !== 'completed') return { success: false, error: 'Can only rollback completed imports' };
-  
-  // Delete rows that were added during this import
-  const deleteResults = {};
-  for (const [tableName, count] of Object.entries(session.rowCounts)) {
-    if (count > 0) {
-      // We need to track specific IDs for precise rollback
-      // For now, we'll mark the session as rolled back
-      // In a full implementation, we'd store the IDs of created records
-    }
+  const ledger = await localDb.ImportRecordIds.where('import_id').equals(importId).toArray();
+
+  if (!ledger.length) {
+    // No ledger means nothing can be deleted precisely. Say so rather than
+    // reporting success — the previous version returned {success: true} here
+    // and callers had no way to learn that zero rows were removed.
+    const session = await getImportSession(importId);
+    return {
+      success: false,
+      error: session
+        ? 'No rollback ledger for this import, so its rows cannot be identified. It predates ledger tracking and needs manual cleanup.'
+        : 'Import session not found',
+    };
   }
-  
+
+  // Idempotent: a second rollback of the same import must not re-delete ids
+  // that may since have been reassigned by Dexie's auto-increment to unrelated
+  // rows. Only 'active' ledger rows are eligible.
+  const pending = ledger.filter((row) => row.status !== 'rolled_back');
+  if (!pending.length) {
+    return { success: true, deletedCount: 0, alreadyRolledBack: true, message: 'This import was already rolled back.' };
+  }
+
+  let totalDeleted = 0;
+  for (const row of pending) {
+    const ids = row.record_ids;
+    if (!ids?.length) continue;
+    await entities[row.entity].bulkDelete(ids);
+    totalDeleted += ids.length;
+    await localDb.ImportRecordIds.update(row.id, {
+      status: 'rolled_back',
+      rolled_back_at: new Date().toISOString(),
+    });
+  }
+
   const sessions = await getImportSessions();
-  const idx = sessions.findIndex(s => s.importId === importId);
+  const idx = sessions.findIndex((s) => s.importId === importId);
   if (idx >= 0) {
     sessions[idx] = {
       ...sessions[idx],
       status: 'rolled_back',
       rolledBackAt: new Date().toISOString(),
+      rolledBackCount: totalDeleted,
     };
     await secureStore(IMPORT_SESSION_KEY, sessions);
   }
-  
-  return { success: true, message: 'Import marked as rolled back. Manual cleanup may be required.' };
+
+  return { success: true, deletedCount: totalDeleted, message: `Rolled back ${totalDeleted} records from import ${importId}` };
 }
 
 export async function listImportSessions() {
   return getImportSessions();
+}
+
+// Add record IDs to the rollback ledger (ImportRecordIds table)
+export async function addImportRecordIds(importId, entity, recordIds, propertyId = '') {
+  try {
+    await localDb.ImportRecordIds.add({
+      import_id: importId,
+      property_id: propertyId || '',
+      entity,
+      record_ids: recordIds,
+      status: 'active',
+      created_date: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.warn('[base44Client] failed to record import IDs:', e.message);
+    throw e; // Re-throw so caller can decide to abort import
+  }
 }
 
 // ─── Helper: match a single row against a Base44-style filter ───
@@ -206,7 +254,8 @@ function createEntityProxy(tableName) {
   // Tables that have property_id and should enforce isolation
   const PROPERTY_TABLES = new Set([
     'OccupancyDay', 'SourceDay', 'GrossRevenueDay', 'PaymentDay',
-    'ClerkShiftRecord', 'UploadedReport', 'Expense', 'PayrollRun', 'Staff', 'HotelMetric'
+    'ClerkShiftRecord', 'UploadedReport', 'Expense', 'PayrollRun', 'Staff', 'HotelMetric',
+    'TransactionLine'
   ]);
 
   // Get current user's property access from session
@@ -400,7 +449,10 @@ function createEntityProxy(tableName) {
       }
       const now = new Date().toISOString();
       const records = dataArray.map(d => ({ ...d, created_date: now, updated_date: now }));
-      const newIds = await table.bulkAdd(records);
+      // `allKeys: true` is required — without it Dexie resolves bulkAdd with only
+      // the LAST generated key, so every returned record ended up with id undefined
+      // and any caller that reused those ids (e.g. import rollback) silently failed.
+      const newIds = await table.bulkAdd(records, { allKeys: true });
       const createdRecords = records.map((r, i) => ({ ...r, id: newIds[i] }));
       notifyRecalculation(tableName, 'bulkCreate', { records: createdRecords });
       return createdRecords;
@@ -452,8 +504,15 @@ function createEntityProxy(tableName) {
 const entitiesHandler = {
   get(target, tableName) {
     if (target[tableName]) return target[tableName];
-    // Check if the table exists in Dexie
-    if (localDb[tableName]) {
+    // Check if the table exists in Dexie.
+    //
+    // Tested by duck-typing rather than truthiness: several Dexie instance
+    // properties share a name with a plausible table (`Transaction`,
+    // `Collection`, `Version`) and are truthy, so a bare existence check would
+    // build a proxy over Dexie's own class and every read would come back empty
+    // with no error. localDb refuses to declare such a table, so this only
+    // catches a typo'd entity name — which is exactly what the warning is for.
+    if (typeof localDb[tableName]?.toArray === 'function') {
       target[tableName] = createEntityProxy(tableName);
       return target[tableName];
     }
@@ -480,12 +539,23 @@ async function getSession() {
     if (secureSession && secureSession.userId && secureSession.token) {
       return secureSession;
     }
-    // Fallback to localStorage for backward compatibility
+    // Migration: if secure storage is empty but localStorage has a session,
+    // migrate it to secure storage and remove from localStorage
     const raw = localStorage.getItem(SESSION_KEY);
-    if (!raw) return null;
-    const s = JSON.parse(raw);
-    if (!s || !s.userId || !s.token) return null;
-    return s;
+    if (raw) {
+      try {
+        const s = JSON.parse(raw);
+        if (s && s.userId && s.token) {
+          await secureStore(SECURE_SESSION_KEY, s);
+          localStorage.removeItem(SESSION_KEY);
+          return s;
+        }
+      } catch {
+        // Invalid localStorage data, remove it
+        localStorage.removeItem(SESSION_KEY);
+      }
+    }
+    return null;
   } catch (e) {
     return null;
   }
@@ -493,18 +563,11 @@ async function getSession() {
 
 async function setSession(session) {
   try {
-    // Store in secure storage
+    // Store in secure storage only — no plaintext fallback
     await secureStore(SECURE_SESSION_KEY, session);
-    // Also store in localStorage for backward compatibility (but with minimal info)
-    localStorage.setItem(SESSION_KEY, JSON.stringify({
-      userId: session.userId,
-      token: session.token,
-      remember: session.remember,
-      expiresAt: session.expiresAt,
-    }));
   } catch (e) {
-    console.error('[session] failed to store:', e);
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    console.error('[session] failed to store securely:', e);
+    throw e; // Do not fall back to plaintext storage
   }
 }
 

@@ -294,16 +294,46 @@ function srcClerk(file) {
 }
 
 // ───────────────────────── Test bookkeeping ─────────────────────────
+// Optional section filter, e.g. HARNESS_SKIP=3 to skip the import-lifecycle
+// section.  Sections are stateful and run in order, so skipping is only for
+// working around slow sandboxes (fake-indexeddb deletes are O(table size));
+// a full unfiltered run remains the default and the source of truth.
+const SKIP = new Set(String(process.env.HARNESS_SKIP || '').split(',').map((s) => s.trim()).filter(Boolean));
+const skipSection = (id) => {
+  if (!SKIP.has(id)) return false;
+  console.log(`  (section ${id} skipped via HARNESS_SKIP)`);
+  return true;
+};
+
 let passed = 0, failed = 0;
 const failures = [];
 const results = [];
+// Wall-clock per check, so a slow sandbox can be diagnosed without guessing.
+const HARNESS_T0 = Date.now();
+let lastCheckAt = HARNESS_T0;
+const TIMING = process.env.HARNESS_TIMING === '1';
+function stamp() {
+  const now = Date.now();
+  const d = now - lastCheckAt;
+  lastCheckAt = now;
+  return TIMING ? `  [+${(d / 1000).toFixed(1)}s / ${((now - HARNESS_T0) / 1000).toFixed(1)}s]` : '';
+}
+// Times one step inside a test body; no-op unless HARNESS_TIMING=1.
+async function mark(label, fn) {
+  if (!TIMING) return fn();
+  const t = Date.now();
+  const out = await fn();
+  console.log(`        · ${label}: ${((Date.now() - t) / 1000).toFixed(1)}s`);
+  lastCheckAt = Date.now();
+  return out;
+}
 function T(name, source, dashboard, diff, opts = {}) {
   const tol = opts.tol ?? 0.011;
   const ok = diff === undefined ? opts.ok : Math.abs(diff) <= tol;
   const rec = { name, source, dashboard, diff: diff === undefined ? null : diff, pass: ok, note: opts.note || '' };
   results.push(rec);
-  if (ok) { passed++; console.log(`  PASS  ${name}`); }
-  else { failed++; failures.push(name); console.log(`  FAIL  ${name}   src=${source}  dash=${dashboard}  diff=${diff}  ${opts.note || ''}`); }
+  if (ok) { passed++; console.log(`  PASS  ${name}${stamp()}`); }
+  else { failed++; failures.push(name); console.log(`  FAIL  ${name}   src=${source}  dash=${dashboard}  diff=${diff}  ${opts.note || ''}${stamp()}`); }
 }
 const money = (v) => `$${Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const pct = (v) => `${(Number(v || 0) * 100).toFixed(1)}%`;
@@ -543,7 +573,7 @@ const mk = await moneyKeptMirror({ from: JAN[0], to: JAN[1], pid: String(pid1), 
 
 // ───────────────────────── 3. Lifecycle tests ─────────────────────────
 console.log('\n=== 3. IMPORT LIFECYCLE ===');
-{
+if (!skipSection('3')) {
   // Duplicate import
   const scan = await parsers.scanReport('auto', fileUrl('Occupancy Summary midelboro.csv'), { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Occupancy Summary midelboro.csv' });
   const res2 = await parsers.importReport(scan, { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Occupancy Summary midelboro.csv' });
@@ -580,17 +610,17 @@ console.log('\n=== 3. IMPORT LIFECYCLE ===');
   const srcRevBefore = hotel.sum(srcAllRows, 'net_revenue');
   const src1Sess = sessions.find((s) => s.reportType === 'source' && String(s.sourceFile || '').includes('Source Summary (1)'));
   const oldSrc1Rows = srcAllRows.filter((r) => r.import_id === src1Sess.importId);
-  await db.entities.SourceDay.bulkDelete(oldSrc1Rows.map((r) => r.id));
-  const scan5 = await parsers.scanReport('auto', fileUrl('Source Summary (1).csv'), { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Source Summary (1).csv' });
-  await parsers.importReport(scan5, { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Source Summary (1).csv' });
-  const srcAfter = await db.entities.SourceDay.list('date');
+  await mark(`bulkDelete ${oldSrc1Rows.length} rows`, () => db.entities.SourceDay.bulkDelete(oldSrc1Rows.map((r) => r.id)));
+  const scan5 = await mark('scanReport', () => parsers.scanReport('auto', fileUrl('Source Summary (1).csv'), { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Source Summary (1).csv' }));
+  await mark('importReport', () => parsers.importReport(scan5, { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Source Summary (1).csv' }));
+  const srcAfter = await mark('list after', () => db.entities.SourceDay.list('date'));
   T('3.5 Replace import: same-file rows replaced (count restored)', srcCountBefore, srcAfter.length, srcCountBefore - srcAfter.length, { ok: srcCountBefore === srcAfter.length, note: `old import ${oldSrc1Rows.length} rows → re-imported ${scan5.rowsToImport.length}; ${srcCountBefore}→${srcAfter.length}` });
   T('3.5b Replace import: net revenue restored (other files untouched)', srcRevBefore, hotel.sum(srcAfter, 'net_revenue'), srcRevBefore - hotel.sum(srcAfter, 'net_revenue'));
 }
 
 // ───────────────────────── 4. Property isolation / switching ─────────────────────────
 console.log('\n=== 4. PROPERTY ISOLATION & SWITCHING ===');
-{
+if (!skipSection('4')) {
   const occP1 = await db.entities.OccupancyDay.filter({ property_id: pid1 }, 'date');
   const srcP1 = await db.entities.SourceDay.filter({ property_id: pid1 }, 'date');
   const payP1 = await db.entities.PaymentDay.filter({ property_id: pid1 }, 'date');
@@ -620,7 +650,7 @@ console.log('\n=== 4. PROPERTY ISOLATION & SWITCHING ===');
 
 // ───────────────────────── 5. Date ranges / weekly / monthly / YoY ─────────────────────────
 console.log('\n=== 5. CUSTOM RANGES, WEEKLY, MONTHLY, YoY ===');
-{
+if (!skipSection('5')) {
   const aprSrc = aggWindow(occSrc, ...APR);
   const julSrc = aggWindow(occSrc, ...JUL);
   const weekSrc = aggWindow(occSrc, ...WEEK);
@@ -677,7 +707,7 @@ console.log('\n=== 5. CUSTOM RANGES, WEEKLY, MONTHLY, YoY ===');
 // ───────────────────────── 6. Expenses, payroll, rates ─────────────────────────
 console.log('\n=== 6. EXPENSES, PAYROLL, RATE CHANGES ===');
 let mk2;
-{
+if (!skipSection('6')) {
   const [f, t] = JAN;
   // expense entry (real app path)
   await db.entities.Expense.create({ property_id: pid1, expense_date: '2026-01-10', expense_name: 'Laundry supplies', vendor: 'Acme', category: 'laundry', amount: 250.75, frequency: 'one_time', status: 'paid', created_date: new Date().toISOString() });
@@ -722,7 +752,7 @@ let mk2;
 
 // ───────────────────────── 7. Refund analysis ─────────────────────────
 console.log('\n=== 7. REFUND ANALYSIS ===');
-{
+if (!skipSection('7')) {
   const [f, t] = JAN;
   const pRows = payIn(f, t);
   const negDays = pRows.filter((r) => Number(r.total) < 0);
@@ -735,7 +765,7 @@ console.log('\n=== 7. REFUND ANALYSIS ===');
 
 // ───────────────────────── 8. Clerk audit ─────────────────────────
 console.log('\n=== 8. CLERK SHIFT & CASH AUDIT ===');
-{
+if (!skipSection('8')) {
   const srcC = srcClerk('Clerk Shift.csv');
   const scan = await parsers.scanReport('auto', fileUrl('Clerk Shift.csv'), { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Clerk Shift.csv' });
   const cRows = await db.entities.ClerkShiftRecord.list('created_date');
@@ -773,7 +803,7 @@ console.log('\n=== 8. CLERK SHIFT & CASH AUDIT ===');
 
 // ───────────────────────── 9. AI assistant vs DB ─────────────────────────
 console.log('\n=== 9. AI ASSISTANT (answers verified against database) ===');
-{
+if (!skipSection('9')) {
   const occ = (f, t) => occIn(f, t);
   const pRows = (f, t) => payIn(f, t);
   const srcRows = (f, t) => srcIn(f, t);
@@ -842,7 +872,7 @@ console.log('\n=== 9. AI ASSISTANT (answers verified against database) ===');
 
 // ───────────────────────── 10. Referential integrity & sessions ─────────────────────────
 console.log('\n=== 10. INTEGRITY & SESSIONS ===');
-{
+if (!skipSection('10')) {
   const issues = await clientMod.checkReferentialIntegrity();
   T('10.1 Referential integrity (no orphan property refs)', 0, issues.length, 0 - issues.length, { ok: issues.length === 0, note: issues.map((i) => `${i.table}:${i.value}`).join(',') || 'clean' });
   const sessions = await readSessions();

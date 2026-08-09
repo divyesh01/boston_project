@@ -1,6 +1,6 @@
 import { db } from '@/api/base44Client';
 
-import React, { useState, useMemo, useRef, useCallback } from "react";
+import React, { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { Plus, Trash2, Save, Upload, Download, Undo2, Redo2, Search, Table2, FileSpreadsheet } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 
@@ -114,6 +114,62 @@ export default function ManualEntry() {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
   const fileInputRef = useRef(null);
+  
+  const [draftKey, setDraftKey] = useState("");
+  const [draftToRecover, setDraftToRecover] = useState(null);
+
+  // When property/reportType changes, evaluate draft
+  useEffect(() => {
+    const propId = Array.isArray(property) ? property[0] : property;
+    if (!propId) return;
+    const key = `manual_draft_${propId}_${reportType}`;
+    setDraftKey(key);
+    
+    const saved = localStorage.getItem(key);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setDraftToRecover(parsed);
+        } else {
+          localStorage.removeItem(key);
+          setDraftToRecover(null);
+        }
+      } catch (e) {
+        localStorage.removeItem(key);
+        setDraftToRecover(null);
+      }
+    } else {
+      setDraftToRecover(null);
+    }
+  }, [property, reportType]);
+
+  // Auto-save logic
+  useEffect(() => {
+    if (!draftKey) return;
+    if (hasDraft && rows.length > 0) {
+      try {
+        localStorage.setItem(draftKey, JSON.stringify(rows));
+      } catch (e) {
+        console.warn("Auto-save failed", e);
+      }
+    }
+  }, [rows, hasDraft, draftKey]);
+
+  const handleDiscardDraft = () => {
+    if (draftKey) localStorage.removeItem(draftKey);
+    setDraftToRecover(null);
+  };
+
+  const handleResumeDraft = () => {
+    if (draftToRecover) {
+      setRows(draftToRecover);
+      setHistory([JSON.parse(JSON.stringify(draftToRecover))]);
+      setHistoryIndex(0);
+      setHasDraft(true);
+      setDraftToRecover(null);
+    }
+  };
 
   const config = REPORT_CONFIGS[reportType];
   const selectedProperty = properties.find((p) => p.id === (Array.isArray(property) ? property[0] : property));
@@ -363,6 +419,7 @@ export default function ManualEntry() {
     const extra = skipped ? ` · ${skipped} duplicate${skipped === 1 ? "" : "s"} skipped` : "";
     setSaveMsg(`${saved} records saved. All dashboards updated.${extra}`);
     setHasDraft(false);
+    if (draftKey) localStorage.removeItem(draftKey);
     setSaving(false);
     rotateCsrfToken();
   };
@@ -382,6 +439,21 @@ export default function ManualEntry() {
           Edit hotel data in a spreadsheet grid. All changes update dashboards, charts, and KPIs automatically.
         </p>
       </header>
+
+      {draftToRecover && (
+        <Card className="border-amber-500/50 bg-amber-500/10">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-medium text-amber-500">Unsaved Draft Recovered</h3>
+              <p className="text-sm text-slate-300">You have an auto-saved draft for this property and report type.</p>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={handleDiscardDraft} className="text-sm text-slate-400 hover:text-white">Discard</button>
+              <button onClick={handleResumeDraft} className="rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-600">Resume Draft</button>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <Card title="Configuration" subtitle="Select property, report type, and date">
         <div className="grid gap-3 sm:grid-cols-3">

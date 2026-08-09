@@ -7,6 +7,7 @@ import { db } from "@/api/base44Client";
 import { useOccupancy } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { money, money2, sum, inRange, C } from "@/lib/hotel";
+import { filterCommittedPay } from "@/lib/payrollCalc";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts";
 
 const HORIZONS = [
@@ -58,7 +59,8 @@ export default function Forecasting() {
     const revpar = totalRooms > 0 ? revenue / totalRooms : 0;
     const days = occRows.length || 1;
     const expInPeriod = expenses.filter((e) => inRange(e.expense_date, dateRange.from, dateRange.to));
-    const payInPeriod = payroll.filter((p) => inRange(p.pay_period_start, dateRange.from, dateRange.to));
+    // Committed payroll only — a draft run should not move the forecast.
+    const payInPeriod = filterCommittedPay(payroll).filter((p) => inRange(p.pay_period_start, dateRange.from, dateRange.to));
     const expenseTotal = sum(payInPeriod, "total_pay") + sum(expInPeriod, "amount");
     const dailyRevenue = revenue / days;
     const dailyExpense = days > 0 ? expenseTotal / days : 0;

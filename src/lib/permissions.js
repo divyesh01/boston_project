@@ -108,11 +108,14 @@ export function defaultPermissionsForRole(role) {
 // Map route path -> required permission (used by the route guard & nav filtering)
 export const ROUTE_PERMISSIONS = {
   "/": "view_dashboard",
+  "/action-center": "view_dashboard",
   "/compare": "view_dashboard",
   "/rooms": "view_dashboard",
   "/charts": "view_dashboard",
   "/employees": "view_dashboard",
   "/payments": "view_financial_reports",
+  "/transactions": "view_financial_reports",
+  "/statistics": "view_dashboard",
   "/settings": "manage_settings",
   "/upload": "import_reports",
   "/calendar": "view_dashboard",

@@ -1,4 +1,6 @@
 import localDb from "@/api/localDb";
+import { formatNumber } from "@/lib/decimal";
+import { refundTotal } from "@/lib/paymentNorm";
 
 const MONTH_NAMES = [
   "january", "february", "march", "april", "may", "june",
@@ -14,7 +16,8 @@ const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate(
 
 function money(v, digits = 0) {
   const n = Number(v) || 0;
-  return `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+  // Preserve the sign: losses and negative adjustments must not print as positives.
+  return `${n < 0 ? "-" : ""}$${formatNumber(Math.abs(n), digits)}`;
 }
 function signedMoney(v, digits = 0) {
   const n = Number(v) || 0;
@@ -24,7 +27,7 @@ function pct(v, digits = 1) {
   return `${(Number(v || 0) * 100).toFixed(digits)}%`;
 }
 function num(v) {
-  return Number(v || 0).toLocaleString("en-US");
+  return formatNumber(v);
 }
 function sum(rows, key) {
   return rows.reduce((a, r) => a + (Number(r[key]) || 0), 0);
@@ -381,7 +384,7 @@ function payTotals(rows) {
   rows.forEach((r) => {
     for (const f of tenderFields) payments += Number(r[f]) || 0;
   });
-  const refunds = Math.abs(sum(rows, "closed_balance_folio")) + Math.abs(sum(rows, "loyalty_discount"));
+  const refunds = refundTotal(rows);
   const net = sum(rows, "total");
   const breakdown = tenderFields
     .map((f) => ({ field: f, value: sum(rows, f) }))

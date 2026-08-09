@@ -151,6 +151,29 @@ const METRIC_CATEGORIES = {
   ],
 };
 
+// Does this row aggregate other rows rather than carry its own measurement?
+//
+// This has to stay narrow. METRIC_CATEGORIES above catalogues 'total rooms',
+// 'total guests', 'total reservations' and 'total cancellations' as first-class
+// metrics, and Occupancy Summary exports ship them as ordinary columns — so a
+// blanket "name starts with total" rule silently deleted four real leaf metrics
+// on every import. 'Total Rooms' is the property's room count, which occupancy
+// and RevPAR math both lean on.
+//
+// In this format the genuine section totals carry an EMPTY description
+// (`"","$5,145.86","$17,145.92",...`), and those are already skipped by the
+// `!metricName` guard in the extract loop. What is left is a bare 'Total' or
+// 'Subtotal' label with no metric identity of its own, so that is all this
+// matches. Anything the catalogue recognises is a real metric, never an artifact.
+//
+// Rows matching this are still parsed and stored, flagged `is_total` — callers
+// that sum a section exclude them instead of the parser throwing them away.
+function isAggregateRow(metricName, category) {
+  if (category !== 'unknown') return false;
+  const lower = metricName.toLowerCase();
+  return lower === 'total' || lower === 'grand total' || lower === 'subtotal' || lower === 'sub total';
+}
+
 function categorizeMetric(metricName) {
   const normalized = metricName.toLowerCase().trim();
   for (const [category, keywords] of Object.entries(METRIC_CATEGORIES)) {
@@ -208,6 +231,84 @@ function parseValue(rawValue, periodLabel) {
   return { value, unit, original };
 }
 
+// ─── Business Date Derivation ───
+//
+// Hotel Statistics exports carry no date column anywhere in the file — the
+// columns are relative ("Actual Today", "M-T-D", "Y-T-D"), so the snapshot's
+// date lives entirely outside the data. Nothing supplied one, so every metric
+// imported with `business_date: ""`. That left the rows unplaceable on a
+// timeline and made two different days' snapshots indistinguishable.
+//
+// So we derive one, in descending order of trustworthiness, and record WHICH
+// source was used in `business_date_source` so the UI can say "date taken from
+// the filename" rather than presenting a guess as fact.
+function localIsoDate(d) {
+  // Deliberately not toISOString(): that converts to UTC first, which rolls the
+  // date backwards for anyone west of Greenwich for most of the day.
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function isRealDate(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+  // Round-trip through a local Date to reject 2026-02-30 and friends.
+  const probe = new Date(y, mo - 1, d);
+  return probe.getFullYear() === y && probe.getMonth() === mo - 1 && probe.getDate() === d;
+}
+
+// Pull a date out of a filename like "Hotel Statistics 2026-02-14.csv" or
+// "hotel_stats_02-14-2026.csv". Conservative on purpose: a filename such as
+// "Hotel Statistics (1).csv" must yield nothing rather than a wrong date.
+export function dateFromFileName(name) {
+  const s = String(name || '');
+  const candidates = [
+    /(\d{4})[-_.](\d{1,2})[-_.](\d{1,2})/,          // 2026-02-14
+    /(\d{1,2})[-_.](\d{1,2})[-_.](\d{4})/,          // 02-14-2026 (US order)
+  ];
+  const iso = candidates[0].exec(s);
+  if (iso) {
+    const c = `${iso[1]}-${String(iso[2]).padStart(2, '0')}-${String(iso[3]).padStart(2, '0')}`;
+    if (isRealDate(c)) return c;
+  }
+  const us = candidates[1].exec(s);
+  if (us) {
+    const c = `${us[3]}-${String(us[1]).padStart(2, '0')}-${String(us[2]).padStart(2, '0')}`;
+    if (isRealDate(c)) return c;
+  }
+  // "14-Feb-2026" / "Feb 14, 2026" — convertDate already knows these shapes.
+  const worded = /(\d{1,2}-[A-Za-z]{3}-\d{2,4})|([A-Za-z]{3,9} \d{1,2}, \d{4})/.exec(s);
+  if (worded) {
+    const c = convertDate(worded[0]);
+    if (isRealDate(c)) return c;
+  }
+  return '';
+}
+
+export function deriveBusinessDate({ businessDate = '', sourceFile = '', fileModified = null, now = null } = {}) {
+  if (businessDate) {
+    const explicit = isIsoDate(businessDate) ? String(businessDate).slice(0, 10) : convertDate(businessDate);
+    if (isRealDate(explicit)) return { date: explicit, source: 'explicit' };
+  }
+
+  const fromName = dateFromFileName(sourceFile);
+  if (fromName) return { date: fromName, source: 'filename' };
+
+  // The file's own mtime is the download time for a PMS export, which is the
+  // day it was run far more often than not — better than today, worse than a
+  // date the operator typed.
+  if (fileModified) {
+    const d = new Date(fileModified);
+    if (!Number.isNaN(d.getTime())) return { date: localIsoDate(d), source: 'file_modified' };
+  }
+
+  return { date: localIsoDate(now ? new Date(now) : new Date()), source: 'import_date' };
+}
+
 // ─── Main Parser ───
 export async function parseHotelReport(csvText, options = {}) {
   const {
@@ -216,8 +317,13 @@ export async function parseHotelReport(csvText, options = {}) {
     businessDate = '',
     sourceFile = '',
     importId = '',
+    fileModified = null,
   } = options;
-  
+
+  const derived = deriveBusinessDate({ businessDate, sourceFile, fileModified });
+  const resolvedDate = derived.date;
+  const dateSource = derived.source;
+
   const rawRows = parseCsvText(csvText);
   if (!rawRows.length) return { sections: [], metrics: [], errors: ['Empty file'] };
   
@@ -336,16 +442,14 @@ if (isEmpty) {
       const metricName = normalizeMetricName(cells[0] || '');
       if (!metricName) continue;
       
-      // Skip total/summary rows
-      const lower = metricName.toLowerCase();
-      if (lower === 'total' || lower === 'grand total' || lower === 'subtotal' || 
-          lower.startsWith('total ') || lower.endsWith(' total')) {
-        continue;
-      }
-      
       const category = categorizeMetric(metricName);
       const isUnknown = category === 'unknown';
-      
+
+      // Aggregate rows are kept, not dropped — see isAggregateRow. Storing them
+      // with a flag preserves the file's own arithmetic (a section total is a
+      // useful cross-check) while letting consumers avoid double counting.
+      const isTotal = isAggregateRow(metricName, category);
+
       if (isUnknown) {
         unknownMetrics.push({ metricName, section: section.name, rowIdx });
       }
@@ -359,7 +463,8 @@ if (isEmpty) {
           allMetrics.push({
             property_id: propertyId,
             property_name: propertyName,
-            business_date: businessDate,
+            business_date: resolvedDate,
+            business_date_source: dateSource,
             section: section.name,
             metric_name: metricName,
             metric_category: category,
@@ -374,6 +479,7 @@ if (isEmpty) {
             original_value: parsed.original,
             raw_row: cells.join(' | '),
             is_unknown: isUnknown,
+            is_total: isTotal,
             created_at: new Date().toISOString(),
           });
         }
@@ -386,7 +492,8 @@ if (isEmpty) {
             allMetrics.push({
               property_id: propertyId,
               property_name: propertyName,
-              business_date: businessDate,
+              business_date: resolvedDate,
+              business_date_source: dateSource,
               section: section.name,
               metric_name: metricName,
               metric_category: category,
@@ -401,6 +508,7 @@ if (isEmpty) {
               original_value: parsed.original,
               raw_row: cells.join(' | '),
               is_unknown: isUnknown,
+              is_total: isTotal,
               created_at: new Date().toISOString(),
             });
           }
@@ -421,6 +529,8 @@ if (isEmpty) {
     unknownMetrics,
     errors,
     fileHash,
+    businessDate: resolvedDate,
+    businessDateSource: dateSource,
     totalRows: rawRows.length,
     parsedAt: new Date().toISOString(),
   };
@@ -454,4 +564,6 @@ export default {
   parseValue,
   isSectionHeaderRow,
   extractPeriodHeaders,
+  deriveBusinessDate,
+  dateFromFileName,
 };

@@ -19,12 +19,31 @@ export const MONTHS_LONG = ["January","February","March","April","May","June","J
 
 export const PAGE_FILTERS = {
   "/": { employee: true, paymentType: true, channel: true, reportType: true },
+  "/action-center": { channel: true },
   "/compare": { channel: true },
   "/rooms": {},
   "/employees": { employee: true },
-  "/payments": { employee: true, paymentType: true },
+  // PaymentDay carries one row per business date with a column per tender and
+  // no employee dimension at all, so the global employee dropdown had nothing to
+  // filter and was silently ignored. The per-clerk section further down the page
+  // comes from ClerkShiftRecord and has its own expander. `paymentType` IS wired
+  // (it narrows the method aggregation).
+  "/payments": { paymentType: true },
+  // The ledger page has its own account picker: the global employee dropdown is
+  // built from ClerkShiftRecord.clerk_name, which never matches the PMS
+  // usernames on TransactionLine, so offering it here would filter to nothing.
+  "/transactions": { paymentType: true },
+  // Statistics reads whole PMS snapshots, and every metric in one is already
+  // aggregated by the PMS. There is no per-employee or per-channel dimension to
+  // slice on, so only the date range and property apply — both of which live
+  // outside this map and always show.
+  "/statistics": {},
   "/charts": { channel: true, reportType: true },
-  "/ota": { channel: true },
+  // The OTA page manages commission RATES and compares every channel against
+  // the others; filtering to a single channel would hide the comparison that is
+  // the point of the page. It never read the global `channel` value, so the
+  // dropdown was rendered and silently ignored — removed rather than wired.
+  "/ota": {},
   "/settings": {},
   "/upload": {},
   "/calendar": {},

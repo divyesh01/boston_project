@@ -14,7 +14,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Eye, EyeOff, Loader2, Lock, LockOpen, Plus, RefreshCw, Search, Trash2, UserCog, UserX, UserCheck } from "lucide-react";
+import { Eye, EyeOff, Loader2, Lock, LockOpen, Plus, RefreshCw, Search, Trash2, UserCog, UserX, UserCheck, Shield, ShieldOff } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
 import db from "@/api/base44Client";
 import { useProperties } from "@/lib/useHotelData";
@@ -35,6 +35,7 @@ const STATUS_BADGE = (u) => {
   if (u.is_locked) return <Badge className="bg-red-500/20 text-red-300 border-red-500/40">Locked</Badge>;
   if (u.is_active === false) return <Badge className="bg-slate-500/20 text-slate-300 border-slate-500/40">Disabled</Badge>;
   if (u.must_change_password) return <Badge className="bg-amber-500/20 text-amber-300 border-amber-500/40">Password change required</Badge>;
+  if (u.mfa_enabled) return <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/40 flex items-center gap-1"><Shield className="h-3 w-3" /> MFA Enabled</Badge>;
   return <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/40">Active</Badge>;
 };
 
@@ -286,6 +287,17 @@ export default function Users() {
       } else if (type === "unlock") {
         await db.users.setStatus(me, u.id, "unlocked");
         toast({ title: "User unlocked", description: `${u.username} can log in again.` });
+      } else if (type === "enable_mfa") {
+        const result = await db.users.enableMfa(me, u.id);
+        toast({ 
+          title: "MFA Enabled", 
+          description: `MFA has been enabled for ${u.username}. Share the setup details securely with the user.`,
+        });
+        // In a real app, you'd show the secret/QR code here for the admin to share
+        console.log('MFA Setup for user:', u.username, result);
+      } else if (type === "disable_mfa") {
+        await db.users.disableMfa(me, u.id);
+        toast({ title: "MFA Disabled", description: `MFA has been disabled for ${u.username}.` });
       }
       setConfirmAction(null);
       rotateCsrfToken();
@@ -336,6 +348,7 @@ export default function Users() {
                   <TableHead>Email</TableHead>
                   <TableHead>Role</TableHead>
                   <TableHead>Property Access</TableHead>
+                  <TableHead>MFA</TableHead>
                   <TableHead>Last Login</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
@@ -358,38 +371,58 @@ export default function Users() {
                       {u.property_access === "all" ? "All properties" : Array.isArray(u.property_access) ? `${u.property_access.length} property(ies)` : "None"}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">{u.last_login ? new Date(u.last_login).toLocaleString() : "Never"}</TableCell>
-                    <TableCell>{STATUS_BADGE(u)}</TableCell>
                     <TableCell>
-                      <div className="flex items-center justify-end gap-1">
-                        <Button variant="ghost" size="sm" onClick={() => openEdit(u)} title="Edit user / permissions">
-                          <UserCog className="h-4 w-4" />
-                        </Button>
-                        <Button variant="ghost" size="sm" onClick={() => { setResetUser(u); setResetPassword(""); setResetAction("temp"); setResetShow(false); }} title="Reset password">
-                          <RefreshCw className="h-4 w-4" />
-                        </Button>
-                        {!u.is_locked ? (
-                          <Button variant="ghost" size="sm" onClick={() => setConfirmAction({ type: "lock", user: u })} title="Lock account">
-                            <Lock className="h-4 w-4" />
-                          </Button>
-                        ) : (
-                          <Button variant="ghost" size="sm" onClick={() => setConfirmAction({ type: "unlock", user: u })} title="Unlock account">
-                            <LockOpen className="h-4 w-4" />
-                          </Button>
-                        )}
-                        {u.is_active === false ? (
-                          <Button variant="ghost" size="sm" onClick={() => setConfirmAction({ type: "enable", user: u })} title="Enable account">
-                            <UserCheck className="h-4 w-4" />
-                          </Button>
-                        ) : (
-                          <Button variant="ghost" size="sm" onClick={() => setConfirmAction({ type: "disable", user: u })} title="Disable account">
-                            <UserX className="h-4 w-4" />
-                          </Button>
-                        )}
-                        <Button variant="ghost" size="sm" className="text-red-400 hover:text-red-300" onClick={() => setConfirmAction({ type: "delete", user: u })} title="Delete user">
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
+                      {u.mfa_enabled ? (
+                        <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/40 flex items-center gap-1">
+                          <Shield className="h-3 w-3" /> Enabled
+                        </Badge>
+                      ) : (
+                        <Badge className="bg-slate-500/20 text-slate-300 border-slate-500/40 flex items-center gap-1">
+                          <ShieldOff className="h-3 w-3" /> Disabled
+                        </Badge>
+                      )}
                     </TableCell>
+                    <TableCell>{STATUS_BADGE(u)}</TableCell>
+<TableCell>
+                       <div className="flex items-center justify-end gap-1">
+                         <Button variant="ghost" size="sm" onClick={() => openEdit(u)} title="Edit user / permissions">
+                           <UserCog className="h-4 w-4" />
+                         </Button>
+                         <Button variant="ghost" size="sm" onClick={() => { setResetUser(u); setResetPassword(""); setResetAction("temp"); setResetShow(false); }} title="Reset password">
+                           <RefreshCw className="h-4 w-4" />
+                         </Button>
+                         {u.mfa_enabled ? (
+                           <Button variant="ghost" size="sm" onClick={() => setConfirmAction({ type: "disable_mfa", user: u })} title="Disable MFA" className="text-amber-400 hover:text-amber-300">
+                             <ShieldOff className="h-4 w-4" />
+                           </Button>
+                         ) : (
+                           <Button variant="ghost" size="sm" onClick={() => setConfirmAction({ type: "enable_mfa", user: u })} title="Enable MFA" className="text-emerald-400 hover:text-emerald-300">
+                             <Shield className="h-4 w-4" />
+                           </Button>
+                         )}
+                         {!u.is_locked ? (
+                           <Button variant="ghost" size="sm" onClick={() => setConfirmAction({ type: "lock", user: u })} title="Lock account">
+                             <Lock className="h-4 w-4" />
+                           </Button>
+                         ) : (
+                           <Button variant="ghost" size="sm" onClick={() => setConfirmAction({ type: "unlock", user: u })} title="Unlock account">
+                             <LockOpen className="h-4 w-4" />
+                           </Button>
+                         )}
+                         {u.is_active === false ? (
+                           <Button variant="ghost" size="sm" onClick={() => setConfirmAction({ type: "enable", user: u })} title="Enable account">
+                             <UserCheck className="h-4 w-4" />
+                           </Button>
+                         ) : (
+                           <Button variant="ghost" size="sm" onClick={() => setConfirmAction({ type: "disable", user: u })} title="Disable account">
+                             <UserX className="h-4 w-4" />
+                           </Button>
+                         )}
+                         <Button variant="ghost" size="sm" className="text-red-400 hover:text-red-300" onClick={() => setConfirmAction({ type: "delete", user: u })} title="Delete user">
+                           <Trash2 className="h-4 w-4" />
+                         </Button>
+                       </div>
+                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -630,6 +663,8 @@ export default function Users() {
                 {confirmAction.type === "enable" && "Enable account"}
                 {confirmAction.type === "lock" && "Lock account"}
                 {confirmAction.type === "unlock" && "Unlock account"}
+                {confirmAction.type === "enable_mfa" && "Enable MFA"}
+                {confirmAction.type === "disable_mfa" && "Disable MFA"}
               </DialogTitle>
               <DialogDescription>
                 {confirmAction.type === "delete" && `Delete ${confirmAction.user.username} permanently? Their login will stop working immediately.`}
@@ -637,6 +672,8 @@ export default function Users() {
                 {confirmAction.type === "enable" && `${confirmAction.user.username} will be able to log in again.`}
                 {confirmAction.type === "lock" && `${confirmAction.user.username} will be locked out immediately.`}
                 {confirmAction.type === "unlock" && `${confirmAction.user.username} will be able to log in again.`}
+                {confirmAction.type === "enable_mfa" && `Enable two-factor authentication for ${confirmAction.user.username}? They will need to set up an authenticator app on next login.`}
+                {confirmAction.type === "disable_mfa" && `Disable two-factor authentication for ${confirmAction.user.username}? This reduces account security.`}
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>

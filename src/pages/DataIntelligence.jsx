@@ -15,6 +15,7 @@ import { db } from '@/api/base44Client';
 import localDb from '@/api/localDb';
 import { useQuery } from '@tanstack/react-query';
 import { useGlobalFilters } from '@/lib/useGlobalFilters';
+import { formatNumber } from '@/lib/decimal';
 import { toast } from 'sonner';
 
 const SEVERITY_COLORS = {
@@ -333,7 +334,7 @@ export default function DataIntelligence() {
             />
             <KpiCard
               label="Total Rows"
-              value={aggregateStats.totalRows.toLocaleString()}
+              value={formatNumber(aggregateStats.totalRows)}
               accent="#00D4FF"
               icon={Database}
             />

@@ -1,6 +1,8 @@
 import { CalculationService } from '@/lib/calculationService';
 import { getAlertThresholds } from '@/lib/alertThresholds';
 import { sumCents, toCents, fromCents } from '@/lib/decimal';
+import { refundOf } from '@/lib/paymentNorm';
+import { money } from '@/lib/hotel';
 
 export class OwnerIntelligenceService {
   // Detect demand trends - holiday/weekend performance
@@ -69,7 +71,7 @@ export class OwnerIntelligenceService {
     const refundsByDate = {};
     payRows.forEach(r => {
       const date = String(r.date).slice(0, 10);
-      const refund = Math.abs(Number(r.closed_balance_folio || 0)) + Math.abs(Number(r.loyalty_discount || 0));
+      const refund = Math.abs(refundOf(r));
       if (refund > 0) {
         refundsByDate[date] = (refundsByDate[date] || 0) + refund;
       }
@@ -249,7 +251,7 @@ export class OwnerIntelligenceService {
     insights.push({
       category: 'Revenue',
       title: 'Period Performance',
-      metric: `$${dailyRevenue.toLocaleString()}`,
+      metric: money(dailyRevenue),
       detail: `${occRows.length} days | ${dailyRooms} rooms sold | ${(avgOcc * 100).toFixed(1)}% avg occupancy`,
     });
     
@@ -262,7 +264,7 @@ export class OwnerIntelligenceService {
         category: 'Portfolio',
         title: 'Best / Needs Attention',
         metric: best.property_name,
-        detail: `Top: $${best.revenue.toLocaleString()} (${(best.occupancy * 100).toFixed(1)}%) | Bottom: ${worst.property_name} - $${worst.revenue.toLocaleString()} (${(worst.occupancy * 100).toFixed(1)}%)`,
+        detail: `Top: ${money(best.revenue)} (${(best.occupancy * 100).toFixed(1)}%) | Bottom: ${worst.property_name} - ${money(worst.revenue)} (${(worst.occupancy * 100).toFixed(1)}%)`,
       });
     }
     
@@ -274,7 +276,7 @@ export class OwnerIntelligenceService {
         category: 'Channels',
         title: 'OTA Margin Opportunity',
         metric: worstOta.source,
-        detail: `${(worstOta.margin * 100).toFixed(1)}% margin | $${worstOta.commission.toLocaleString()} commission | ${worstOta.recommendation}`,
+        detail: `${(worstOta.margin * 100).toFixed(1)}% margin | ${money(worstOta.commission)} commission | ${worstOta.recommendation}`,
       });
     }
     
@@ -286,7 +288,7 @@ export class OwnerIntelligenceService {
         category: 'Expenses',
         title: 'Expense Spike Detected',
         metric: `${top.category} at ${top.property_name}`,
-        detail: `${(top.spikeRatio * 100).toFixed(0)}% above average ($${top.maxAmount.toLocaleString()} vs $${top.averageAmount.toLocaleString()})`,
+        detail: `${(top.spikeRatio * 100).toFixed(0)}% above average (${money(top.maxAmount)} vs ${money(top.averageAmount)})`,
       });
     }
     
@@ -297,7 +299,7 @@ export class OwnerIntelligenceService {
         category: 'Risk',
         title: 'Unusual Refund Activity',
         metric: `${refunds.length} anomalous day(s)`,
-        detail: `Highest: $${refunds[0].amount.toLocaleString()} on ${refunds[0].date}`,
+        detail: `Highest: ${money(refunds[0].amount)} on ${refunds[0].date}`,
       });
     }
     
@@ -308,7 +310,7 @@ export class OwnerIntelligenceService {
       insights.push({
         category: 'Profit',
         title: 'Profit Leakage',
-        metric: `$${totalLeakage.toLocaleString()}`,
+        metric: money(totalLeakage),
         detail: `${leaks.length} leak(s) detected | Top: ${leaks[0].type}`,
       });
     }

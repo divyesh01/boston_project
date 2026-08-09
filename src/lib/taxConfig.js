@@ -3,6 +3,9 @@
 // Sources: Expedia HC, Booking.com HC, Walk-in, Property Booking = taxable
 // Other OTA = tax exempt
 
+import { notifySettingsChanged } from "@/lib/settingsBus";
+import { getTaxSettings, saveTaxSettings } from "@/lib/taxSettings";
+
 const TAX_KEY = "rri_tax_config_v1";
 
 export const TAX_SOURCES = [
@@ -34,6 +37,24 @@ export function getTaxConfig() {
 
 export function setTaxConfig(config) {
   localStorage.setItem(TAX_KEY, JSON.stringify(config));
+  syncDefaultTaxSetting(config.taxRate);
+  notifySettingsChanged();
+}
+
+function syncDefaultTaxSetting(rate) {
+  const r = Number(rate);
+  if (!Number.isFinite(r) || r <= 0) return;
+  const list = getTaxSettings();
+  const defaults = list
+    .map((rec, i) => ({ ...rec, _i: i }))
+    .filter((rec) => rec.property_id === "*" || !rec.property_id);
+  if (!defaults.length) return;
+  defaults.sort((a, b) => String(b.effective_start || "").localeCompare(String(a.effective_start || "")));
+  const idx = defaults[0]._i;
+  const next = [...list];
+  const { _i, ...rest } = { ...next[idx], state_rate: r, city_rate: 0, other_rate: 0 };
+  next[idx] = rest;
+  saveTaxSettings(next);
 }
 
 export function getTaxRate() {

@@ -8,6 +8,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useGlobalFilters, MONTHS_LONG } from "@/lib/useGlobalFilters";
 import { useOccupancy, usePaymentData } from "@/lib/useHotelData";
 import { money, sum, inRange, pct, C } from "@/lib/hotel";
+import { filterCommittedPay } from "@/lib/payrollCalc";
+import { refundTotal } from "@/lib/paymentNorm";
 import { toast } from "sonner";
 import { EXPENSE_CATEGORIES, EXPENSE_FREQUENCIES, EXPENSE_STATUSES, expenseLabel, frequencyLabel, isStandardCategory, slugifyCategory } from "@/lib/expenseCategories";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
@@ -78,7 +80,7 @@ export default function Expenses() {
 
   // Revenue calculations
   const grossRevenue = sum(occRows, "total_revenue");
-  const refundsAndAdjustments = Math.abs(sum(payRows, "closed_balance_folio")) + Math.abs(sum(payRows, "loyalty_discount"));
+  const refundsAndAdjustments = refundTotal(payRows);
   const netRevenue = grossRevenue - refundsAndAdjustments;
 
   // Cost calculations (scoped to the selected period so they match the revenue window)
@@ -86,8 +88,9 @@ export default function Expenses() {
     () => expenses.filter((e) => inRange(e.expense_date, dateRange.from, dateRange.to)),
     [expenses, dateRange]
   );
+  // Committed runs only, so the payroll cost here matches Money Kept.
   const payrollInPeriod = useMemo(
-    () => payroll.filter((p) => inRange(p.pay_period_start, dateRange.from, dateRange.to)),
+    () => filterCommittedPay(payroll).filter((p) => inRange(p.pay_period_start, dateRange.from, dateRange.to)),
     [payroll, dateRange]
   );
   const totalPayroll = sum(payrollInPeriod, "total_pay");

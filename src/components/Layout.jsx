@@ -1,41 +1,13 @@
 import React, { useState, useEffect } from "react";
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import {
-  LayoutDashboard, GitCompareArrows, Grid3x3, BarChart3, Upload, Building2,
-  Users, CreditCard, Settings as SettingsIcon, MoreHorizontal, X, ArrowLeft,
-  CalendarDays, TrendingUp, Wallet, ClipboardList, Radio, FileSpreadsheet, LineChart, Table2,
-  ShieldCheck, ScrollText, LogOut, KeyRound, BrainCircuit,
-} from "lucide-react";
+import { Building2, MoreHorizontal, X, ArrowLeft, LogOut, KeyRound } from "lucide-react";
 import AIAssistant from "@/components/AIAssistant";
 import { GlobalFiltersProvider, useGlobalFilters } from "@/lib/useGlobalFilters";
 import GlobalControlBar from "@/components/GlobalControlBar";
 import { useAuth } from "@/lib/AuthContext";
-
-const NAV = [
-  { to: "/", label: "Executive Hub", icon: LayoutDashboard, short: "Dashboard" },
-  { to: "/upload", label: "Import Reports", icon: Upload, short: "Upload" },
-  { to: "/mtd", label: "MTD Growth", icon: TrendingUp, short: "MTD" },
-  { to: "/calendar", label: "Monthly Calendar", icon: CalendarDays, short: "Calendar" },
-  { to: "/compare", label: "Period Compare", icon: GitCompareArrows, short: "Compare" },
-  { to: "/data-intelligence", label: "Data Intelligence", icon: BrainCircuit, short: "Data AI" },
-  { to: "/rooms", label: "Room Board", icon: Grid3x3, short: "Rooms" },
-  { to: "/employees", label: "Clerk Audit", icon: Users, short: "Employees" },
-  { to: "/payments", label: "Payments", icon: CreditCard, short: "Payments" },
-  { to: "/ota", label: "OTA Channels", icon: Radio, short: "OTA" },
-  { to: "/charts", label: "Chart Builder", icon: BarChart3, short: "Charts" },
-  { to: "/expenses", label: "Expenses", icon: Wallet, short: "Expenses" },
-  { to: "/payroll", label: "Payroll", icon: ClipboardList, short: "Payroll" },
-  { to: "/manual-entry", label: "Manual Entry", icon: Table2, short: "Manual" },
-  { to: "/forecasting", label: "Forecasting", icon: LineChart, short: "Forecast" },
-  { to: "/data-template", label: "Data Template", icon: FileSpreadsheet, short: "Template" },
-  { to: "/users", label: "User Management", icon: ShieldCheck, short: "Users" },
-  { to: "/audit-log", label: "Audit Log", icon: ScrollText, short: "Audit Log" },
-  { to: "/settings", label: "Settings", icon: SettingsIcon, short: "Settings" },
-];
-
-const PRIMARY = NAV.slice(0, 4);
-const MORE = NAV.slice(4);
+import CommandMenu from "@/components/CommandMenu";
+import { NAV, PRIMARY, MORE } from "@/lib/navigation";
 
 function SidebarBrand() {
   const { property, properties } = useGlobalFilters();
@@ -260,6 +232,7 @@ export default function Layout() {
       </div>
 
       <AIAssistant />
+      <CommandMenu />
       </div>
       </GlobalFiltersProvider>
   );

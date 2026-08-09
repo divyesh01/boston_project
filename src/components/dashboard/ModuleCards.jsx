@@ -5,7 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useOccupancy } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { db } from "@/api/base44Client";
-import { money, num } from "@/lib/hotel";
+import { money, num, inRange } from "@/lib/hotel";
+import { sumCommittedPay } from "@/lib/payrollCalc";
 
 const THEMES = {
   emerald: {
@@ -100,23 +101,47 @@ function rgba(hex, alpha) {
 }
 
 export default function ModuleCards() {
-  const { dateRange, property } = useGlobalFilters();
-  const { data: occ = [], isLoading } = useOccupancy(dateRange, property, []);
-  const { data: payroll = [] } = useQuery({
-    queryKey: ["payroll"],
-    queryFn: () => db.entities.PayrollRun.list("-pay_period_start", 500),
+  const { dateRange, property, months } = useGlobalFilters();
+  // `months` was hardcoded to [] here while every other card on the dashboard
+  // passes it, so in Multi-Month mode these three tiles summed the whole
+  // envelope range while the KPIs above them summed only the picked months.
+  const { data: occ = [], isLoading } = useOccupancy(dateRange, property, months);
+
+  // Payroll used to be an unscoped `list(..., 500)`: it ignored both the
+  // property selection and the period, so the tile reported every run ever
+  // recorded across the whole portfolio while sitting beside period-scoped
+  // revenue. It also used the bare key ["payroll"], which missed the
+  // ["payroll", propertyKey] cache that Dashboard, ActionCenter, MoneyKept and
+  // Forecasting already share — so it paid for its own extra scan to get a
+  // worse answer. Join that cache and scope by pay_period_start in memory, the
+  // same field and idiom actionCenter.js and calculationService.js use.
+  const propertyKey = Array.isArray(property) ? property.join(",") : property;
+  const propFilter = property && property !== "all"
+    ? (Array.isArray(property) ? { property_id: { $in: property } } : { property_id: property })
+    : {};
+  const { data: allPayroll = [] } = useQuery({
+    queryKey: ["payroll", propertyKey],
+    queryFn: () => db.entities.PayrollRun.filter(propFilter, "-pay_period_start", 100000),
   });
+  const payroll = useMemo(
+    () => allPayroll.filter((p) => inRange(p.pay_period_start, dateRange.from, dateRange.to)),
+    [allPayroll, dateRange]
+  );
 
   const stats = useMemo(() => {
     const rowsSold = occ.reduce((a, r) => a + (Number(r.rooms_sold) || 0), 0);
     const revenue = occ.reduce((a, r) => a + (Number(r.total_revenue) || 0), 0);
     const approved = payroll.filter((p) => p.payroll_status === "approved").length;
-    const totalPay = payroll.reduce((a, p) => a + (Number(p.total_pay) || 0), 0);
+    // Card headline shows committed cost, matching Money Kept rather than the
+    // gross of every draft.
+    const totalPay = sumCommittedPay(payroll);
     return {
       payroll: {
         statLabel: "Approved Run",
-        statValue: approved ? `${num(approved)} approved` : "No runs yet",
-        statSub: payroll.length ? `${num(payroll.length)} runs · ${money(totalPay)} total` : "active when staff is set",
+        statValue: approved ? `${num(approved)} approved` : "No runs in period",
+        statSub: payroll.length
+          ? `${num(payroll.length)} runs · ${money(totalPay)} total`
+          : "no payroll runs in this date range",
       },
       rooms: {
         statLabel: "Rooms Sold",

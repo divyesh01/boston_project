@@ -5,12 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { LogIn, Mail, Lock, Eye, EyeOff, Loader2 } from "lucide-react";
+import { LogIn, Mail, Lock, Eye, EyeOff, Loader2, Smartphone, RotateCcw, Shield } from "lucide-react";
 import AuthLayout from "@/components/AuthLayout";
 import { safeReturnTo } from "@/lib/authReturnTo";
 import { useAuth } from "@/lib/AuthContext";
 import db from "@/api/base44Client";
 import { getCsrfToken, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
+import MFASetup from "@/components/MFASetup";
 
 export default function Login() {
   const { login, isAuthenticated } = useAuth();
@@ -23,6 +24,16 @@ export default function Login() {
   const [returnTo, setReturnTo] = useState("/");
   const [searchParams] = useSearchParams();
   const [setupRequired, setSetupRequired] = useState(false);
+  
+  // MFA flow states
+  const [mfaStep, setMfaStep] = useState(null); // null = password step, 'verify' = MFA token, 'setup' = first-time setup
+  const [mfaUserId, setMfaUserId] = useState(null);
+  const [mfaUsername, setMfaUsername] = useState(null);
+  const [mfaSecret, setMfaSecret] = useState(null);
+  const [mfaUri, setMfaUri] = useState(null);
+  const [mfaBackupCodes, setMfaBackupCodes] = useState([]);
+  const [mfaToken, setMfaToken] = useState("");
+  const [mfaError, setMfaError] = useState("");
 
   // Post-login destination (same-origin paths only)
   useEffect(() => {
@@ -50,7 +61,7 @@ export default function Login() {
     return () => { mounted = false; };
   }, []);
 
-  const handleSubmit = async (e) => {
+  const handlePasswordSubmit = async (e) => {
     e.preventDefault();
     setError("");
     // CSRF validation
@@ -62,9 +73,18 @@ export default function Login() {
     }
     setLoading(true);
     try {
-      await login(identifier, password, remember);
-      rotateCsrfToken();
-      window.location.href = returnTo;
+      const result = await login(identifier, password, remember);
+      if (result?.mfaRequired) {
+        // MFA required but no token provided - move to MFA verification step
+        setMfaStep('verify');
+        setMfaUserId(result.userId);
+        setMfaUsername(result.username);
+        setError("");
+      } else {
+        // Login successful (no MFA or MFA already verified)
+        rotateCsrfToken();
+        window.location.href = returnTo;
+      }
     } catch (err) {
       setError(err.message || "Invalid username/email or password");
     } finally {
@@ -72,11 +92,80 @@ export default function Login() {
     }
   };
 
+  const handleMfaVerify = async (e) => {
+    e.preventDefault();
+    setMfaError("");
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      setMfaError("Invalid security token. Please refresh the page and try again.");
+      rotateCsrfToken();
+      return;
+    }
+    if (!mfaToken || mfaToken.length !== 6) {
+      setMfaError("Please enter a 6-digit code.");
+      return;
+    }
+    setLoading(true);
+    try {
+      await login(identifier, password, remember, mfaToken);
+      rotateCsrfToken();
+      window.location.href = returnTo;
+    } catch (err) {
+      setMfaError(err.message || "Invalid MFA code. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleMfaSetupComplete = async (token, done) => {
+    if (done) {
+      // Setup complete, redirect
+      rotateCsrfToken();
+      window.location.href = returnTo;
+      return;
+    }
+    // Verify the token during setup
+    setLoading(true);
+    try {
+      await login(identifier, password, remember, token);
+      rotateCsrfToken();
+      window.location.href = returnTo;
+    } catch (err) {
+      setMfaError(err.message || "Invalid MFA code. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleMfaSetupCancel = () => {
+    // Cancel MFA setup - go back to password step
+    setMfaStep(null);
+    setMfaUserId(null);
+    setMfaUsername(null);
+    setMfaSecret(null);
+    setMfaUri(null);
+    setMfaBackupCodes([]);
+    setMfaToken("");
+    setMfaError("");
+  };
+
+  const goBackToPassword = () => {
+    setMfaStep(null);
+    setMfaUserId(null);
+    setMfaUsername(null);
+    setMfaToken("");
+    setMfaError("");
+  };
+
   return (
     <AuthLayout
       icon={LogIn}
-      title="Welcome back"
-      subtitle="Log in to RRI Executive"
+      title={mfaStep === 'verify' ? "Two-Factor Authentication" : mfaStep === 'setup' ? "Set Up MFA" : "Welcome back"}
+      subtitle={
+        mfaStep === 'verify' ? "Enter the code from your authenticator app" :
+        mfaStep === 'setup' ? "Scan the QR code to enable MFA" :
+        "Log in to RRI Executive"
+      }
       footer={
         <>
           Don't have an account?{" "}
@@ -86,7 +175,7 @@ export default function Login() {
         </>
       }
     >
-      {setupRequired && (
+      {setupRequired && mfaStep === null && (
         <div className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-300">
           <p className="font-medium">First-time setup</p>
           <p className="mt-1">
@@ -98,81 +187,149 @@ export default function Login() {
         </div>
       )}
 
-      {error && (
+      {(error && mfaStep === null) && (
         <div className="mb-4 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
           {error}
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="space-y-2">
-          <Label htmlFor="identifier">Username or Email</Label>
-          <div className="relative">
-            <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-            <Input
-              id="identifier"
-              type="text"
-              autoComplete="username"
-              autoFocus
-              placeholder="you@example.com or username"
-              value={identifier}
-              onChange={(e) => setIdentifier(e.target.value)}
-              className="h-12 pl-10"
-              required
+      {(mfaError && mfaStep !== null) && (
+        <div className="mb-4 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+          {mfaError}
+        </div>
+      )}
+
+      {mfaStep === 'verify' && (
+        <form onSubmit={handleMfaVerify} className="space-y-4">
+          <div className="flex items-center justify-center gap-3 mb-4">
+            <Shield className="h-8 w-8 text-[#6C63FF]" />
+            <div className="text-left">
+              <p className="font-medium">MFA Required</p>
+              <p className="text-sm text-slate-500">Enter the 6-digit code from your authenticator app</p>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="mfa-token">Authentication Code</Label>
+            <div className="relative">
+              <Smartphone className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+              <Input
+                id="mfa-token"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={6}
+                placeholder="000000"
+                value={mfaToken}
+                onChange={(e) => setMfaToken(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                className="h-12 pl-10 text-2xl tracking-widest text-center"
+                autoFocus
+                autoComplete="one-time-code"
+                required
+              />
+            </div>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-slate-500">Code refreshes every 30 seconds</span>
+            <Button type="button" variant="ghost" size="sm" onClick={goBackToPassword}>
+              <RotateCcw className="mr-1 h-3 w-3" /> Use password instead
+            </Button>
+          </div>
+          <Button type="submit" className="h-12 w-full font-medium" disabled={loading || mfaToken.length !== 6}>
+            {loading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Verifying...
+              </>
+            ) : (
+              "Verify & Log in"
+            )}
+          </Button>
+        </form>
+      )}
+
+      {mfaStep === 'setup' && (
+        <MFASetup
+          secret={mfaSecret}
+          uri={mfaUri}
+          userEmail={mfaUsername}
+          backupCodes={mfaBackupCodes}
+          onComplete={handleMfaSetupComplete}
+          onCancel={handleMfaSetupCancel}
+          isEnabling={true}
+        />
+      )}
+
+      {mfaStep === null && (
+        <form onSubmit={handlePasswordSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="identifier">Username or Email</Label>
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+              <Input
+                id="identifier"
+                type="text"
+                autoComplete="username"
+                autoFocus
+                placeholder="you@example.com or username"
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
+                className="h-12 pl-10"
+                required
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="password">Password</Label>
+              <span className="text-xs text-slate-500">
+                Forgot password? Contact an administrator.
+              </span>
+            </div>
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+              <Input
+                id="password"
+                type={showPassword ? "text" : "password"}
+                autoComplete="current-password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="h-12 pl-10 pr-10"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-slate-100"
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                tabIndex={-1}
+              >
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center space-x-2">
+            <Checkbox
+              id="remember"
+              checked={remember}
+              onCheckedChange={(v) => setRemember(!!v)}
             />
+            <label htmlFor="remember" className="text-sm text-slate-400">
+              Remember me for 30 days
+            </label>
           </div>
-        </div>
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="password">Password</Label>
-            <span className="text-xs text-slate-500">
-              Forgot password? Contact an administrator.
-            </span>
-          </div>
-          <div className="relative">
-            <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-            <Input
-              id="password"
-              type={showPassword ? "text" : "password"}
-              autoComplete="current-password"
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="h-12 pl-10 pr-10"
-              required
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword((v) => !v)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-slate-100"
-              aria-label={showPassword ? "Hide password" : "Show password"}
-              tabIndex={-1}
-            >
-              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </button>
-          </div>
-        </div>
-        <div className="flex items-center space-x-2">
-          <Checkbox
-            id="remember"
-            checked={remember}
-            onCheckedChange={(v) => setRemember(!!v)}
-          />
-          <label htmlFor="remember" className="text-sm text-slate-400">
-            Remember me for 30 days
-          </label>
-        </div>
-        <Button type="submit" className="h-12 w-full font-medium" disabled={loading}>
-          {loading ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Logging in...
-            </>
-          ) : (
-            "Log in"
-          )}
-        </Button>
-      </form>
+          <Button type="submit" className="h-12 w-full font-medium" disabled={loading}>
+            {loading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Logging in...
+              </>
+            ) : (
+              "Log in"
+            )}
+          </Button>
+        </form>
+      )}
     </AuthLayout>
   );
 }

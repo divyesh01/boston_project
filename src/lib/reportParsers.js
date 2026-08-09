@@ -1,4 +1,4 @@
-import { db, runInTransaction, createImportSession, completeImportSession } from '@/api/base44Client';
+import { db, runInTransaction, createImportSession, completeImportSession, addImportRecordIds } from '@/api/base44Client';
 import localDb from '@/api/localDb';
 
 import {
@@ -6,6 +6,11 @@ import {
 } from "@/lib/csvParser";
 
 import { parseHotelReport, makeFileDedupKey, generateFileHash } from '@/lib/universalParser';
+
+import {
+  TXN_SIGNATURE, mapTransactionRow, isTrailerRow, assignDedupeKeys,
+} from '@/lib/transactionNorm';
+import { toCents, fromCents, sumCents } from '@/lib/decimal';
 
 // Serialize report imports to prevent double-click/parallel duplicate writes.
 let importQueue = Promise.resolve();
@@ -52,19 +57,19 @@ async function dedupePropertyRows(entity, propertyId, keyFn) {
   }
 }
 
-// Track IDs of created records for precise rollback
+// Track IDs of created records so rollback can delete exactly what an import
+// wrote — no date-range guessing, no collateral damage to rows that were
+// already there.
+//
+// Writes to ImportRecordIds, NOT to the lifecycle session in base44Client.js.
+// Those were both called "ImportSession" until v11; see localDb.js for why.
+//
+// Failing to record ids would leave an import that cannot be undone, so this
+// rethrows: the caller runs inside the import transaction, and losing the
+// rollback ledger should abort the import rather than silently produce
+// unremovable rows.
 async function recordCreatedIds(entity, propertyId, importId, ids) {
-  try {
-    await localDb.ImportSession.add({
-      import_id: importId,
-      property_id: propertyId || "",
-      entity,
-      record_ids: ids,
-      created_date: new Date().toISOString(),
-    });
-  } catch (e) {
-    console.warn('[reportParsers] failed to record import IDs:', e.message);
-  }
+  await addImportRecordIds(importId, entity, ids, propertyId || "");
 }
 
 export const REPORT_TYPES = [
@@ -75,6 +80,7 @@ export const REPORT_TYPES = [
   { key: "payments", label: "Payments Summary" },
   { key: "clerk", label: "Clerk Shift & Cash Audit" },
   { key: "hotel_statistics", label: "Hotel Statistics (Universal)" },
+  { key: "transactions", label: "All Transactions (Ledger)" },
   { key: "generic", label: "Any other spreadsheet" },
 ];
 
@@ -86,6 +92,9 @@ const COLUMN_MAP = {
   "Net Revenue": "net_revenue", net_revenue: "net_revenue",
   Stays: "stays", stays: "stays",
   ADR: "adr", adr: "adr",
+  "Occupancy Contribution": "occupancy_contribution", occupancy_contribution: "occupancy_contribution",
+  "RevPAR Contribution": "revpar_contribution", "Revpar Contribution": "revpar_contribution",
+  revpar_contribution: "revpar_contribution",
   "Room Revenue": "room_revenue", room_revenue: "room_revenue",
   "Other Room Revenue": "other_room_revenue", other_room_revenue: "other_room_revenue",
   "Total Revenue": "total_revenue", total_revenue: "total_revenue",
@@ -126,6 +135,7 @@ const NUMERIC_FIELDS = new Set([
   "revpar_without_ooo",
   "net_revenue", "stays", "room_rent", "misc_charge", "system_charge", "food", "event",
   "bar", "laundry", "phone", "other", "non_revenue", "advance_deposit", "beverage",
+  "occupancy_contribution", "revpar_contribution",
   "actual", "adjusted", "net_today", "amount", "transaction_count",
   "cash", "check", "closed_balance_folio", "corpay", "direct_bill", "amex", "discover",
   "master", "visa", "loyalty_certificate", "loyalty_discount", "vip_pass", "wire_transfer",
@@ -139,6 +149,7 @@ const ENTITY = {
   gross: "GrossRevenueDay",
   payments: "PaymentDay",
   hotel_statistics: "HotelMetric",
+  transactions: "TransactionLine",
 };
 const REVENUE_COL = {
   occupancy: "total_revenue",
@@ -199,19 +210,32 @@ async function skipExisting(entity, rows, keyFn, propertyId) {
   });
 }
 
+// Returns { rawRows, objects }. `objects` is a lazy getter: the header-keyed
+// object form is derived on first access and cached. The transaction ledger has
+// ~17k rows across five stacked sections with different headers, so building
+// objects from section 1's headers would be both wrong for that report and a
+// pure waste of a pass; its scanner works from rawRows directly and never
+// touches the getter. Every other report type sees exactly what it saw before.
+function withLazyObjects(rawRows, eager) {
+  let cache = eager;
+  return {
+    rawRows,
+    get objects() {
+      if (cache === undefined) cache = rowsToObjects(rawRows);
+      return cache;
+    },
+  };
+}
+
 async function getRowsArray(type, fileUrl, meta) {
   // If CSV text was pre-read from the File object, parse it directly (no fetch needed)
   if (meta?.csvText) {
-    const rawRows = parseCsvText(meta.csvText);
-    const objects = rowsToObjects(rawRows);
-    return { objects, rawRows };
+    return withLazyObjects(parseCsvText(meta.csvText));
   }
   // Use sourceFile for detection if available, fallback to fileUrl
   const checkUrl = meta?.sourceFile || fileUrl;
   if (isCsvFile(checkUrl)) {
-    const rawRows = await fetchCsvRows(fileUrl);
-    const objects = rowsToObjects(rawRows);
-    return { objects, rawRows };
+    return withLazyObjects(await fetchCsvRows(fileUrl));
   }
   // Excel fallback — use AI extraction
   const schema = {
@@ -225,7 +249,7 @@ async function getRowsArray(type, fileUrl, meta) {
     json_schema: schema,
   });
   if (res.status !== "success") throw new Error(res.details || "Extraction failed");
-  return { objects: Array.isArray(res.output) ? res.output : [], rawRows: [] };
+  return withLazyObjects([], Array.isArray(res.output) ? res.output : []);
 }
 
 function detectReportType(fileUrl, rawRows, meta) {
@@ -239,6 +263,14 @@ function detectReportType(fileUrl, rawRows, meta) {
     
     const header = row.map((c) => String(c).trim().toLowerCase());
     const has = (kw) => header.some((h) => h.includes(kw));
+
+    // All Transactions ledger. Checked before the flat-table types below because
+    // its header also contains "transaction description", which the payments and
+    // gross checks would otherwise claim. Requires the full signature, so a
+    // single overlapping word is not enough to misroute a file here.
+    if (TXN_SIGNATURE.every((kw) => header.some((h) => h === kw || h.includes(kw)))) {
+      return "transactions";
+    }
 
     // Hotel Statistics (universal parser)
     if (has("description") && (has("actual today") || has("m-t-d") || has("mtd") || has("y-t-d") || has("ytd"))) {
@@ -266,6 +298,7 @@ function detectReportType(fileUrl, rawRows, meta) {
 
   // Fallbacks by filename
   if (/hotel.?stat/i.test(fileName)) return "hotel_statistics";
+  if (/all.?transactions?|transaction.?(list|ledger|detail)/i.test(fileName)) return "transactions";
   if (/clerk|shift|cash audit/i.test(fileName)) return "clerk";
   if (/payments? summary/i.test(fileName)) return "payments";
   if (/source summary/i.test(fileName)) return "source";
@@ -276,9 +309,22 @@ function detectReportType(fileUrl, rawRows, meta) {
 }
 
 export async function scanReport(type, fileUrl, meta = {}) {
-  const { objects, rawRows } = await getRowsArray(type, fileUrl, meta);
+  // Note: `source.objects` is a lazy getter — destructuring it here would defeat
+  // the point, so it is read only inside the branches that need object form.
+  const source = await getRowsArray(type, fileUrl, meta);
+  const rawRows = source.rawRows;
   const resolvedType = !type || type === "auto" ? detectReportType(fileUrl, rawRows, meta) : type;
   const fullMeta = { ...meta, type: resolvedType };
+
+  if (resolvedType === "hotel_statistics") {
+    return scanHotelStatistics(rawRows, fileUrl, fullMeta);
+  }
+
+  if (resolvedType === "transactions") {
+    return scanTransactions(rawRows, fullMeta);
+  }
+
+  const objects = source.objects;
 
   // Debug info for troubleshooting
   const debugInfo = {
@@ -299,10 +345,6 @@ export async function scanReport(type, fileUrl, meta = {}) {
       meta: fullMeta,
       debug: debugInfo,
     };
-  }
-
-  if (resolvedType === "hotel_statistics") {
-    return scanHotelStatistics(rawRows, fileUrl, fullMeta);
   }
 
   if (resolvedType === "clerk") {
@@ -384,6 +426,7 @@ async function scanHotelStatistics(rawRows, fileUrl, meta) {
     propertyName: meta.propertyName || '',
     businessDate: meta.businessDate || '',
     sourceFile: meta.sourceFile || fileUrl,
+    fileModified: meta.fileModified || null,
     importId,
   });
   
@@ -425,7 +468,150 @@ async function scanHotelStatistics(rawRows, fileUrl, meta) {
     unknownMetrics: parseResult.unknownMetrics,
     errors: parseResult.errors,
     fileHash: parseResult.fileHash,
+    businessDate: parseResult.businessDate,
+    businessDateSource: parseResult.businessDateSource,
     meta,
+  };
+}
+
+// ─── All Transactions ledger ───
+//
+// The export stacks five grids in one file, separated by blank lines:
+//   1. guest transactions          19 cols
+//   2. group transactions          26 cols   (empty in every file seen)
+//   3. house-account transactions  26 cols   (empty)
+//   4. company-code transactions   12 cols   (empty)
+//   5. guest transactions again    34 cols
+// Section 5 holds the SAME transactions as section 1 with 15 extra columns, so
+// importing both would double every revenue figure. We take the widest section
+// that carries the transaction signature, which is 5 when present and 1 when the
+// export was produced without it. `detectSections` in csvParser keys off known
+// clerk-report headers, so it cannot see these grids — this splits on blank rows
+// directly, which is the delimiter the file actually uses.
+//
+// Each grid ends with a trailer row: no Date, but the section total in the Amount
+// column. It is a checksum, never a transaction. We drop it and compare it to the
+// parsed sum so a truncated or mis-parsed file is reported rather than imported
+// silently.
+function splitTransactionSections(rawRows) {
+  const sections = [];
+  let current = null;
+
+  for (const row of rawRows || []) {
+    const blank = !row || row.length === 0 || row.every((c) => String(c).trim() === "");
+    if (blank) { current = null; continue; }
+
+    const looksLikeHeader = TXN_SIGNATURE.every((kw) =>
+      row.some((c) => String(c).trim().toLowerCase().includes(kw))
+    );
+
+    if (!current) {
+      // First non-blank row after a break defines the grid. If it is not a
+      // recognisable header the grid is unusable, so record it and skip its rows
+      // rather than guessing at column positions.
+      current = { headers: looksLikeHeader ? row.map((c) => String(c).trim()) : null, rows: [] };
+      sections.push(current);
+      continue;
+    }
+    if (current.headers) current.rows.push(row);
+  }
+
+  return sections.filter((s) => s.headers);
+}
+
+// File identity for the re-import guard. Hashes the raw text when we have it,
+// otherwise the section's own rows — either way the same file yields the same
+// hash and a different file does not. Falls back to "" if the crypto API is
+// unavailable (non-secure context), which just disables the file-level guard;
+// the row-level dedupe_key guard still applies.
+async function hashTransactionFile(meta, section) {
+  try {
+    const text = meta.csvText || section.rows.map((r) => r.join(",")).join("\n");
+    return await generateFileHash(text);
+  } catch (e) {
+    console.warn("[reportParsers] transaction file hash unavailable:", e.message);
+    return "";
+  }
+}
+
+async function scanTransactions(rawRows, meta) {
+  const sections = splitTransactionSections(rawRows);
+
+  // Widest header wins: section 5's 34 columns are a strict superset of section
+  // 1's 19, so this keeps the extra fields instead of discarding them, and still
+  // works on an export that only has the narrow grid.
+  let best = null;
+  for (const s of sections) {
+    if (!s.rows.length) continue;
+    if (!best || s.headers.length > best.headers.length) best = s;
+  }
+
+  const sectionSummary = sections.map((s, i) => ({
+    name: `Section ${i + 1} — ${s.headers.length} columns`,
+    rows: s.rows.length,
+    columns: s.headers.length,
+    used: s === best,
+  }));
+
+  if (!best) {
+    return {
+      type: "transactions",
+      sections: sectionSummary,
+      totalRows: 0,
+      rowsToImport: [],
+      errors: ["No transaction rows found. The file has headers but no data rows."],
+      meta,
+    };
+  }
+
+  const rows = [];
+  const trailers = [];
+  let skipped = 0;
+
+  for (const cells of best.rows) {
+    const mapped = mapTransactionRow(best.headers, cells);
+    // Trailer: total but no date. Keep it for the checksum, never as data.
+    if (isTrailerRow(mapped)) { trailers.push(mapped); continue; }
+    if (!mapped.date || !isIsoDate(mapped.date)) { skipped++; continue; }
+    rows.push(mapped);
+  }
+
+  // Checksum. A mismatch does not block the import — the parsed rows are still
+  // the best available truth — but it is surfaced in the scan so a bad file is
+  // never imported unnoticed.
+  const parsedCents = sumCents(rows.map((r) => r.amount));
+  const trailerCents = trailers.length ? toCents(trailers[trailers.length - 1].amount) : null;
+  const errors = [];
+  if (trailerCents !== null && trailerCents !== parsedCents) {
+    errors.push(
+      `Amount total does not match the file's own total: parsed ${fromCents(parsedCents).toFixed(2)}, file says ${fromCents(trailerCents).toFixed(2)}.`
+    );
+  }
+  if (skipped) {
+    errors.push(`${skipped} row(s) skipped: no readable date.`);
+  }
+
+  return {
+    type: "transactions",
+    sections: sectionSummary,
+    totalRows: rows.length,
+    rowsToImport: rows,
+    fileHash: await hashTransactionFile(meta, best),
+    checksum: {
+      parsed: fromCents(parsedCents),
+      declared: trailerCents === null ? null : fromCents(trailerCents),
+      matches: trailerCents === null ? null : trailerCents === parsedCents,
+    },
+    errors,
+    meta,
+    debug: {
+      rawRowCount: rawRows?.length || 0,
+      detectedType: "transactions",
+      sectionsFound: sections.length,
+      usedColumns: best.headers.length,
+      sampleHeaders: best.headers,
+      sampleObject: rows[0] || null,
+    },
   };
 }
 
@@ -436,7 +622,12 @@ function scanClerkReport(rawRows, meta, objects = []) {
 
   const sections = detectSections(rawRows || []);
 
-  for (const section of sections) {
+  for (let sectionIdx = 0; sectionIdx < sections.length; sectionIdx++) {
+    const section = sections[sectionIdx];
+    // Create a section identifier from the header row for deduplication
+    // This preserves data from each stacked period (month) separately
+    const sectionKey = section.headerRow ? section.headerRow.join('|').slice(0, 100) : `section_${sectionIdx}`;
+
     if (section.type === "payment_summary") {
       for (const row of section.rows) {
         const label = String(row[0] || "").trim();
@@ -464,6 +655,7 @@ function scanClerkReport(rawRows, meta, objects = []) {
           actual: parseAmount(row[1]) ?? 0,
           adjusted: parseAmount(row[2]) ?? 0,
           net_today: parseAmount(row[3]) ?? 0,
+          _sectionKey: sectionKey, // Preserve section context for deduplication
         });
       }
     }
@@ -480,6 +672,7 @@ function scanClerkReport(rawRows, meta, objects = []) {
           payment_type: payType,
           amount,
           transaction_count: 1,
+          _sectionKey: sectionKey,
         });
       }
     }
@@ -523,9 +716,14 @@ function scanClerkReport(rawRows, meta, objects = []) {
     }
   }
 
-  // Payments repeat per stacked period — keep the latest block per payment type
+  // Payments repeat per stacked period — preserve each period's data by including
+  // the section key in the deduplication key. This prevents earlier months from
+  // being silently overwritten by later ones (the "last block wins" bug).
   const seenPayments = new Map();
-  for (const p of payments) seenPayments.set(p.payment_type, p);
+  for (const p of payments) {
+    const key = `${p.payment_type}|${p._sectionKey || 'unknown'}`;
+    seenPayments.set(key, p);
+  }
   const uniquePayments = [...seenPayments.values()];
 
   return {
@@ -563,12 +761,16 @@ export async function importReport(scanResult, meta = {}) {
     const rowCounts = {};
     if (scanResult.type === "clerk") {
       rowCounts["ClerkShiftRecord"] = result.count;
-    } else if (scanResult.type !== "generic") {
+    } else if (ENTITY[scanResult.type]) {
       rowCounts[ENTITY[scanResult.type]] = result.count;
     }
     
     await completeImportSession(importSession.importId, rowCounts);
-    return result;
+    // Return the session's importId, not the caller's. Callers pass their own
+    // meta.importId for row tagging, but the rollback ledger is keyed by the
+    // session id — a caller that recorded its own would look up an import that
+    // has no ledger and be told it cannot be undone.
+    return { ...result, importId: importSession.importId };
   } catch (e) {
     // Import failed - session remains as 'in_progress' for debugging
     throw e;
@@ -587,9 +789,9 @@ async function doImport(scanResult, meta, importId) {
     for (const c of (scanResult.clerkPayments || [])) all.push(addMetaFn(c));
 
     const keyFn = (r) => {
-      if (r.record_type === "payment") return `payment|${r.payment_type}`;
+      if (r.record_type === "payment") return `payment|${r.payment_type}|${r._sectionKey || 'unknown'}`;
       if (r.record_type === "drop") return `drop|${r.shift_date}|${r.clerk_name}|${r.amount}`;
-      return `clerk_payment|${r.clerk_name}|${r.payment_type}|${r.amount}`;
+      return `clerk_payment|${r.clerk_name}|${r.payment_type}|${r.amount}|${r._sectionKey || 'unknown'}`;
     };
 
     const deduped = dedupByKey(all, keyFn);
@@ -603,8 +805,8 @@ async function doImport(scanResult, meta, importId) {
     if (newRows.length) {
       for (let i = 0; i < newRows.length; i += 400) {
         const batch = newRows.slice(i, i + 400);
-        const ids = await db.entities.ClerkShiftRecord.bulkCreate(batch);
-        createdIds.push(...ids);
+        const created = await db.entities.ClerkShiftRecord.bulkCreate(batch);
+        createdIds.push(...created.map((r) => r.id));
       }
     }
     if (createdIds.length) {
@@ -616,19 +818,26 @@ async function doImport(scanResult, meta, importId) {
 
   if (type === "hotel_statistics") {
     const metrics = scanResult.metrics || scanResult.rowsToImport || [];
-    
+
     const keyFn = (r) => `${r.property_id}|${r.business_date}|${r.section}|${r.metric_name}|${r.period}|${r.import_id}`;
-    
+
     const deduped = dedupByKey(metrics, keyFn);
-    
+
+    // File-level guard: same bytes, same property = already imported.
+    //
+    // This used to also match on business_date, which worked only because the
+    // date was permanently "" — every statistics file agreed with every other.
+    // Now that a real date is derived per import, keeping it in the key would
+    // mean re-importing the same file tomorrow derives a different date, misses
+    // the guard, and duplicates all 510 metrics. The file hash already identifies
+    // the snapshot uniquely (a statistics export whose every figure across five
+    // periods is byte-identical to another day's is not a thing), so hash plus
+    // property is both narrower and safer. Same shape the transactions branch uses.
     const fileHash = scanResult.fileHash;
-    const businessDate = restMeta.businessDate || restMeta.business_date || '';
-    const fileDedupKey = fileHash ? `${fileHash}|${restMeta.propertyId}|${businessDate}` : null;
-    
     let newRows = deduped;
-    if (fileDedupKey && !forceImport) {
+    if (fileHash && !forceImport) {
       const existingImports = await db.entities.HotelMetric
-        .filter({ file_hash: fileHash, property_id: restMeta.propertyId, business_date: businessDate });
+        .filter({ file_hash: fileHash, property_id: restMeta.propertyId });
       if (existingImports.length > 0) {
         newRows = [];
       }
@@ -638,14 +847,70 @@ async function doImport(scanResult, meta, importId) {
     if (newRows.length) {
       for (let i = 0; i < newRows.length; i += 400) {
         const batch = newRows.slice(i, i + 400);
-        const ids = await db.entities.HotelMetric.bulkCreate(batch);
-        createdIds.push(...ids);
+        const created = await db.entities.HotelMetric.bulkCreate(batch);
+        createdIds.push(...created.map((r) => r.id));
       }
     }
     if (createdIds.length) {
       await recordCreatedIds("HotelMetric", restMeta.propertyId, importId, createdIds);
     }
     return { count: newRows.length, excluded: deduped.length - newRows.length, cleaned: 0 };
+  }
+
+  if (type === "transactions") {
+    // Stamp property/import metadata first, then assign dedupe keys — the key
+    // includes property_id, so the order matters.
+    const rows = assignDedupeKeys((scanResult.rowsToImport || []).map((r) => addMetaFn(r)));
+
+    // Two guards, cheapest first.
+    //
+    // 1. File-level: the same file re-imported for the same property is a no-op.
+    //    This is the common case (a user clicking Import twice) and costs one
+    //    indexed lookup instead of reading 17k rows.
+    // 2. Row-level: a partial overlap — e.g. a re-export covering an extra week —
+    //    is filtered by dedupe_key so the new days import and the old ones do not
+    //    duplicate.
+    //
+    // Neither guard ever deletes: an existing row always wins over an incoming
+    // copy of itself.
+    const fileHash = scanResult.fileHash || meta.fileHash || "";
+    if (fileHash && !forceImport) {
+      const priorFile = await db.entities.TransactionLine.filter({
+        file_hash: fileHash,
+        property_id: restMeta.propertyId || "",
+      });
+      if (priorFile.length) {
+        return { count: 0, excluded: rows.length, cleaned: 0, reason: "already-imported" };
+      }
+    }
+    if (fileHash) for (const r of rows) r.file_hash = fileHash;
+
+    let newRows = rows;
+    if (!forceImport) {
+      const existing = await db.entities.TransactionLine.filter(
+        restMeta.propertyId ? { property_id: restMeta.propertyId } : {},
+        "date",
+        1000000
+      );
+      const seen = new Set(existing.map((r) => r.dedupe_key));
+      newRows = rows.filter((r) => !seen.has(r.dedupe_key));
+    }
+
+    const createdIds = [];
+    for (let i = 0; i < newRows.length; i += 400) {
+      const batch = newRows.slice(i, i + 400);
+      const created = await db.entities.TransactionLine.bulkCreate(batch);
+      createdIds.push(...created.map((r) => r.id));
+    }
+    if (createdIds.length) {
+      await recordCreatedIds("TransactionLine", restMeta.propertyId, importId, createdIds);
+    }
+    // No dedupePropertyRows pass here: dedupe_key is exact and already applied
+    // above, so a second full-table scan would cost a 17k-row read to find
+    // nothing. Byte-identical rows in this export are legitimate (one posting
+    // action per night of a stay) and the occurrence index in the key keeps
+    // them — a key-collapsing cleanup would silently delete real revenue.
+    return { count: newRows.length, excluded: rows.length - newRows.length, cleaned: 0 };
   }
 
   if (type === "generic") {
@@ -664,8 +929,8 @@ async function doImport(scanResult, meta, importId) {
   let createdIds = [];
   for (let i = 0; i < newRows.length; i += 400) {
     const batch = newRows.slice(i, i + 400);
-    const ids = await db.entities[ENTITY[type]].bulkCreate(batch);
-    createdIds.push(...ids);
+    const created = await db.entities[ENTITY[type]].bulkCreate(batch);
+    createdIds.push(...created.map((r) => r.id));
   }
   if (createdIds.length) {
     await recordCreatedIds(ENTITY[type], restMeta.propertyId, importId, createdIds);
@@ -674,33 +939,15 @@ async function doImport(scanResult, meta, importId) {
   return { count: newRows.length, excluded: deduped.length - newRows.length, cleaned };
 }
 
-// Rollback an import by deleting all records created during that import
-export async function rollbackImport(importId) {
-  try {
-    const sessions = await localDb.ImportSession.where('import_id').equals(importId).toArray();
-    if (!sessions.length) {
-      return { success: false, error: 'Import session not found' };
-    }
-
-    let totalDeleted = 0;
-    for (const session of sessions) {
-      if (session.record_ids && session.record_ids.length) {
-        await db.entities[session.entity].bulkDelete(session.record_ids);
-        totalDeleted += session.record_ids.length;
-      }
-    }
-
-    // Mark session as rolled back
-    for (const session of sessions) {
-      await localDb.ImportSession.update(session.id, { status: 'rolled_back', rolled_back_at: new Date().toISOString() });
-    }
-
-    return { success: true, deletedCount: totalDeleted, message: `Rolled back ${totalDeleted} records from import ${importId}` };
-  } catch (e) {
-    console.error('[reportParsers] rollback failed:', e);
-    return { success: false, error: e.message };
-  }
-}
+// Rollback an import by deleting exactly the records it created.
+//
+// Re-export, not a reimplementation. There were briefly two rollback functions
+// with the same purpose and different behaviour — this one deleted through the
+// entity proxy, the other through the raw Dexie table, so whether a rollback
+// enforced property isolation and refreshed cached KPIs depended on which one
+// the caller happened to import. Keeping the name as an alias preserves the
+// existing import sites without reintroducing the fork.
+export { rollbackImportSession as rollbackImport } from '@/api/base44Client';
 
 // Backward-compatible convenience: scan + import in one call
 export async function parseReport(type, fileUrl, meta = {}) {

@@ -3,7 +3,7 @@ import { getAlertThresholds } from "@/lib/alertThresholds";
 import { getRevenueColor, getRevenueGroup } from "@/lib/revenueThresholds";
 export { getRevenueColor, getRevenueGroup };
 
-import { toCents, fromCents, toRate, fromRate, add, subtract, multiply, divide, divideRate, sumCents, formatCents, formatRate, portfolioOccupancy, portfolioAdr, portfolioRevpar } from '@/lib/decimal';
+import { toCents, fromCents, toRate, fromRate, add, subtract, multiply, divide, divideRate, sumCents, formatCents, formatRate, formatNumber, portfolioOccupancy, portfolioAdr, portfolioRevpar } from '@/lib/decimal';
 
 // Default property — used as fallback when no Property records exist yet
 export const PROPERTY = { name: "Red Roof Inn & Suites Middleborough", code: "RRI1416", rooms: 100 };
@@ -39,7 +39,7 @@ export function commissionFor(source = "") {
 export const money = (v) => formatCents(toCents(v), 0);
 export const money2 = (v) => formatCents(toCents(v), 2);
 export const pct = (v, digits = 1) => formatRate(toRate(v), digits);
-export const num = (v) => Number(v || 0).toLocaleString("en-IN");
+export const num = (v) => formatNumber(v);
 
 export const sum = (rows, key) => fromCents(sumCents(rows.map(r => r[key])));
 export const avg = (rows, key) => rows.length ? sum(rows, key) / rows.length : 0;
@@ -120,6 +120,75 @@ export function portfolioStats(occRows, roomCounts) {
   const adr = roomsSold ? divide(revenue, roomsSold) : 0;
   const revpar = capacity ? divide(revenue, capacity) : 0;
   return { revenue: fromCents(revenue), roomsSold: fromCents(roomsSold), capacity: fromCents(capacity), occupancy: fromRate(occupancy), adr: fromCents(adr), revpar: fromCents(revpar) };
+}
+
+// Room count for one property id, falling back to the default only when the
+// property genuinely has no configured inventory.
+export function roomsForProperty(propertyId, properties) {
+  const found = (properties || []).find((p) => p.id === propertyId);
+  return Number(found?.rooms) || PROPERTY.rooms;
+}
+
+// Build a { property_id: rooms } map once, for the capacity helpers below.
+export function roomCountsFrom(properties) {
+  const map = {};
+  (properties || []).forEach((p) => { map[p.id] = Number(p.rooms) || PROPERTY.rooms; });
+  return map;
+}
+
+// Total room-nights of capacity represented by a set of occupancy rows.
+//
+// Capacity is ALWAYS the sum over each property of (its days x its rooms).
+// Several pages previously did `properties.find(p => p.id === property)?.rooms || 100`
+// and multiplied by row count, which silently collapsed to a flat 100 rooms
+// whenever `property` was "all" or an array — understating occupancy and RevPAR
+// for every multi-property owner, and overstating it for a property with fewer
+// than 100 rooms.
+export function capacityRoomNights(occRows, properties) {
+  const rooms = roomCountsFrom(properties);
+  const daysPerProp = new Map();
+  (occRows || []).forEach((r) => {
+    const pid = r.property_id || "_default";
+    daysPerProp.set(pid, (daysPerProp.get(pid) || 0) + 1);
+  });
+  let capacity = 0;
+  daysPerProp.forEach((days, pid) => {
+    capacity += days * (rooms[pid] ?? PROPERTY.rooms);
+  });
+  return capacity;
+}
+
+// Physical room inventory in scope: one property's rooms, or the sum across the
+// properties the current selection covers.
+export function inventoryInScope(property, properties) {
+  const list = properties || [];
+  if (Array.isArray(property)) {
+    const ids = new Set(property);
+    const sel = list.filter((p) => ids.has(p.id));
+    return sel.reduce((a, p) => a + (Number(p.rooms) || PROPERTY.rooms), 0) || PROPERTY.rooms;
+  }
+  if (!property || property === "all") {
+    return list.reduce((a, p) => a + (Number(p.rooms) || PROPERTY.rooms), 0) || PROPERTY.rooms;
+  }
+  return roomsForProperty(property, list);
+}
+
+// Revenue-weighted occupancy / ADR / RevPAR over a row set. One implementation,
+// so Dashboard, Compare and MTD Growth cannot disagree for the same period.
+export function occupancyStats(occRows, properties) {
+  const rows = occRows || [];
+  const revenue = sum(rows, "total_revenue");
+  const roomsSold = sum(rows, "rooms_sold");
+  const capacity = capacityRoomNights(rows, properties);
+  return {
+    revenue,
+    roomsSold,
+    capacity,
+    days: rows.length,
+    occupancy: capacity ? roomsSold / capacity : 0,
+    adr: roomsSold ? revenue / roomsSold : 0,
+    revpar: capacity ? revenue / capacity : 0,
+  };
 }
 
 // Group occupancy rows by property_id and compute per-property stats

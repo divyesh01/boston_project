@@ -9,7 +9,7 @@ import { usePaymentData, useOccupancy, useClerkRecords, useSources } from "@/lib
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { money, money2, sum, inRange, C } from "@/lib/hotel";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
-import { PAYMENT_METHOD_FIELDS, CARD_METHODS } from "@/lib/paymentNorm";
+import { PAYMENT_METHOD_FIELDS, CARD_METHODS, refundTotalFromTotals } from "@/lib/paymentNorm";
 import { getTaxConfig, calculateTax, formatTaxRate, TAX_SOURCES } from "@/lib/taxConfig";
 
 export default function Payments() {
@@ -34,42 +34,66 @@ export default function Payments() {
     [sourceRows, dateRange]
   );
 
-  // Aggregate payment methods from PaymentDay columns
+  // Aggregate payment methods from PaymentDay columns.
+  //
+  // `paymentType` narrows this to a single tender. It was destructured but never
+  // used, so the dropdown appeared to work and changed nothing. PaymentDay
+  // stores one column per method, so the filter is applied here at the
+  // aggregation step rather than by dropping rows — a row can carry several
+  // tenders at once.
+  const activeMethods = useMemo(
+    () => (paymentType && paymentType !== "all"
+      ? PAYMENT_METHOD_FIELDS.filter(([key]) => key === paymentType)
+      : PAYMENT_METHOD_FIELDS),
+    [paymentType]
+  );
+  const methodFiltered = activeMethods.length !== PAYMENT_METHOD_FIELDS.length;
+
   const methodTotals = useMemo(() => {
     const out = {};
-    PAYMENT_METHOD_FIELDS.forEach(([key]) => { out[key] = sum(payRows, key); });
+    activeMethods.forEach(([key]) => { out[key] = sum(payRows, key); });
     return out;
-  }, [payRows]);
+  }, [payRows, activeMethods]);
 
   const cardTotal = CARD_METHODS.reduce((a, k) => a + (methodTotals[k] || 0), 0);
   const cashTotal = methodTotals.cash || 0;
-  const totalCollected = sum(payRows, "total");
-  const refunds = Math.abs(methodTotals.closed_balance_folio || 0) + Math.abs(methodTotals.loyalty_discount || 0);
+  // When one tender is selected, "collected" means that tender — otherwise the
+  // stored row total, which is the authoritative sum across all methods.
+  const totalCollected = methodFiltered
+    ? activeMethods.reduce((a, [key]) => a + (methodTotals[key] || 0), 0)
+    : sum(payRows, "total");
+  const refunds = refundTotalFromTotals(methodTotals);
   const netPaymentCollected = totalCollected - refunds;
   const expectedRevenue = sum(occRows, "total_revenue");
   const variance = totalCollected - expectedRevenue;
 
   // Payment distribution data for chart — exclude zero values
   const paymentData = useMemo(() => {
-    let data = PAYMENT_METHOD_FIELDS
+    let data = activeMethods
       .map(([key, label]) => ({ name: label, value: Math.abs(methodTotals[key] || 0), key }))
       .filter((d) => d.value > 0)
       .sort((a, b) => b.value - a.value);
     return data;
-  }, [methodTotals]);
+  }, [methodTotals, activeMethods]);
 
   // Daily trend
   const dailyTrend = useMemo(() => {
+    const cardKeys = methodFiltered
+      ? CARD_METHODS.filter((k) => activeMethods.some(([key]) => key === k))
+      : CARD_METHODS;
+    const showCash = activeMethods.some(([key]) => key === "cash");
     return payRows
       .map((r) => ({
         date: String(r.date).slice(0, 10),
-        total: Number(r.total) || 0,
-        cash: Number(r.cash) || 0,
-        card: CARD_METHODS.reduce((a, k) => a + (Number(r[k]) || 0), 0),
+        total: methodFiltered
+          ? activeMethods.reduce((a, [key]) => a + (Number(r[key]) || 0), 0)
+          : Number(r.total) || 0,
+        cash: showCash ? Number(r.cash) || 0 : 0,
+        card: cardKeys.reduce((a, k) => a + (Number(r[k]) || 0), 0),
       }))
       .filter((r) => r.date)
       .sort((a, b) => a.date.localeCompare(b.date));
-  }, [payRows]);
+  }, [payRows, activeMethods, methodFiltered]);
 
   // Clerk drops (from ClerkShiftRecord, if any exist)
   const drops = useMemo(() => clerk.filter((x) => x.record_type === "drop"), [clerk]);
@@ -329,7 +353,19 @@ export default function Payments() {
                 </div>
               </div>
 
-              {Math.abs(variance) > 100 && (
+              {methodFiltered ? (
+                <div className="flex items-start gap-3 rounded-xl border border-[#00D4FF]/20 bg-[#00D4FF]/[0.06] p-4">
+                  <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-[#00D4FF]" />
+                  <div>
+                    <p className="text-sm text-slate-200">Showing one payment method only.</p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      Variance compares a single tender against the full room revenue for the period, so a large gap is
+                      expected here and does not indicate a problem. Set the payment method filter back to All to
+                      reconcile collections against revenue.
+                    </p>
+                  </div>
+                </div>
+              ) : Math.abs(variance) > 100 && (
                 <div className="flex items-start gap-3 rounded-xl border border-[#FFB547]/20 bg-[#FFB547]/[0.06] p-4">
                   <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-[#FFB547]" />
                   <div>

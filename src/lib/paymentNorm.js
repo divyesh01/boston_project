@@ -65,3 +65,31 @@ export function formatPaymentMethod(key) {
 export const PAYMENT_METHOD_FIELDS = Object.entries(FIELD_LABELS);
 
 export const CARD_METHODS = ["visa", "master", "amex", "discover"];
+
+// Payment fields that carry refunds / negative adjustments rather than tender.
+//
+// These are stored SIGNED. The PMS emits them as negatives — see the
+// `DataTemplate` examples ("-50.00", "-20.00") and the `ManualEntry` validator,
+// which allows negatives for exactly these two keys and no others — and
+// `parseAmount` preserves the sign, including accounting parentheses.
+//
+// So sum the signed values and take the magnitude once at the end. Taking
+// `abs()` per field first (the previous approach) inflates the total whenever a
+// positive correction is present, because the correction adds to the refund
+// instead of offsetting it.
+export const REFUND_FIELDS = ["closed_balance_folio", "loyalty_discount"];
+
+// Signed refund value for one row — negative under the convention above.
+export function refundOf(row) {
+  return REFUND_FIELDS.reduce((total, f) => total + (Number(row?.[f]) || 0), 0);
+}
+
+// Refund magnitude for a set of payment rows.
+export function refundTotal(rows) {
+  return Math.abs((rows || []).reduce((total, r) => total + refundOf(r), 0));
+}
+
+// Refund magnitude from an already-summed per-method map.
+export function refundTotalFromTotals(methodTotals) {
+  return Math.abs(REFUND_FIELDS.reduce((total, f) => total + (Number(methodTotals?.[f]) || 0), 0));
+}

@@ -5,41 +5,17 @@ import CompareBars from "@/components/compare/CompareBars";
 import ChannelRevenue from "@/components/compare/ChannelRevenue";
 import { useOccupancy, useSources } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
-import { money, money2, num, pct, sum, inRange } from "@/lib/hotel";
+import { money, money2, num, pct, inRange, occupancyStats } from "@/lib/hotel";
 
 export default function Compare() {
   const { dateRange, compareDateRange, channel, property, properties, months, compareMonths } = useGlobalFilters();
-  const isPortfolio = property === "all" || Array.isArray(property);
-  const propRooms = isPortfolio ? 100 : (properties.find((p) => p.id === property)?.rooms || 100);
   const { data: occ = [], isLoading } = useOccupancy(dateRange, property, months);
   const { data: prevOcc = [] } = useOccupancy(compareDateRange, property, compareMonths);
   const { data: sources = [] } = useSources(dateRange, property, months);
 
-  const stats = (rows) => {
-    const revenue = sum(rows, "total_revenue");
-    const roomsSold = sum(rows, "rooms_sold");
-    let capacity;
-    if (isPortfolio) {
-      const daysPerProp = new Map();
-      rows.forEach((r) => {
-        const pid = r.property_id || "_default";
-        daysPerProp.set(pid, (daysPerProp.get(pid) || 0) + 1);
-      });
-      capacity = 0;
-      daysPerProp.forEach((days, pid) => {
-        capacity += days * (properties.find((p) => p.id === pid)?.rooms || 100);
-      });
-    } else {
-      capacity = rows.length * propRooms;
-    }
-    return {
-      revenue,
-      roomsSold,
-      adr: roomsSold ? revenue / roomsSold : 0,
-      occupancy: capacity ? roomsSold / capacity : 0,
-      days: rows.length,
-    };
-  };
+  // Shared engine — capacity is summed per property, so portfolio mode no longer
+  // collapses to a flat 100 rooms and this page cannot disagree with Dashboard.
+  const stats = (rows) => occupancyStats(rows, properties);
 
   const sa = stats(occ.filter((x) => inRange(x.date, dateRange.from, dateRange.to)));
   const sb = stats(prevOcc.filter((x) => inRange(x.date, compareDateRange.from, compareDateRange.to)));

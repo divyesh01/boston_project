@@ -29,6 +29,12 @@
     "rows_imported": {
       "type": "number"
     },
+    "rows_skipped": {
+      "type": "number"
+    },
+    "rows_parsed": {
+      "type": "number"
+    },
     "file_url": {
       "type": "string"
     },

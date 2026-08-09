@@ -1,7 +1,7 @@
-import { db, listImportSessions } from '@/api/base44Client';
+import { db, listImportSessions, rollbackImportSession } from '@/api/base44Client';
 
 import React, { useState } from "react";
-import { UploadCloud, CheckCircle2, FileSpreadsheet, XCircle, Search, Building2, Loader2, Eye, Trash2, ArrowDownToLine, RefreshCw, X } from "lucide-react";
+import { UploadCloud, CheckCircle2, FileSpreadsheet, XCircle, Search, Building2, Loader2, Eye, Trash2, ArrowDownToLine, RefreshCw, RotateCcw, X } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 
 import { useUploads, useProperties } from "@/lib/useHotelData";
@@ -11,6 +11,161 @@ import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
 import { useAuth } from "@/lib/AuthContext";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
 
+// Per-import undo. Deletes exactly the rows one import created, via the
+// rollback ledger — unlike "Clear all imported data", which wipes every table.
+//
+// Two-click confirm rather than a modal: this is destructive but precisely
+// scoped and reversible by re-importing the file, so a full dialog would be
+// heavier than the action warrants.
+//
+// Imports predating ledger tracking have no recorded ids. Rather than offer a
+// button that always fails, those rows show nothing at all.
+function UndoImportButton({ upload: u, disabled, onDone }) {
+  const [confirming, setConfirming] = useState(false);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState("");
+
+  if (!u.import_id) return null;
+  // A re-upload where every row was already present wrote nothing, so it has no
+  // ledger. Offering Undo here would produce a "cannot be undone" error for what
+  // was actually a successful import — the dedupe case ImportOutcome shows as
+  // "0 new". Undoing it would also be wrong: the rows belong to the earlier
+  // import, and that one still has its own Undo.
+  if (u.rows_imported != null && Number(u.rows_imported) === 0) return null;
+
+  const run = async () => {
+    // Same guards the other destructive paths use (import, clear-all), but
+    // reported inline instead of via alert() — the button has somewhere to
+    // put the message.
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      setError(`Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
+      setConfirming(false);
+      return;
+    }
+    if (!validateCsrfToken(getCsrfToken())) {
+      setError("Invalid security token. Refresh the page and try again.");
+      setConfirming(false);
+      rotateCsrfToken();
+      return;
+    }
+    setWorking(true);
+    setError("");
+    try {
+      const res = await rollbackImportSession(u.import_id);
+      if (!res.success) {
+        setError(res.error || "Undo failed");
+        setConfirming(false);
+        return;
+      }
+      // Drop the history row too, so the list reflects that this import's data
+      // is gone. Leaving it would imply the rows are still queryable.
+      await db.entities.UploadedReport.delete(u.id);
+      rotateCsrfToken();
+      onDone?.();
+    } catch (e) {
+      setError(e.message || "Undo failed");
+      setConfirming(false);
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  if (error) {
+    return (
+      <button
+        onClick={() => setError("")}
+        title={error}
+        className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-[#FF6B6B]/30 px-2.5 py-1 text-xs text-[#FF6B6B] hover:bg-[#FF6B6B]/10"
+      >
+        <XCircle className="h-3.5 w-3.5 shrink-0" /> Undo failed
+      </button>
+    );
+  }
+
+  if (confirming) {
+    return (
+      <span className="flex items-center gap-1.5">
+        <button
+          onClick={run}
+          disabled={working}
+          className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-[#FF6B6B]/50 bg-[#FF6B6B]/10 px-2.5 py-1 text-xs text-[#FF6B6B] hover:bg-[#FF6B6B]/20 disabled:opacity-50"
+        >
+          {working ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" /> : <Trash2 className="h-3.5 w-3.5 shrink-0" />}
+          {working ? "Undoing…" : "Confirm undo"}
+        </button>
+        <button
+          onClick={() => setConfirming(false)}
+          disabled={working}
+          className="rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-400 hover:bg-white/5 disabled:opacity-50"
+        >
+          Cancel
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setConfirming(true)}
+      disabled={disabled}
+      title="Delete only the rows this file created"
+      className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-white/10 px-2.5 py-1 text-xs text-slate-400 transition-colors hover:border-[#FF6B6B]/40 hover:text-[#FF6B6B] disabled:opacity-40"
+    >
+      <RotateCcw className="h-3.5 w-3.5 shrink-0" /> Undo
+    </button>
+  );
+}
+
+// Import history outcome. A file that imported nothing because every row was
+// already in the database is a normal, successful re-upload — it must not look
+// identical to a file that failed to parse. Older records predate rows_skipped
+// and can't tell the two apart, so they stay deliberately vague.
+function ImportOutcome({ upload: u }) {
+  const imported = Number(u.rows_imported) || 0;
+  const skipped = u.rows_skipped == null ? null : Number(u.rows_skipped) || 0;
+  const parsed = u.rows_parsed == null ? null : Number(u.rows_parsed) || 0;
+
+  if (imported > 0) {
+    return (
+      <p className="flex items-center gap-2 whitespace-nowrap text-xs text-[#00E096]">
+        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+        {num(imported)} rows
+        {skipped > 0 && (
+          <span className="text-slate-500">· {num(skipped)} already imported</span>
+        )}
+      </p>
+    );
+  }
+
+  // Nothing new landed. Why not?
+  if (skipped > 0) {
+    return (
+      <p className="flex items-center gap-2 whitespace-nowrap text-xs text-[#FFB547]">
+        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+        0 new
+        <span className="text-slate-500">· all {num(skipped)} already imported</span>
+      </p>
+    );
+  }
+
+  if (skipped === 0 && parsed === 0) {
+    return (
+      <p className="flex items-center gap-2 whitespace-nowrap text-xs text-[#FF6B6B]">
+        <XCircle className="h-3.5 w-3.5 shrink-0" /> No rows found
+      </p>
+    );
+  }
+
+  return (
+    <p className="flex items-center gap-2 whitespace-nowrap text-xs text-[#FFB547]">
+      <XCircle className="h-3.5 w-3.5 shrink-0" />
+      0 rows
+      {parsed > 0 && <span className="text-slate-500">· {num(parsed)} parsed, none stored</span>}
+    </p>
+  );
+}
+
 const STATUS_LABEL = {
   pending: "Queued",
   scanning: "Scanning…",
@@ -18,6 +173,15 @@ const STATUS_LABEL = {
   importing: "Importing…",
   done: "Imported",
   error: "Failed",
+};
+
+// Where a Hotel Statistics snapshot's date came from. The file itself has none,
+// so the operator is told plainly whether the date was inferred or confirmed.
+const DATE_SOURCE_LABEL = {
+  explicit: "confirmed",
+  filename: "read from the filename",
+  file_modified: "guessed from the file date — check it",
+  import_date: "defaulted to today — check it",
 };
 
 // Flatten a scan result into plain rows usable by the Chart Builder's custom datasets
@@ -97,6 +261,10 @@ export default function Import() {
       count: 0,
       excluded: 0,
       importId: `imp_${stamp}_${i}`,
+      // Operator-supplied statement date, set from the queue row and only used by
+      // Hotel Statistics (which ships no date column). Declared here rather than
+      // appearing on first edit so the queue item has one stable shape.
+      businessDate: "",
     }));
     setQueue(newQueue);
     setResults([]);
@@ -121,6 +289,12 @@ export default function Import() {
           propertyName: selectedProperty?.name || "",
           importId: item.importId,
           sourceFile: item.name,
+          // Hotel Statistics files carry no date of their own. The parser derives
+          // one and says where it came from; the mtime is the best automatic
+          // signal available in the browser, and the operator can correct it on
+          // the queue row before importing.
+          fileModified: item.file?.lastModified || null,
+          businessDate: item.businessDate || "",
           csvText,
         });
         setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "ready", scan, file_url } : q)));
@@ -135,8 +309,32 @@ export default function Import() {
     setCurrentFile("");
   };
 
-  const importSingle = async (item) => {
-    if (!item.scan || !propertyId || item.status === "done") return null;
+  // Re-scan one queued file against an operator-supplied statement date.
+  //
+  // Only Hotel Statistics needs this: the export has no date column, so the
+  // parser infers one and labels the source. Re-running the scan (rather than
+  // patching the parsed rows) keeps the date on exactly one code path, so what
+  // the preview shows is what gets stored.
+  const rescanWithDate = async (item, businessDate) => {
+    setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, businessDate, status: "scanning" } : q)));
+    try {
+      const csvText = /\.csv$/i.test(item.name) ? await item.file.text() : null;
+      const scan = await scanReport(type, item.file_url, {
+        propertyId,
+        propertyName: selectedProperty?.name || "",
+        importId: item.importId,
+        sourceFile: item.name,
+        fileModified: item.file?.lastModified || null,
+        businessDate,
+        csvText,
+      });
+      setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "ready", scan } : q)));
+    } catch (e) {
+      setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: e.message || "Could not re-scan file" } : q)));
+    }
+  };
+
+  const importSingle = async (item) => {    if (!item.scan || !propertyId || item.status === "done") return null;
     // Rate limiting for imports
     const rateLimit = sensitiveActionRateLimiter.check();
     if (!rateLimit.allowed) {
@@ -163,10 +361,12 @@ export default function Import() {
         file_name: item.name,
         report_type: item.scan.type || type,
         rows_imported: result.count,
+        rows_skipped: result.excluded || 0,
+        rows_parsed: item.scan.totalRows ?? null,
         file_url: item.file_url,
         property_id: propertyId,
         property_name: selectedProperty?.name || "",
-        import_id: item.importId,
+        import_id: result.importId || item.importId,
         source_file: item.name,
         raw_rows: scanRawRows(item.scan),
       });
@@ -219,7 +419,7 @@ export default function Import() {
     setQueue((prev) => prev.filter((q) => q.key !== key));
   };
 
-  const IMPORT_TABLES = ["OccupancyDay", "SourceDay", "GrossRevenueDay", "PaymentDay", "ClerkShiftRecord", "UploadedReport"];
+  const IMPORT_TABLES = ["OccupancyDay", "SourceDay", "GrossRevenueDay", "PaymentDay", "ClerkShiftRecord", "HotelMetric", "TransactionLine", "UploadedReport"];
 
   const handleClearAll = async () => {
     if (clearing) return;
@@ -237,7 +437,7 @@ export default function Import() {
       return;
     }
     const ok = window.confirm(
-      "Delete ALL imported report data and import history?\n\nThis permanently removes every imported row from this browser (occupancy, sources, gross revenue, payments, clerk records). Properties and settings are kept.\n\nThis cannot be undone."
+      "Delete ALL imported report data and import history?\n\nThis permanently removes every imported row from this browser (occupancy, sources, gross revenue, payments, clerk records, hotel statistics, transactions). Properties and settings are kept.\n\nThis cannot be undone."
     );
     if (!ok) return;
     setClearing(true);
@@ -293,10 +493,12 @@ export default function Import() {
           file_name: fileName,
           report_type: scan.type || type,
           rows_imported: result.count,
+          rows_skipped: result.excluded || 0,
+          rows_parsed: scan.totalRows ?? null,
           file_url: fileUrl,
           property_id: propertyId,
           property_name: selectedProperty?.name || "",
-          import_id: meta.importId,
+          import_id: result.importId || meta.importId,
           source_file: fileName,
           drive_file_id: fileId,
           raw_rows: scanRawRows(scan),
@@ -544,6 +746,23 @@ export default function Import() {
                     </span>
                   </div>
 
+                  {q.scan?.type === "hotel_statistics" && q.status !== "done" && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                      <label className="flex items-center gap-2 text-slate-400">
+                        Statement date
+                        <input
+                          type="date"
+                          value={q.scan.businessDate || ""}
+                          onChange={(e) => e.target.value && rescanWithDate(q, e.target.value)}
+                          className="rounded-md border border-white/10 bg-[#0A1628] px-2 py-1 text-slate-200 outline-none focus:border-[#6C63FF]"
+                        />
+                      </label>
+                      <span className={q.scan.businessDateSource === "explicit" ? "text-[#00E096]" : "text-[#FFB547]"}>
+                        {DATE_SOURCE_LABEL[q.scan.businessDateSource] || q.scan.businessDateSource}
+                      </span>
+                    </div>
+                  )}
+
                   {q.status === "error" && <p className="mt-1 text-xs text-[#FF6B6B]">{q.error}</p>}
 
 {expandedKey === q.key && q.scan && (
@@ -738,19 +957,24 @@ export default function Import() {
         </div>
         <div className="space-y-2">
           {filtered.map((u) => (
-            <div key={u.id} className="flex items-center justify-between rounded-xl border border-white/5 bg-[#0A1628]/60 px-4 py-3">
-              <div className="flex items-center gap-3">
-                <FileSpreadsheet className="h-4 w-4 text-[#6C63FF]" />
-                <div>
-                  <p className="text-sm text-white">{u.file_name}</p>
+            <div key={u.id} className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-[#0A1628]/60 px-4 py-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <FileSpreadsheet className="h-4 w-4 shrink-0 text-[#6C63FF]" />
+                <div className="min-w-0">
+                  <p className="truncate text-sm text-white">{u.file_name}</p>
                   <p className="text-xs text-slate-500">
                     {u.property_name || "—"} · {u.report_type} · {String(u.created_date || "").slice(0, 10)}
                   </p>
                 </div>
               </div>
-              <p className="flex items-center gap-2 text-xs text-[#00E096]">
-                <CheckCircle2 className="h-3.5 w-3.5" /> {num(u.rows_imported)} rows
-              </p>
+              <div className="flex shrink-0 items-center gap-3">
+                <ImportOutcome upload={u} />
+                <UndoImportButton
+                  upload={u}
+                  disabled={busy || importing || clearing}
+                  onDone={refetch}
+                />
+              </div>
             </div>
           ))}
           {!filtered.length && (

@@ -7,6 +7,7 @@ import UniversalChart from "@/components/charts/UniversalChart";
 import ChartToolbar from "@/components/charts/ChartToolbar";
 import { useOccupancy, useSources, useGrossRevenue, useUploads } from "@/lib/useHotelData";
 import { aggregate, downloadCsv, num, inRange } from "@/lib/hotel";
+import { formatNumber } from "@/lib/decimal";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 
 const CHARTS = [
@@ -134,7 +135,7 @@ export default function ChartBuilder() {
               {data.map((d) => (
                 <tr key={d.name} className="border-t border-white/5">
                   <td className="py-2 text-slate-300">{d.name}</td>
-                  <td className="py-2 text-right tabular-nums text-white">{d.value.toLocaleString()}</td>
+                  <td className="py-2 text-right tabular-nums text-white">{formatNumber(d.value, 'auto')}</td>
                 </tr>
               ))}
             </tbody>

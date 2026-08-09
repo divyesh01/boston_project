@@ -6,8 +6,9 @@ import KpiCard from "@/components/ui-exec/KpiCard";
 import Card from "@/components/ui-exec/Card";
 import { useOccupancy, useSources } from "@/lib/useHotelData";
 import { useGlobalFilters, MONTHS_LONG } from "@/lib/useGlobalFilters";
-import { money, money2, pct, num, sum, inRange, C } from "@/lib/hotel";
-import { getRevenueColor, getRevenueGroup, getRevenueGroupLabel } from "@/lib/revenueThresholds";
+import { Link } from "react-router-dom";
+import { money, money2, pct, num, inRange, C, occupancyStats, commissionFor } from "@/lib/hotel";
+import { getRevenueThresholds, getRevenueColor, getRevenueGroup, getRevenueGroupLabel } from "@/lib/revenueThresholds";
 
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -16,6 +17,8 @@ export default function MonthlyCalendar() {
   const { data: occ = [] } = useOccupancy(dateRange, property, months);
   const { data: sources = [] } = useSources(dateRange, property, months);
   const [selectedDay, setSelectedDay] = useState(null);
+  // Read the configured thresholds so the legend cannot drift from the colours.
+  const revThresholds = getRevenueThresholds();
 
   const occRows = useMemo(
     () => occ.filter((r) => inRange(r.date, dateRange.from, dateRange.to)),
@@ -41,22 +44,6 @@ export default function MonthlyCalendar() {
     return map;
   }, [sources]);
 
-  const kpis = useMemo(() => {
-    const revenue = sum(occRows, "total_revenue");
-    const roomsSold = sum(occRows, "rooms_sold");
-    const totalRooms = occRows.length * (properties.find((p) => p.id === property)?.rooms || 100);
-    const days = occRows.length;
-    return {
-      revenue,
-      occupancy: totalRooms > 0 ? roomsSold / totalRooms : 0,
-      adr: roomsSold > 0 ? revenue / roomsSold : 0,
-      revpar: totalRooms > 0 ? revenue / totalRooms : 0,
-      highest: occRows.length ? Math.max(...occRows.map((r) => r.total_revenue || 0)) : 0,
-      lowest: occRows.length ? Math.min(...occRows.map((r) => r.total_revenue || 0)) : 0,
-      days,
-    };
-  }, [occRows, properties, property]);
-
   // Build calendar grid
   const calYear = year || new Date().getFullYear();
   const calMonth = month !== null ? month : new Date().getMonth();
@@ -69,6 +56,30 @@ export default function MonthlyCalendar() {
     const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
     cells.push({ date: dateStr, day: d, data: byDate.get(dateStr) });
   }
+
+  // KPIs describe exactly the days drawn in the grid.
+  //
+  // They used to be computed over the whole global `dateRange` while the grid
+  // was built from `year`/`month`, so under a YTD, quarterly or custom range the
+  // header and the grid below it described different spans — the header could
+  // report eight months of revenue above a single month of squares.
+  const gridRows = useMemo(() => {
+    const monthPrefix = `${calYear}-${String(calMonth + 1).padStart(2, "0")}`;
+    return occRows.filter((r) => String(r.date).slice(0, 7) === monthPrefix);
+  }, [occRows, calYear, calMonth]);
+
+  const kpis = useMemo(() => {
+    const s = occupancyStats(gridRows, properties);
+    return {
+      revenue: s.revenue,
+      occupancy: s.occupancy,
+      adr: s.adr,
+      revpar: s.revpar,
+      highest: gridRows.length ? Math.max(...gridRows.map((r) => r.total_revenue || 0)) : 0,
+      lowest: gridRows.length ? Math.min(...gridRows.map((r) => r.total_revenue || 0)) : 0,
+      days: s.days,
+    };
+  }, [gridRows, properties]);
 
   const groups = useMemo(() => {
     const g = { high: [], medium: [], low: [], nodata: [] };
@@ -83,21 +94,19 @@ export default function MonthlyCalendar() {
 
   const groupStats = (groupCells) => {
     if (!groupCells.length) return { days: 0, revenue: 0, pct: 0, occupancy: 0, adr: 0, revpar: 0 };
-    const revenue = groupCells.reduce((a, c) => a + (c.data?.total_revenue || 0), 0);
-    const roomsSold = groupCells.reduce((a, c) => a + (c.data?.rooms_sold || 0), 0);
-    const totalRooms = groupCells.length * (properties.find((p) => p.id === property)?.rooms || 100);
+    const rows = groupCells.map((c) => c.data).filter(Boolean);
+    const s = occupancyStats(rows, properties);
     return {
       days: groupCells.length,
-      revenue,
-      pct: kpis.revenue > 0 ? revenue / kpis.revenue : 0,
-      occupancy: totalRooms > 0 ? roomsSold / totalRooms : 0,
-      adr: roomsSold > 0 ? revenue / roomsSold : 0,
-      revpar: totalRooms > 0 ? revenue / totalRooms : 0,
+      revenue: s.revenue,
+      pct: kpis.revenue > 0 ? s.revenue / kpis.revenue : 0,
+      occupancy: s.occupancy,
+      adr: s.adr,
+      revpar: s.revpar,
     };
   };
 
-  const selectedData = selectedDay ? byDate.get(selectedDay) : null;
-  const selectedSources = selectedDay ? (srcByDate.get(selectedDay) || []) : [];
+  const selectedData = selectedDay ? byDate.get(selectedDay) : null;  const selectedSources = selectedDay ? (srcByDate.get(selectedDay) || []) : [];
   const prevDayData = selectedDay ? byDate.get(
     new Date(new Date(selectedDay).getTime() - 86400000).toISOString().slice(0, 10)
   ) : null;
@@ -105,13 +114,24 @@ export default function MonthlyCalendar() {
   const channelRanking = useMemo(() => {
     if (!selectedSources.length) return [];
     const ranked = selectedSources
-      .map((s) => ({
-        name: s.source || s.code || "Unknown",
-        gross: s.net_revenue || 0,
-        commission: 0,
-        net: s.net_revenue || 0,
-        stays: s.stays || 0,
-      }))
+      .map((s) => {
+        // Actually subtract commission — the panel is titled "Ranked by Net
+        // Revenue" but used to set commission: 0 and net = gross, so an OTA
+        // booking outranked a direct booking of the same value.
+        const gross = s.net_revenue || 0;
+        const info = commissionFor(s.source || s.code);
+        let commission = 0;
+        if (info.type === "percentage") commission = gross * info.rate;
+        else if (info.type === "fixed") commission = info.rate * (s.stays || 0);
+        else if (info.type === "actual") commission = info.rate;
+        return {
+          name: s.source || s.code || "Unknown",
+          gross,
+          commission,
+          net: gross - commission,
+          stays: s.stays || 0,
+        };
+      })
       .sort((a, b) => b.net - a.net);
     const total = ranked.reduce((a, r) => a + r.net, 0);
     return ranked.map((r, i) => ({ ...r, rank: i + 1, pct: total > 0 ? r.net / total : 0 }));
@@ -138,7 +158,7 @@ export default function MonthlyCalendar() {
 
       <Card
         title={`${MONTHS_LONG[calMonth]} ${calYear} Calendar`}
-        subtitle="Green ≥ $6K · Gray $3.5K–$6K · Red < $3.5K (editable in Settings)"
+        subtitle={`Green ≥ ${money(revThresholds.highRevenueThreshold)} · Gray ${money(revThresholds.mediumRevenueThreshold)}–${money(revThresholds.highRevenueThreshold)} · Red < ${money(revThresholds.mediumRevenueThreshold)} (editable in Settings)`}
       >
         <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
           {DOW.map((d) => (
@@ -271,7 +291,7 @@ export default function MonthlyCalendar() {
             ) : (
               <div className="py-8 text-center">
                 <p className="text-slate-500">No data imported for this day.</p>
-                <a href="/upload" className="mt-2 inline-block text-sm text-[#00D4FF] underline">Import reports →</a>
+                <Link to="/upload" className="mt-2 inline-block text-sm text-[#00D4FF] underline">Import reports →</Link>
               </div>
             )}
           </div>

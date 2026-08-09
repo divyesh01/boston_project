@@ -95,6 +95,27 @@ export function formatRate(rate, decimals = 2) {
   return `${pct}%`;
 }
 
+// Canonical grouped-number formatter for the whole app.
+// Locale is pinned to en-US so counters, staff counts and AI answers use the
+// same thousands separators as formatCents (never the browser's locale).
+//
+// `decimals` may be 'auto' for values whose precision is not known ahead of time
+// (generic chart series, which may hold counts, money or fractions). 'auto'
+// keeps up to 3 decimals and pads none, matching a bare `toLocaleString()` so
+// displayed precision is unchanged — it only pins the locale.
+/**
+ * @param {number} value
+ * @param {number | 'auto'} [decimals]
+ */
+export function formatNumber(value, decimals = 0) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '0';
+  if (decimals === 'auto') {
+    return n.toLocaleString('en-US', { maximumFractionDigits: 3 });
+  }
+  return n.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
 export function roundCents(cents) {
   return Math.round(cents);
 }

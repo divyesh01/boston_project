@@ -8,12 +8,15 @@ import {
 import { X, Wallet } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { db } from "@/api/base44Client";
+import { usePaymentData } from "@/lib/useHotelData";
+import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { money, money2, pct, sum, inRange, C, CHART_COLORS, commissionFor } from "@/lib/hotel";
 import { getCcFeeRate, getCcFeeOnRefunds } from "@/lib/commissionRates";
 import { getTaxConfig } from "@/lib/taxConfig";
-import { getEffectiveTaxRates } from "@/lib/taxSettings";
+import { getEffectiveTaxRates, getTaxSettings } from "@/lib/taxSettings";
 import { expenseLabel, STANDARD_CATEGORY_KEYS } from "@/lib/expenseCategories";
-import { CARD_METHODS } from "@/lib/paymentNorm";
+import { CARD_METHODS, refundOf } from "@/lib/paymentNorm";
+import { filterCommittedPay } from "@/lib/payrollCalc";
 import { useSettingsVersion } from "@/hooks/useSettingsVersion";
 
 const tip = { background: "#0A1628", border: "1px solid #ffffff14", borderRadius: 12, color: "#e2e8f0" };
@@ -29,6 +32,16 @@ const TREND_MODES = [
 
 // Tax buckets for manual expense entries that feed the liability display
 const TAX_EXPENSE_CATS = ["state_taxes", "city_taxes"];
+
+// Bucket a booking source into its configured tax class.
+function classifyTaxSource(r) {
+  const text = `${r.source || ""} ${r.code || ""}`.toUpperCase();
+  if (/EXPEDIA.*HOTEL COLLECT|EHC/.test(text)) return "EXPEDIA_HC";
+  if (/BOOKING\.?COM.*HOTEL COLLECT|BHC/.test(text)) return "BOOKING_HC";
+  if (/WALK|WIN/.test(text)) return "WALK_IN";
+  if (/PROPERTY BOOKING|PRP|RR WEBSITE|WEB|RED ROOF APP|APP|CONTACT CENTER|CRS/.test(text)) return "PROPERTY_BOOKING";
+  return "OTHER_OTA";
+}
 
 // Bucket a YYYY-MM-DD date into day / week (Monday start) / month / year key
 function bucketKey(dateStr, mode) {
@@ -67,11 +80,18 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
   const propFilter = useMemo(() => buildPropertyFilter(property), [property]);
   const propertyKey = useMemo(() => propKey(property), [property]);
 
-  // Shared query keys so any write to payments/expenses/payroll elsewhere auto-refreshes this section
-  const { data: payRecords = [] } = useQuery({
-    queryKey: ["payments", dateRange?.from, dateRange?.to, property, ""],
-    queryFn: () => db.entities.PaymentDay.filter(propFilter, "date", 100000),
-  });
+  // Payments come through the shared hook rather than a hand-rolled query.
+  //
+  // This used to be its own useQuery with the key
+  // ["payments", from, to, property, ""] — byte-identical to the key
+  // usePaymentData builds when no months are selected — but with a fetcher that
+  // ignored the date range entirely. Two different fetchers under one key means
+  // whichever component mounted first populated the cache for both, so the
+  // Payments page could be handed every PaymentDay row ever imported instead of
+  // the selected period. Sharing the hook makes the key and the fetcher agree
+  // and costs nothing: Dashboard has already issued this exact query.
+  const { months } = useGlobalFilters();
+  const { data: payRecords = [] } = usePaymentData(dateRange, property, months);
 
   const { data: expenses = [] } = useQuery({
     queryKey: ["expenses", propertyKey],
@@ -88,7 +108,11 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     const to = dateRange?.to || "";
     const payRows = payRecords.filter((r) => inRange(r.date, from, to));
     const expInPeriod = expenses.filter((e) => inRange(e.expense_date, from, to));
-    const payInPeriod = payroll.filter((p) => inRange(p.pay_period_start, from, to));
+    // Only approved/paid runs reduce cash. Drafts are proposals, and counting
+    // them here made money kept drop the moment a run was keyed in.
+    const payInPeriod = filterCommittedPay(payroll).filter((p) =>
+      inRange(p.pay_period_start, from, to)
+    );
     const grossInPeriod = (grossRows || []).filter((r) => inRange(r.date, from, to));
 
     const gross = sum(occRows, "total_revenue");
@@ -127,36 +151,82 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       const date = String(r.date).slice(0, 10);
       const card = CARD_METHODS.reduce((a, k) => a + (Number(r[k]) || 0), 0);
       bump(date, "ccFee", card * ccFee);
-      const refund = Math.abs(Number(r.closed_balance_folio) || 0) + Math.abs(Number(r.loyalty_discount) || 0);
+      const refund = Math.abs(refundOf(r));
       bump(date, "refunds", refund);
       if (ccFeeRefunds) bump(date, "refundFee", refund * ccFee);
     });
 
-    // Resolve taxes per day: imported (pass-through) or estimated from configured rates (deducted)
-    const taxEnabled = getTaxConfig().taxEnabled;
+    // ── Tax estimate base: net revenue of taxable booking sources per day/property.
+    // Only taxable sources (hotel-collect OTAs, walk-in, direct/property bookings) form
+    // the base; imported PMS tax lines (below) always take precedence when present.
+    const taxCfg = getTaxConfig();
+    const taxableSources = new Set(taxCfg.sources.filter((s) => s.taxable).map((s) => s.key));
+    const taxBaseByKey = new Map();
+    const occGrossByKey = new Map();
+    const hasSourceByKey = new Map();
+    const dateBaseKeys = new Map();
+    const keyDate = (k) => k.slice(0, 10);
+    const pushDateKey = (k) => {
+      const d = keyDate(k);
+      const arr = dateBaseKeys.get(d) || [];
+      arr.push(k);
+      dateBaseKeys.set(d, arr);
+    };
+    srcRows.forEach((r) => {
+      const d = String(r.date).slice(0, 10);
+      const pid = r.property_id || "";
+      const key = `${d}|${pid}`;
+      hasSourceByKey.set(key, true);
+      if (taxableSources.has(classifyTaxSource(r))) {
+        taxBaseByKey.set(key, (taxBaseByKey.get(key) || 0) + (Number(r.net_revenue) || 0));
+      }
+      pushDateKey(key);
+    });
+    occRows.forEach((r) => {
+      const d = String(r.date).slice(0, 10);
+      const pid = r.property_id || "";
+      const key = `${d}|${pid}`;
+      occGrossByKey.set(key, (occGrossByKey.get(key) || 0) + (Number(r.total_revenue) || 0));
+      pushDateKey(key);
+    });
+
+    // Resolve taxes per day: imported (pass-through) or estimated from configured rates (deducted).
+    // The per-property tax settings remain active even when the legacy global toggle is off.
+    const taxEnabled = taxCfg.taxEnabled || getTaxSettings().length > 0;
     const ratesCache = new Map();
-    const ratesFor = (d) => {
-      if (!ratesCache.has(d)) ratesCache.set(d, getEffectiveTaxRates(property, d));
-      return ratesCache.get(d);
+    const ratesFor = (pid, d) => {
+      const k = `${pid}|${d}`;
+      if (!ratesCache.has(k)) ratesCache.set(k, getEffectiveTaxRates(pid, d));
+      return ratesCache.get(k);
     };
 
     const dayTotals = [...dayMap.values()].sort((a, b) => a.date.localeCompare(b.date)).map((d) => {
       const imp = taxImp.get(d.date);
       const hasImported = imp && (imp.state + imp.city + imp.other) > 0.004;
-      let state = 0, city = 0, other = 0, passTax = 0, deductTax = 0;
+      let state = 0, city = 0, other = 0, passTax = 0, deductTax = 0, baseSum = 0;
       if (hasImported) {
         state = imp.state;
         city = imp.city;
         other = imp.other;
         passTax = state + city + other;
       } else if (taxEnabled) {
-        const r = ratesFor(d.date);
-        state = d.gross * r.state;
-        city = d.gross * r.city;
-        other = d.gross * r.other;
+        const keys = dateBaseKeys.get(d.date) || [];
+        const used = new Set();
+        keys.forEach((key) => {
+          if (used.has(key)) return;
+          used.add(key);
+          const pid = key.slice(d.date.length + 1);
+          const r = ratesFor(pid, d.date);
+          const hasSource = hasSourceByKey.has(key);
+          const base = taxBaseByKey.has(key) ? taxBaseByKey.get(key) : hasSource ? 0 : (occGrossByKey.get(key) || 0);
+          baseSum += base;
+          state += base * r.state;
+          city += base * r.city;
+          other += base * r.other;
+        });
         deductTax = state + city + other;
       }
-      return { ...d, state, city, other, passTax, deductTax };
+      return { ...d, state, city, other, passTax, deductTax, taxBase: baseSum };
     });
 
     // ── Manual expenses & payroll ──
@@ -167,8 +237,25 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     });
     const otaFromSources = srcRows.length > 0;
 
+    // ACTUAL-BEATS-ESTIMATE.
+    //
+    // Three costs can arrive by two different routes: OTA commission, card
+    // processing fees and taxes are each *derived* from imported data at
+    // configured rates, and can *also* be entered by the owner as a real expense
+    // row (the invoice / merchant statement / tax payment). Deducting both
+    // charges the owner twice for one cost.
+    //
+    // The rule below is applied identically to all three: if actual expense rows
+    // exist in the period, they are the deduction and the estimate is discarded;
+    // otherwise the estimate stands in. The label says which one is in force so
+    // the number stays traceable to its source.
+    //
+    // Previously `ota_commission` was re-bucketed to "other" when SourceDay rows
+    // existed, which moved it off the OTA line but left it in the total, and
+    // `credit_card_fees` fell through to its own bucket and was pushed by the
+    // generic category loop alongside the derived fee. Both double-counted.
     const bucketOf = (cat) => {
-      if (cat === "ota_commission") return otaFromSources ? "other" : "ota";
+      if (cat === "ota_commission") return "ota";
       if (cat === "payroll") return "payroll";
       if (TAX_EXPENSE_CATS.includes(cat)) return "taxes";
       return cat || "other";
@@ -223,13 +310,19 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       (expGroups[b] = expGroups[b] || []).push(e);
     });
 
-    // Manual tax expense entries (real business tax outflows)
-    const manualState = expRows("tax").filter((e) => e.category === "state_taxes");
-    const manualCity = expRows("tax").filter((e) => e.category === "city_taxes");
+    // Manual tax expense entries (real business tax outflows).
+    // These read the "taxes" bucket that `bucketOf` actually writes — the
+    // previous code asked for `expRows("tax")` (singular), a bucket nothing ever
+    // creates, so every manually entered state/city/other tax expense silently
+    // evaluated to 0 and was dropped from both the deduction total and the
+    // liability panel.
+    const manualState = expRows("taxes").filter((e) => e.category === "state_taxes");
+    const manualCity = expRows("taxes").filter((e) => e.category === "city_taxes");
     const manualStateAmt = manualState.reduce((a, e) => a + (Number(e.amount) || 0), 0);
     const manualCityAmt = manualCity.reduce((a, e) => a + (Number(e.amount) || 0), 0);
-    const manualOtherTax = expRows("tax").filter((e) => e.category === "taxes");
+    const manualOtherTax = expRows("taxes").filter((e) => e.category === "taxes");
     const manualOtherTaxAmt = manualOtherTax.reduce((a, e) => a + (Number(e.amount) || 0), 0);
+    const manualTaxAmt = manualStateAmt + manualCityAmt + manualOtherTaxAmt;
 
     // ── OTA commissions from imported SourceDay data ──
     const srcMap = new Map();
@@ -279,32 +372,47 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
 
     // ── Deduction items ──
     const items = [];
-    const pushItem = (key, label, amount, records) => {
-      if (amount > 0.004) items.push({ key, label, amount: Math.round(amount * 100) / 100, records: records || [] });
+    const pushItem = (key, label, amount, records, rate) => {
+      if (amount > 0.004) items.push({ key, label, amount: Math.round(amount * 100) / 100, records: records || [], rate: Number.isFinite(rate) ? rate : undefined });
     };
 
-    if (otaFromSources) {
-      pushItem("ota", "OTA Commissions", otaRecords.reduce((a, x) => a + x.amount, 0), otaRecords);
-    } else {
-      pushItem("ota", "OTA Commissions", expAmt("ota"), expRows("ota").map(expRecord));
-    }
-    const ccTotal = ccRecords.reduce((a, x) => a + x.amount, 0);
-    pushItem("cc", "Credit Card Processing Fees", ccTotal, ccRecords);
-    if (ccFeeRefunds) {
-      pushItem("refund_fee", "CC Fee on Refunds", refundFeeRecords.reduce((a, x) => a + x.amount, 0), refundFeeRecords);
+    // OTA commission — actual invoices beat the rate-card estimate.
+    const otaActual = expAmt("ota");
+    const otaEstimated = otaRecords.reduce((a, x) => a + x.amount, 0);
+    if (otaActual > 0.004) {
+      pushItem("ota", "OTA Commissions (actual)", otaActual, expRows("ota").map(expRecord));
+    } else if (otaFromSources) {
+      pushItem("ota", "OTA Commissions (estimated)", otaEstimated, otaRecords);
     }
 
-    // Estimated (not imported) taxes reduce money kept; imported taxes are pass-through.
-    const estimatedTaxTotal = dayTotals.reduce((a, d) => a + d.deductTax, 0) + manualStateAmt + manualCityAmt + manualOtherTaxAmt;
-    const estimatedTaxRecords = [
-      ...dayTotals.filter((d) => d.deductTax > 0).map((d) => ({
-        name: d.date,
-        detail: "Estimated at configured tax rates",
-        amount: d.deductTax,
-      })),
-      ...[...manualState, ...manualCity, ...manualOtherTax].map(expRecord),
-    ];
-    pushItem("taxes", "Business Taxes (estimated)", estimatedTaxTotal, estimatedTaxRecords);
+    // Card processing fees — a real merchant statement beats the derived fee.
+    const ccActual = expAmt("credit_card_fees");
+    const ccTotal = ccRecords.reduce((a, x) => a + x.amount, 0);
+    if (ccActual > 0.004) {
+      pushItem("credit_card_fees", "Credit Card Processing Fees (actual)", ccActual, expRows("credit_card_fees").map(expRecord));
+    } else {
+      pushItem("cc", "Credit Card Processing Fees (estimated)", ccTotal, ccRecords);
+      if (ccFeeRefunds) {
+        pushItem("refund_fee", "CC Fee on Refunds", refundFeeRecords.reduce((a, x) => a + x.amount, 0), refundFeeRecords);
+      }
+    }
+
+    // Taxes — imported PMS tax is guest-collected pass-through and is never a
+    // cost to the owner. Of the remaining two, an actual tax payment beats the
+    // estimate derived from configured rates.
+    const estimatedTaxFromRates = dayTotals.reduce((a, d) => a + d.deductTax, 0);
+    const estimatedTaxBase = dayTotals.reduce((a, d) => a + (d.taxBase || 0), 0);
+    const taxIsActual = manualTaxAmt > 0.004;
+    const taxTotal = taxIsActual ? manualTaxAmt : estimatedTaxFromRates;
+    const effectiveTaxRate = !taxIsActual && estimatedTaxBase > 0 ? estimatedTaxFromRates / estimatedTaxBase : undefined;
+    const estimatedTaxRecords = taxIsActual
+      ? [...manualState, ...manualCity, ...manualOtherTax].map(expRecord)
+      : dayTotals.filter((d) => d.deductTax > 0).map((d) => ({
+          name: d.date,
+          detail: "Estimated at configured tax rates",
+          amount: d.deductTax,
+        }));
+    pushItem("taxes", taxIsActual ? "Business Taxes (actual)" : "Business Taxes (estimated)", taxTotal, estimatedTaxRecords, effectiveTaxRate);
 
     pushItem("payroll", "Payroll", sum(payInPeriod, "total_pay") + expAmt("payroll"), [
       ...payInPeriod.map((p) => ({
@@ -315,7 +423,11 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       ...expRows("payroll").map(expRecord),
     ].filter((x) => x.amount > 0));
 
-    const specialBuckets = new Set(["ota", "payroll", "taxes"]);
+    // Buckets already emitted above with their own actual-vs-estimate handling.
+    // `credit_card_fees` MUST be here: it is a standard category, so without it
+    // the generic loop below would push the merchant statement a second time on
+    // top of the line already emitted above.
+    const specialBuckets = new Set(["ota", "payroll", "taxes", "credit_card_fees"]);
     const customKeys = Object.keys(expGroups)
       .filter((b) => !specialBuckets.has(b) && !STANDARD_CATEGORY_KEYS.includes(b))
       .sort((a, b) => expAmt(b) - expAmt(a));
@@ -329,10 +441,20 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     const kept = gross - totalDeductions;
 
     // ── Tax liability (state / city / other shown separately) ──
-    const liabState = dayTotals.reduce((a, d) => a + d.state, 0) + manualStateAmt;
-    const liabCity = dayTotals.reduce((a, d) => a + d.city, 0) + manualCityAmt;
-    const liabOther = dayTotals.reduce((a, d) => a + d.other, 0);
-    const passThrough = dayTotals.reduce((a, d) => a + d.passTax, 0);
+    //
+    // A day contributes on exactly one branch: imported PMS tax (passTax > 0) or
+    // tax estimated from configured rates (deductTax > 0). Liability is the
+    // imported pass-through the owner has collected and owes, plus whichever of
+    // {actual payments, rate estimate} is in force for the days with no imported
+    // line. Adding the manual amounts on top of the estimate — as this did
+    // before — counted the same liability twice.
+    const impDays = dayTotals.filter((d) => d.passTax > 0.004);
+    const estDays = dayTotals.filter((d) => d.deductTax > 0.004);
+    const sumOn = (rows, k) => rows.reduce((a, d) => a + d[k], 0);
+    const liabState = sumOn(impDays, "state") + (taxIsActual ? manualStateAmt : sumOn(estDays, "state"));
+    const liabCity = sumOn(impDays, "city") + (taxIsActual ? manualCityAmt : sumOn(estDays, "city"));
+    const liabOther = sumOn(impDays, "other") + (taxIsActual ? manualOtherTaxAmt : sumOn(estDays, "other"));
+    const passThrough = sumOn(impDays, "passTax");
 
     const dayImpImported = (d) => {
       const imp = taxImp.get(d.date);
@@ -395,7 +517,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       gross, items, totalDeductions, kept, pieData, barData, trendData, from, to,
       tax: {
         state: liabState, city: liabCity, other: liabOther,
-        passThrough, estimated: estimatedTaxTotal,
+        passThrough, estimated: estimatedTaxFromRates, effectiveRate: effectiveTaxRate,
         stateRecords: [...taxRecords["State Tax"], ...manualState.map(expRecord)],
         cityRecords: [...taxRecords["City/Local Tax"], ...manualCity.map(expRecord)],
         otherRecords: taxRecords["Other Taxes"],
@@ -490,7 +612,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
                   </span>
                   <span className="text-sm tabular-nums text-slate-200">
                     -{money(i.amount)}
-                    <span className="ml-1.5 text-xs text-slate-500">({pct(i.amount / (gross || 1))})</span>
+                    <span className="ml-1.5 text-xs text-slate-500">({i.rate !== undefined ? pct(i.rate, 2) : pct(i.amount / (gross || 1))})</span>
                   </span>
                 </button>
               );
@@ -571,7 +693,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
                   <span className="block">Pass-through (imported from PMS): <span className="text-[#00E096]">{money(tax.passThrough)}</span> — collected from the guest, remitted to government, does not reduce money kept.</span>
                 )}
                 {tax.estimated > 0.004 && (
-                  <span className="block">Estimated at configured rates: <span className="text-[#FFB547]">{money(tax.estimated)}</span> — treated as a business cost since reports didn't include tax lines.</span>
+                  <span className="block">Estimated at configured rates{tax.effectiveRate > 0 ? ` — combined ${pct(tax.effectiveRate, 2)}` : ""}: <span className="text-[#FFB547]">{money(tax.estimated)}</span> — treated as a business cost since reports didn't include tax lines.</span>
                 )}
               </p>
             </div>

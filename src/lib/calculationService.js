@@ -4,9 +4,10 @@ import {
   portfolioOccupancy, portfolioAdr, portfolioRevpar
 } from '@/lib/decimal';
 import { commissionFor } from '@/lib/hotel';
-import { getTaxConfig, calculateTax, TAX_SOURCES } from '@/lib/taxConfig';
+import { getTaxConfig, TAX_SOURCES } from '@/lib/taxConfig';
+import { getEffectiveTaxRates, getTaxSettings } from '@/lib/taxSettings';
 import { getCcFeeRate, getCcFeeOnRefunds } from '@/lib/commissionRates';
-import { CARD_METHODS } from '@/lib/paymentNorm';
+import { CARD_METHODS, refundTotal, refundTotalFromTotals } from '@/lib/paymentNorm';
 
 function inRange(dateStr, from, to) {
   if (!dateStr) return false;
@@ -131,7 +132,7 @@ export class CalculationService {
     const cardTotal = CARD_METHODS.reduce((a, k) => a + (methodTotals[k] || 0), 0);
     const cashTotal = methodTotals.cash || 0;
     const totalCollected = sum(payRows, 'total');
-    const refunds = Math.abs(methodTotals.closed_balance_folio || 0) + Math.abs(methodTotals.loyalty_discount || 0);
+    const refunds = refundTotalFromTotals(methodTotals);
     const netPaymentCollected = totalCollected - refunds;
 
     return { methodTotals, cardTotal, cashTotal, totalCollected, refunds, netPaymentCollected };
@@ -139,7 +140,7 @@ export class CalculationService {
 
   static calculateTaxLiability(srcRows, grossRows, propertyId, dateRange) {
     const taxConfig = getTaxConfig();
-    if (!taxConfig.taxEnabled) return { state: 0, city: 0, other: 0, total: 0 };
+    if (!taxConfig.taxEnabled && getTaxSettings().length === 0) return { state: 0, city: 0, other: 0, total: 0 };
 
     const taxBase = new Map();
     srcRows.forEach((r) => {
@@ -171,9 +172,10 @@ export class CalculationService {
         other += imp.other;
       } else {
         const base = taxBase.get(d) || 0;
-        state += calculateTax(base, 'EXPEDIA_HC');
-        city += calculateTax(base, 'BOOKING_HC');
-        other += calculateTax(base, 'OTHER_OTA');
+        const r = getEffectiveTaxRates(propertyId, d);
+        state += base * r.state;
+        city += base * r.city;
+        other += base * r.other;
       }
     });
 
@@ -190,7 +192,7 @@ export class CalculationService {
     const cardTotal = sum(payRows, 'total') - sum(payRows, 'cash') - sum(payRows, 'check');
     const ccFees = cardTotal * ccFee;
 
-    const refunds = Math.abs(sum(payRows, 'closed_balance_folio')) + Math.abs(sum(payRows, 'loyalty_discount'));
+    const refunds = refundTotal(payRows);
     let refundFees = 0;
     if (ccFeeRefunds) refundFees = refunds * ccFee;
 
@@ -222,7 +224,7 @@ export class CalculationService {
 
   static calculateProfitMetrics(occRows, payRows, expenses, payroll, dateRange) {
     const grossRevenue = sum(occRows, 'total_revenue');
-    const refundsAndAdjustments = Math.abs(sum(payRows, 'closed_balance_folio')) + Math.abs(sum(payRows, 'loyalty_discount'));
+    const refundsAndAdjustments = refundTotal(payRows);
     const netRevenue = grossRevenue - refundsAndAdjustments;
 
     const expensesInPeriod = expenses.filter(e => inRange(e.expense_date, dateRange.from, dateRange.to));

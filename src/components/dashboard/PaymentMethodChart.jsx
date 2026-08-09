@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
+import PieDonut from "@/components/charts/PieDonut";
 import Card from "@/components/ui-exec/Card";
 import { CHART_COLORS, money2, pct } from "@/lib/hotel";
 import { getCcFeeRate } from "@/lib/commissionRates";
@@ -67,39 +67,7 @@ export default function PaymentMethodChart({ payRows }) {
     >
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="h-[280px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={chart}
-                dataKey="value"
-                nameKey="name"
-                cx="50%"
-                cy="50%"
-                outerRadius={90}
-                innerRadius={45}
-                paddingAngle={2}
-              >
-                {chart.map((entry, i) => (
-                  <Cell key={i} fill={entry.color} stroke="#040D1A" strokeWidth={2} />
-                ))}
-              </Pie>
-              <Tooltip
-                contentStyle={{
-                  background: "#0F1F35",
-                  border: "1px solid rgba(255,255,255,0.1)",
-                  borderRadius: "12px",
-                  color: "#fff",
-                }}
-                labelStyle={{ color: "#fff" }}
-                itemStyle={{ color: "#e2e8f0" }}
-                formatter={(v) => money2(v)}
-              />
-              <Legend
-                wrapperStyle={{ color: "#e2e8f0", fontSize: "12px" }}
-                formatter={(value) => <span style={{ color: "#e2e8f0" }}>{value}</span>}
-              />
-            </PieChart>
-          </ResponsiveContainer>
+          <PieDonut data={chart} type="donut" height="100%" outerRadius={90} formatter={money2} />
         </div>
 
         <div className="space-y-2">

@@ -7,7 +7,7 @@ import {
 } from "recharts";
 import { useOccupancy } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
-import { money, money2, num, pct, sum, inRange, C } from "@/lib/hotel";
+import { money, money2, num, pct, sum, inRange, C, occupancyStats } from "@/lib/hotel";
 
 const METRICS = [
   { key: "total_revenue", label: "Total Revenue", fmt: money },
@@ -55,15 +55,18 @@ export default function MtdGrowth() {
     return prevRows.filter((r) => inRange(r.date, compareDateRange.from, prevToIso));
   }, [prevRows, compareOn, dateRange, compareDateRange]);
 
+  // Shared engine: capacity is summed per property (portfolio-safe), and ADR /
+  // RevPAR are properly weighted.
+  //
+  // Both were wrong here before. Capacity used
+  // `properties.find(p => p.id === property)?.rooms || 100`, which returns
+  // undefined -> 100 whenever `property` is "all" or an array. And ADR / RevPAR
+  // were `sum(rows, key) / rows.length` — the unweighted mean of daily rates,
+  // which is not ADR: a 10-room day at $200 and a 90-room day at $100 averaged
+  // to $150 instead of the true $110.
   const calc = (rows, key) => {
-    if (key === "occupancy") {
-      const roomsSold = sum(rows, "rooms_sold");
-      const totalRooms = rows.length * (properties.find((p) => p.id === property)?.rooms || 100);
-      return totalRooms > 0 ? roomsSold / totalRooms : 0;
-    }
-    if (key === "adr" || key === "revpar") {
-      if (rows.length === 0) return 0;
-      return sum(rows, key) / rows.length;
+    if (key === "occupancy" || key === "adr" || key === "revpar") {
+      return occupancyStats(rows, properties)[key];
     }
     return sum(rows, key);
   };

@@ -1,9 +1,10 @@
 import React from "react";
 import {
-  ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend,
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, AreaChart, Area,
+  ResponsiveContainer,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, AreaChart, Area, Tooltip,
 } from "recharts";
-import { CHART_COLORS, C, money2 } from "@/lib/hotel";
+import PieDonut from "@/components/charts/PieDonut";
+import { C, money2 } from "@/lib/hotel";
 
 const tip = { background: "#0A1628", border: "1px solid #ffffff14", borderRadius: 12, color: "#e2e8f0" };
 const axis = { fill: "#64748b", fontSize: 11 };
@@ -16,28 +17,7 @@ export default function UniversalChart({ data, type }) {
     <div className="h-96">
       <ResponsiveContainer width="100%" height="100%">
         {type === "pie" || type === "donut" ? (
-          <PieChart>
-            <Pie
-              data={top}
-              dataKey="value"
-              nameKey="name"
-              innerRadius={type === "donut" ? 70 : 0}
-              outerRadius={110}
-              paddingAngle={2}
-              label={({ name, value }) => {
-                const total = top.reduce((a, c) => a + (Number(c.value) || 0), 0);
-                const p = total > 0 ? ((value / total) * 100).toFixed(1) : "0";
-                return `${name}: ${money2(value)} (${p}%)`;
-              }}
-              labelLine={{ stroke: "#475569", strokeWidth: 1 }}
-            >
-              {top.map((_, i) => (
-                <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} stroke="#040D1A" />
-              ))}
-            </Pie>
-            <Tooltip contentStyle={tip} />
-            <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
-          </PieChart>
+          <PieDonut data={top} type={type} height="100%" formatter={money2} maxSlices={25} />
         ) : type === "hbar" ? (
           <BarChart data={top} layout="vertical" margin={{ left: 40, right: 16 }}>
             <CartesianGrid stroke="#ffffff0a" horizontal={false} />

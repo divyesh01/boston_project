@@ -1,11 +1,10 @@
 import { db } from '@/api/base44Client';
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
-import { Save, Plus, CheckCircle2, RotateCcw, Trash2, Building2, RefreshCw, UserCog, LogOut } from "lucide-react";
+import { Save, Plus, CheckCircle2, RotateCcw, Trash2, Building2, RefreshCw, UserCog, LogOut, Shield, ShieldOff, Key, Smartphone } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, getCcFeeOnRefunds, setCcFeeOnRefunds, COMMISSION_TYPES } from "@/lib/commissionRates";
-import { useEffect } from "react";
 import { getAlertThresholds, saveAlertThresholds } from "@/lib/alertThresholds";
 import { getRevenueThresholds, saveRevenueThresholds } from "@/lib/revenueThresholds";
 import { getTaxSettings, saveTaxSettings } from "@/lib/taxSettings";
@@ -18,6 +17,11 @@ import {
   AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogHeader,
   AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
+import { Label } from "@/components/ui/label";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Loader2 } from "lucide-react";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeText, sanitizeAlphanumeric } from "@/lib/securityUtils";
 
 export default function Settings() {
@@ -42,6 +46,14 @@ export default function Settings() {
   const [newPropRooms, setNewPropRooms] = useState("100");
   const [propMsg, setPropMsg] = useState("");
   const [propDeleteTarget, setPropDeleteTarget] = useState(null);
+  
+  // MFA self-service state
+  const [mfaSetupOpen, setMfaSetupOpen] = useState(false);
+  const [mfaSecret, setMfaSecret] = useState(null);
+  const [mfaUri, setMfaUri] = useState(null);
+  const [mfaBackupCodes, setMfaBackupCodes] = useState([]);
+  const [mfaVerifying, setMfaVerifying] = useState(false);
+  const [mfaAction, setMfaAction] = useState(null); // 'enable' | 'disable'
 
   // Auto-save commission rates & CC fee to localStorage on change
   useEffect(() => {
@@ -328,6 +340,99 @@ export default function Settings() {
       setDeleting(false);
     }
   };
+
+  // MFA self-service handlers
+  const handleMfaEnable = async () => {
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
+      return;
+    }
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      toast({ variant: "destructive", title: "Security Error", description: "Invalid security token. Please refresh the page and try again." });
+      rotateCsrfToken();
+      return;
+    }
+    try {
+      const result = await db.users.enableMfa(me, me.id);
+      setMfaSecret(result.secret);
+      setMfaUri(result.uri);
+      setMfaBackupCodes([]);
+      setMfaAction('enable');
+      setMfaSetupOpen(true);
+    } catch (e) {
+      toast({ variant: "destructive", title: "Error", description: e.message });
+    }
+  };
+
+  const handleMfaDisable = async () => {
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
+      return;
+    }
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      toast({ variant: "destructive", title: "Security Error", description: "Invalid security token. Please refresh the page and try again." });
+      rotateCsrfToken();
+      return;
+    }
+    try {
+      await db.users.disableMfa(me, me.id);
+      toast({ title: "MFA Disabled", description: "Two-factor authentication has been disabled for your account." });
+    } catch (e) {
+      toast({ variant: "destructive", title: "Error", description: e.message });
+    }
+  };
+
+  const handleMfaSetupComplete = async (token, done) => {
+    if (done) {
+      setMfaSetupOpen(false);
+      setMfaSecret(null);
+      setMfaUri(null);
+      setMfaBackupCodes([]);
+      setMfaAction(null);
+      return;
+    }
+    if (!token) return;
+    setMfaVerifying(true);
+    try {
+      await db.users.verifyMfa(me, me.id, token);
+      toast({ title: "MFA Enabled Successfully!", description: "Your account is now protected with two-factor authentication." });
+      setMfaSetupOpen(false);
+      setMfaSecret(null);
+      setMfaUri(null);
+      setMfaBackupCodes([]);
+      setMfaAction(null);
+    } catch (e) {
+      toast({ variant: "destructive", title: "Invalid Code", description: e.message || "The code is incorrect or has expired." });
+    } finally {
+      setMfaVerifying(false);
+    }
+  };
+
+  const handleMfaSetupCancel = () => {
+    setMfaSetupOpen(false);
+    setMfaSecret(null);
+    setMfaUri(null);
+    setMfaBackupCodes([]);
+    setMfaAction(null);
+  };
+
+  // Render QR code when MFA dialog opens
+  const qrCanvasRef = useRef(/** @type {HTMLCanvasElement | null} */ (null));
+  useEffect(() => {
+    if (mfaSetupOpen && mfaUri && qrCanvasRef.current) {
+      import("qrcode").then(QRCode => {
+        QRCode.default.toCanvas(qrCanvasRef.current, mfaUri, {
+          width: 200,
+          margin: 2,
+          color: { dark: '#000000', light: '#ffffff' }
+        }).catch(console.error);
+      });
+    }
+  }, [mfaSetupOpen, mfaUri]);
 
   const entries = Object.entries(rates).sort((a, b) => a[0].localeCompare(b[0]));
 
@@ -750,9 +855,9 @@ export default function Settings() {
         </div>
       </Card>
 
-      <Card title="My account" subtitle="Your profile, role, and session">
+      <Card title="My account" subtitle="Your profile, role, session, and security">
         {me && (
-          <div className="space-y-3">
+          <div className="space-y-6">
             <div className="flex items-center gap-3 rounded-xl border border-white/5 bg-[#0A1628]/60 px-4 py-3">
               <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#6C63FF]/30 text-base font-bold text-white">
                 {(me.full_name || me.username || "?").slice(0, 1).toUpperCase()}
@@ -765,12 +870,49 @@ export default function Settings() {
                 </p>
               </div>
             </div>
+
+            {/* MFA Section */}
+            <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  {me.mfa_enabled ? (
+                    <Shield className="h-5 w-5 text-emerald-400" />
+                  ) : (
+                    <ShieldOff className="h-5 w-5 text-slate-500" />
+                  )}
+                  <div>
+                    <p className="text-sm font-medium text-white">Two-Factor Authentication</p>
+                    <p className="text-xs text-slate-500">
+                      {me.mfa_enabled 
+                        ? "MFA is enabled. You'll need your authenticator app to log in." 
+                        : "Add an extra layer of security to your account."}
+                    </p>
+                  </div>
+                </div>
+                {me.mfa_enabled ? (
+                  <button
+                    onClick={handleMfaDisable}
+                    className="text-sm text-amber-400 hover:text-amber-300 transition-colors"
+                  >
+                    Disable MFA
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleMfaEnable}
+                    className="inline-flex items-center gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 text-sm font-medium text-emerald-400 transition-colors hover:bg-emerald-500/20"
+                  >
+                    <Shield className="h-3.5 w-3.5" /> Enable MFA
+                  </button>
+                )}
+              </div>
+            </div>
+
             <div className="flex flex-wrap gap-2">
               <Link
                 to="/change-password"
                 className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-4 py-2.5 text-sm text-slate-300 transition-colors hover:border-[#6C63FF]/60 hover:text-white"
               >
-                Change Password
+                <Key className="h-3.5 w-3.5" /> Change Password
               </Link>
               <button
                 onClick={() => logout(true)}
@@ -822,6 +964,88 @@ export default function Settings() {
           </AlertDialogContent>
         </AlertDialog>
       </Card>
+
+{/* MFA Setup Dialog */}
+      {mfaSetupOpen && mfaSecret && mfaUri && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="w-full max-w-md bg-[#0F1F35] rounded-xl border border-white/10 overflow-hidden">
+            <div className="p-6 space-y-6">
+              <div className="text-center">
+                {mfaAction === 'enable' && (
+                  <>
+                    <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10">
+                      <Shield className="h-6 w-6 text-emerald-400" />
+                    </div>
+                    <h3 className="text-lg font-semibold text-white">Set Up Authenticator App</h3>
+                    <p className="mt-1 text-sm text-slate-400">Scan the QR code to enable two-factor authentication</p>
+                  </>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                <div className="flex justify-center">
+                  <div className="bg-white p-4 rounded-lg border">
+                    <canvas ref={qrCanvasRef} className="mx-auto" />
+                  </div>
+                </div>
+
+                <div className="text-center text-sm">
+                  <p className="text-muted-foreground">Or enter this secret key manually:</p>
+                  <code className="block mt-1 font-mono text-xs text-slate-300 bg-slate-800 px-2 py-1 rounded break-all">{mfaSecret}</code>
+                </div>
+
+                <Alert className="border-amber-500/30 bg-amber-500/10">
+                  <AlertDescription className="text-sm flex items-center gap-2">
+                    <span className="flex-shrink-0">⚠</span>
+                    <strong>Save backup codes!</strong> You'll receive 10 one-time backup codes after verification. Store them securely — each can only be used once.
+                  </AlertDescription>
+                </Alert>
+
+                <div className="space-y-3">
+                  <Label htmlFor="mfa-token" className="text-sm font-medium">Enter the 6-digit code from your app</Label>
+                  <div className="relative">
+                    <Smartphone className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                    <Input
+                      id="mfa-token"
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      maxLength={6}
+                      placeholder="000000"
+                      onChange={(e) => {
+                        const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+                        if (val.length === 6) handleMfaSetupComplete(val);
+                      }}
+                      className="h-12 pl-10 text-2xl tracking-widest text-center"
+                      autoFocus
+                      autoComplete="one-time-code"
+                      disabled={mfaVerifying}
+                    />
+                  </div>
+                  <Button 
+                    className="w-full h-12" 
+                    onClick={() => {}}
+                    disabled={mfaVerifying}
+                  >
+                    {mfaVerifying ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Verifying...
+                      </>
+                    ) : (
+                      "Verify & Enable MFA"
+                    )}
+                  </Button>
+                </div>
+
+                <Button variant="outline" className="w-full" onClick={handleMfaSetupCancel}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

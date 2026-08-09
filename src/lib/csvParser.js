@@ -61,37 +61,61 @@ export function parseAmount(s) {
   return isNegative ? -n : n;
 }
 
-function parseCsvLine(line) {
-  const fields = [];
+// Character-level scanner over the whole text.
+//
+// A quoted field may legally contain commas AND newlines, so the text cannot be
+// split into lines before tokenizing. Real PMS exports do this: a transaction
+// whose Remarks field is "SS\n" used to be torn into two rows, which shifted
+// every field after it and silently produced a corrupt record plus a junk one.
+// A leading UTF-8 BOM is also stripped here — left in place it becomes part of
+// the first header name ("﻿Date"), which breaks every header lookup.
+//
+// Blank lines still yield `[]`: both section detectors (`detectSections` here and
+// the one in universalParser) use that empty-array sentinel as their delimiter.
+export function parseCsvText(text) {
+  const src = String(text ?? "").replace(/^﻿/, "");
+  const rows = [];
+  let fields = [];
   let current = "";
   let inQuote = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
+  // Quote characters are content: a line holding only `""` is a row with one
+  // empty field, not a blank line. Tracked so that distinction survives.
+  let sawQuote = false;
+
+  const endField = () => {
+    fields.push(current.trim());
+    current = "";
+  };
+  const endRow = () => {
+    endField();
+    const blank = !sawQuote && fields.length === 1 && fields[0] === "";
+    rows.push(blank ? [] : fields);
+    fields = [];
+    sawQuote = false;
+  };
+
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
     if (c === '"') {
-      if (inQuote && line[i + 1] === '"') {
+      sawQuote = true;
+      if (inQuote && src[i + 1] === '"') {
         current += '"';
         i++;
       } else {
         inQuote = !inQuote;
       }
     } else if (c === "," && !inQuote) {
-      fields.push(current);
-      current = "";
+      endField();
+    } else if ((c === "\n" || c === "\r") && !inQuote) {
+      if (c === "\r" && src[i + 1] === "\n") i++;
+      endRow();
     } else {
       current += c;
     }
   }
-  fields.push(current);
-  return fields.map((f) => f.trim());
-}
-
-export function parseCsvText(text) {
-  const lines = text.split(/\r?\n/);
-  const rows = [];
-  for (const line of lines) {
-    if (line.trim()) rows.push(parseCsvLine(line));
-    else rows.push([]);
-  }
+  // Trailing text with no final newline is still a row; a trailing newline must
+  // not invent an extra empty one.
+  if (current !== "" || fields.length || sawQuote) endRow();
   return rows;
 }
 

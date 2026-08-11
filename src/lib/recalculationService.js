@@ -113,9 +113,11 @@ class RecalculationService {
     );
 
     // Also trigger a custom event for components that need to recalculate
-    window.dispatchEvent(new CustomEvent('rri:recalculate', {
-      detail: { propertyId, dateRange, timestamp: Date.now() }
-    }));
+    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+      window.dispatchEvent(new CustomEvent('rri:recalculate', {
+        detail: { propertyId, dateRange, timestamp: Date.now() }
+      }));
+    }
   }
 
   // Get the singleton instance

@@ -2,6 +2,29 @@ import { db } from '@/api/base44Client';
 
 import { useQuery } from "@tanstack/react-query";
 
+export function useReservations(dateRange, propertyId) {
+  return useQuery({
+    queryKey: ["reservations", dateRange, propertyId],
+    queryFn: async () => {
+      const filter = {};
+      if (propertyId && propertyId !== "all") {
+        if (Array.isArray(propertyId)) {
+          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
+        } else {
+          filter.property_id = propertyId;
+        }
+      }
+      const allRes = await db.entities.Reservation.filter(filter);
+      
+      return allRes.filter(r => {
+        if (!dateRange || (!dateRange.from && !dateRange.to)) return true;
+        if (dateRange.from && r.check_out && new Date(r.check_out) < new Date(dateRange.from)) return false;
+        if (dateRange.to && r.check_in && new Date(r.check_in) > new Date(dateRange.to)) return false;
+        return true;
+      });
+    },
+  });
+}
 // Build a server-side filter combining date range and property_id(s)
 // propertyId can be: "all", a single string ID, or an array of IDs
 function buildFilter(dateRange, propertyId) {
@@ -251,5 +274,114 @@ export function useTransactions(dateRange, propertyId, months = [], enabled = tr
         : await db.entities.TransactionLine.list("date", 200000);
       return filterByMonths(rows, months);
     },
+  });
+}
+
+// ─── Operational modules (features 3-6) ───
+
+// Room master register. Scoped by property; the entity proxy also enforces
+// per-user property access.
+export function useRooms(propertyId) {
+  return useQuery({
+    queryKey: ["rooms", Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
+    queryFn: async () => {
+      const filter = {};
+      if (propertyId && propertyId !== "all") {
+        if (Array.isArray(propertyId)) {
+          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
+        } else {
+          filter.property_id = propertyId;
+        }
+      }
+      return db.entities.Room.filter(filter, "room_number", 100000);
+    },
+  });
+}
+
+// Per-room nightly ledger (RoomStay). Same property/date/month idiom as the
+// other hooks.
+export function useRoomStays(dateRange, propertyId, months = []) {
+  return useQuery({
+    queryKey: [
+      "room-stays",
+      dateRange?.from,
+      dateRange?.to,
+      Array.isArray(propertyId) ? propertyId.join(",") : propertyId,
+      (months || []).join(","),
+    ],
+    queryFn: async () => {
+      const filter = buildFilter(dateRange, propertyId);
+      const rows = filter.date
+        ? await db.entities.RoomStay.filter(filter, "date", 100000)
+        : await db.entities.RoomStay.list("date", 100000);
+      return filterByMonths(rows, months);
+    },
+  });
+}
+
+// Housekeeping task queue.
+export function useHousekeepingTasks(dateRange, propertyId) {
+  return useQuery({
+    queryKey: [
+      "housekeeping",
+      dateRange?.from,
+      dateRange?.to,
+      Array.isArray(propertyId) ? propertyId.join(",") : propertyId,
+    ],
+    queryFn: async () => {
+      const filter = {};
+      if (dateRange?.from && dateRange?.to) filter.task_date = { $gte: dateRange.from, $lte: dateRange.to };
+      if (propertyId && propertyId !== "all") {
+        if (Array.isArray(propertyId)) {
+          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
+        } else {
+          filter.property_id = propertyId;
+        }
+      }
+      return db.entities.HousekeepingTask.filter(filter, "-task_date", 100000);
+    },
+  });
+}
+
+// Aggregated guest reviews (feature 6).
+export function useReviews(dateRange, propertyId) {
+  return useQuery({
+    queryKey: [
+      "reviews",
+      dateRange?.from,
+      dateRange?.to,
+      Array.isArray(propertyId) ? propertyId.join(",") : propertyId,
+    ],
+    queryFn: async () => {
+      const filter = {};
+      if (dateRange?.from && dateRange?.to) filter.review_date = { $gte: dateRange.from, $lte: dateRange.to };
+      if (propertyId && propertyId !== "all") {
+        if (Array.isArray(propertyId)) {
+          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
+        } else {
+          filter.property_id = propertyId;
+        }
+      }
+      return db.entities.Review.filter(filter, "-review_date", 100000);
+    },
+  });
+}
+
+// Cached weather snapshots (feature 5).
+export function useWeatherSnapshots(propertyId) {
+  return useQuery({
+    queryKey: ["weather", Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
+    queryFn: async () => {
+      const filter = {};
+      if (propertyId && propertyId !== "all") {
+        if (Array.isArray(propertyId)) {
+          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
+        } else {
+          filter.property_id = propertyId;
+        }
+      }
+      return db.entities.WeatherSnapshot.filter(filter, "-date", 100000);
+    },
+    staleTime: 60 * 1000,
   });
 }

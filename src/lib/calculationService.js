@@ -16,11 +16,11 @@ function inRange(dateStr, from, to) {
 }
 
 function sum(rows, key) {
-  return fromCents(sumCents(rows.map(r => r[key])));
+  return fromCents(sumCents((rows || []).map(r => r[key])));
 }
 
 function avg(rows, key) {
-  return rows.length ? sum(rows, key) / rows.length : 0;
+  return (rows || []).length ? sum(rows, key) / rows.length : 0;
 }
 
 // Classify booking source into tax bucket
@@ -34,20 +34,21 @@ function classifySource(r) {
 }
 
 export class CalculationService {
-  static calculateOccupancyMetrics(occRows, propertyRoomCounts) {
+  static calculateOccupancyMetrics(occRows = [], propertyRoomCounts = {}) {
     const revenue = sumCents(occRows.map(r => r.total_revenue));
     const roomsSold = sumCents(occRows.map(r => r.rooms_sold));
 
-    const daysPerProp = new Map();
+    // Sum per-row total_rooms (actual inventory per date), fallback to Property.rooms
+    let capacity = 0;
     occRows.forEach((r) => {
       const pid = r.property_id || '_default';
-      daysPerProp.set(pid, (daysPerProp.get(pid) || 0) + 1);
-    });
-
-    let capacity = 0;
-    daysPerProp.forEach((days, pid) => {
-      const rooms = propertyRoomCounts?.[pid] || 100;
-      capacity += days * rooms * 100;
+      const rowRooms = Number(r.total_rooms) || 0;
+      if (rowRooms > 0) {
+        capacity += rowRooms * 100;
+      } else {
+        const rooms = propertyRoomCounts?.[pid] || 100;
+        capacity += rooms * 100;
+      }
     });
 
     const occupancy = capacity ? divideRate(roomsSold, capacity) : 0;
@@ -64,7 +65,7 @@ export class CalculationService {
     };
   }
 
-  static calculatePerPropertyStats(occRows, properties) {
+  static calculatePerPropertyStats(occRows = [], properties = []) {
     const byProp = new Map();
     occRows.forEach((r) => {
       const pid = r.property_id || '_default';
@@ -75,10 +76,16 @@ export class CalculationService {
     const results = [];
     byProp.forEach((rows, pid) => {
       const prop = properties.find((p) => p.id === pid);
-      const rooms = prop?.rooms || 100;
+      const fallbackRooms = prop?.rooms || 100;
       const revenue = sumCents(rows.map(r => r.total_revenue));
       const roomsSold = sumCents(rows.map(r => r.rooms_sold));
-      const capacity = rows.length * rooms * 100;
+      // Sum per-row total_rooms, fallback to Property.rooms
+      let capacity = 0;
+      rows.forEach((r) => {
+        const rowRooms = Number(r.total_rooms) || 0;
+        capacity += rowRooms > 0 ? rowRooms : fallbackRooms;
+      });
+      capacity *= 100;
       results.push({
         property_id: pid,
         property_name: prop?.name || rows[0]?.property_name || 'Unknown',
@@ -88,13 +95,13 @@ export class CalculationService {
         adr: roomsSold ? fromCents(divide(revenue, roomsSold)) : 0,
         revpar: capacity ? fromCents(divide(revenue, capacity)) : 0,
         days: rows.length,
-        rooms,
+        rooms: fallbackRooms,
       });
     });
     return results.sort((a, b) => b.revenue - a.revenue);
   }
 
-  static calculateChannelMetrics(srcRows) {
+  static calculateChannelMetrics(srcRows = []) {
     const map = new Map();
     srcRows.forEach((r) => {
       const key = r.source || r.code || 'UNKNOWN';
@@ -123,7 +130,7 @@ export class CalculationService {
       .sort((a, b) => b.net - a.net);
   }
 
-  static calculatePaymentMetrics(payRows) {
+  static calculatePaymentMetrics(payRows = []) {
     const methodTotals = {};
     const allFields = [...CARD_METHODS, 'cash', 'check', 'direct_bill', 'corpay', 'wire_transfer', 'loyalty_certificate', 'loyalty_discount', 'vip_pass', 'other', 'closed_balance_folio'];
 
@@ -138,7 +145,7 @@ export class CalculationService {
     return { methodTotals, cardTotal, cashTotal, totalCollected, refunds, netPaymentCollected };
   }
 
-  static calculateTaxLiability(srcRows, grossRows, propertyId, dateRange) {
+  static calculateTaxLiability(srcRows = [], grossRows = [], propertyId = null, dateRange = { from: '', to: '' }) {
     const taxConfig = getTaxConfig();
     if (!taxConfig.taxEnabled && getTaxSettings().length === 0) return { state: 0, city: 0, other: 0, total: 0 };
 
@@ -182,7 +189,7 @@ export class CalculationService {
     return { state, city, other, total: state + city + other };
   }
 
-  static calculateMoneyKept(occRows, srcRows, grossRows, payRows, expenses, payroll, dateRange, propertyId) {
+  static calculateMoneyKept(occRows = [], srcRows = [], grossRows = [], payRows = [], expenses = [], payroll = [], dateRange = { from: '', to: '' }, propertyId = null) {
     const gross = sum(occRows, 'total_revenue');
     const ccFee = getCcFeeRate();
     const ccFeeRefunds = getCcFeeOnRefunds();
@@ -268,7 +275,7 @@ export class CalculationService {
     };
   }
 
-  static calculatePortfolioComparison(currentRows, previousRows, propertyRoomCounts, properties) {
+  static calculatePortfolioComparison(currentRows = [], previousRows = [], propertyRoomCounts = {}, properties = []) {
     const current = this.calculateOccupancyMetrics(currentRows, propertyRoomCounts);
     const previous = this.calculateOccupancyMetrics(previousRows, propertyRoomCounts);
 

@@ -63,13 +63,13 @@ export default function Layout() {
     <GlobalFiltersProvider>
     <div className="min-h-screen bg-[#040D1A] font-body text-slate-200">
       {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-white/5 bg-[#0A1628] p-6 lg:block">
+      <aside className="fixed inset-y-0 left-0 hidden w-64 overflow-y-auto border-r border-white/5 bg-[#0A1628] p-6 lg:flex lg:flex-col">
         <div className="flex items-center gap-2">
           <Building2 className="h-5 w-5 text-[#6C63FF]" />
           <span className="font-heading text-sm font-semibold tracking-wide text-white">RRI Executive</span>
         </div>
         <SidebarBrand />
-        <nav className="mt-8 space-y-1">
+        <nav className="mt-8 flex-1 space-y-1 overflow-y-auto">
           {visibleNav.map(({ to, label, icon: Icon }) => {
             const a = pathname === to;
             return (
@@ -86,7 +86,7 @@ export default function Layout() {
             );
           })}
         </nav>
-        <div className="absolute inset-x-6 bottom-6 space-y-3">
+        <div className="mt-auto pt-4 space-y-3">
           {user && (
             <div className="flex items-center gap-3 rounded-xl border border-white/5 bg-white/5 px-3 py-2.5">
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#6C63FF]/30 text-xs font-bold text-white">

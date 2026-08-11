@@ -68,16 +68,24 @@ export default function MFASetup({
     }
   };
 
-  const copyCode = (index, code) => {
-    navigator.clipboard.writeText(code.replace('-', ''));
+  const copyCode = async (index, code) => {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+      toast({ title: "Copy failed", description: "Clipboard not available in this browser." });
+      return;
+    }
+    await navigator.clipboard.writeText(code.replace('-', ''));
     setCopiedIndex(index);
     setTimeout(() => setCopiedIndex(-1), 2000);
     toast({ title: "Copied!", description: "Backup code copied to clipboard." });
   };
 
-  const copyAllCodes = () => {
+  const copyAllCodes = async () => {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+      toast({ title: "Copy failed", description: "Clipboard not available in this browser." });
+      return;
+    }
     const allCodes = backupCodesRef.current.map(c => c.replace('-', '')).join('\n');
-    navigator.clipboard.writeText(allCodes);
+    await navigator.clipboard.writeText(allCodes);
     toast({ title: "All codes copied", description: "10 backup codes copied to clipboard." });
   };
 

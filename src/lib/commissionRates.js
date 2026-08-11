@@ -56,7 +56,7 @@ export function getCommissionRates() {
 }
 
 export function setCommissionRates(rates) {
-  localStorage.setItem(RATES_KEY, JSON.stringify(rates));
+  try { localStorage.setItem(RATES_KEY, JSON.stringify(rates)); } catch {}
   notifySettingsChanged();
 }
 
@@ -75,7 +75,7 @@ export function getCcFeeRate() {
 export function setCcFeeRate(rate) {
   let n = Number(rate);
   if (Number.isNaN(n)) n = DEFAULT_CC_FEE;
-  localStorage.setItem(CC_FEE_KEY, String(Math.max(0, Math.min(0.9999, n))));
+  try { localStorage.setItem(CC_FEE_KEY, String(Math.max(0, Math.min(0.9999, n)))); } catch {}
   notifySettingsChanged();
 }
 
@@ -89,7 +89,7 @@ export function getCcFeeOnRefunds() {
 }
 
 export function setCcFeeOnRefunds(enabled) {
-  localStorage.setItem(CC_REFUNDS_KEY, enabled ? "1" : "0");
+  try { localStorage.setItem(CC_REFUNDS_KEY, enabled ? "1" : "0"); } catch {}
   notifySettingsChanged();
 }
 

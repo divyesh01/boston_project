@@ -88,19 +88,23 @@ export default function DataIntelligence() {
   const aiEngine = useMemo(() => new AIInsightsEngine(scanner), [scanner]);
 
   useEffect(() => {
-    const saved = localStorage.getItem('rri_automationRules');
-    if (saved) setAutomationRules(JSON.parse(saved));
-    const history = localStorage.getItem('rri_reportHistory');
-    if (history) setReportHistory(JSON.parse(history));
+    try {
+      const saved = localStorage.getItem('rri_automationRules');
+      if (saved) setAutomationRules(JSON.parse(saved));
+    } catch { setAutomationRules([]); }
+    try {
+      const history = localStorage.getItem('rri_reportHistory');
+      if (history) setReportHistory(JSON.parse(history));
+    } catch { setReportHistory([]); }
   }, []);
 
   const saveAutomationRules = (rules) => {
-    localStorage.setItem('rri_automationRules', JSON.stringify(rules));
+    try { localStorage.setItem('rri_automationRules', JSON.stringify(rules)); } catch {}
     setAutomationRules(rules);
   };
 
   const saveReportHistory = (history) => {
-    localStorage.setItem('rri_reportHistory', JSON.stringify(history));
+    try { localStorage.setItem('rri_reportHistory', JSON.stringify(history)); } catch {}
     setReportHistory(history);
   };
 

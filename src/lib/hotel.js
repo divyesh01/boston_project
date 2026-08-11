@@ -4,8 +4,10 @@ import { getRevenueColor, getRevenueGroup } from "@/lib/revenueThresholds";
 export { getRevenueColor, getRevenueGroup };
 
 import { toCents, fromCents, toRate, fromRate, add, subtract, multiply, divide, divideRate, sumCents, formatCents, formatRate, formatNumber, portfolioOccupancy, portfolioAdr, portfolioRevpar } from '@/lib/decimal';
+import { neutralizeFormula } from '@/lib/securityUtils';
 
 // Default property — used as fallback when no Property records exist yet
+import * as XLSX from 'xlsx';
 export const PROPERTY = { name: "Red Roof Inn & Suites Middleborough", code: "RRI1416", rooms: 100 };
 
 export const C = {
@@ -41,8 +43,8 @@ export const money2 = (v) => formatCents(toCents(v), 2);
 export const pct = (v, digits = 1) => formatRate(toRate(v), digits);
 export const num = (v) => formatNumber(v);
 
-export const sum = (rows, key) => fromCents(sumCents(rows.map(r => r[key])));
-export const avg = (rows, key) => rows.length ? sum(rows, key) / rows.length : 0;
+export const sum = (rows, key) => fromCents(sumCents((rows || []).map(r => r[key])));
+export const avg = (rows, key) => rows && rows.length ? sum(rows, key) / rows.length : 0;
 
 export function inRange(dateStr, from, to) {
   if (!dateStr) return false;
@@ -52,7 +54,7 @@ export function inRange(dateStr, from, to) {
 
 export function aggregate(rows, groupKey, valueKey, agg) {
   const map = new Map();
-  rows.forEach((r) => {
+  (rows || []).forEach((r) => {
     const k = r[groupKey] === undefined || r[groupKey] === null || r[groupKey] === "" ? "(blank)" : String(r[groupKey]).slice(0, 40);
     const v = toCents(r[valueKey]);
     if (!map.has(k)) map.set(k, []);
@@ -71,15 +73,16 @@ export function aggregate(rows, groupKey, valueKey, agg) {
   return out.sort((a, b) => b.value - a.value);
 }
 
-// Neutralize CSV formula injection (cells beginning with =, +, -, @, tab, CR)
+// Neutralize CSV formula injection (cells beginning with =, +, -, @, tab, CR).
+// Applied on every export regardless of sanitizeCsv so unsanitized historical
+// database values cannot smuggle formulas into downloads.
 function csvCell(value) {
-  let s = String(value ?? "");
-  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  let s = neutralizeFormula(String(value ?? ""));
   return `"${s.replace(/"/g, '""')}"`;
 }
 
 export function toCsv(rows) {
-  if (!rows.length) return "";
+  if (!rows || !rows.length) return "";
   const keys = Object.keys(rows[0]);
   return [keys.join(","), ...rows.map((r) => keys.map((k) => csvCell(r[k])).join(","))].join("\n");
 }
@@ -94,6 +97,14 @@ export function downloadCsv(rows, name = "export.csv") {
   URL.revokeObjectURL(url);
 }
 
+export function downloadExcel(rows, name = "export.xlsx") {
+  if (!rows || rows.length === 0) return;
+  const worksheet = XLSX.utils.json_to_sheet(rows);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
+  XLSX.writeFile(workbook, name);
+}
+
 // Normalize employee/clerk names — trim, collapse repeated spaces, consistent casing
 export function normalizeName(name) {
   return String(name || "").trim().replace(/\s+/g, " ");
@@ -101,19 +112,22 @@ export function normalizeName(name) {
 
 // Weighted portfolio calculations — never average property percentages
 export function portfolioStats(occRows, roomCounts) {
-  const revenue = sumCents(occRows.map(r => r.total_revenue));
-  const roomsSold = sumCents(occRows.map(r => r.rooms_sold));
+  const safeRows = occRows || [];
+  const revenue = sumCents(safeRows.map(r => r.total_revenue));
+  const roomsSold = sumCents(safeRows.map(r => r.rooms_sold));
 
-  // Calculate total capacity using per-property room counts
-  const daysPerProp = new Map();
-  occRows.forEach((r) => {
-    const pid = r.property_id || "_default";
-    daysPerProp.set(pid, (daysPerProp.get(pid) || 0) + 1);
-  });
+  // Calculate total capacity using per-row total_rooms (actual inventory per date)
+  // Falls back to Property.rooms for legacy rows missing total_rooms.
+  const rooms = roomCountsFrom(roomCounts); // normalizes both properties arrays and plain maps
   let capacity = 0;
-  daysPerProp.forEach((days, pid) => {
-    const rooms = roomCounts?.[pid] ?? PROPERTY.rooms;
-    capacity += days * rooms * 100; // Scale to cents
+  safeRows.forEach((r) => {
+    const pid = r.property_id || "_default";
+    const rowRooms = Number(r.total_rooms) || 0;
+    if (rowRooms > 0) {
+      capacity += rowRooms * 100; // Scale to cents
+    } else {
+      capacity += (rooms[pid] ?? PROPERTY.rooms) * 100;
+    }
   });
 
   const occupancy = capacity ? divideRate(roomsSold, capacity) : 0;
@@ -130,30 +144,54 @@ export function roomsForProperty(propertyId, properties) {
 }
 
 // Build a { property_id: rooms } map once, for the capacity helpers below.
-export function roomCountsFrom(properties) {
-  const map = {};
-  (properties || []).forEach((p) => { map[p.id] = Number(p.rooms) || PROPERTY.rooms; });
-  return map;
+//
+// Defensively normalizes either shape callers pass for room inventory:
+//   - Array of property objects [{ id, rooms|room_count|total_rooms }, ...]
+//   - Plain key-value map { property_id: rooms, ... }
+// Unknown shapes degrade to {} so downstream `?? PROPERTY.rooms` guards keep
+// legacy rows at the default inventory.
+export function roomCountsFrom(input) {
+  if (!input) return {};
+
+  // Case 1: Array of property objects (e.g., [{ id: 'prop_1', rooms: 50 }, ...])
+  if (Array.isArray(input)) {
+    const map = {};
+    for (const prop of input) {
+      if (prop && prop.id) {
+        map[prop.id] = Number(prop.rooms || prop.room_count || prop.total_rooms) || PROPERTY.rooms;
+      }
+    }
+    return map;
+  }
+
+  // Case 2: Plain key-value map object (e.g., { 'prop_1': 50, 'prop_2': 100 })
+  if (typeof input === 'object') {
+    const map = {};
+    for (const [key, val] of Object.entries(input)) {
+      map[key] = Number(val) || 0;
+    }
+    return map;
+  }
+
+  return {};
 }
 
 // Total room-nights of capacity represented by a set of occupancy rows.
 //
-// Capacity is ALWAYS the sum over each property of (its days x its rooms).
-// Several pages previously did `properties.find(p => p.id === property)?.rooms || 100`
-// and multiplied by row count, which silently collapsed to a flat 100 rooms
-// whenever `property` was "all" or an array — understating occupancy and RevPAR
-// for every multi-property owner, and overstating it for a property with fewer
-// than 100 rooms.
+// Capacity is the sum of per-row total_rooms (which reflects actual inventory
+// per property per date, accounting for renovations, closures, seasonal changes).
+// Falls back to Property.rooms × days for legacy rows missing total_rooms.
 export function capacityRoomNights(occRows, properties) {
   const rooms = roomCountsFrom(properties);
-  const daysPerProp = new Map();
+  let capacity = 0;
   (occRows || []).forEach((r) => {
     const pid = r.property_id || "_default";
-    daysPerProp.set(pid, (daysPerProp.get(pid) || 0) + 1);
-  });
-  let capacity = 0;
-  daysPerProp.forEach((days, pid) => {
-    capacity += days * (rooms[pid] ?? PROPERTY.rooms);
+    const rowRooms = Number(r.total_rooms) || 0;
+    if (rowRooms > 0) {
+      capacity += rowRooms;
+    } else {
+      capacity += rooms[pid] ?? PROPERTY.rooms;
+    }
   });
   return capacity;
 }
@@ -192,9 +230,9 @@ export function occupancyStats(occRows, properties) {
 }
 
 // Group occupancy rows by property_id and compute per-property stats
-export function perPropertyStats(occRows, properties) {
+export function perPropertyStats(occRows = [], properties = []) {
   const byProp = new Map();
-  occRows.forEach((r) => {
+  (occRows || []).forEach((r) => {
     const pid = r.property_id || "_default";
     if (!byProp.has(pid)) byProp.set(pid, []);
     byProp.get(pid).push(r);
@@ -203,10 +241,16 @@ export function perPropertyStats(occRows, properties) {
   const results = [];
   byProp.forEach((rows, pid) => {
     const prop = properties.find((p) => p.id === pid);
-    const rooms = prop?.rooms || PROPERTY.rooms;
+    const fallbackRooms = prop?.rooms || PROPERTY.rooms;
     const revenue = sumCents(rows.map(r => r.total_revenue));
     const roomsSold = sumCents(rows.map(r => r.rooms_sold));
-    const capacity = rows.length * rooms * 100; // Scale to cents
+    // Sum per-row total_rooms (actual inventory per date), fallback to Property.rooms
+    let capacity = 0;
+    rows.forEach((r) => {
+      const rowRooms = Number(r.total_rooms) || 0;
+      capacity += rowRooms > 0 ? rowRooms : fallbackRooms;
+    });
+    capacity *= 100; // Scale to cents
     results.push({
       property_id: pid,
       property_name: prop?.name || rows[0]?.property_name || "Unknown",
@@ -216,7 +260,7 @@ export function perPropertyStats(occRows, properties) {
       adr: roomsSold ? fromCents(divide(revenue, roomsSold)) : 0,
       revpar: capacity ? fromCents(divide(revenue, capacity)) : 0,
       days: rows.length,
-      rooms,
+      rooms: fallbackRooms,
     });
   });
   return results.sort((a, b) => b.revenue - a.revenue);

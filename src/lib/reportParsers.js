@@ -11,6 +11,9 @@ import {
   TXN_SIGNATURE, mapTransactionRow, isTrailerRow, assignDedupeKeys,
 } from '@/lib/transactionNorm';
 import { toCents, fromCents, sumCents } from '@/lib/decimal';
+import { neutralizeFormula } from '@/lib/securityUtils';
+import { detectAnomalies } from '@/lib/anomalyDetector';
+export { neutralizeFormula };
 
 // Serialize report imports to prevent double-click/parallel duplicate writes.
 let importQueue = Promise.resolve();
@@ -70,6 +73,54 @@ async function dedupePropertyRows(entity, propertyId, keyFn) {
 // unremovable rows.
 async function recordCreatedIds(entity, propertyId, importId, ids) {
   await addImportRecordIds(importId, entity, ids, propertyId || "");
+}
+
+// Run the anomaly engine over newly imported transaction rows and persist any
+// flagged alerts for owner review. Idempotent: alerts carry a dedupe_key, so a
+// force re-import never stacks a second copy. Created ids go into the rollback
+// ledger, so an undo also removes the alerts the import produced.
+async function persistAnomalyAlerts(rows, meta) {
+  const propertyId = meta.propertyId || "";
+  const alerts = detectAnomalies(rows || []);
+  if (!alerts.length) return { count: 0, audit: null };
+
+  const stamped = alerts.map((a) => ({
+    ...a,
+    property_id: propertyId,
+    property_name: meta.propertyName || "",
+    import_id: meta.importId || "",
+    source_file: meta.sourceFile || "",
+    status: "open",
+  }));
+
+  const existing = propertyId
+    ? await db.entities.AnomalyAlert.filter({ property_id: propertyId })
+    : [];
+  const seen = new Set(existing.map((a) => a.dedupe_key));
+  const fresh = stamped.filter((a) => !seen.has(a.dedupe_key));
+
+  let createdIds = [];
+  if (fresh.length) {
+    for (let i = 0; i < fresh.length; i += 400) {
+      const batch = fresh.slice(i, i + 400);
+      const created = await db.entities.AnomalyAlert.bulkCreate(batch);
+      createdIds.push(...created.map((r) => r.id));
+    }
+  }
+  if (createdIds.length) {
+    await recordCreatedIds("AnomalyAlert", propertyId, meta.importId, createdIds);
+  }
+  // Returns an audit descriptor so the HMAC audit-log entry is written by the
+  // caller AFTER the import transaction commits — logging inside the transaction
+  // would race Dexie's auto-commit and either roll back with the import or throw
+  // a PrematureCommitError. A post-commit write only records what actually stuck.
+  const types = [...new Set(fresh.map((a) => a.alert_type))].sort();
+  return {
+    count: createdIds.length,
+    audit: createdIds.length
+      ? { propertyId, propertyName: meta.propertyName || "", importId: meta.importId || "", count: createdIds.length, types }
+      : null,
+  };
 }
 
 export const REPORT_TYPES = [
@@ -227,6 +278,9 @@ function withLazyObjects(rawRows, eager) {
   };
 }
 
+// CSV injection defense (neutralizeFormula) belongs ONLY on export — see
+// hotel.js csvCell. It must NEVER be applied on import: prefixing a value like
+// '-12.50' with an apostrophe before parsing corrupts numeric data into NaN.
 async function getRowsArray(type, fileUrl, meta) {
   // If CSV text was pre-read from the File object, parse it directly (no fetch needed)
   if (meta?.csvText) {
@@ -249,7 +303,12 @@ async function getRowsArray(type, fileUrl, meta) {
     json_schema: schema,
   });
   if (res.status !== "success") throw new Error(res.details || "Extraction failed");
-  return withLazyObjects([], Array.isArray(res.output) ? res.output : []);
+  const eager = (Array.isArray(res.output) ? res.output : []).map((obj) => {
+    const safe = {};
+    for (const [k, v] of Object.entries(obj || {})) safe[k] = v;
+    return safe;
+  });
+  return withLazyObjects([], eager);
 }
 
 function detectReportType(fileUrl, rawRows, meta) {
@@ -766,6 +825,28 @@ export async function importReport(scanResult, meta = {}) {
     }
     
     await completeImportSession(importSession.importId, rowCounts);
+    // The anomaly alerts were persisted inside the import transaction; their
+    // HMAC audit-log entry is written here, after commit, so the log only ever
+    // records detections that actually stuck. audit.log swallows its own errors,
+    // so a failed log write cannot turn a successful import into a failure.
+    if (result.anomalyAudit) {
+      await db.audit.log({
+        action: "Anomaly Detection",
+        username: "system",
+        performed_by: "system",
+        property_id: result.anomalyAudit.propertyId,
+        property_name: result.anomalyAudit.propertyName || "",
+        result: "success",
+        detail: `Flagged ${result.anomalyAudit.count} financial anomaly alert(s) during import ${importSession.importId} (${result.anomalyAudit.types.join(", ")})`,
+      });
+      if (db.integrations && db.integrations.Email) {
+        await db.integrations.Email.SendEmail({
+          to: "alerts@hotel-operator.com",
+          subject: `[ALERT] ${result.anomalyAudit.count} Financial Anomalies Detected`,
+          body: `During the import of file ${importSession.importId}, ${result.anomalyAudit.count} anomalies were detected.\nTypes: ${result.anomalyAudit.types.join(", ")}\nProperty ID: ${result.anomalyAudit.propertyId}\nProperty Name: ${result.anomalyAudit.propertyName || "Unknown"}\n\nPlease review the Anomaly report in your dashboard immediately.`,
+        }).catch(e => console.error('Failed to send anomaly email', e));
+      }
+    }
     // Return the session's importId, not the caller's. Callers pass their own
     // meta.importId for row tagging, but the rollback ledger is keyed by the
     // session id — a caller that recorded its own would look up an import that
@@ -905,12 +986,28 @@ async function doImport(scanResult, meta, importId) {
     if (createdIds.length) {
       await recordCreatedIds("TransactionLine", restMeta.propertyId, importId, createdIds);
     }
+    // Automated anomaly & fraud detection: scan the newly imported ledger rows
+    // and persist flagged alerts for owner review. Runs after the rows are
+    // committed so the import transaction owns both sides consistently.
+    const anomalyResult = await persistAnomalyAlerts(newRows, {
+      ...restMeta,
+      importId,
+      propertyId: restMeta.propertyId,
+      propertyName: restMeta.propertyName,
+      sourceFile: restMeta.sourceFile,
+    });
     // No dedupePropertyRows pass here: dedupe_key is exact and already applied
     // above, so a second full-table scan would cost a 17k-row read to find
     // nothing. Byte-identical rows in this export are legitimate (one posting
     // action per night of a stay) and the occurrence index in the key keeps
     // them — a key-collapsing cleanup would silently delete real revenue.
-    return { count: newRows.length, excluded: rows.length - newRows.length, cleaned: 0 };
+    return {
+      count: newRows.length,
+      excluded: rows.length - newRows.length,
+      cleaned: 0,
+      anomalies: anomalyResult.count,
+      anomalyAudit: anomalyResult.audit,
+    };
   }
 
   if (type === "generic") {

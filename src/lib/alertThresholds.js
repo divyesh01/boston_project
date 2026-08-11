@@ -15,5 +15,5 @@ export function getAlertThresholds() {
 }
 
 export function saveAlertThresholds(thresholds) {
-  localStorage.setItem(KEY, JSON.stringify(thresholds));
+  try { localStorage.setItem(KEY, JSON.stringify(thresholds)); } catch {}
 }

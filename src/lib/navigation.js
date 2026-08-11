@@ -2,7 +2,7 @@ import {
   LayoutDashboard, Target, GitCompareArrows, Grid3x3, BarChart3, Upload,
   Users, CreditCard, Settings as SettingsIcon, CalendarDays, TrendingUp, Wallet,
   ClipboardList, Radio, FileSpreadsheet, LineChart, Table2, ShieldCheck, ScrollText,
-  BrainCircuit, Receipt, Gauge
+  BrainCircuit, Receipt, Gauge, BedDouble, Star,
 } from "lucide-react";
 
 export const NAV = [
@@ -14,11 +14,15 @@ export const NAV = [
   { to: "/compare", label: "Period Compare", icon: GitCompareArrows, short: "Compare" },
   { to: "/data-intelligence", label: "Data Intelligence", icon: BrainCircuit, short: "Data AI" },
   { to: "/rooms", label: "Room Board", icon: Grid3x3, short: "Rooms" },
+  { to: "/housekeeping", label: "Housekeeping", icon: BedDouble, short: "Clean" },
+  { to: "/reviews", label: "Guest Reviews", icon: Star, short: "Reviews" },
+  { to: "/pricing", label: "Dynamic Pricing", icon: TrendingUp, short: "Pricing" },
   { to: "/employees", label: "Clerk Audit", icon: Users, short: "Employees" },
   { to: "/payments", label: "Payments", icon: CreditCard, short: "Payments" },
   { to: "/transactions", label: "Transactions", icon: Receipt, short: "Txns" },
   { to: "/statistics", label: "Statistics", icon: Gauge, short: "Stats" },
   { to: "/ota", label: "OTA Channels", icon: Radio, short: "OTA" },
+  { to: "/channel-manager", label: "Channel Manager", icon: SettingsIcon, short: "Channel Manager" },
   { to: "/charts", label: "Chart Builder", icon: BarChart3, short: "Charts" },
   { to: "/expenses", label: "Expenses", icon: Wallet, short: "Expenses" },
   { to: "/payroll", label: "Payroll", icon: ClipboardList, short: "Payroll" },

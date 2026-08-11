@@ -30,7 +30,7 @@ function num(v) {
   return formatNumber(v);
 }
 function sum(rows, key) {
-  return rows.reduce((a, r) => a + (Number(r[key]) || 0), 0);
+  return (rows || []).reduce((a, r) => a + (Number(r[key]) || 0), 0);
 }
 
 function monthIndex(token) {
@@ -330,7 +330,9 @@ async function resolveProperty(question, defaultFilter, allowedPropertyIds = nul
 }
 
 async function load(table, prop, from, to, dateField = "date") {
-  const all = await localDb[table].toArray();
+  const tbl = localDb[table];
+  if (!tbl || typeof tbl.toArray !== "function") return [];
+  const all = await tbl.toArray();
   return all.filter((r) => {
     if (prop.ids && !prop.ids.has(String(r.property_id || ""))) return false;
     const d = String(r[dateField] || r.date || "").slice(0, 10);
@@ -353,7 +355,7 @@ async function latestDate(allowedPropertyIds = null) {
   return max;
 }
 
-function occTotals(rows) {
+function occTotals(rows = []) {
   const revenue = sum(rows, "total_revenue");
   const roomsSold = sum(rows, "rooms_sold");
   const capacity = sum(rows, "total_rooms") || 0;
@@ -376,18 +378,19 @@ function occTotals(rows) {
 }
 
 function payTotals(rows) {
+  const safe = rows || [];
   const tenderFields = [
     "cash", "check", "amex", "master", "visa", "discover", "direct_bill",
     "corpay", "wire_transfer", "loyalty_certificate", "vip_pass", "other",
   ];
   let payments = 0;
-  rows.forEach((r) => {
+  safe.forEach((r) => {
     for (const f of tenderFields) payments += Number(r[f]) || 0;
   });
-  const refunds = refundTotal(rows);
-  const net = sum(rows, "total");
+  const refunds = refundTotal(safe);
+  const net = sum(safe, "total");
   const breakdown = tenderFields
-    .map((f) => ({ field: f, value: sum(rows, f) }))
+    .map((f) => ({ field: f, value: sum(safe, f) }))
     .filter((x) => Math.abs(x.value) > 0)
     .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
   return { payments: payments || net, refunds, breakdown };
@@ -395,7 +398,7 @@ function payTotals(rows) {
 
 function channelTotals(rows) {
   const map = new Map();
-  rows.forEach((r) => {
+  (rows || []).forEach((r) => {
     const key = r.source || r.code || "UNKNOWN";
     const cur = map.get(key) || { name: key, gross: 0, stays: 0 };
     cur.gross += Number(r.net_revenue) || 0;
@@ -406,12 +409,12 @@ function channelTotals(rows) {
 }
 
 function costTotals(expenses, payroll) {
-  const payrollTotal = sum(payroll, "total_pay");
-  const operating = expenses.filter((e) => e.category !== "payroll").reduce((a, e) => a + (Number(e.amount) || 0), 0);
+  const payrollTotal = sum(payroll || [], "total_pay");
+  const operating = (expenses || []).filter((e) => e.category !== "payroll").reduce((a, e) => a + (Number(e.amount) || 0), 0);
   return { payrollTotal, operating, total: payrollTotal + operating };
 }
 
-function clerkVariance(records) {
+function clerkVariance(records = []) {
   const drops = records.filter((r) => r.record_type === "drop");
   const clerkPay = records.filter((r) => r.record_type === "clerk_payment");
   const byClerk = new Map();
@@ -434,7 +437,7 @@ function clerkVariance(records) {
   return all;
 }
 
-function buildAlerts(occRows, occThreshold = 0.6) {
+function buildAlerts(occRows = [], occThreshold = 0.6) {
   const low = occRows
     .filter((r) => (Number(r.occupancy) || 0) < occThreshold)
     .sort((a, b) => (Number(a.occupancy) || 0) - (Number(b.occupancy) || 0))
@@ -473,15 +476,15 @@ function summarySection(range, occ, pay, channels, expenses, payroll, propLabel)
 }
 
 async function intentSummary({ prop, range }) {
-  const occRows = await load("OccupancyDay", prop, range.from, range.to);
+  const occRows = await load("OccupancyDay", prop, range.from, range.to) || [];
   if (!occRows.length) return { heading: "", lines: [], noData: "occupancy" };
   const occ = occTotals(occRows);
-  const payRows = await load("PaymentDay", prop, range.from, range.to);
+  const payRows = await load("PaymentDay", prop, range.from, range.to) || [];
   const pay = payTotals(payRows);
-  const srcRows = await load("SourceDay", prop, range.from, range.to);
+  const srcRows = await load("SourceDay", prop, range.from, range.to) || [];
   const channels = channelTotals(srcRows);
-  const expenses = await load("Expense", prop, range.from, range.to, "expense_date");
-  const payroll = await load("PayrollRun", prop, range.from, range.to, "pay_period_start");
+  const expenses = await load("Expense", prop, range.from, range.to, "expense_date") || [];
+  const payroll = await load("PayrollRun", prop, range.from, range.to, "pay_period_start") || [];
   const alerts = buildAlerts(occRows);
   const s = summarySection(range, occ, pay, channels, expenses, payroll, prop.label);
   const lines = [...s.lines];
@@ -492,7 +495,7 @@ async function intentSummary({ prop, range }) {
 }
 
 async function intentMetric({ prop, range, metric, question }) {
-  const occRows = await load("OccupancyDay", prop, range.from, range.to);
+  const occRows = await load("OccupancyDay", prop, range.from, range.to) || [];
   const occ = occRows.length ? occTotals(occRows) : null;
   const labels = {
     revenue: ["Revenue", () => (occ ? `${money(occ.revenue)}` : null)],
@@ -512,7 +515,7 @@ async function intentMetric({ prop, range, metric, question }) {
 }
 
 async function intentRooms({ prop, range }) {
-  const occRows = await load("OccupancyDay", prop, range.from, range.to);
+  const occRows = await load("OccupancyDay", prop, range.from, range.to) || [];
   if (!occRows.length) return { heading: "", lines: [], noData: "occupancy" };
   const occ = occTotals(occRows);
   return {
@@ -528,8 +531,8 @@ async function intentRooms({ prop, range }) {
 }
 
 async function intentExpenses({ prop, range }) {
-  const expenses = await load("Expense", prop, range.from, range.to, "expense_date");
-  const payroll = await load("PayrollRun", prop, range.from, range.to, "pay_period_start");
+  const expenses = await load("Expense", prop, range.from, range.to, "expense_date") || [];
+  const payroll = await load("PayrollRun", prop, range.from, range.to, "pay_period_start") || [];
   const costs = costTotals(expenses, payroll);
   const byCat = new Map();
   expenses.forEach((e) => {
@@ -548,13 +551,13 @@ async function intentExpenses({ prop, range }) {
 }
 
 async function intentProfit({ prop, range }) {
-  const occRows = await load("OccupancyDay", prop, range.from, range.to);
+  const occRows = await load("OccupancyDay", prop, range.from, range.to) || [];
   if (!occRows.length) return { heading: "", lines: [], noData: "occupancy" };
   const occ = occTotals(occRows);
-  const payRows = await load("PaymentDay", prop, range.from, range.to);
+  const payRows = await load("PaymentDay", prop, range.from, range.to) || [];
   const pay = payTotals(payRows);
-  const expenses = await load("Expense", prop, range.from, range.to, "expense_date");
-  const payroll = await load("PayrollRun", prop, range.from, range.to, "pay_period_start");
+  const expenses = await load("Expense", prop, range.from, range.to, "expense_date") || [];
+  const payroll = await load("PayrollRun", prop, range.from, range.to, "pay_period_start") || [];
   const costs = costTotals(expenses, payroll);
   const netRev = occ.revenue - pay.refunds;
   const profit = netRev - costs.total;
@@ -572,7 +575,7 @@ async function intentProfit({ prop, range }) {
 }
 
 async function intentPayments({ prop, range }) {
-  const rows = await load("PaymentDay", prop, range.from, range.to);
+  const rows = await load("PaymentDay", prop, range.from, range.to) || [];
   if (!rows.length) return { heading: "", lines: [], noData: "payments" };
   const pay = payTotals(rows);
   const lines = [`**Payments & refunds — ${prop.label} · ${fmtRange(range)}**`];
@@ -585,7 +588,7 @@ async function intentPayments({ prop, range }) {
 }
 
 async function intentOta({ prop, range, question }) {
-  const rows = await load("SourceDay", prop, range.from, range.to);
+  const rows = await load("SourceDay", prop, range.from, range.to) || [];
   let channels = channelTotals(rows);
   if (!channels.length) return { heading: "", lines: [], noData: "sources" };
   const ql = String(question || "").toLowerCase();
@@ -601,7 +604,7 @@ async function intentOta({ prop, range, question }) {
 }
 
 async function intentBestDay({ prop, range, question }) {
-  const rows = await load("OccupancyDay", prop, range.from, range.to);
+  const rows = await load("OccupancyDay", prop, range.from, range.to) || [];
   if (!rows.length) return null;
   const q = String(question || "");
   const metric = /adr\b/i.test(q)
@@ -664,8 +667,8 @@ async function intentCompareProps({ q, range, allowedPropertyIds = null }) {
   const [a, b] = sorted;
   const fa = { ids: new Set([String(a.p.id)]), label: a.p.name, isAll: false };
   const fb = { ids: new Set([String(b.p.id)]), label: b.p.name, isAll: false };
-  const aRows = await load("OccupancyDay", fa, range.from, range.to);
-  const bRows = await load("OccupancyDay", fb, range.from, range.to);
+  const aRows = await load("OccupancyDay", fa, range.from, range.to) || [];
+  const bRows = await load("OccupancyDay", fb, range.from, range.to) || [];
   if (!aRows.length && !bRows.length) return { heading: "", lines: [], noData: "occupancy" };
   const A = aRows.length ? occTotals(aRows) : null;
   const B = bRows.length ? occTotals(bRows) : null;
@@ -692,7 +695,7 @@ async function intentCompareProps({ q, range, allowedPropertyIds = null }) {
 }
 
 async function intentTopOta({ prop, range, question }) {
-  const rows = await load("SourceDay", prop, range.from, range.to);
+  const rows = await load("SourceDay", prop, range.from, range.to) || [];
   const channels = channelTotals(rows);
   if (!channels.length) return { heading: "", lines: [], noData: "sources" };
   const top = channels[0];
@@ -721,11 +724,11 @@ async function intentClerk({ prop, range }) {
 
 async function intentForecast({ prop, range, question, allowedPropertyIds }) {
   const today = new Date();
-  let occRows = await load("OccupancyDay", prop, range.from, range.to);
+  let occRows = await load("OccupancyDay", prop, range.from, range.to) || [];
   if (!occRows.length) {
     const end = range.to || (await latestDate(allowedPropertyIds)) || iso(today);
     const start = iso(new Date(new Date(`${end}T00:00:00`).getTime() - 29 * 86400000));
-    occRows = await load("OccupancyDay", prop, start, end);
+    occRows = await load("OccupancyDay", prop, start, end) || [];
   }
   if (!occRows.length) return { heading: "", lines: [], noData: "occupancy" };
   const occ = occTotals(occRows);
@@ -761,8 +764,8 @@ async function intentCompare({ prop, range, q, question, allowedPropertyIds }) {
     const ranges = pairs
       ? pairs.slice(0, 2).map(({ idx, year }) => monthRange(year, idx, last))
       : monthTok.slice(0, 2).map(({ idx }) => monthRange(y, idx, last));
-    const aRows = await load("OccupancyDay", prop, ranges[0].from, ranges[0].to);
-    const bRows = await load("OccupancyDay", prop, ranges[1].from, ranges[1].to);
+    const aRows = await load("OccupancyDay", prop, ranges[0].from, ranges[0].to) || [];
+    const bRows = await load("OccupancyDay", prop, ranges[1].from, ranges[1].to) || [];
     if (!aRows.length && !bRows.length) return { heading: "", lines: [], noData: "occupancy" };
     const a = aRows.length ? occTotals(aRows) : null;
     const b = bRows.length ? occTotals(bRows) : null;

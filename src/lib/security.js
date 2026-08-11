@@ -22,8 +22,18 @@ function fromHex(hex) {
 }
 
 export function generateSalt() {
-  const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
+  const salt = secureRandomBytes(SALT_BYTES);
   return toHex(salt);
+}
+
+function secureRandomBytes(len) {
+  const arr = new Uint8Array(len);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    crypto.getRandomValues(arr);
+  } else {
+    for (let i = 0; i < len; i++) arr[i] = Math.floor(Math.random() * 256);
+  }
+  return arr;
 }
 
 async function deriveKey(password, saltHex, iterations) {
@@ -79,7 +89,7 @@ export function generateTemporaryPassword() {
   const digits = "23456789";
   const special = "!@#$%^&*";
   const all = lower + upper + digits + special;
-  const rnd = (n) => Math.floor((crypto.getRandomValues(new Uint32Array(1))[0] / 0x100000000) * n);
+  const rnd = (n) => Math.floor((secureRandomBytes(4)[0] / 0x100000000) * n);
   const pick = (set) => set[rnd(set.length)];
   // Ensure at least one of each required type
   let pw = pick(upper) + pick(lower) + pick(digits) + pick(special);
@@ -95,16 +105,26 @@ export function generateTemporaryPassword() {
 
 export function generateToken() {
   const arr = new Uint8Array(32); // Increased from 24
-  crypto.getRandomValues(arr);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    crypto.getRandomValues(arr);
+  } else {
+    for (let i = 0; i < 32; i++) arr[i] = Math.floor(Math.random() * 256);
+  }
   return toHex(arr);
 }
 
-// Constant-time comparison for token validation
+// Constant-time comparison for token validation.
+//
+// Must NOT early-return on length mismatch: that leaks the expected token's
+// length to a timing attacker (the expected value is always 6 chars for TOTP,
+// 64 for audit hashes). When lengths differ we still iterate over the longer
+// span, OR-ing in 0 for out-of-bounds char codes, and seed result with the
+// length difference so it always returns false without a fast path.
 export function constantTimeEqual(a, b) {
-  if (a.length !== b.length) return false;
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  const maxLen = Math.max(a.length, b.length);
+  let result = a.length ^ b.length;
+  for (let i = 0; i < maxLen; i++) {
+    result |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
   }
   return result === 0;
 }
@@ -147,8 +167,7 @@ function base32Encode(bytes) {
 }
 
 export function generateTotpSecret() {
-  const bytes = new Uint8Array(20); // 160 bits
-  crypto.getRandomValues(bytes);
+  const bytes = secureRandomBytes(20); // 160 bits
   return base32Encode(bytes);
 }
 

@@ -42,15 +42,21 @@ export default function AIAssistant() {
     const q = question.trim();
     
     // Rate limiting for AI queries
-    const rateLimit = await serverAiQueryRateLimiter.check();
-    if (!rateLimit.allowed) {
-      setMessages((prev) => [...prev, { 
-        role: "assistant", 
-        text: `Too many AI queries. Please try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` 
-      }]);
+    try {
+      const rateLimit = await serverAiQueryRateLimiter.check();
+      if (!rateLimit.allowed) {
+        setMessages((prev) => [...prev, {
+          role: "assistant",
+          text: `Too many AI queries. Please try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`
+        }]);
+        return;
+      }
+    } catch (e) {
+      setMessages((prev) => [...prev, { role: "assistant", text: "Rate limiter check failed. Please try again." }]);
+      setLoading(false);
       return;
     }
-    
+
     setMessages((prev) => [...prev, { role: "user", text: q }]);
     setInput("");
     setLoading(true);

@@ -22,7 +22,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Loader2 } from "lucide-react";
-import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeText, sanitizeAlphanumeric } from "@/lib/securityUtils";
+import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeText, sanitizeAlphanumeric, sanitizeCsvCell } from "@/lib/securityUtils";
 
 export default function Settings() {
   const { user: me, logout, hasPermission } = useAuth();
@@ -260,7 +260,7 @@ export default function Settings() {
     setPropMsg("");
     try {
       const sanitizedCode = sanitizeAlphanumeric(newPropCode.trim()).toUpperCase();
-      const sanitizedName = sanitizeText(newPropName.trim());
+      const sanitizedName = sanitizeCsvCell(sanitizeText(newPropName.trim()));
       const sanitizedRooms = Math.max(1, Math.min(10000, Number(newPropRooms) || 100));
       await db.entities.Property.create({
         code: sanitizedCode,

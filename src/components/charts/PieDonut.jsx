@@ -42,7 +42,7 @@ export default function PieDonut(
   height = 320,
   outerRadius = 110,
   innerRadius,
-  minShareLabel = 5,
+  minShareLabel = 0.5,
   maxSlices = 12,
   formatter = money2,
   showLegend = true,
@@ -65,6 +65,7 @@ export default function PieDonut(
   const renderLabel = ({ name, value, percent }) => {
     const share = (percent || 0) * 100;
     if (share < minShareLabel) return "";
+    if (share < 4) return `${name} (${share.toFixed(1)}%)`;
     return `${name} ${formatter(value)} (${share.toFixed(1)}%)`;
   };
 

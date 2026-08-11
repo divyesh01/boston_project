@@ -57,12 +57,20 @@ export default function LedgerTable({ rows = [], onExport }) {
       subtitle={`${num(sorted.length)} of ${num(rows.length)} rows`}
       right={
         onExport && (
-          <button
-            onClick={() => onExport(sorted)}
-            className="flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs text-slate-300 transition-colors hover:border-white/20 hover:text-white"
-          >
-            <Download className="h-3 w-3" /> Export
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => onExport(sorted, 'csv')}
+              className="flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs text-slate-300 transition-colors hover:border-white/20 hover:text-white"
+            >
+              <Download className="h-3 w-3" /> CSV
+            </button>
+            <button
+              onClick={() => onExport(sorted, 'excel')}
+              className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#107C41]/20 px-2.5 py-1.5 text-xs text-[#107C41] transition-colors hover:bg-[#107C41]/30 hover:text-[#19a557]"
+            >
+              <Download className="h-3 w-3" /> Excel
+            </button>
+          </div>
         )
       }
     >

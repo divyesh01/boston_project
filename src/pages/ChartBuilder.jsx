@@ -6,7 +6,7 @@ import Card from "@/components/ui-exec/Card";
 import UniversalChart from "@/components/charts/UniversalChart";
 import ChartToolbar from "@/components/charts/ChartToolbar";
 import { useOccupancy, useSources, useGrossRevenue, useUploads } from "@/lib/useHotelData";
-import { aggregate, downloadCsv, num, inRange } from "@/lib/hotel";
+import { aggregate, downloadCsv, downloadExcel, num, inRange } from "@/lib/hotel";
 import { formatNumber } from "@/lib/decimal";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 
@@ -60,8 +60,9 @@ export default function ChartBuilder() {
     return rows.filter((r) => inRange(r.date, dateRange.from, dateRange.to));
   }, [rows, hasDate, dateRange]);
 
-  const g = columns.includes(groupBy) ? groupBy : columns[0];
-  const v = columns.includes(valueKey) ? valueKey : columns[columns.length - 1];
+  const cols = columns.length ? columns : [];
+  const g = cols.includes(groupBy) ? groupBy : cols[0];
+  const v = cols.includes(valueKey) ? valueKey : cols[cols.length - 1];
   const data = useMemo(() => (filteredRows.length && g && v ? aggregate(filteredRows, g, v, agg) : []), [filteredRows, g, v, agg]);
 
   const dateRangeText = hasDate && dateRange.from && dateRange.to
@@ -115,12 +116,20 @@ export default function ChartBuilder() {
       <Card
         title="Summary Table"
         right={
-          <button
-            onClick={() => downloadCsv(data, `${g}_${v}_${agg}.csv`)}
-            className="flex items-center gap-2 rounded-lg bg-[#6C63FF] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[#5b52e8]"
-          >
-            <Download className="h-3.5 w-3.5" /> Export CSV
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => downloadCsv(data, `${g}_${v}_${agg}.csv`)}
+              className="flex items-center gap-2 rounded-lg bg-[#6C63FF] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[#5b52e8]"
+            >
+              <Download className="h-3.5 w-3.5" /> Export CSV
+            </button>
+            <button
+              onClick={() => downloadExcel(data, `${g}_${v}_${agg}.xlsx`)}
+              className="flex items-center gap-2 rounded-lg bg-[#107C41] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[#0e6b38]"
+            >
+              <Download className="h-3.5 w-3.5" /> Export Excel
+            </button>
+          </div>
         }
       >
         <div className="max-h-80 overflow-auto">

@@ -14,7 +14,7 @@ export function getRevenueThresholds() {
 }
 
 export function saveRevenueThresholds(thresholds) {
-  localStorage.setItem(KEY, JSON.stringify(thresholds));
+  try { localStorage.setItem(KEY, JSON.stringify(thresholds)); } catch {}
 }
 
 export function getRevenueColor(revenue) {

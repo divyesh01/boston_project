@@ -14,10 +14,20 @@ import Dexie from 'dexie';
  *   User: import('dexie').Table<any, number>;
  *   AuditLog: import('dexie').Table<any, number>;
  *   Staff: import('dexie').Table<any, number>;
+ *   Room: import('dexie').Table<any, number>;
+ *   RoomStay: import('dexie').Table<any, number>;
+ *   HousekeepingTask: import('dexie').Table<any, number>;
+ *   WeatherSnapshot: import('dexie').Table<any, number>;
+ *   Review: import('dexie').Table<any, number>;
  *   ImportRecordIds: import('dexie').Table<any, number>;
  *   ScanResult: import('dexie').Table<any, number>;
  *   HotelMetric: import('dexie').Table<any, number>;
  *   TransactionLine: import('dexie').Table<any, number>;
+ *   PasswordResetRequest: import('dexie').Table<any, number>;
+ *   AnomalyAlert: import('dexie').Table<any, number>;
+ *   Reservation: import('dexie').Table<any, number>;
+ *   RoomType: import('dexie').Table<any, number>;
+ *   ChannelMap: import('dexie').Table<any, number>;
  * }} */
 // @ts-ignore — augment the non-generic Dexie interface with the app's tables.
 const localDb = new Dexie('RedRoofIntelligence');
@@ -93,6 +103,43 @@ localDb.version(8).stores({
   HotelMetric: '++id, property_id, business_date, section, metric_name, period, import_id, file_hash, [property_id+business_date], [property_id+business_date+section+metric_name+period], created_date',
 });
 
+// v13 — add PasswordResetRequest table for self-service password reset flow
+localDb.version(13).stores({
+  PasswordResetRequest: '++id, user_id, token, expires_at, used, created_date',
+});
+
+// v14 — compound indexes for indexed range queries.
+//
+// [property_id+date] on the four daily ledgers is the driving index for every
+// property-scoped date-range read (Dashboard, Payments, Sources, occupancy
+// pages). It sits alongside the existing [date+property_id] so trend scans that
+// start from the date axis stay indexed too. [property_id+status] on Expense
+// serves status scoping (e.g. committed/approved expense filters). Adding
+// indexes is a non-destructive upgrade: Dexie backfills the new indexes from
+// existing rows without touching data.
+localDb.version(14).stores({
+  OccupancyDay:     '++id, date, property_id, [date+property_id], [property_id+date], import_id, created_date',
+  SourceDay:        '++id, date, property_id, code, source, [date+property_id], [property_id+date], import_id, created_date',
+  GrossRevenueDay:  '++id, date, property_id, [date+property_id], [property_id+date], import_id, created_date',
+  PaymentDay:       '++id, date, property_id, [date+property_id], [property_id+date], import_id, created_date',
+  Expense:          '++id, property_id, expense_date, category, status, [property_id+expense_date], [property_id+status], import_id, created_date',
+});
+
+// v15 — automated financial anomaly & fraud detection alerts.
+//
+// One row per flagged transaction (see src/lib/anomalyDetector.js). [property_id+date]
+// is the driving index for the Dashboard banner's property-scoped date-range read.
+localDb.version(15).stores({
+  AnomalyAlert: '++id, property_id, date, alert_type, status, [property_id+date], [property_id+date+alert_type], dedupe_key, created_date',
+});
+
+// v16 — Channel Manager integration tables
+localDb.version(16).stores({
+  Reservation: '++id, property_id, channel, confirmation_num, check_in, check_out, room_type_id, status, [property_id+check_in], created_date',
+  RoomType: '++id, property_id, name, total_inventory',
+  ChannelMap: '++id, property_id, channel_name, local_room_id, remote_room_id',
+});
+
 // v9 — add Transaction table for line-level PMS transaction ledgers.
 //
 // SUPERSEDED BY v10. `Transaction` is a reserved property name on a Dexie
@@ -159,6 +206,24 @@ localDb.version(11).stores({
 // v12 — drop ImportSession now that v11 has copied its ledger rows across.
 localDb.version(12).stores({
   ImportSession: null,
+});
+
+// v16 — operational modules: enhanced room board, housekeeping, weather cache,
+// and guest reputation. All are property-scoped (enforcement lives in
+// base44Client's PROPERTY_TABLES) and are additive — no existing store changes.
+//
+// Room is the room master register; RoomStay is the per-room nightly ledger the
+// enhanced Room Board renders (guest, check-in/out, rate stored in integer
+// cents, room type). HousekeepingTask is the operational room-cleaning queue.
+// WeatherSnapshot caches OpenWeather responses per property+date to respect the
+// API rate limit. Review is the aggregated review inbox (Google / TripAdvisor /
+// OTA) with a sentiment column computed at ingest.
+localDb.version(16).stores({
+  Room: '++id, property_id, room_number, room_type, floor, capacity, [property_id+room_number], [property_id+status], created_date',
+  RoomStay: '++id, property_id, date, room_number, guest_name, status, [property_id+date], [property_id+room_number], [property_id+date+status], created_date',
+  HousekeepingTask: '++id, property_id, task_date, room_number, assignee, status, [property_id+task_date], [property_id+room_number], [property_id+task_date+status], created_date',
+  WeatherSnapshot: '++id, property_id, date, kind, [property_id+date], [property_id+date+kind], created_date',
+  Review: '++id, property_id, source, rating, sentiment, status, review_date, [property_id+review_date], [property_id+source+status], created_date',
 });
 
 // Guard: a table whose name collides with a Dexie instance property is created

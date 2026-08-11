@@ -123,23 +123,15 @@ export function roundCents(cents) {
 // Portfolio calculations using fixed decimal
 export function portfolioOccupancy(occupancyRows, propertyRoomCounts) {
   // occupancyRows: array of { property_id, date, rooms_sold, total_rooms }
-  // propertyRoomCounts: { [property_id]: number_of_rooms }
-  const soldByProp = {};
-  const daysByProp = {};
-  
-  for (const row of occupancyRows) {
-    const pid = row.property_id || '_default';
-    soldByProp[pid] = (soldByProp[pid] || 0) + toCents(row.rooms_sold);
-    daysByProp[pid] = (daysByProp[pid] || 0) + 1;
-  }
-  
+  // propertyRoomCounts: { [property_id]: number_of_rooms } (fallback for legacy rows)
   let totalSold = 0;
   let totalCapacity = 0;
   
-  for (const pid of Object.keys(soldByProp)) {
-    const rooms = propertyRoomCounts[pid] || 100;
-    totalSold += soldByProp[pid];
-    totalCapacity += daysByProp[pid] * rooms * SCALE;
+  for (const row of occupancyRows) {
+    const pid = row.property_id || '_default';
+    totalSold += toCents(row.rooms_sold);
+    const rowRooms = Number(row.total_rooms) || 0;
+    totalCapacity += rowRooms > 0 ? rowRooms * SCALE : (propertyRoomCounts[pid] || 100) * SCALE;
   }
   
   if (totalCapacity === 0) return 0;

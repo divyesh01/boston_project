@@ -11,6 +11,7 @@ import { safeReturnTo } from "@/lib/authReturnTo";
 import { useAuth } from "@/lib/AuthContext";
 import db from "@/api/base44Client";
 import { getCsrfToken, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
+import { isValidEmail } from "@/lib/validator";
 import MFASetup from "@/components/MFASetup";
 
 export default function Login() {
@@ -64,6 +65,14 @@ export default function Login() {
   const handlePasswordSubmit = async (e) => {
     e.preventDefault();
     setError("");
+    // Format check before any network/auth work. Emails are validated strictly;
+    // the username branch mirrors the identifier policy in base44Client (hyphens
+    // allowed, bounded length) so legacy accounts are never blocked here.
+    const id = identifier.trim();
+    if (id.includes("@") ? !isValidEmail(id) : !/^[A-Za-z0-9_-]{1,50}$/.test(id)) {
+      setError("Please enter a valid username or email.");
+      return;
+    }
     // CSRF validation
     const csrfToken = getCsrfToken();
     if (!validateCsrfToken(csrfToken)) {
@@ -281,9 +290,9 @@ export default function Login() {
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label htmlFor="password">Password</Label>
-              <span className="text-xs text-slate-500">
-                Forgot password? Contact an administrator.
-              </span>
+              <Link to="/forgot-password" className="text-xs text-[#6C63FF] hover:underline">
+                Forgot password?
+              </Link>
             </div>
             <div className="relative">
               <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />

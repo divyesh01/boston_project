@@ -12,7 +12,7 @@ export default function ChannelRevenue({ rows, dateRange }) {
 
   const channels = useMemo(() => {
     const map = new Map();
-    rows.forEach((r) => {
+    (rows || []).forEach((r) => {
       const src = r.source || "Unknown";
       const net = Number(r.net_revenue || 0);
       const stays = Number(r.stays || 0);

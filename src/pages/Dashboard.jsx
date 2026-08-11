@@ -21,6 +21,9 @@ import { CalculationService } from "@/lib/calculationService";
 import { OwnerIntelligenceService } from "@/lib/ownerIntelligence";
 import { useQuery } from "@tanstack/react-query";
 import { db } from "@/api/base44Client";
+import WeatherPanel from "@/components/dashboard/WeatherPanel";
+import PricingPanel from "@/components/dashboard/PricingPanel";
+import { useRealtimeInvalidation } from "@/lib/realtime";
 
 export default function Dashboard() {
   const { dateRange, property, properties, compareOn, compareDateRange, compareMonths, employee, paymentType, channel, months } = useGlobalFilters();
@@ -28,6 +31,11 @@ export default function Dashboard() {
   const selectedProp = isPortfolio ? null : properties.find((p) => p.id === property);
   const propRooms = selectedProp?.rooms || 100;
   const propName = isPortfolio ? (Array.isArray(property) ? `${property.length} Properties` : "All Properties / Portfolio") : (selectedProp?.name || "Property");
+
+  // Feature 7: live dashboard. While enabled, cross-tab change notifications and
+  // a lightweight poll invalidate these query prefixes so the dashboard stays
+  // fresh without manual refresh. Default on for the operational data sets.
+  useRealtimeInvalidation(["occupancy", "sources", "gross", "clerk", "payments", "expenses", "payroll", "anomaly-alerts", "rooms", "reservations", "weather"]);
 
   const { data: occ = [], isLoading, refetch: refOcc } = useOccupancy(dateRange, property, months);
   const { data: prevOcc = [] } = useOccupancy(compareOn ? compareDateRange : { from: "", to: "" }, property, compareOn ? compareMonths : [], compareOn);
@@ -50,6 +58,23 @@ export default function Dashboard() {
   const { data: payroll = [] } = useQuery({
     queryKey: ["payroll", propertyKey],
     queryFn: () => db.entities.PayrollRun.filter(propFilter, "-pay_period_start", 100000),
+  });
+
+  // Automated financial anomaly alerts flagged during CSV import — owner review queue.
+  // Scoped by the active date range so the query planner uses the [property_id+date]
+  // compound index (or the plain date index for portfolio-wide views).
+  const anomalyFilter = useMemo(() => {
+    /** @type {{ property_id?: string | { $in: string[] }, date?: { $gte: string, $lte: string } }} */
+    const base = { ...propFilter };
+    if (dateRange.from && dateRange.to) {
+      base.date = { $gte: dateRange.from, $lte: dateRange.to };
+    }
+    return base;
+  }, [propFilter, dateRange.from, dateRange.to]);
+
+  const { data: anomalyAlerts = [] } = useQuery({
+    queryKey: ["anomaly-alerts", propertyKey, dateRange.from, dateRange.to],
+    queryFn: () => db.entities.AnomalyAlert.filter(anomalyFilter, "-date", 500),
   });
 
   // Dedicated previous-period range for trend alerts (independent of the current filter)
@@ -134,6 +159,12 @@ export default function Dashboard() {
     }
     return out;
   }, [occ, alertPrevOcc, dateRange, revenue, occupancy, adr, roomCounts, threshold]);
+
+  // Anomaly alerts scoped to the currently selected period.
+  const anomalyInRange = useMemo(
+    () => anomalyAlerts.filter((a) => inRange(a.date, dateRange.from, dateRange.to)),
+    [anomalyAlerts, dateRange]
+  );
 
   const miscCharges = useMemo(() => {
     const cats = [
@@ -262,6 +293,46 @@ export default function Dashboard() {
           </div>
         ))}
 
+        {/* Operational Anomalies Alert — automated fraud/risk flags from CSV import */}
+        {anomalyInRange.length > 0 && (
+          <div className="rounded-2xl border border-[#FF6B6B]/30 bg-[#FF6B6B]/[0.07] p-4">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="h-5 w-5 shrink-0 text-[#FF6B6B]" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-white">
+                  Operational Anomalies Alert · {anomalyInRange.length} flagged {anomalyInRange.length === 1 ? "entry" : "entries"} require review
+                </p>
+                <p className="text-xs text-slate-400">
+                  Automated flags from imported transaction ledgers — rate overrides, adjustment/void spikes, off-hours postings.
+                </p>
+              </div>
+            </div>
+            <div className="mt-3 space-y-2">
+              {anomalyInRange.map((a) => (
+                <div key={a.id} className="flex flex-wrap items-center gap-3 rounded-lg bg-[#0A1628]/60 px-3 py-2">
+                  <span
+                    className={`shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                      a.severity === "high" ? "bg-[#FF6B6B]/20 text-[#FF6B6B]" : "bg-[#FFB547]/15 text-[#FFB547]"
+                    }`}
+                  >
+                    {a.severity}
+                  </span>
+                  <span className="shrink-0 rounded-full bg-[#00D4FF]/15 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[#00D4FF]">
+                    {a.alert_type === "rate_override" ? "Rate Override"
+                      : a.alert_type === "excessive_adjustments" ? "Adjustment / Void Spike"
+                      : "Off-Hours Posting"}
+                  </span>
+                  <p className="min-w-0 flex-1 text-xs text-slate-300">{a.detail}</p>
+                  <p className="shrink-0 text-xs text-slate-400">
+                    {a.date} · {a.username}
+                    {a.folio_number ? ` · Folio ${a.folio_number}` : ""}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Owner Intelligence Insights */}
         {(() => {
           const insights = OwnerIntelligenceService.generateExecutiveInsights(
@@ -311,6 +382,9 @@ export default function Dashboard() {
 
         <RevenueTrend rows={occRows} dateRange={`${dateRange.from || "—"} to ${dateRange.to || "—"}`} />
         <OtaMatrix rows={srcRows} />
+
+        <WeatherPanel />
+        <PricingPanel />
 
         {miscCharges.length > 0 && (
           <Card title="Miscellaneous charges" subtitle="Non-room revenue breakdown for selected period">

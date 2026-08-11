@@ -8,7 +8,16 @@ globalThis.localStorage = st; globalThis.sessionStorage = st; globalThis.window 
 if (globalThis.navigator === undefined) Object.defineProperty(globalThis,'navigator',{value:{userAgent:'harness',language:'en-US'},configurable:true});
 
 import fs from "node:fs";
-const UP = process.env.UPLOADS_DIR || "/sessions/kind-admiring-dijkstra/mnt/uploads/";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Fixture directory, in order: UPLOADS_DIR env → the repo's own scripts/data.
+//
+// This used to default to an absolute path inside a since-deleted sandbox
+// session, so the suite died with EACCES on every machine but the one it was
+// written on. scripts/data/ is checked in and holds the same exports.
+const REPO_DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), "data");
+const UP = process.env.UPLOADS_DIR || REPO_DATA;
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, ...rest) => {
   if (typeof url === "string" && url.startsWith("file:///")) {
@@ -29,7 +38,7 @@ const order = ["Source Summary (1).csv","Source Summary (2).csv","Source Summary
 const hist = [];
 
 for (const f of order) {
-  const url = "file:///" + (UP+f).replace(/^\//,"");
+  const url = "file:///" + path.join(UP, f).replace(/^\//,"");
   const scan = await mod.scanReport("source", url, { ...PROP, sourceFile:f });
   const res  = await mod.importReport(scan, { ...PROP, importId:"imp_"+f, sourceFile:f });
   hist.push({ f, parsed: scan.totalRows, imported: res.count, skipped: res.excluded });

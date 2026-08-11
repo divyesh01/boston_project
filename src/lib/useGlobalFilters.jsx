@@ -44,6 +44,7 @@ export const PAGE_FILTERS = {
   // the point of the page. It never read the global `channel` value, so the
   // dropdown was rendered and silently ignored — removed rather than wired.
   "/ota": {},
+  "/channel-manager": {},
   "/settings": {},
   "/upload": {},
   "/calendar": {},
@@ -53,6 +54,9 @@ export const PAGE_FILTERS = {
   "/manual-entry": {},
   "/forecasting": {},
   "/data-template": {},
+  "/housekeeping": {},
+  "/reviews": {},
+  "/pricing": {},
 };
 
 const CUR_YEAR = new Date().getFullYear();

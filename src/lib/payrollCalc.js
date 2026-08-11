@@ -1,3 +1,5 @@
+import { toCents, fromCents } from '@/lib/decimal';
+
 /**
  * Shared payroll calculation utilities
  * Used by Payroll page, autoPayroll engine, and historical posting
@@ -38,20 +40,24 @@ export function calculatePay({
   const bns = Number(bonus) || 0;
   const ded = Number(deductions) || 0;
 
-  const regularPay = pay_type === "salary" ? br : br * hrs;
-  const overtimePay = otHrs * otRate;
-  const totalPay = regularPay + overtimePay + bns - ded;
+  // Integer-cents math to avoid floating-point drift
+  const baseRateCents = toCents(br);
+  const regularPayCents = pay_type === "salary" ? baseRateCents : Math.round(baseRateCents * hrs);
+  const overtimePayCents = Math.round(toCents(otRate) * otHrs);
+  const bonusCents = toCents(bns);
+  const deductionsCents = toCents(ded);
+  const totalPayCents = regularPayCents + overtimePayCents + bonusCents - deductionsCents;
 
   return {
     base_rate: br,
     hours: hrs,
     overtime_hours: otHrs,
     overtime_rate: otRate,
-    regular_pay: regularPay,
-    overtime_pay: overtimePay,
+    regular_pay: fromCents(regularPayCents),
+    overtime_pay: fromCents(overtimePayCents),
     bonus: bns,
     deductions: ded,
-    total_pay: totalPay,
+    total_pay: fromCents(totalPayCents),
   };
 }
 

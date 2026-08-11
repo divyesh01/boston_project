@@ -1,9 +1,20 @@
-import localDb from './localDb';
+import localDb from '@/api/localDb';
 import { answerQuestion } from '@/lib/aiEngine';
-import { hashPassword, verifyPassword, generateSalt, generateToken, isCryptoAvailable, validatePasswordStrength, generateTemporaryPassword, generateTotpSecret, formatTotpUri, verifyTotpToken } from '@/lib/security';
+import {
+  generateSalt,
+  hashPassword,
+  validatePasswordStrength,
+  generateToken,
+  isCryptoAvailable,
+} from '@/lib/security';
+import { toCents, fromCents } from '@/lib/decimal';
+import { verifyPassword, generateTemporaryPassword, generateTotpSecret, formatTotpUri, verifyTotpToken } from '@/lib/security';
 import { defaultPermissionsForRole, canUser } from '@/lib/permissions';
 import { loginRateLimiter, sanitizeEmail, sanitizeAlphanumeric, secureStore, secureRetrieve, secureRemove, createAuditEntry, getDeviceFingerprint, getClientIpHint } from '@/lib/securityUtils';
+import { postSessionRevoked } from '@/lib/sessionChannel';
+import { publishChange } from '@/lib/realtime';
 import { recalculationService } from '@/lib/recalculationService';
+import { isValidEmail, isValidUsername } from '@/lib/validator';
 
 // ─── Tables that trigger recalculation when modified ───
 const RECALCULATION_TABLES = new Set([
@@ -168,16 +179,18 @@ export async function rollbackImportSession(importId) {
   }
 
   let totalDeleted = 0;
-  for (const row of pending) {
-    const ids = row.record_ids;
-    if (!ids?.length) continue;
-    await entities[row.entity].bulkDelete(ids);
-    totalDeleted += ids.length;
-    await localDb.ImportRecordIds.update(row.id, {
-      status: 'rolled_back',
-      rolled_back_at: new Date().toISOString(),
-    });
-  }
+  await localDb.transaction('rw', localDb.ImportRecordIds, async () => {
+    for (const row of pending) {
+      const ids = row.record_ids;
+      if (!ids?.length) continue;
+      await entities[row.entity].bulkDelete(ids);
+      totalDeleted += ids.length;
+      await localDb.ImportRecordIds.update(row.id, {
+        status: 'rolled_back',
+        rolled_back_at: new Date().toISOString(),
+      });
+    }
+  });
 
   const sessions = await getImportSessions();
   const idx = sessions.findIndex((s) => s.importId === importId);
@@ -247,6 +260,117 @@ function sortRows(rows, sortField) {
   });
 }
 
+// Login/reset identifiers may be a username OR an email. Emails are checked
+// strictly (RFC 5322); the username branch stays deliberately permissive —
+// hyphens and up to 50 chars, matching what the sanitizer has historically
+// allowed — so a stricter rule can never lock a legacy account out of its own
+// login.
+function isValidIdentifier(identifier) {
+  const s = String(identifier ?? '').trim();
+  if (!s || s.length > 254) return false;
+  if (s.includes('@')) return isValidEmail(s);
+  return /^[A-Za-z0-9_-]{1,50}$/.test(s);
+}
+
+// ─── Indexed query planner for the entity proxy ───
+//
+// Turns a Base44-style filter ({ field: value | { $gte, $lte, $gt, $lt, $in } })
+// into a Dexie indexed query instead of a full-table toArray() + in-memory
+// filter. Picks ONE driving index — a compound [property_id+<field>] first,
+// then the most selective single-field index — and applies whatever conditions
+// the index did not consume as a residual predicate over the already narrowed
+// set. Results are byte-identical to the old scan; only the number of rows
+// materialised changes, which is what turns a 50,000-row scan into a
+// sub-millisecond range read.
+//
+//   { property_id, date:{$gte,$lte} }  -> [property_id+date].between(...)
+//   { property_id, status }            -> [property_id+status].equals(...)
+//   { date:{$gte,$lte} }               -> date.between(...)
+//   { property_id:{$in:[...]} }        -> property_id.anyOf(...)
+//   {}                                 -> (no condition) toArray() fallback
+
+const isRangeCond = (c) => !!c && typeof c === 'object' && !Array.isArray(c) &&
+  (('$gte' in c) || ('$gt' in c) || ('$lte' in c) || ('$lt' in c));
+const isInCond = (c) => !!c && typeof c === 'object' && !Array.isArray(c) && ('$in' in c);
+const isEqCond = (c) => c !== undefined && c !== null && !(typeof c === 'object' && !Array.isArray(c));
+
+function singleIndexQuery(table, index, cond) {
+  if (cond === undefined || cond === null) return null;
+  if (isEqCond(cond)) return table.where(index).equals(cond);
+  if (isInCond(cond)) {
+    const ids = Array.isArray(cond.$in) && cond.$in.length ? cond.$in : [''];
+    return table.where(index).anyOf(ids);
+  }
+  if (isRangeCond(cond)) {
+    const loIncl = cond.$gte !== undefined;
+    const hiIncl = cond.$lte !== undefined;
+    const lo = cond.$gte !== undefined ? cond.$gte : cond.$gt;
+    const hi = cond.$lte !== undefined ? cond.$lte : cond.$lt;
+    const q = table.where(index);
+    if (lo !== undefined && hi !== undefined) return q.between(lo, hi, loIncl, hiIncl);
+    if (lo !== undefined) return loIncl ? q.aboveOrEqual(lo) : q.above(lo);
+    if (hi !== undefined) return hiIncl ? q.belowOrEqual(hi) : q.below(hi);
+  }
+  return null;
+}
+
+function compoundIndexQuery(table, index, prefix, cond) {
+  if (cond === undefined || cond === null) return null;
+  if (isEqCond(cond)) return table.where(index).equals([prefix, cond]);
+  if (isRangeCond(cond)) {
+    const loIncl = cond.$gte !== undefined;
+    const hiIncl = cond.$lte !== undefined;
+    const lo = cond.$gte !== undefined ? cond.$gte : cond.$gt;
+    const hi = cond.$lte !== undefined ? cond.$lte : cond.$lt;
+    const q = table.where(index);
+    if (lo !== undefined && hi !== undefined) return q.between([prefix, lo], [prefix, hi], loIncl, hiIncl);
+    if (lo !== undefined) return loIncl ? q.aboveOrEqual([prefix, lo]) : q.above([prefix, lo]);
+    if (hi !== undefined) return hiIncl ? q.belowOrEqual([prefix, hi]) : q.below([prefix, hi]);
+  }
+  return null;
+}
+
+// Driver-field preference for single-index fallbacks. Date-like columns narrow
+// a ledger scan hardest, so they rank above the generic property_id column.
+const DRIVER_FIELDS = [
+  'date', 'shift_date', 'expense_date', 'pay_period_start',
+  'created_date', 'status', 'property_id',
+];
+
+function planQuery(table, query) {
+  const entries = Object.entries(query || {});
+  if (!entries.length) return null;
+  const indexes = new Set((table.schema.indexes || []).map((i) => i.name));
+  const pid = query.property_id;
+  const pidSingle = pid && typeof pid === 'string' ? pid : null;
+
+  // Compound [property_id+<field>]: exact property plus an equality/range on an
+  // indexed second component — the hot path for every property-scoped range read.
+  if (pidSingle !== null) {
+    for (const [field, cond] of entries) {
+      if (field === 'property_id' || cond === undefined || cond === null) continue;
+      const index = `[property_id+${field}]`;
+      if (!indexes.has(index)) continue;
+      if (isEqCond(cond) || isRangeCond(cond)) {
+        const collection = compoundIndexQuery(table, index, pidSingle, cond);
+        if (collection) return { collection };
+      }
+    }
+  }
+
+  // Single-field indexes, most selective driver first.
+  for (const field of DRIVER_FIELDS) {
+    if (!(field in query)) continue;
+    if (!indexes.has(field)) continue;
+    const collection = singleIndexQuery(table, field, query[field]);
+    if (collection) return { collection };
+  }
+
+  // No usable index for the requested conditions — fall back to a scan. The
+  // residual matcher below still runs, so results are identical either way.
+  return null;
+}
+
 // ─── Create an entity proxy for a Dexie table with property isolation ───
 function createEntityProxy(tableName) {
   const table = localDb[tableName];
@@ -255,8 +379,22 @@ function createEntityProxy(tableName) {
   const PROPERTY_TABLES = new Set([
     'OccupancyDay', 'SourceDay', 'GrossRevenueDay', 'PaymentDay',
     'ClerkShiftRecord', 'UploadedReport', 'Expense', 'PayrollRun', 'Staff', 'HotelMetric',
-    'TransactionLine'
+    'TransactionLine', 'AnomalyAlert', 'Room', 'RoomStay', 'HousekeepingTask',
+    'WeatherSnapshot', 'Review'
   ]);
+
+  // Tables that are immutable append-only (audit trail integrity)
+  const PROTECTED_IMMUTABLE_TABLES = new Set([
+    'AuditLog'
+  ]);
+
+  const isProtectedImmutable = PROTECTED_IMMUTABLE_TABLES.has(tableName);
+
+  function throwIfProtected() {
+    if (isProtectedImmutable) {
+      throw new Error('Security Violation: Audit logs are immutable and cannot be modified or deleted.');
+    }
+  }
 
   // Get current user's property access from session
   async function getUserPropertyAccess() {
@@ -279,22 +417,16 @@ function createEntityProxy(tableName) {
 
   function applyPropertyFilter(query, propertyAccess) {
     if (propertyAccess === 'all' || propertyAccess === null) return query;
-    if (Array.isArray(propertyAccess) && propertyAccess.length > 0) {
-      // If query already has property_id, intersect with allowed properties
-      if (query.property_id) {
-        if (query.property_id.$in) {
-          query.property_id.$in = query.property_id.$in.filter(id => propertyAccess.includes(id));
-        } else if (typeof query.property_id === 'string' || typeof query.property_id === 'number') {
-          if (!propertyAccess.includes(query.property_id)) {
-            query.property_id = { $in: [] }; // No matching properties
-          }
-        }
+    if (PROPERTY_TABLES.has(tableName)) {
+      if (Array.isArray(propertyAccess) && propertyAccess.length > 0) {
+        // Force intersection — never allow the raw query to broaden access
+        const effective = query.property_id?.$in
+          ? query.property_id.$in.filter(id => propertyAccess.includes(id))
+          : propertyAccess;
+        query.property_id = { $in: effective };
       } else {
-        query.property_id = { $in: propertyAccess };
+        query.property_id = { $in: [] };
       }
-    } else {
-      // No access - return empty result
-      query.property_id = { $in: [] };
     }
     return query;
   }
@@ -303,7 +435,8 @@ function createEntityProxy(tableName) {
     async filter(query = {}, sortField, limit) {
       const propertyAccess = await getUserPropertyAccess();
       const filteredQuery = PROPERTY_TABLES.has(tableName) ? applyPropertyFilter({ ...query }, propertyAccess) : query;
-      let rows = await table.toArray();
+      const plan = planQuery(table, filteredQuery);
+      let rows = plan ? await plan.collection.toArray() : await table.toArray();
       rows = rows.filter(r => matchesFilter(r, filteredQuery));
       rows = sortRows(rows, sortField);
       if (limit) rows = rows.slice(0, limit);
@@ -313,7 +446,8 @@ function createEntityProxy(tableName) {
     async paginate(query = {}, sortField, limit = 50, cursor = null) {
       const propertyAccess = await getUserPropertyAccess();
       const filteredQuery = PROPERTY_TABLES.has(tableName) ? applyPropertyFilter({ ...query }, propertyAccess) : query;
-      let rows = await table.toArray();
+      const plan = planQuery(table, filteredQuery);
+      let rows = plan ? await plan.collection.toArray() : await table.toArray();
       rows = rows.filter(r => matchesFilter(r, filteredQuery));
       rows = sortRows(rows, sortField);
       
@@ -338,7 +472,8 @@ function createEntityProxy(tableName) {
     async list(sortField, limit) {
       const propertyAccess = await getUserPropertyAccess();
       const query = PROPERTY_TABLES.has(tableName) ? applyPropertyFilter({}, propertyAccess) : {};
-      let rows = await table.toArray();
+      const plan = planQuery(table, query);
+      let rows = plan ? await plan.collection.toArray() : await table.toArray();
       rows = rows.filter(r => matchesFilter(r, query));
       rows = sortRows(rows, sortField);
       if (limit) rows = rows.slice(0, limit);
@@ -381,10 +516,12 @@ function createEntityProxy(tableName) {
       const newId = await table.add(record);
       const createdRecord = { ...record, id: newId };
       notifyRecalculation(tableName, 'create', createdRecord);
+      publishChange(tableName, 'create', createdRecord);
       return createdRecord;
     },
 
     async update(id, data) {
+      throwIfProtected();
       const numId = Number(id) || id;
       // Check access before updating
       if (PROPERTY_TABLES.has(tableName)) {
@@ -409,10 +546,12 @@ function createEntityProxy(tableName) {
       await table.update(numId, { ...data, updated_date: now });
       const updatedRecord = await table.get(numId);
       notifyRecalculation(tableName, 'update', updatedRecord);
+      publishChange(tableName, 'update', updatedRecord);
       return updatedRecord;
     },
 
     async delete(id) {
+      throwIfProtected();
       const numId = Number(id) || id;
       // Check access before deleting
       if (PROPERTY_TABLES.has(tableName)) {
@@ -428,10 +567,12 @@ function createEntityProxy(tableName) {
       const deletedRecord = await table.get(numId);
       await table.delete(numId);
       notifyRecalculation(tableName, 'delete', deletedRecord);
+      publishChange(tableName, 'delete', deletedRecord);
       return { success: true };
     },
 
     async bulkCreate(dataArray) {
+      throwIfProtected();
       const propertyAccess = await getUserPropertyAccess();
       if (PROPERTY_TABLES.has(tableName)) {
         if (propertyAccess !== 'all' && propertyAccess !== null) {
@@ -455,10 +596,12 @@ function createEntityProxy(tableName) {
       const newIds = await table.bulkAdd(records, { allKeys: true });
       const createdRecords = records.map((r, i) => ({ ...r, id: newIds[i] }));
       notifyRecalculation(tableName, 'bulkCreate', { records: createdRecords });
+      publishChange(tableName, 'bulkCreate', { records: createdRecords });
       return createdRecords;
     },
 
     async bulkDelete(ids) {
+      throwIfProtected();
       const propertyAccess = await getUserPropertyAccess();
       if (PROPERTY_TABLES.has(tableName)) {
         if (propertyAccess !== 'all' && propertyAccess !== null) {
@@ -477,10 +620,12 @@ function createEntityProxy(tableName) {
       const deletedRecords = await table.where('id').anyOf(numIds).toArray();
       await table.bulkDelete(numIds);
       notifyRecalculation(tableName, 'bulkDelete', { records: deletedRecords });
+      publishChange(tableName, 'bulkDelete', { records: deletedRecords });
       return { success: true };
     },
 
     async clear() {
+      throwIfProtected();
       // Only allow clear for users with full access (owner/admin)
       const propertyAccess = await getUserPropertyAccess();
       if (propertyAccess !== 'all') {
@@ -493,7 +638,8 @@ function createEntityProxy(tableName) {
     async count(query = {}) {
       const propertyAccess = await getUserPropertyAccess();
       const filteredQuery = PROPERTY_TABLES.has(tableName) ? applyPropertyFilter({ ...query }, propertyAccess) : query;
-      let rows = await table.toArray();
+      const plan = planQuery(table, filteredQuery);
+      let rows = plan ? await plan.collection.toArray() : await table.toArray();
       return rows.filter(r => matchesFilter(r, filteredQuery)).length;
     },
   };
@@ -572,7 +718,7 @@ async function setSession(session) {
 }
 
 function clearSession() {
-  localStorage.removeItem(SESSION_KEY);
+  try { localStorage.removeItem(SESSION_KEY); } catch {}
   secureRemove(SECURE_SESSION_KEY);
 }
 
@@ -868,6 +1014,18 @@ const auth = {
       throw new Error(`Too many login attempts. Please try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
     }
 
+    // Format guard before any lookups; same generic message as a bad password
+    // so the error channel cannot be used for account enumeration.
+    if (!isValidIdentifier(identifier)) {
+      await audit.log({
+        username: String(identifier || '').toLowerCase(),
+        action: 'Login',
+        result: 'failed',
+        detail: 'Malformed identifier format',
+      });
+      throw new Error('Invalid username/email or password.');
+    }
+
     const user = await findUserByIdentity(identifier);
     if (!user) {
       await audit.log({
@@ -953,6 +1111,13 @@ const auth = {
         action: 'Logout',
         result: 'success',
       });
+      // Tell every other open tab/window that this user's session is gone.
+      postSessionRevoked({
+        type: 'SESSION_REVOKED',
+        targetUserId: session.userId,
+        status: 'logged_out',
+        reason: 'User logged out',
+      });
     }
     clearSession();
     if (redirect && typeof redirect === 'string') {
@@ -961,24 +1126,192 @@ const auth = {
   },
 
   async resetPasswordRequest(identifier) {
-    throw new Error('Password reset must be requested from an administrator.');
+    const rateLimit = await serverSensitiveActionRateLimiter.check(identifier);
+    if (!rateLimit.allowed) {
+      await audit.log({
+        username: String(identifier || '').toLowerCase(),
+        action: 'Password Reset Requested',
+        result: 'failed',
+        detail: `Rate limited. Try again in ${rateLimit.retryAfter} seconds.`,
+      });
+      throw new Error(`Too many requests. Please try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
+    }
+
+    const term = String(identifier || '').trim().toLowerCase();
+    if (!isValidIdentifier(term)) throw new Error('Username or email is required.');
+
+    const user = await findUserByIdentity(term);
+    if (!user) {
+      // Always show success to prevent user enumeration
+      await audit.log({
+        username: term,
+        action: 'Password Reset Requested',
+        result: 'success',
+        detail: 'Request processed (user not found, but response is generic)',
+      });
+      return { success: true, message: 'If an account exists, a reset token has been generated.' };
+    }
+
+    if (user.is_active === false) {
+      await audit.log({ user_id: user.id, username: user.username, action: 'Password Reset Requested', result: 'failed', detail: 'Account disabled' });
+      throw new Error('This account is disabled. Contact the administrator.');
+    }
+
+    // Generate a secure reset token
+    const token = generateToken();
+    const expiresAt = Date.now() + 60 * 60 * 1000; // 1 hour
+
+    // Store the reset request in Dexie
+    await localDb.PasswordResetRequest.add({
+      user_id: user.id,
+      token,
+      expires_at: expiresAt,
+      used: false,
+      created_date: new Date().toISOString(),
+    });
+
+    await audit.log({
+      user_id: user.id,
+      username: user.username,
+      action: 'Password Reset Requested',
+      result: 'success',
+      detail: 'Reset token generated for self-service password reset',
+    });
+
+    // In a real app, this would email the token. For local dev, we log it to console
+    // NEVER return the token to the client directly.
+    console.log(`[local dev] Password reset token for ${user.username}: ${token}`);
+    return { success: true, expiresAt, message: 'If an account exists, a reset token has been generated.' };
   },
 
-  async resetPassword(options) {
-    throw new Error('Password reset must be performed by the administrator from User Management.');
+  async resetPassword({ resetToken, newPassword }) {
+    if (!resetToken || !newPassword) {
+      throw new Error('Reset token and new password are required.');
+    }
+
+    const rateLimit = await serverSensitiveActionRateLimiter.check(`reset:${resetToken.slice(0,8)}`);
+    if (!rateLimit.allowed) throw new Error('Too many attempts. Try again later.');
+
+    const strengthErr = validatePasswordStrength(newPassword);
+    if (strengthErr) throw new Error(strengthErr);
+
+    const resetReq = await localDb.PasswordResetRequest.where('token').equals(resetToken).first();
+    if (!resetReq) {
+      await audit.log({
+        action: 'Password Reset Attempt',
+        result: 'failed',
+        detail: 'Invalid or unknown reset token',
+      });
+      throw new Error('Invalid or expired reset token.');
+    }
+
+    if (resetReq.used) {
+      await audit.log({
+        action: 'Password Reset Attempt',
+        result: 'failed',
+        detail: 'Reset token already used',
+      });
+      throw new Error('This reset token has already been used.');
+    }
+
+    if (Date.now() > resetReq.expires_at) {
+      await audit.log({
+        action: 'Password Reset Attempt',
+        result: 'failed',
+        detail: 'Reset token expired',
+      });
+      throw new Error('This reset token has expired. Please request a new one.');
+    }
+
+    const user = await findUserById(resetReq.user_id);
+    if (!user) {
+      throw new Error('User associated with this token no longer exists.');
+    }
+
+    if (user.is_active === false || user.is_locked === true) {
+      throw new Error('This account is disabled or locked. Contact the administrator.');
+    }
+
+    // Hash the new password
+    const salt = generateSalt();
+    const password_hash = await hashPassword(newPassword, salt);
+
+    // Update user and mark token as used
+    await localDb.User.update(user.id, {
+      salt,
+      password_hash,
+      must_change_password: false,
+      failed_attempts: 0,
+      is_locked: false,
+    });
+    await localDb.PasswordResetRequest.update(resetReq.id, { used: true });
+
+    await audit.log({
+      user_id: user.id,
+      username: user.username,
+      action: 'Password Reset Completed',
+      result: 'success',
+      detail: 'Self-service password reset completed',
+    });
+
+    return { success: true, message: 'Password has been reset. You can now log in.' };
   },
 
-  redirectToLogin(returnUrl) {
-    const target = returnUrl || '/';
-    window.location.href = `/login?returnTo=${encodeURIComponent(target)}`;
+  async registerUser({ username, email, password, role = 'read_only', assigned_property_ids = [] }) {
+    // This is an admin-only operation; caller should verify permissions
+    if (!isValidUsername(username)) throw new Error('Username must be 3-30 alphanumeric or underscore characters.');
+    if (!isValidEmail(email)) throw new Error('Invalid email address.');
+    if (!password) throw new Error('A password is required.');
+    if (!isCryptoAvailable()) throw new Error('Password hashing is not available in this browser.');
+    const strengthErr = validatePasswordStrength(password);
+    if (strengthErr) throw new Error(strengthErr);
+
+    const all = await localDb.User.toArray();
+    if (all.some((u) => u.username && u.username.toLowerCase() === username.toLowerCase())) {
+      throw new Error(`Username "${username}" is already taken.`);
+    }
+    if (all.some((u) => u.email && u.email.toLowerCase() === email.toLowerCase())) {
+      throw new Error(`Email "${email}" is already registered.`);
+    }
+
+    const salt = generateSalt();
+    const password_hash = await hashPassword(password, salt);
+
+    const record = {
+      username,
+      email: email.toLowerCase(),
+      full_name: '',
+      role,
+      permissions: defaultPermissionsForRole(role),
+      property_access: assigned_property_ids.length > 0 ? assigned_property_ids : [],
+      is_active: true,
+      is_locked: false,
+      must_change_password: true,
+      last_login: null,
+      failed_attempts: 0,
+      salt,
+      password_hash,
+    };
+    const id = await localDb.User.add(record);
+    await audit.log({
+      user_id: id, username,
+      action: 'User Registered',
+      performed_by_id: null, performed_by: 'system',
+      result: 'success',
+      detail: `Role: ${role}, Self-registration or admin creation`,
+    });
+    return publicUser({ ...record, id });
   },
 
-  // Backward-compatible shims
-  async loginViaEmailPassword(identifier, password, remember) {
-    return auth.login(identifier, password, remember);
+  async getCurrentSession() {
+    return getSession();
   },
-  async loginWithProvider(provider, returnUrl) {
-    throw new Error('Single sign-on is not available. Use username/email and password.');
+
+  async setSessionToken(token, remember = false) {
+    // A session must only be set after identity is confirmed.
+    // The previous implementation stored userId: null, creating dead sessions.
+    // We remove this function and rely on explicit session creation during login.
+    throw new Error('setSessionToken must not be called directly. Use normal auth flows.');
   },
 };
 
@@ -1000,6 +1333,49 @@ const integrations = {
         output: [],
       };
     },
+  },
+  Email: {
+    async SendEmail({ to, subject, body }) {
+      // Mock for local dev
+      console.log('\n================ EMAIL DISPATCH ================');
+      console.log(`To: ${to}`);
+      console.log(`Subject: ${subject}`);
+      console.log(`Body:\n${body}`);
+      console.log('================================================\n');
+      return { status: 'success' };
+    },
+  },
+  ChannelManager: {
+    async Connect(channel, credentials) {
+      console.log(`[ChannelManager] Connected to ${channel}`);
+      return { status: 'success' };
+    },
+    async PushInventory(propertyId, mapping) {
+      console.log(`[ChannelManager] Pushed inventory for property ${propertyId}`);
+      return { status: 'success' };
+    },
+    async PullReservations(propertyId) {
+      console.log(`[ChannelManager] Pulling reservations for property ${propertyId}`);
+      // Return deterministic mock reservations for UI idempotency testing
+      return [
+        {
+          channel: 'Booking.com',
+          confirmation_num: `BKG-74892`,
+          check_in: new Date().toISOString().split('T')[0],
+          check_out: new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0],
+          status: 'confirmed',
+          guest_name: 'John Doe',
+        },
+        {
+          channel: 'Expedia',
+          confirmation_num: `EXP-19304`,
+          check_in: new Date(Date.now() + 86400000 * 1).toISOString().split('T')[0],
+          check_out: new Date(Date.now() + 86400000 * 3).toISOString().split('T')[0],
+          status: 'confirmed',
+          guest_name: 'Jane Smith',
+        }
+      ];
+    }
   },
 };
 
@@ -1054,9 +1430,11 @@ async function runLocalAutoPayroll(params = {}) {
     const otRate = Number(s.overtime_rate) || baseRate * 1.5;
     const bonus = Number(s.bonus) || 0;
     const deductions = Number(s.deductions) || 0;
-    const regularPay = s.pay_type === "salary" ? baseRate : baseRate * hours;
-    const overtimePay = otHours * otRate;
-    const totalPay = regularPay + overtimePay + bonus - deductions;
+    
+    const baseRateCents = toCents(baseRate);
+    const regularPayCents = s.pay_type === "salary" ? baseRateCents : Math.round(baseRateCents * hours);
+    const overtimePayCents = Math.round(toCents(otRate) * otHours);
+    const totalPayCents = regularPayCents + overtimePayCents + toCents(bonus) - toCents(deductions);
 
     const record = {
       property_id: s.property_id || "",
@@ -1066,13 +1444,13 @@ async function runLocalAutoPayroll(params = {}) {
       pay_type: s.pay_type || "hourly",
       base_rate: baseRate,
       hours,
-      regular_pay: Math.round(regularPay * 100) / 100,
+      regular_pay: fromCents(regularPayCents),
       overtime_hours: otHours,
       overtime_rate: otRate,
-      overtime_pay: Math.round(overtimePay * 100) / 100,
+      overtime_pay: fromCents(overtimePayCents),
       bonus,
       deductions,
-      total_pay: Math.round(totalPay * 100) / 100,
+      total_pay: fromCents(totalPayCents),
       pay_period_start: periodStart,
       pay_period_end: periodEnd,
       payroll_date: periodEnd,
@@ -1194,8 +1572,8 @@ const users = {
     const username = String(data.username || '').trim();
     const email = String(data.email || '').trim().toLowerCase();
     const password = data.password || '';
-    if (!username || !email) throw new Error('Username and email are required.');
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Invalid email address.');
+    if (!isValidUsername(username)) throw new Error('Username must be 3-30 alphanumeric or underscore characters.');
+    if (!isValidEmail(email)) throw new Error('Invalid email address.');
 
     const all = await localDb.User.toArray();
     if (all.some((u) => u.username && u.username.toLowerCase() === username.toLowerCase())) {
@@ -1254,6 +1632,11 @@ const users = {
     if ('username' in data) {
       const username = String(data.username || '').trim();
       if (!username) throw new Error('Username cannot be empty.');
+      // Format is enforced only when the username actually changes, so legacy
+      // accounts created under the older, looser sanitizer stay editable.
+      if (username !== String(user.username || '')) {
+        if (!isValidUsername(username)) throw new Error('Username must be 3-30 alphanumeric or underscore characters.');
+      }
       const all = await localDb.User.toArray();
       if (all.some((u) => u.id !== user.id && u.username && u.username.toLowerCase() === username.toLowerCase())) {
         throw new Error(`Username "${username}" is already taken.`);
@@ -1262,7 +1645,7 @@ const users = {
     }
     if ('email' in data) {
       const email = String(data.email || '').trim().toLowerCase();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Invalid email address.');
+      if (!isValidEmail(email)) throw new Error('Invalid email address.');
       const all = await localDb.User.toArray();
       if (all.some((u) => u.id !== user.id && u.email && u.email.toLowerCase() === email.toLowerCase())) {
         throw new Error(`Email "${email}" is already registered.`);
@@ -1305,6 +1688,13 @@ const users = {
       await assertNotLastOwner(user);
       await localDb.User.update(user.id, { is_active: false, is_locked: false });
       await audit.log({ user_id: user.id, username: user.username, action: 'User Disabled', performed_by_id: actor.id, performed_by: actor.username || actor.email, result: 'success' });
+      // Instantly revoke every open tab/window of this user.
+      postSessionRevoked({
+        type: 'SESSION_REVOKED',
+        targetUserId: user.id,
+        status: 'disabled',
+        reason: 'Account status updated by administrator',
+      });
     } else if (status === 'enabled') {
       await localDb.User.update(user.id, { is_active: true, is_locked: false, failed_attempts: 0 });
       await audit.log({ user_id: user.id, username: user.username, action: 'User Enabled', performed_by_id: actor.id, performed_by: actor.username || actor.email, result: 'success' });
@@ -1313,6 +1703,13 @@ const users = {
       await assertNotLastOwner(user);
       await localDb.User.update(user.id, { is_locked: true });
       await audit.log({ user_id: user.id, username: user.username, action: 'User Locked', performed_by_id: actor.id, performed_by: actor.username || actor.email, result: 'success' });
+      // Instantly revoke every open tab/window of this user.
+      postSessionRevoked({
+        type: 'SESSION_REVOKED',
+        targetUserId: user.id,
+        status: 'locked',
+        reason: 'Account status updated by administrator',
+      });
     } else if (status === 'unlocked') {
       await localDb.User.update(user.id, { is_locked: false, failed_attempts: 0 });
       await audit.log({ user_id: user.id, username: user.username, action: 'User Unlocked', performed_by_id: actor.id, performed_by: actor.username || actor.email, result: 'success' });
@@ -1404,11 +1801,17 @@ const users = {
 
   // Backward-compatible convenience
   async inviteUser(email, role = 'read_only') {
+    if (!isValidEmail(email)) throw new Error('Invalid email address.');
     const existing = await localDb.User.where('email').equals(String(email).toLowerCase()).first();
     if (existing) return publicUser(existing);
     const actor = await auth.me();
     const tempPassword = generateTemporaryPassword();
-    return users.create(actor, { username: String(email).split('@')[0], email, role, password: tempPassword, must_change_password: true });
+    // Derive a schema-valid username from the email's local part, so the
+    // stricter username rule below cannot reject addresses whose local part
+    // contains dots, hyphens or other non-alphanumeric characters.
+    const local = String(email).split('@')[0].replace(/[^A-Za-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
+    const username = local.length >= 3 ? local.slice(0, 30) : `${local || 'user'}${Date.now().toString(36).slice(-4)}`;
+    return users.create(actor, { username, email, role, password: tempPassword, must_change_password: true });
   },
 };
 

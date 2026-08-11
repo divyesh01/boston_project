@@ -11,17 +11,21 @@ export function usePullToRefresh(refetch) {
   useEffect(() => {
     const onTouchStart = (e) => {
       if (window.scrollY <= 0 && !refreshing) {
-        active.current = true;
-        startY.current = e.touches[0].clientY;
+        if (e.touches && e.touches[0]) {
+          active.current = true;
+          startY.current = e.touches[0].clientY;
+        }
       }
     };
 
     const onTouchMove = (e) => {
       if (!active.current) return;
-      const diff = e.touches[0].clientY - startY.current;
-      if (diff > 0) {
-        currentPull.current = Math.min(diff * 0.5, threshold);
-        setPullDist(currentPull.current);
+      if (e.touches && e.touches[0]) {
+        const diff = e.touches[0].clientY - startY.current;
+        if (diff > 0) {
+          currentPull.current = Math.min(diff * 0.5, threshold);
+          setPullDist(currentPull.current);
+        }
       }
     };
 

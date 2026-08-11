@@ -7,7 +7,7 @@ import Card from "@/components/ui-exec/Card";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { useTransactions, useSources } from "@/lib/useHotelData";
-import { money, money2, num, pct, C, CHART_COLORS, downloadCsv, inRange } from "@/lib/hotel";
+import { money, money2, num, pct, C, CHART_COLORS, downloadCsv, downloadExcel, inRange } from "@/lib/hotel";
 import {
   summarize, seriesByGrain, revenueMix, paymentMix, employeeStats, monthlyBreakdown, GRAINS,
 } from "@/lib/transactionAnalytics";
@@ -354,18 +354,21 @@ export default function Transactions() {
           )}
           <LedgerTable
             rows={scoped}
-            onExport={(visible) =>
-              downloadCsv(
-                visible.map((r) => ({
-                  date: r.date, time: r.time, guest: r.guest_name, room: r.room_number,
-                  folio: r.folio_number, confirmation: r.confirmation_number,
-                  code: r.transaction_code, description: r.transaction_description,
-                  side: r.ledger_side, category: r.charge_category, method: r.payment_method,
-                  amount: r.amount, posted_by: r.username,
-                })),
-                `transactions_${dateRange.from || "all"}_${dateRange.to || "all"}.csv`
-              )
-            }
+            onExport={(visible, type) => {
+              const exportData = visible.map((r) => ({
+                date: r.date, time: r.time, guest: r.guest_name, room: r.room_number,
+                folio: r.folio_number, confirmation: r.confirmation_number,
+                code: r.transaction_code, description: r.transaction_description,
+                side: r.ledger_side, category: r.charge_category, method: r.payment_method,
+                amount: r.amount, posted_by: r.username,
+              }));
+              const filename = `transactions_${dateRange.from || "all"}_${dateRange.to || "all"}`;
+              if (type === 'excel') {
+                downloadExcel(exportData, `${filename}.xlsx`);
+              } else {
+                downloadCsv(exportData, `${filename}.csv`);
+              }
+            }}
           />
         </>
       )}

@@ -35,7 +35,7 @@ if (globalThis.navigator === undefined) {
 import fs from "node:fs";
 import path from "node:path";
 
-const DATA = process.env.DATA_DIR || path.join(process.env.HARNESS_ROOT || ".", "scripts", "data");
+const DATA = process.env.DATA_DIR || path.resolve(process.env.HARNESS_ROOT || ".", "scripts", "data");
 // Resolve the statistics fixture from the repo rather than one session's upload
 // directory (see verify-statistics.mjs for the same fix). If it is genuinely
 // absent, the transaction half of the coexistence check still runs and the
@@ -149,15 +149,19 @@ console.log("\n3. dedupe independence");
   // the bookkeeping assertions stay honest when the statistics fixture is
   // absent and only the transaction files run.
   const FILE_COUNT = imported.length;
-  const TABLE_COUNT = HAS_STATS ? 2 : 1;
+  const TXN_FILE_COUNT = TXN_FILES.length;
+  const STATS_FILE_COUNT = HAS_STATS ? 1 : 0;
+  const EXPECTED_ROLLBACKS = (TXN_FILE_COUNT * 2) + STATS_FILE_COUNT;
+  const EXPECTED_TABLE_COUNT = HAS_STATS ? 3 : 2; // TransactionLine, AnomalyAlert, (HotelMetric)
+  
   const rollbackRecords = await localDb.ImportRecordIds
     .where("property_id").equals(PROPERTY).toArray();
-  eq("a rollback record per imported file", rollbackRecords.length, FILE_COUNT);
+  eq("a rollback record per imported file/table", rollbackRecords.length, EXPECTED_ROLLBACKS);
   check("every rollback record carries its row ids",
     rollbackRecords.every((r) => Array.isArray(r.record_ids) && r.record_ids.length > 0),
     rollbackRecords.map((r) => `${r.entity}:${r.record_ids?.length ?? "none"}`).join(" "));
   check("rollback records cover every table written",
-    new Set(rollbackRecords.map((r) => r.entity)).size === TABLE_COUNT,
+    new Set(rollbackRecords.map((r) => r.entity)).size === EXPECTED_TABLE_COUNT,
     [...new Set(rollbackRecords.map((r) => r.entity))].join(","));
 
   const lifecycle = (await listImportSessions()).filter((s) => s.propertyId === PROPERTY);

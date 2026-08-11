@@ -1,6 +1,8 @@
 import React, { createContext, useState, useContext, useEffect, useCallback, useRef } from 'react';
 import db from '@/api/base44Client';
-import { canUser, ROUTE_PERMISSIONS } from '@/lib/permissions';
+import { canUser, canAccessRoute as checkRouteAccess } from '@/lib/permissions';
+import { subscribeSessionRevoked } from '@/lib/sessionChannel';
+import { logAuditEvent } from '@/lib/auditLogger';
 
 const AuthContext = /** @type {import('react').Context<any>} */ (createContext(null));
 
@@ -14,8 +16,10 @@ export const AuthProvider = ({ children }) => {
   const [authError, setAuthError] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [appPublicSettings, setAppPublicSettings] = useState({ id: 'local', public_settings: {} });
+  const [accountRestricted, setAccountRestricted] = useState(null);
   const activityEvents = useRef(0);
   const authenticatedRef = useRef(false);
+  const crossTabRevokingRef = useRef(false);
 
   console.log('[AuthProvider] Component mounted, initial state:', { isLoadingAuth, authChecked, isAuthenticated });
 
@@ -106,11 +110,11 @@ export const AuthProvider = ({ children }) => {
   const navigateToLoginRef = useRef(navigateToLogin);
   useEffect(() => { navigateToLoginRef.current = navigateToLogin; }, [navigateToLogin]);
 
-  const login = useCallback(async (identifier, password, remember = false) => {
+  const login = useCallback(async (identifier, password, remember = false, totpToken = null) => {
     setIsLoadingAuth(true);
     setAuthError(null);
     try {
-      const result = await db.auth.login(identifier, password, remember);
+      const result = await db.auth.login(identifier, password, remember, totpToken);
       setUser(result.user);
       setIsAuthenticated(true);
       setAuthChecked(true);
@@ -140,9 +144,9 @@ export const AuthProvider = ({ children }) => {
   }, [user]);
 
   const canAccessRoute = useCallback((path) => {
-    const required = ROUTE_PERMISSIONS[path];
-    if (!required) return true;
-    return canUser(user?.permissions, required);
+    // Delegates to the catch-all default-deny check in permissions.js: unmapped
+    // routes are denied unless they are public or explicitly mapped.
+    return checkRouteAccess(path, user?.permissions);
   }, [user]);
 
   const canAccessProperty = useCallback((propertyId) => {
@@ -152,6 +156,71 @@ export const AuthProvider = ({ children }) => {
     if (Array.isArray(user.property_access) && user.property_access.includes(propertyId)) return true;
     return false;
   }, [user]);
+
+  const validateCurrentAccountStatus = useCallback(async () => {
+    // Real-time account status check. Re-queries the live user record for the
+    // current session so Disabled/Locked accounts are revoked on the next route
+    // navigation/action instead of waiting for the 30s idle poll.
+    try {
+      const session = await db.auth.getCurrentSession();
+      if (!session) return { valid: false, status: 'revoked' };
+      const record = await db.entities.User.get(session.userId);
+      if (!record) return { valid: false, status: 'revoked' };
+      if (record.is_active === false) return { valid: false, status: 'disabled' };
+      if (record.is_locked === true) return { valid: false, status: 'locked' };
+      const me = await db.auth.me();
+      return { valid: true, user: me || record };
+    } catch (e) {
+      console.error('[AuthProvider] validateCurrentAccountStatus error:', e);
+      return { valid: false, status: 'revoked' };
+    }
+  }, []);
+
+  // Cross-tab revocation: an admin disabling/locking this user (or a logout) in
+  // another tab/window broadcasts over BroadcastChannel (with a localStorage
+  // `storage`-event fallback). Any open tab of this user revokes instantly —
+  // no route navigation and no 30s idle-poll wait.
+  const handleCrossTabRevocation = useCallback(async (message) => {
+    if (crossTabRevokingRef.current) return;
+    crossTabRevokingRef.current = true;
+    try {
+      const session = await db.auth.getCurrentSession();
+      const selfId = user?.id ?? session?.userId;
+      // If the session is already gone (e.g. a re-broadcast echo of our own
+      // logout), ignore the message to stay idempotent.
+      if (!selfId) return;
+      const targetsSelf =
+        message.type === 'SESSION_REVOKED_ALL' ||
+        String(message.targetUserId) === String(selfId);
+      if (!targetsSelf) return;
+      await logAuditEvent('Cross-Tab Session Revoked', {
+        user_id: selfId,
+        username: user?.username || 'unknown',
+        result: 'failed',
+        detail: message.reason || 'Session revoked from another tab',
+      });
+      await db.auth.logout().catch(() => {});
+      setUser(null);
+      setIsAuthenticated(false);
+      authenticatedRef.current = false;
+      if (message.status === 'logged_out') {
+        // Standard logout in another tab -> send this tab to the login page.
+        setAccountRestricted(null);
+        navigateToLoginRef.current(window.location.pathname + window.location.search);
+      } else {
+        // Account was disabled/locked -> show the restricted banner immediately.
+        setAccountRestricted(message.status === 'disabled' || message.status === 'locked' ? message.status : 'revoked');
+      }
+    } finally {
+      crossTabRevokingRef.current = false;
+    }
+  }, [user]);
+
+  useEffect(() => {
+    return subscribeSessionRevoked((message) => {
+      handleCrossTabRevocation(message);
+    });
+  }, [handleCrossTabRevocation]);
 
   console.log('[AuthProvider] Rendering context provider, state:', { isLoadingAuth, authChecked, isAuthenticated, hasUser: !!user });
 
@@ -164,12 +233,14 @@ export const AuthProvider = ({ children }) => {
       authError,
       appPublicSettings,
       authChecked,
+      accountRestricted,
       login,
       logout,
       navigateToLogin,
       checkUserAuth,
       checkAppState,
       refreshUser,
+      validateCurrentAccountStatus,
       hasPermission,
       canAccessRoute,
       canAccessProperty,

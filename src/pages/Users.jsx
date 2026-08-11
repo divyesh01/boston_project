@@ -20,7 +20,8 @@ import db from "@/api/base44Client";
 import { useProperties } from "@/lib/useHotelData";
 import { ROLES, PERMISSIONS, PERMISSION_KEYS, defaultPermissionsForRole } from "@/lib/permissions";
 import { isCryptoAvailable, validatePasswordStrength, generateTemporaryPassword } from "@/lib/security";
-import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeEmail, sanitizeAlphanumeric, sanitizeText } from "@/lib/securityUtils";
+import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeEmail, sanitizeAlphanumeric, sanitizeText, sanitizeCsvCell } from "@/lib/securityUtils";
+import { isValidEmail, isValidUsername } from "@/lib/validator";
 
 const ROLE_BADGE = {
   owner: "bg-purple-500/20 text-purple-300 border-purple-500/40",
@@ -129,9 +130,17 @@ export default function Users() {
     // Input sanitization
     const sanitizedUsername = sanitizeAlphanumeric(form.username);
     const sanitizedEmail = sanitizeEmail(form.email);
-    const sanitizedFullName = sanitizeText(form.full_name);
+    const sanitizedFullName = sanitizeCsvCell(sanitizeText(form.full_name));
     if (sanitizedUsername !== form.username || sanitizedEmail !== form.email) {
       toast({ variant: "destructive", title: "Error", description: "Invalid characters in username or email." });
+      return;
+    }
+    if (!isValidUsername(sanitizedUsername)) {
+      toast({ variant: "destructive", title: "Error", description: "Username must be 3-30 alphanumeric or underscore characters." });
+      return;
+    }
+    if (!isValidEmail(sanitizedEmail)) {
+      toast({ variant: "destructive", title: "Error", description: "Invalid email address." });
       return;
     }
     setActionBusy(true);
@@ -185,9 +194,17 @@ export default function Users() {
     // Input sanitization
     const sanitizedUsername = sanitizeAlphanumeric(editForm.username);
     const sanitizedEmail = sanitizeEmail(editForm.email);
-    const sanitizedFullName = sanitizeText(editForm.full_name);
+    const sanitizedFullName = sanitizeCsvCell(sanitizeText(editForm.full_name));
     if (sanitizedUsername !== editForm.username || sanitizedEmail !== editForm.email) {
       toast({ variant: "destructive", title: "Error", description: "Invalid characters in username or email." });
+      return;
+    }
+    if (sanitizedUsername !== String(editUser.username || "") && !isValidUsername(sanitizedUsername)) {
+      toast({ variant: "destructive", title: "Error", description: "Username must be 3-30 alphanumeric or underscore characters." });
+      return;
+    }
+    if (!isValidEmail(sanitizedEmail)) {
+      toast({ variant: "destructive", title: "Error", description: "Invalid email address." });
       return;
     }
     setActionBusy(true);

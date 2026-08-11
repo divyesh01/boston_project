@@ -1,5 +1,5 @@
 {
-  "generated": "2026-08-09T05:52:38.055Z",
+  "generated": "2026-08-09T20:12:16.641Z",
   "summary": {
     "passed": 78,
     "failed": 0,
@@ -292,7 +292,7 @@
       "dashboard": "$0.00",
       "diff": "$0.00",
       "pass": true,
-      "note": "deleted 214 rows (session imp_1786254388267_z2e6im6)"
+      "note": "deleted 214 rows (session imp_1786306102525_cld6dhw)"
     },
     {
       "test": "3.3 Re-import after delete restores rows",

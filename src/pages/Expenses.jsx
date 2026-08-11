@@ -12,7 +12,7 @@ import { filterCommittedPay } from "@/lib/payrollCalc";
 import { refundTotal } from "@/lib/paymentNorm";
 import { toast } from "sonner";
 import { EXPENSE_CATEGORIES, EXPENSE_FREQUENCIES, EXPENSE_STATUSES, expenseLabel, frequencyLabel, isStandardCategory, slugifyCategory } from "@/lib/expenseCategories";
-import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
+import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeCsvCell } from "@/lib/securityUtils";
 
 function useExpenses(propertyId) {
   return useQuery({
@@ -94,7 +94,7 @@ export default function Expenses() {
     [payroll, dateRange]
   );
   const totalPayroll = sum(payrollInPeriod, "total_pay");
-  const operatingExpenses = expensesInPeriod
+  const operatingExpenses = (expensesInPeriod || [])
     .filter((e) => e.category !== "payroll")
     .reduce((a, e) => a + (e.amount || 0), 0);
   const totalCosts = totalPayroll + operatingExpenses;
@@ -147,8 +147,8 @@ export default function Expenses() {
     const prop = properties.find((p) => p.id === (Array.isArray(property) ? property[0] : property));
     try {
       await db.entities.Expense.create({
-        expense_name: form.expense_name,
-        vendor: form.vendor || "",
+        expense_name: sanitizeCsvCell(String(form.expense_name || "").trim()),
+        vendor: sanitizeCsvCell(String(form.vendor || "").trim()),
         category,
         frequency: form.frequency,
         expense_date: form.expense_date,

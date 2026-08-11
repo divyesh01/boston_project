@@ -36,7 +36,7 @@ export function getTaxConfig() {
 }
 
 export function setTaxConfig(config) {
-  localStorage.setItem(TAX_KEY, JSON.stringify(config));
+  try { localStorage.setItem(TAX_KEY, JSON.stringify(config)); } catch {}
   syncDefaultTaxSetting(config.taxRate);
   notifySettingsChanged();
 }

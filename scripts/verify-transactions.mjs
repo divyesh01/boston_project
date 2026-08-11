@@ -13,6 +13,9 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { register } from "node:module";
+
+register(new URL("./resolve-alias.mjs", import.meta.url));
 
 // fake-indexeddb must be installed before anything imports Dexie.
 await import("fake-indexeddb/auto");
@@ -63,6 +66,7 @@ const {
 } = await import("@/lib/transactionAnalytics");
 const { filterByMonths } = await import("@/lib/useHotelData");
 const { LEDGER_SIDE_CHARGE, LEDGER_SIDE_PAYMENT } = await import("@/lib/transactionNorm");
+const { verifyAuditChain } = await import("@/lib/securityUtils");
 
 const PROPERTY_ID = "prop-test-1";
 
@@ -73,7 +77,7 @@ console.log("\n=== 0. Seed pre-existing data (must survive untouched) ===");
 const OTHER_TABLES = [
   "Property", "OccupancyDay", "SourceDay", "GrossRevenueDay", "PaymentDay",
   "ClerkShiftRecord", "UploadedReport", "Expense", "PayrollRun", "User",
-  "AuditLog", "Staff", "ScanResult", "HotelMetric",
+  "Staff", "ScanResult", "HotelMetric",
 ];
 for (const t of OTHER_TABLES) {
   await localDb[t].add({ property_id: PROPERTY_ID, date: "2026-01-01", marker: "pre-existing", created_date: new Date().toISOString() });
@@ -236,6 +240,16 @@ for (const t of OTHER_TABLES) {
 }
 const marker = await localDb.OccupancyDay.toArray();
 T("pre-existing row content intact", marker.every((r) => r.marker === "pre-existing"));
+// AuditLog is append-only by design and not seeded (its HMAC chain must start
+// at a real entry). The imports are expected to append anomaly-detection
+// entries per the checklist, and the whole chain must still verify.
+const auditLog = await localDb.AuditLog.orderBy("created_date").toArray();
+const newAudit = auditLog.slice(0);
+T("AuditLog: growth is anomaly-detection entries (checklist: detections in HMAC audit log)",
+  newAudit.length > 0 && newAudit.every((r) => r.action === "Anomaly Detection"),
+  newAudit.map((r) => r.action).join(","));
+const auditChain = await verifyAuditChain();
+T("AuditLog: SHA-256 HMAC chain verifies", auditChain.valid, auditChain.valid ? "" : JSON.stringify(auditChain));
 
 // ─────────────────────────────────────────────── 10. analytics
 console.log("\n=== 10. Analytics agree with the ledger ===");

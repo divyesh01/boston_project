@@ -2,12 +2,12 @@ import React, { useMemo, useState } from "react";
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from "recharts";
-import { BedDouble, DollarSign, Gauge, TrendingUp, Users2, Wallet, Info } from "lucide-react";
+import { BedDouble, DollarSign, Gauge, TrendingUp, Users2, Wallet, Info, Download } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { useHotelMetrics, useMetricDates } from "@/lib/useHotelData";
-import { money, money2, num, C, CHART_COLORS, downloadCsv } from "@/lib/hotel";
+import { money, money2, num, C, CHART_COLORS, downloadCsv, downloadExcel } from "@/lib/hotel";
 import {
   snapshotDates, snapshotFor, headline, headlineTrends, composition, quality,
   indexSnapshot, metricValue, firstValue, PERIODS, PERIOD_LABEL, HEADLINE,
@@ -340,26 +340,48 @@ export default function Statistics() {
         title="About this data"
         subtitle="What was imported and how much of it the app recognised"
         right={
-          <button
-            onClick={() =>
-              downloadCsv(
-                snapshot.rows.map((r) => ({
-                  business_date: r.business_date,
-                  section: r.section,
-                  metric: r.metric_name,
-                  category: r.metric_category,
-                  period: r.period,
-                  value: r.value,
-                  unit: r.unit,
-                  original: r.original_value,
-                })),
-                `statistics-${snapshot.date || "snapshot"}.csv`
-              )
-            }
-            className="rounded-lg bg-[#6C63FF]/20 px-3 py-1.5 text-xs text-[#6C63FF] transition-colors hover:bg-[#6C63FF]/35"
-          >
-            Export snapshot
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() =>
+                downloadCsv(
+                  snapshot.rows.map((r) => ({
+                    business_date: r.business_date,
+                    section: r.section,
+                    metric: r.metric_name,
+                    category: r.metric_category,
+                    period: r.period,
+                    value: r.value,
+                    unit: r.unit,
+                    original: r.original_value,
+                  })),
+                  `statistics-${snapshot.date || "snapshot"}.csv`
+                )
+              }
+              className="flex items-center gap-2 rounded-lg bg-[#6C63FF]/20 px-3 py-1.5 text-xs font-medium text-[#6C63FF] transition-colors hover:bg-[#6C63FF]/35"
+            >
+              <Download className="h-3.5 w-3.5" /> Export CSV
+            </button>
+            <button
+              onClick={() =>
+                downloadExcel(
+                  snapshot.rows.map((r) => ({
+                    business_date: r.business_date,
+                    section: r.section,
+                    metric: r.metric_name,
+                    category: r.metric_category,
+                    period: r.period,
+                    value: r.value,
+                    unit: r.unit,
+                    original: r.original_value,
+                  })),
+                  `statistics-${snapshot.date || "snapshot"}.xlsx`
+                )
+              }
+              className="flex items-center gap-2 rounded-lg bg-[#107C41]/20 px-3 py-1.5 text-xs font-medium text-[#107C41] transition-colors hover:bg-[#107C41]/35"
+            >
+              <Download className="h-3.5 w-3.5" /> Export Excel
+            </button>
+          </div>
         }
       >
         <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

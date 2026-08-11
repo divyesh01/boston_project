@@ -6,7 +6,7 @@ import Card from "@/components/ui-exec/Card";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
-import { downloadCsv } from "@/lib/hotel";
+import { downloadCsv, downloadExcel } from "@/lib/hotel";
 import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
 
@@ -277,6 +277,7 @@ export default function ManualEntry() {
     if (!file) return;
     const text = await file.text();
     const lines = text.split("\n").filter((l) => l.trim());
+    if (!lines.length) return;
     const headers = lines[0].split(",").map((h) => h.trim().replace(/"/g, ""));
     const importedRows = lines.slice(1).map((line) => {
       const cells = line.split(",").map((c) => c.trim().replace(/"/g, ""));
@@ -294,13 +295,17 @@ export default function ManualEntry() {
     setHasDraft(true);
   };
 
-  const handleExport = () => {
+  const handleExport = (type = 'csv') => {
     const exportRows = rows.map((r) => {
       const out = {};
       config.fields.forEach((f) => { out[f.key] = r[f.key] || ""; });
       return out;
     });
-    downloadCsv(exportRows, `manual_${reportType}_${Date.now()}.csv`);
+    if (type === 'excel') {
+      downloadExcel(exportRows, `manual_${reportType}_${Date.now()}.xlsx`);
+    } else {
+      downloadCsv(exportRows, `manual_${reportType}_${Date.now()}.csv`);
+    }
   };
 
   const handleSave = async () => {
@@ -501,7 +506,10 @@ export default function ManualEntry() {
                 <button onClick={() => fileInputRef.current?.click()} className="rounded-lg border border-white/10 p-2 text-slate-300 hover:border-[#00D4FF]/30" title="Import CSV">
                   <Upload className="h-4 w-4" />
                 </button>
-                <button onClick={handleExport} className="rounded-lg border border-white/10 p-2 text-slate-300 hover:border-[#00D4FF]/30" title="Export CSV">
+                <button onClick={() => handleExport('csv')} className="rounded-lg border border-white/10 p-2 text-[#6C63FF] hover:border-[#6C63FF]/30" title="Export CSV">
+                  <Download className="h-4 w-4" />
+                </button>
+                <button onClick={() => handleExport('excel')} className="rounded-lg border border-white/10 p-2 text-[#107C41] hover:border-[#107C41]/30" title="Export Excel">
                   <Download className="h-4 w-4" />
                 </button>
                 <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleImportFile} />

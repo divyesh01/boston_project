@@ -25,14 +25,14 @@ export class AIInsightsEngine {
     }
 
     const autoFixRecommendations = scannedFiles
-      .filter((f) => f.issues.some((i) => i.applyAutoFix))
+      .filter((f) => (f?.issues || []).some((i) => i.applyAutoFix))
       .map((f) => ({
         type: 'auto_fix',
         file: f.fileName,
-        issues: f.issues.filter((i) => i.applyAutoFix).length,
+        issues: (f.issues || []).filter((i) => i.applyAutoFix).length,
         severity: 'info',
         title: 'Auto-fixable issues found',
-        detail: `${f.issues.filter((i) => i.applyAutoFix).length} issues can be automatically resolved.`,
+        detail: `${(f.issues || []).filter((i) => i.applyAutoFix).length} issues can be automatically resolved.`,
         priority: 4,
         action: 'apply_auto_fix',
         params: { fileId: f.fileId, file: f.fileName },

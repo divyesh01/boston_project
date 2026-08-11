@@ -1,0 +1,37 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import * as React from "react";
+import { OTPInput, OTPInputContext } from "input-otp";
+import { Minus } from "lucide-react";
+import { cn } from "@/lib/utils";
+const InputOTP = React.forwardRef((
+/** @type {{
+ *   value?: string;
+ *   onChange?: (newValue: string) => unknown;
+ *   maxLength: number;
+ *   autoFocus?: boolean;
+ *   autoComplete?: string;
+ *   placeholder?: string;
+ *   className?: string;
+ *   containerClassName?: string;
+ *   onComplete?: (...args: any[]) => unknown;
+ *   children: import('react').ReactNode;
+ * }} */
+{ className, containerClassName, ...props }, ref) => (_jsx(OTPInput, { ref: ref, containerClassName: cn("flex items-center gap-2 has-[:disabled]:opacity-50", containerClassName), className: cn("disabled:cursor-not-allowed", className), ...props })));
+InputOTP.displayName = "InputOTP";
+const InputOTPGroup = React.forwardRef((
+/** @type {import('react').ComponentPropsWithoutRef<'div'>} */
+{ className, ...props }, ref) => (_jsx("div", { ref: ref, className: cn("flex items-center", className), ...props })));
+InputOTPGroup.displayName = "InputOTPGroup";
+const InputOTPSlot = React.forwardRef((
+/** @type {{ index: number; className?: string; children?: import('react').ReactNode }} */
+{ index, className, ...props }, ref) => {
+    const inputOTPContext = React.useContext(OTPInputContext);
+    const { char, hasFakeCaret, isActive } = inputOTPContext.slots[index];
+    return ((_jsxs("div", { ref: ref, className: cn("relative flex h-9 w-9 items-center justify-center border-y border-r border-input text-sm shadow-sm transition-all first:rounded-l-md first:border-l last:rounded-r-md", isActive && "z-10 ring-1 ring-ring", className), ...props, children: [char, hasFakeCaret && (_jsx("div", { className: "pointer-events-none absolute inset-0 flex items-center justify-center", children: _jsx("div", { className: "h-4 w-px animate-caret-blink bg-foreground duration-1000" }) }))] })));
+});
+InputOTPSlot.displayName = "InputOTPSlot";
+const InputOTPSeparator = React.forwardRef((
+/** @type {import('react').ComponentPropsWithoutRef<'div'>} */
+{ ...props }, ref) => (_jsx("div", { ref: ref, role: "separator", ...props, children: _jsx(Minus, {}) })));
+InputOTPSeparator.displayName = "InputOTPSeparator";
+export { InputOTP, InputOTPGroup, InputOTPSlot, InputOTPSeparator };

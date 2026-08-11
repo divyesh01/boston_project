@@ -8,7 +8,7 @@ import AuthLayout from "@/components/AuthLayout";
 import { useAuth } from "@/lib/AuthContext";
 import db from "@/api/base44Client";
 import { isCryptoAvailable, validatePasswordStrength } from "@/lib/security";
-import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeAlphanumeric, sanitizeEmail, sanitizeText } from "@/lib/securityUtils";
+import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeAlphanumeric, sanitizeEmail, sanitizeText, sanitizeCsvCell } from "@/lib/securityUtils";
 
 export default function Setup() {
   const navigate = useNavigate();
@@ -79,7 +79,7 @@ export default function Setup() {
     // Input sanitization
     const sanitizedUsername = sanitizeAlphanumeric(username);
     const sanitizedEmail = sanitizeEmail(email);
-    const sanitizedFullName = sanitizeText(fullName);
+    const sanitizedFullName = sanitizeCsvCell(sanitizeText(fullName));
     if (sanitizedUsername !== username || sanitizedEmail !== email) {
       setError("Invalid characters in username or email.");
       return;

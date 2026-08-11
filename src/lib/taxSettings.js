@@ -24,7 +24,7 @@ export function getTaxSettings() {
 }
 
 export function saveTaxSettings(list) {
-  localStorage.setItem(TAX_SETTINGS_KEY, JSON.stringify(list || []));
+  try { localStorage.setItem(TAX_SETTINGS_KEY, JSON.stringify(list || [])); } catch {}
   notifySettingsChanged();
 }
 

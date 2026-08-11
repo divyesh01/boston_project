@@ -28,8 +28,8 @@ export default function OtaMatrix({ rows }) {
 
   const totalGross = channels.reduce((a, c) => a + c.gross, 0);
   const totalCommission = channels.reduce((a, c) => a + c.commission, 0);
-  const bestDirect = channels.filter((c) => c.rate === 0).sort((a, b) => b.gross - a.gross)[0];
-  const worstOta = channels.filter((c) => c.rate > 0).sort((a, b) => b.commission - a.commission)[0];
+  const bestDirect = channels.filter((c) => c.rate === 0).sort((a, b) => b.gross - a.gross)[0] || null;
+  const worstOta = channels.filter((c) => c.rate > 0).sort((a, b) => b.commission - a.commission)[0] || null;
 
   return (
     <Card

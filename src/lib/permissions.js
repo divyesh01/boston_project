@@ -24,6 +24,7 @@ export const PERMISSIONS = [
   { key: "view_audit_logs", label: "View Audit Logs", group: "Admin" },
   { key: "backup_restore", label: "Backup & Restore", group: "Admin" },
   { key: "system_administration", label: "System Administration", group: "Admin" },
+  { key: "manage_pricing", label: "Manage Dynamic Pricing", group: "Revenue" },
 ];
 
 export const PERMISSION_KEYS = PERMISSIONS.map((p) => p.key);
@@ -50,6 +51,7 @@ export const ROLE_DEFAULTS = {
     view_audit_logs: false,
     backup_restore: false,
     system_administration: false,
+    manage_pricing: true,
   },
   front_desk: {
     view_dashboard: true,
@@ -123,12 +125,41 @@ export const ROUTE_PERMISSIONS = {
   "/expenses": "manage_expenses",
   "/payroll": "manage_expenses",
   "/ota": "manage_ota_commissions",
+  "/channel-manager": "manage_ota_commissions",
   "/data-template": "import_reports",
   "/manual-entry": "import_reports",
   "/forecasting": "view_dashboard",
   "/users": "manage_users",
   "/audit-log": "view_audit_logs",
+  "/data-intelligence": "view_dashboard",
+  "/change-password": "view_dashboard",
+  "/housekeeping": "view_dashboard",
+  "/reviews": "view_dashboard",
+  "/pricing": "manage_pricing",
 };
+
+// Routes reachable without any role/permission check.
+export const PUBLIC_ROUTES = new Set([
+  "/login",
+  "/forgot-password",
+  "/reset-password",
+  "/setup",
+]);
+
+// True when the path has an explicit permission mapping in ROUTE_PERMISSIONS.
+export function isRouteMapped(pathname) {
+  return Object.prototype.hasOwnProperty.call(ROUTE_PERMISSIONS, pathname);
+}
+
+// Catch-all route authorization. Default-DENY: a path that is neither a public
+// route nor explicitly mapped in ROUTE_PERMISSIONS is refused regardless of the
+// user's permissions. This prevents unknown/unmapped routes from being reachable.
+export function canAccessRoute(pathname, permissions) {
+  if (PUBLIC_ROUTES.has(pathname)) return true;
+  const required = ROUTE_PERMISSIONS[pathname];
+  if (!required) return false; // unmapped -> deny
+  return canUser(permissions, required);
+}
 
 export function canUser(permissions, permissionKey) {
   return !!(permissions && permissions[permissionKey]);

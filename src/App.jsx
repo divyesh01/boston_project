@@ -5,6 +5,8 @@ import { queryClientInstance } from '@/lib/query-client'
 import { BrowserRouter as Router, Route, Routes, Navigate, useLocation } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
+import { isRouteMapped } from '@/lib/permissions';
+import { logAuditEvent } from '@/lib/auditLogger';
 import ScrollToTop from './components/ScrollToTop';
 import Layout from '@/components/Layout';
 import { attachClickSounds } from '@/lib/sound';
@@ -25,15 +27,21 @@ const MtdGrowth = lazy(() => import('@/pages/MtdGrowth'));
 const Expenses = lazy(() => import('@/pages/Expenses'));
 const Payroll = lazy(() => import('@/pages/Payroll'));
 const OtaChannels = lazy(() => import('@/pages/OtaChannels'));
+const ChannelManager = lazy(() => import('@/pages/ChannelManager'));
 const DataTemplate = lazy(() => import('@/pages/DataTemplate'));
 const ManualEntry = lazy(() => import('@/pages/ManualEntry'));
 const Forecasting = lazy(() => import('@/pages/Forecasting'));
 const ActionCenterPage = lazy(() => import('@/pages/ActionCenter'));
 const Login = lazy(() => import('@/pages/Login'));
+const ForgotPassword = lazy(() => import('@/pages/ForgotPassword'));
+const ResetPassword = lazy(() => import('@/pages/ResetPassword'));
 const Setup = lazy(() => import('@/pages/Setup'));
 const Users = lazy(() => import('@/pages/Users'));
 const AuditLog = lazy(() => import('@/pages/AuditLog'));
 const ChangePassword = lazy(() => import('@/pages/ChangePassword'));
+const Housekeeping = lazy(() => import('@/pages/Housekeeping'));
+const Reviews = lazy(() => import('@/pages/Reviews'));
+const Pricing = lazy(() => import('@/pages/Pricing'));
 
 const PageFallback = () => (
   <div className="flex min-h-[50vh] items-center justify-center">
@@ -78,8 +86,42 @@ class TopLevelErrorBoundary extends Component {
   }
 }
 
+class LazyErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true };
+  }
+  componentDidCatch(error, info) {
+    console.error('[lazy-error-boundary]', error, info);
+  }
+  handleReset = () => {
+    this.setState({ hasError: false });
+  };
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-[#040D1A] p-6">
+          <div className="text-center">
+            <h2 className="text-xl text-white">Failed to load page</h2>
+            <p className="mt-2 text-sm text-slate-400">This page could not be loaded.</p>
+            <button onClick={() => window.location.reload()} className="mt-4 rounded bg-[#6C63FF] px-4 py-2 text-white">
+              Reload
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const Suspended = ({ children }) => (
-  <Suspense fallback={<PageFallback />}>{children}</Suspense>
+  <LazyErrorBoundary>
+    <Suspense fallback={<PageFallback />}>{children}</Suspense>
+  </LazyErrorBoundary>
 );
 
 const LoginRedirect = () => {
@@ -113,9 +155,25 @@ const RequireAuth = ({ children }) => {
 };
 
 const RequirePermission = ({ children }) => {
-  const { canAccessRoute } = useAuth();
+  const { canAccessRoute, user } = useAuth();
   const location = useLocation();
-  if (!canAccessRoute(location.pathname)) {
+  const allowed = canAccessRoute(location.pathname);
+
+  // Log every denied route attempt — including unmapped (default-deny) routes.
+  useEffect(() => {
+    if (!allowed) {
+      logAuditEvent('Unauthorized Route Access', {
+        user_id: user?.id,
+        username: user?.username,
+        result: 'failed',
+        detail: isRouteMapped(location.pathname)
+          ? `No permission for route ${location.pathname}`
+          : `Unmapped route: ${location.pathname}`,
+      });
+    }
+  }, [allowed, location.pathname, user?.id, user?.username]);
+
+  if (!allowed) {
     return <Navigate to="/" replace />;
   }
   return children;
@@ -161,12 +219,16 @@ const ProtectedRoutes = () => {
         <Route path="/expenses" element={<Suspended><Expenses /></Suspended>} />
         <Route path="/payroll" element={<Suspended><Payroll /></Suspended>} />
         <Route path="/ota" element={<Suspended><OtaChannels /></Suspended>} />
+        <Route path="/channel-manager" element={<Suspended><ChannelManager /></Suspended>} />
         <Route path="/data-template" element={<Suspended><DataTemplate /></Suspended>} />
         <Route path="/manual-entry" element={<Suspended><ManualEntry /></Suspended>} />
         <Route path="/forecasting" element={<Suspended><Forecasting /></Suspended>} />
         <Route path="/users" element={<Suspended><Users /></Suspended>} />
         <Route path="/audit-log" element={<Suspended><AuditLog /></Suspended>} />
         <Route path="/change-password" element={<Suspended><ChangePassword /></Suspended>} />
+        <Route path="/housekeeping" element={<Suspended><Housekeeping /></Suspended>} />
+        <Route path="/reviews" element={<Suspended><Reviews /></Suspended>} />
+        <Route path="/pricing" element={<Suspended><Pricing /></Suspended>} />
       </Route>
       <Route path="*" element={<PageNotFound />} />
     </Routes>
@@ -177,6 +239,8 @@ const AuthenticatedApp = () => {
   return (
     <Routes>
       <Route path="/login" element={<LoginRedirect />} />
+      <Route path="/forgot-password" element={<Suspended><ForgotPassword /></Suspended>} />
+      <Route path="/reset-password" element={<Suspended><ResetPassword /></Suspended>} />
       <Route path="/setup" element={<Suspended><Setup /></Suspended>} />
       <Route path="/*" element={<ProtectedRoutes />} />
     </Routes>
@@ -186,14 +250,23 @@ const AuthenticatedApp = () => {
 function App() {
   useEffect(() => {
     attachClickSounds();
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const update = () => {
-      if (mq.matches) document.documentElement.classList.add("dark");
-      else document.documentElement.classList.remove("dark");
-    };
-    update();
-    mq.addEventListener("change", update);
-    return () => mq.removeEventListener("change", update);
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    try {
+      const mq = window.matchMedia("(prefers-color-scheme: dark)");
+      const update = () => {
+        if (mq.matches) document.documentElement.classList.add("dark");
+        else document.documentElement.classList.remove("dark");
+      };
+      update();
+      if (mq.addEventListener) mq.addEventListener("change", update);
+      else if (mq.addListener) mq.addListener(update);
+      return () => {
+        if (mq.removeEventListener) mq.removeEventListener("change", update);
+        else if (mq.removeListener) mq.removeListener(update);
+      };
+    } catch {
+      // matchMedia not supported or quota issue — skip dark mode sync
+    }
   }, []);
 
   return (

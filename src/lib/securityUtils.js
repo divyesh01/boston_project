@@ -28,7 +28,11 @@ class RateLimiter {
   }
 
   _setStore(store) {
-    localStorage.setItem(this.key, JSON.stringify(store));
+    try {
+      localStorage.setItem(this.key, JSON.stringify(store));
+    } catch (e) {
+      // Quota exceeded or storage disabled — silently drop the write
+    }
   }
 
   _cleanOldRequests(store, now) {
@@ -76,7 +80,9 @@ class RateLimiter {
   }
 
   reset() {
-    localStorage.removeItem(this.key);
+    try {
+      localStorage.removeItem(this.key);
+    } catch {}
   }
 
   getStatus() {
@@ -189,6 +195,26 @@ export function sanitizeText(str, maxLength = 1000) {
     .slice(0, maxLength);
 }
 
+// ─── CSV Formula Injection Defense ───
+
+// Neutralize spreadsheet formula/DDE-injection payloads. Excel, Google Sheets
+// and LibreOffice execute a cell as a formula/DDE link when its first character
+// is one of =, +, -, @, tab, or CR — so those are checked against the raw value
+// (never a trimmed copy, or tab/CR-prefixed payloads would evade detection).
+// Whitespace-padded formulas (e.g. "  =1+1") are also caught because many CSV
+// importers trim leading whitespace before evaluating. A single leading quote
+// forces the cell to be read as literal text. Non-strings pass through
+// untouched; the caller's original string is returned verbatim apart from the
+// guard prefix so surrounding whitespace and casing are preserved.
+export function neutralizeFormula(val) {
+  if (typeof val !== 'string') return val;
+  if (/^[\t\r ]*[=\-+@\t\r]/.test(val)) return "'" + val;
+  return val;
+}
+
+// Alias kept for backwards compatibility with existing call sites.
+export const sanitizeCsvCell = neutralizeFormula;
+
 // ─── CSRF Protection ───
 
 const CSRF_TOKEN_KEY = 'rri_csrf_token';
@@ -196,27 +222,51 @@ const CSRF_TOKEN_LENGTH = 32;
 
 function generateCsrfToken() {
   const arr = new Uint8Array(CSRF_TOKEN_LENGTH);
-  crypto.getRandomValues(arr);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    crypto.getRandomValues(arr);
+  } else {
+    for (let i = 0; i < CSRF_TOKEN_LENGTH; i++) arr[i] = Math.floor(Math.random() * 256);
+  }
   return Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+function safeSessionStorage() {
+  try {
+    if (typeof sessionStorage === "undefined") return null;
+    sessionStorage.setItem("_rri_test_", "_test_");
+    sessionStorage.removeItem("_rri_test_");
+    return sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
 export function getCsrfToken() {
-  let token = sessionStorage.getItem(CSRF_TOKEN_KEY);
+  const ss = safeSessionStorage();
+  if (!ss) return generateCsrfToken();
+  let token = ss.getItem(CSRF_TOKEN_KEY);
   if (!token) {
     token = generateCsrfToken();
-    sessionStorage.setItem(CSRF_TOKEN_KEY, token);
+    ss.setItem(CSRF_TOKEN_KEY, token);
   }
   return token;
 }
 
 export function rotateCsrfToken() {
   const token = generateCsrfToken();
-  sessionStorage.setItem(CSRF_TOKEN_KEY, token);
+  const ss = safeSessionStorage();
+  if (ss) {
+    try {
+      ss.setItem(CSRF_TOKEN_KEY, token);
+    } catch {}
+  }
   return token;
 }
 
 export function validateCsrfToken(token) {
-  const stored = sessionStorage.getItem(CSRF_TOKEN_KEY);
+  const ss = safeSessionStorage();
+  if (!ss) return false;
+  const stored = ss.getItem(CSRF_TOKEN_KEY);
   return stored && stored === token;
 }
 
@@ -226,12 +276,33 @@ export function validateCsrfToken(token) {
 const ENCRYPTION_KEY_PREFIX = 'rri_enc_';
 
 async function getEncryptionKey() {
-  let key = sessionStorage.getItem(ENCRYPTION_KEY_PREFIX + 'key');
+  const ss = safeSessionStorage();
+  if (!ss) {
+    // Fallback: generate a per-session in-memory key
+    const w = /** @type {any} */ (window);
+    if (!w.__rri_enc_key) {
+      const arr = new Uint8Array(32);
+      if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+        crypto.getRandomValues(arr);
+      } else {
+        for (let i = 0; i < 32; i++) arr[i] = Math.floor(Math.random() * 256);
+      }
+      w.__rri_enc_key = Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
+    }
+    return w.__rri_enc_key;
+  }
+  let key = ss.getItem(ENCRYPTION_KEY_PREFIX + 'key');
   if (!key) {
     const arr = new Uint8Array(32);
-    crypto.getRandomValues(arr);
+    if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+      crypto.getRandomValues(arr);
+    } else {
+      for (let i = 0; i < 32; i++) arr[i] = Math.floor(Math.random() * 256);
+    }
     key = Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
-    sessionStorage.setItem(ENCRYPTION_KEY_PREFIX + 'key', key);
+    try {
+      ss.setItem(ENCRYPTION_KEY_PREFIX + 'key', key);
+    } catch {}
   }
   return key;
 }
@@ -261,7 +332,10 @@ export async function secureStore(key, value) {
     const combined = new Uint8Array(iv.length + encrypted.byteLength);
     combined.set(iv);
     combined.set(new Uint8Array(encrypted), iv.length);
-    localStorage.setItem(ENCRYPTION_KEY_PREFIX + key, Array.from(combined).map((b) => b.toString(16).padStart(2, '0')).join(''));
+    const ls = safeLocalStorage();
+    if (ls) {
+      try { ls.setItem(ENCRYPTION_KEY_PREFIX + key, Array.from(combined).map((b) => b.toString(16).padStart(2, '0')).join('')); } catch {}
+    }
     return true;
   } catch (e) {
     console.error('[secureStore] failed:', e);
@@ -271,7 +345,9 @@ export async function secureStore(key, value) {
 
 export async function secureRetrieve(key) {
   try {
-    const stored = localStorage.getItem(ENCRYPTION_KEY_PREFIX + key);
+    const ls = safeLocalStorage();
+    if (!ls) return null;
+    const stored = ls.getItem(ENCRYPTION_KEY_PREFIX + key);
     if (!stored) return null;
     const keyHex = await getEncryptionKey();
     const cryptoKey = await importKey(keyHex);
@@ -291,20 +367,51 @@ export async function secureRetrieve(key) {
 }
 
 export function secureRemove(key) {
-  localStorage.removeItem(ENCRYPTION_KEY_PREFIX + key);
+  try { localStorage.removeItem(ENCRYPTION_KEY_PREFIX + key); } catch {}
 }
 
 // ─── Audit Log Helpers ───
 
 const AUDIT_CHAIN_KEY = 'rri_audit_chain';
 
+function safeLocalStorage() {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    localStorage.setItem("_rri_test_", "_test_");
+    localStorage.removeItem("_rri_test_");
+    return localStorage;
+  } catch {
+    return null;
+  }
+}
+
 async function getChainSecret() {
-  let secret = sessionStorage.getItem(AUDIT_CHAIN_KEY);
+  const ls = safeLocalStorage();
+  if (!ls) {
+    const w = /** @type {any} */ (window);
+  if (!w.__rri_audit_chain) {
+      const arr = new Uint8Array(32);
+      if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+        crypto.getRandomValues(arr);
+      } else {
+        for (let i = 0; i < 32; i++) arr[i] = Math.floor(Math.random() * 256);
+      }
+      w.__rri_audit_chain = Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
+    }
+    return w.__rri_audit_chain;
+  }
+  let secret = ls.getItem(AUDIT_CHAIN_KEY);
   if (!secret) {
     const arr = new Uint8Array(32);
-    crypto.getRandomValues(arr);
+    if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+      crypto.getRandomValues(arr);
+    } else {
+      for (let i = 0; i < 32; i++) arr[i] = Math.floor(Math.random() * 256);
+    }
     secret = Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
-    sessionStorage.setItem(AUDIT_CHAIN_KEY, secret);
+    try {
+      ls.setItem(AUDIT_CHAIN_KEY, secret);
+    } catch {}
   }
   return secret;
 }
@@ -421,7 +528,11 @@ export function getDeviceFingerprint() {
 export function getCspNonce() {
   // Generate a nonce for inline scripts/styles if needed
   const arr = new Uint8Array(16);
-  crypto.getRandomValues(arr);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    crypto.getRandomValues(arr);
+  } else {
+    for (let i = 0; i < 16; i++) arr[i] = Math.floor(Math.random() * 256);
+  }
   return Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 

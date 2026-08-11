@@ -6,7 +6,7 @@ import { money } from '@/lib/hotel';
 
 export class OwnerIntelligenceService {
   // Detect demand trends - holiday/weekend performance
-  static analyzeDemandPatterns(occRows, properties) {
+  static analyzeDemandPatterns(occRows = [], properties = []) {
     const stats = CalculationService.calculatePerPropertyStats(occRows, properties);
     const byProperty = {};
     
@@ -134,7 +134,7 @@ export class OwnerIntelligenceService {
   }
   
   // OTA profitability analysis
-  static analyzeOtaProfitability(srcRows, occRows, properties) {
+  static analyzeOtaProfitability(srcRows = [], occRows = [], properties = []) {
     const channelMetrics = CalculationService.calculateChannelMetrics(srcRows);
     const occMetrics = CalculationService.calculateOccupancyMetrics(occRows, {});
     
@@ -152,7 +152,7 @@ export class OwnerIntelligenceService {
   }
   
   // Upcoming high-demand dates
-  static findUpcomingHighDemand(occRows, properties, daysAhead = 30) {
+  static findUpcomingHighDemand(occRows = [], properties = [], daysAhead = 30) {
     // This would need future booking data; for now, use historical patterns
     const now = new Date();
     const upcoming = [];
@@ -186,7 +186,7 @@ export class OwnerIntelligenceService {
   }
   
   // Profit leakage detection
-  static detectProfitLeakage(occRows, payRows, expenses, payroll, srcRows, properties) {
+  static detectProfitLeakage(occRows = [], payRows = [], expenses = [], payroll = [], srcRows = [], properties = []) {
     const leaks = [];
     
     // 1. High OTA commission leakage
@@ -240,7 +240,7 @@ export class OwnerIntelligenceService {
   }
   
   // Comprehensive executive summary
-  static generateExecutiveInsights(occRows, payRows, expenses, payroll, srcRows, grossRows, properties, dateRange) {
+  static generateExecutiveInsights(occRows = [], payRows = [], expenses = [], payroll = [], srcRows = [], grossRows = [], properties = [], dateRange = { from: '', to: '' }) {
     const insights = [];
     
     // Revenue trend

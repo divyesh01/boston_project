@@ -61,12 +61,12 @@ export default function PieDonut(
   const colorAt = (i) => palette[i % palette.length];
   const radiusInner = innerRadius !== undefined ? innerRadius : type === "donut" ? Math.round(outerRadius * 0.55) : 0;
 
-  // On-chart label: readable only when the slice is big enough to fit one.
+  const trunc = (s) => s && s.length > 18 ? s.slice(0, 16) + "\u2026" : s;
   const renderLabel = ({ name, value, percent }) => {
     const share = (percent || 0) * 100;
     if (share < minShareLabel) return "";
-    if (share < 4) return `${name} (${share.toFixed(1)}%)`;
-    return `${name} ${formatter(value)} (${share.toFixed(1)}%)`;
+    if (share < 4) return `${trunc(name)} (${share.toFixed(1)}%)`;
+    return `${trunc(name)} ${formatter(value)} (${share.toFixed(1)}%)`;
   };
 
   if (!chart.length) {
@@ -74,7 +74,7 @@ export default function PieDonut(
   }
 
   return (
-    <div style={{ height }} className="relative w-full">
+    <div style={{ height }} className="relative w-full overflow-hidden">
       <ResponsiveContainer width="100%" height="100%">
         <PieChart>
           <Pie

@@ -45,19 +45,19 @@ export default function PieDonut(
     const palette = colors && colors.length ? colors : CHART_COLORS;
     const colorAt = (i) => palette[i % palette.length];
     const radiusInner = innerRadius !== undefined ? innerRadius : type === "donut" ? Math.round(outerRadius * 0.55) : 0;
-    // On-chart label: readable only when the slice is big enough to fit one.
+    const trunc = (s) => s && s.length > 18 ? s.slice(0, 16) + "\u2026" : s;
     const renderLabel = ({ name, value, percent }) => {
         const share = (percent || 0) * 100;
         if (share < minShareLabel)
             return "";
         if (share < 4)
-            return `${name} (${share.toFixed(1)}%)`;
-        return `${name} ${formatter(value)} (${share.toFixed(1)}%)`;
+            return `${trunc(name)} (${share.toFixed(1)}%)`;
+        return `${trunc(name)} ${formatter(value)} (${share.toFixed(1)}%)`;
     };
     if (!chart.length) {
         return _jsx("p", { className: "py-12 text-center text-sm text-slate-500", children: "No data to visualise." });
     }
-    return (_jsxs("div", { style: { height }, className: "relative w-full", children: [_jsx(ResponsiveContainer, { width: "100%", height: "100%", children: _jsxs(PieChart, { children: [_jsx(Pie, { data: chart, dataKey: "value", nameKey: "name", cx: "50%", cy: "50%", outerRadius: outerRadius, innerRadius: radiusInner, paddingAngle: 2, label: renderLabel, labelLine: { stroke: "#475569", strokeWidth: 1 }, isAnimationActive: false, children: chart.map((entry, i) => (_jsx(Cell, { fill: entry.color || colorAt(i), stroke: "#040D1A", strokeWidth: 2 }, i))) }), _jsx(Tooltip, { contentStyle: tip, formatter: (value, name, entry) => {
+    return (_jsxs("div", { style: { height }, className: "relative w-full overflow-hidden", children: [_jsx(ResponsiveContainer, { width: "100%", height: "100%", children: _jsxs(PieChart, { children: [_jsx(Pie, { data: chart, dataKey: "value", nameKey: "name", cx: "50%", cy: "50%", outerRadius: outerRadius, innerRadius: radiusInner, paddingAngle: 2, label: renderLabel, labelLine: { stroke: "#475569", strokeWidth: 1 }, isAnimationActive: false, children: chart.map((entry, i) => (_jsx(Cell, { fill: entry.color || colorAt(i), stroke: "#040D1A", strokeWidth: 2 }, i))) }), _jsx(Tooltip, { contentStyle: tip, formatter: (value, name, entry) => {
                                 const share = total ? (((Number(value) || 0) / total) * 100).toFixed(1) : "0";
                                 return [`${formatter(value)} (${share}%)`, name];
                             } }), showLegend && (_jsx(Legend, { wrapperStyle: { fontSize: 11, color: "#94a3b8" }, formatter: (value, entry) => {

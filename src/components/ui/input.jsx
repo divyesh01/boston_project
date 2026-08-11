@@ -1,13 +1,52 @@
+/**
+ * @fileoverview Input component for text entry.
+ * 
+ * Styled text input with focus ring, disabled state, and file input support.
+ * Used throughout forms and search interfaces.
+ * 
+ * @module ui/input
+ * @example
+ * ```jsx
+ * import { Input } from "@/components/ui/input";
+ * 
+ * // Basic input
+ * <Input placeholder="Enter your name" />
+ * 
+ * // With label
+ * <div>
+ *   <Label htmlFor="email">Email</Label>
+ *   <Input id="email" type="email" placeholder="you@example.com" />
+ * </div>
+ * 
+ * // File input
+ * <Input type="file" accept=".csv,.xlsx" />
+ * ```
+ */
+
 import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * Input component for text entry.
+ * 
+ * Styled input element with focus-visible ring, disabled state,
+ * placeholder styling, and file input support. Includes responsive
+ * font sizing for mobile devices.
+ * 
+ * @type {React.ComponentPropsWithoutRef<"input">}
+ * @property {string} [type] - Input type (text, email, password, file, etc.)
+ * @property {string} [className] - Additional CSS classes
+ * @property {string} [placeholder] - Placeholder text
+ * @property {boolean} [disabled] - Whether input is disabled
+ * @property {boolean} [readOnly] - Whether input is read-only
+ * @property {string} [value] - Controlled input value
+ * @property {(e: React.ChangeEvent<HTMLInputElement>) => void} [onChange] - Change handler
+ * @property {(e: React.FocusEvent<HTMLInputElement>) => void} [onFocus] - Focus handler
+ * @property {(e: React.FocusEvent<HTMLInputElement>) => void} [onBlur] - Blur handler
+ */
 const Input = React.forwardRef(
-  (
-    /** @type {import('react').ComponentPropsWithoutRef<'input'>} */
-    { className, type, ...props },
-    ref
-  ) => {
+  ({ className, type, ...props }, ref) => {
   return (
     (<input
       type={type}
@@ -16,7 +55,7 @@ const Input = React.forwardRef(
         className
       )}
       ref={ref}
-      {...props} />)
+      {...props} />
   );
 })
 Input.displayName = "Input"

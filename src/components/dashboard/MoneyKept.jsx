@@ -640,7 +640,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
           </div>
 
           {/* Pie chart */}
-          <div className="h-[340px]">
+          <div className="h-[340px] overflow-hidden">
             {pieData.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -653,6 +653,14 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
                     outerRadius={110}
                     innerRadius={55}
                     paddingAngle={2}
+                    label={({ name, value, percent }) => {
+                      const share = (percent || 0) * 100;
+                      const t = name && name.length > 18 ? name.slice(0, 16) + "\u2026" : name;
+                      if (share < 2) return "";
+                      if (share < 5) return `${t} (${share.toFixed(1)}%)`;
+                      return `${t} ${money(value)} (${share.toFixed(1)}%)`;
+                    }}
+                    labelLine={{ stroke: "#475569", strokeWidth: 1 }}
                   >
                     {pieData.map((entry, i) => (
                       <Cell key={i} fill={entry.color} stroke="#040D1A" strokeWidth={2} />

@@ -1,13 +1,57 @@
+/**
+ * @fileoverview Table components for data display.
+ * 
+ * Semantic table components with consistent styling for headers,
+ * bodies, rows, and cells. Used throughout the app for data
+ * grids, lists, and comparison views.
+ * 
+ * @module ui/table
+ * @example
+ * ```jsx
+ * import {
+ *   Table,
+ *   TableHeader,
+ *   TableBody,
+ *   TableRow,
+ *   TableHead,
+ *   TableCell,
+ * } from "@/components/ui/table";
+ * 
+ * <Table>
+ *   <TableHeader>
+ *     <TableRow>
+ *       <TableHead>Name</TableHead>
+ *       <TableHead>Amount</TableHead>
+ *     </TableRow>
+ *   </TableHeader>
+ *   <TableBody>
+ *     {items.map((item) => (
+ *       <TableRow key={item.id}>
+ *         <TableCell>{item.name}</TableCell>
+ *         <TableCell>{item.amount}</TableCell>
+ *       </TableRow>
+ *     ))}
+ *   </TableBody>
+ * </Table>
+ * ```
+ */
+
 import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * Table wrapper with scrollable container.
+ * 
+ * Wraps the table element in a scrollable div for horizontal
+ * overflow handling. Required for responsive table layouts.
+ * 
+ * @type {React.ComponentPropsWithoutRef<"table">}
+ * @property {string} [className] - Additional CSS classes
+ * @property {React.ReactNode} children - TableHeader, TableBody, TableFooter
+ */
 const Table = React.forwardRef(
-  (
-    /** @type {import('react').ComponentPropsWithoutRef<'table'>} */
-    { className, ...props },
-    ref
-  ) => (
+  ({ className, ...props }, ref) => (
   <div className="relative w-full overflow-auto">
     <table
       ref={ref}
@@ -17,22 +61,34 @@ const Table = React.forwardRef(
 ))
 Table.displayName = "Table"
 
+/**
+ * Table header section.
+ * 
+ * Contains column header rows. Bottom border applied to rows
+ * for visual separation from body content.
+ * 
+ * @type {React.ComponentPropsWithoutRef<"thead">}
+ * @property {string} [className] - Additional CSS classes
+ * @property {React.ReactNode} children - TableRow elements with TableHead cells
+ */
 const TableHeader = React.forwardRef(
-  (
-    /** @type {import('react').ComponentPropsWithoutRef<'thead'>} */
-    { className, ...props },
-    ref
-  ) => (
+  ({ className, ...props }, ref) => (
   <thead ref={ref} className={cn("[&_tr]:border-b", className)} {...props} />
 ))
 TableHeader.displayName = "TableHeader"
 
+/**
+ * Table body section.
+ * 
+ * Contains data rows. Removes bottom border from last row
+ * for clean visual termination.
+ * 
+ * @type {React.ComponentPropsWithoutRef<"tbody">}
+ * @property {string} [className] - Additional CSS classes
+ * @property {React.ReactNode} children - TableRow elements
+ */
 const TableBody = React.forwardRef(
-  (
-    /** @type {import('react').ComponentPropsWithoutRef<'tbody'>} */
-    { className, ...props },
-    ref
-  ) => (
+  ({ className, ...props }, ref) => (
   <tbody
     ref={ref}
     className={cn("[&_tr:last-child]:border-0", className)}
@@ -40,12 +96,18 @@ const TableBody = React.forwardRef(
 ))
 TableBody.displayName = "TableBody"
 
+/**
+ * Table footer section.
+ * 
+ * Contains summary rows with muted background. Used for
+ * totals, averages, or aggregated data.
+ * 
+ * @type {React.ComponentPropsWithoutRef<"tfoot">}
+ * @property {string} [className] - Additional CSS classes
+ * @property {React.ReactNode} children - TableRow elements
+ */
 const TableFooter = React.forwardRef(
-  (
-    /** @type {import('react').ComponentPropsWithoutRef<'tfoot'>} */
-    { className, ...props },
-    ref
-  ) => (
+  ({ className, ...props }, ref) => (
   <tfoot
     ref={ref}
     className={cn("border-t bg-muted/50 font-medium [&>tr]:last:border-b-0", className)}
@@ -53,12 +115,19 @@ const TableFooter = React.forwardRef(
 ))
 TableFooter.displayName = "TableFooter"
 
+/**
+ * Table row element.
+ * 
+ * Row with hover effect and selected state. Transitions background
+ * color on hover for interactive feedback.
+ * 
+ * @type {React.ComponentPropsWithoutRef<"tr">}
+ * @property {string} [className] - Additional CSS classes
+ * @property {boolean} [data-state] - Selection state ('selected')
+ * @property {React.ReactNode} children - TableCell or TableHead elements
+ */
 const TableRow = React.forwardRef(
-  (
-    /** @type {import('react').ComponentPropsWithoutRef<'tr'>} */
-    { className, ...props },
-    ref
-  ) => (
+  ({ className, ...props }, ref) => (
   <tr
     ref={ref}
     className={cn(
@@ -69,12 +138,19 @@ const TableRow = React.forwardRef(
 ))
 TableRow.displayName = "TableRow"
 
+/**
+ * Table header cell.
+ * 
+ * Column header with muted text and aligned checkbox support.
+ * Uses medium font weight for visual hierarchy.
+ * 
+ * @type {React.ComponentPropsWithoutRef<"th">}
+ * @property {string} [className] - Additional CSS classes
+ * @property {'left' | 'center' | 'right'} [align] - Text alignment
+ * @property {React.ReactNode} children - Header content
+ */
 const TableHead = React.forwardRef(
-  (
-    /** @type {import('react').ComponentPropsWithoutRef<'th'>} */
-    { className, ...props },
-    ref
-  ) => (
+  ({ className, ...props }, ref) => (
   <th
     ref={ref}
     className={cn(
@@ -85,12 +161,18 @@ const TableHead = React.forwardRef(
 ))
 TableHead.displayName = "TableHead"
 
+/**
+ * Table data cell.
+ * 
+ * Standard cell with vertical alignment and checkbox support.
+ * Padding adjusted when containing checkbox inputs.
+ * 
+ * @type {React.ComponentPropsWithoutRef<"td">}
+ * @property {string} [className] - Additional CSS classes
+ * @property {React.ReactNode} children - Cell content
+ */
 const TableCell = React.forwardRef(
-  (
-    /** @type {import('react').ComponentPropsWithoutRef<'td'>} */
-    { className, ...props },
-    ref
-  ) => (
+  ({ className, ...props }, ref) => (
   <td
     ref={ref}
     className={cn(
@@ -101,12 +183,18 @@ const TableCell = React.forwardRef(
 ))
 TableCell.displayName = "TableCell"
 
+/**
+ * Table caption element.
+ * 
+ * Descriptive text below the table. Uses muted text color
+ * and smaller font size.
+ * 
+ * @type {React.ComponentPropsWithoutRef<"caption">}
+ * @property {string} [className] - Additional CSS classes
+ * @property {React.ReactNode} children - Caption text
+ */
 const TableCaption = React.forwardRef(
-  (
-    /** @type {import('react').ComponentPropsWithoutRef<'caption'>} */
-    { className, ...props },
-    ref
-  ) => (
+  ({ className, ...props }, ref) => (
   <caption
     ref={ref}
     className={cn("mt-4 text-sm text-muted-foreground", className)}

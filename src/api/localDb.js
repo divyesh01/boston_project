@@ -104,43 +104,6 @@ localDb.version(8).stores({
   HotelMetric: '++id, property_id, business_date, section, metric_name, period, import_id, file_hash, [property_id+business_date], [property_id+business_date+section+metric_name+period], created_date',
 });
 
-// v13 — add PasswordResetRequest table for self-service password reset flow
-localDb.version(13).stores({
-  PasswordResetRequest: '++id, user_id, token, expires_at, used, created_date',
-});
-
-// v14 — compound indexes for indexed range queries.
-//
-// [property_id+date] on the four daily ledgers is the driving index for every
-// property-scoped date-range read (Dashboard, Payments, Sources, occupancy
-// pages). It sits alongside the existing [date+property_id] so trend scans that
-// start from the date axis stay indexed too. [property_id+status] on Expense
-// serves status scoping (e.g. committed/approved expense filters). Adding
-// indexes is a non-destructive upgrade: Dexie backfills the new indexes from
-// existing rows without touching data.
-localDb.version(14).stores({
-  OccupancyDay:     '++id, date, property_id, [date+property_id], [property_id+date], import_id, created_date',
-  SourceDay:        '++id, date, property_id, code, source, [date+property_id], [property_id+date], import_id, created_date',
-  GrossRevenueDay:  '++id, date, property_id, [date+property_id], [property_id+date], import_id, created_date',
-  PaymentDay:       '++id, date, property_id, [date+property_id], [property_id+date], import_id, created_date',
-  Expense:          '++id, property_id, expense_date, category, status, [property_id+expense_date], [property_id+status], import_id, created_date',
-});
-
-// v15 — automated financial anomaly & fraud detection alerts.
-//
-// One row per flagged transaction (see src/lib/anomalyDetector.js). [property_id+date]
-// is the driving index for the Dashboard banner's property-scoped date-range read.
-localDb.version(15).stores({
-  AnomalyAlert: '++id, property_id, date, alert_type, status, [property_id+date], [property_id+date+alert_type], dedupe_key, created_date',
-});
-
-// v16 — Channel Manager integration tables
-localDb.version(16).stores({
-  Reservation: '++id, property_id, channel, confirmation_num, check_in, check_out, room_type_id, status, [property_id+check_in], created_date',
-  RoomType: '++id, property_id, name, total_inventory',
-  ChannelMap: '++id, property_id, channel_name, local_room_id, remote_room_id',
-});
-
 // v9 — add Transaction table for line-level PMS transaction ledgers.
 //
 // SUPERSEDED BY v10. `Transaction` is a reserved property name on a Dexie
@@ -209,6 +172,36 @@ localDb.version(12).stores({
   ImportSession: null,
 });
 
+// v13 — add PasswordResetRequest table for self-service password reset flow
+localDb.version(13).stores({
+  PasswordResetRequest: '++id, user_id, token, expires_at, used, created_date',
+});
+
+// v14 — compound indexes for indexed range queries.
+//
+// [property_id+date] on the four daily ledgers is the driving index for every
+// property-scoped date-range read (Dashboard, Payments, Sources, occupancy
+// pages). It sits alongside the existing [date+property_id] so trend scans that
+// start from the date axis stay indexed too. [property_id+status] on Expense
+// serves status scoping (e.g. committed/approved expense filters). Adding
+// indexes is a non-destructive upgrade: Dexie backfills the new indexes from
+// existing rows without touching data.
+localDb.version(14).stores({
+  OccupancyDay:     '++id, date, property_id, [date+property_id], [property_id+date], import_id, created_date',
+  SourceDay:        '++id, date, property_id, code, source, [date+property_id], [property_id+date], import_id, created_date',
+  GrossRevenueDay:  '++id, date, property_id, [date+property_id], [property_id+date], import_id, created_date',
+  PaymentDay:       '++id, date, property_id, [date+property_id], [property_id+date], import_id, created_date',
+  Expense:          '++id, property_id, expense_date, category, status, [property_id+expense_date], [property_id+status], import_id, created_date',
+});
+
+// v15 — automated financial anomaly & fraud detection alerts.
+//
+// One row per flagged transaction (see src/lib/anomalyDetector.js). [property_id+date]
+// is the driving index for the Dashboard banner's property-scoped date-range read.
+localDb.version(15).stores({
+  AnomalyAlert: '++id, property_id, date, alert_type, status, [property_id+date], [property_id+date+alert_type], dedupe_key, created_date',
+});
+
 // v16 — operational modules: enhanced room board, housekeeping, weather cache,
 // and guest reputation. All are property-scoped (enforcement lives in
 // base44Client's PROPERTY_TABLES) and are additive — no existing store changes.
@@ -230,6 +223,15 @@ localDb.version(16).stores({
 // v17 — Add AdjustmentRefund for Clerk Audit.
 localDb.version(17).stores({
   AdjustmentRefund: '++id, property_id, date, record_type, username, [property_id+date], [property_id+username], import_id, created_date',
+});
+
+// v18 — Channel Manager tables that were lost due to a duplicate version(16)
+// overwrite in an earlier migration. Adding them as a forward-only new version
+// so existing databases (already at v17) can upgrade without a schema conflict.
+localDb.version(18).stores({
+  Reservation: '++id, property_id, channel, confirmation_num, check_in, check_out, room_type_id, status, [property_id+check_in], created_date',
+  RoomType: '++id, property_id, name, total_inventory',
+  ChannelMap: '++id, property_id, channel_name, local_room_id, remote_room_id',
 });
 
 // Guard: a table whose name collides with a Dexie instance property is created

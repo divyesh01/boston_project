@@ -1,5 +1,3 @@
-import { db } from '@/api/base44Client';
-
 import * as React from "react"
 import { useSize } from "@/hooks/use-size"
 import { cn } from "@/lib/utils"

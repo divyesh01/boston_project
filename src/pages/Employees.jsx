@@ -285,10 +285,20 @@ export default function Employees() {
           </Tabs.Content>
 
           <Tabs.Content value="anomalies" className="outline-none">
-            {adjustments.length === 0 && refunds.length === 0 ? (
+            {isLoadingAdj ? (
+               <Card title="Loading anomaly data…">
+                 <p className="text-sm text-slate-400">Querying adjustment and refund records…</p>
+               </Card>
+            ) : adjustments.length === 0 && refunds.length === 0 ? (
                <Card title="No anomaly data available">
                  <p className="text-sm text-slate-400">
-                   Import an <span className="text-slate-300">Adjustments & Refunds Activity</span> report to view clerk anomaly detection.
+                   No <span className="text-slate-300">Adjustments & Refunds</span> records found for{" "}
+                   <span className="text-slate-300">{propName}</span> during{" "}
+                   <span className="text-slate-300">{periodLabel}</span>.
+                 </p>
+                 <p className="mt-2 text-sm text-slate-500">
+                   Import an <span className="text-slate-300">Adjustments & Refunds Activity</span> report on the{" "}
+                   <a href="/upload" className="text-[#00D4FF] underline">Import</a> page, or adjust your date range and property filters.
                  </p>
                </Card>
             ) : (

@@ -268,6 +268,10 @@ export const CLERK_THRESHOLDS = {
   offHoursEnd: 6,                 // 06:00 (exclusive)
   highRiskFlagCount: 3,           // 3+ flags → HIGH risk clerk
   highRiskAdjustedAmount: 300,    // >$300 total adjusted → HIGH risk clerk
+  microSkimCount: 3,              // 3+ small cash refunds in a shift
+  microSkimMaxAmount: 20,         // under $20 is considered a micro-skim
+  graveyardStart: 1,              // 01:00 AM
+  graveyardEnd: 5,                // 05:00 AM
 };
 
 const VAGUE_REASON_CODES = new Set([
@@ -276,9 +280,12 @@ const VAGUE_REASON_CODES = new Set([
   "HOSPITALITY ADJUSTMENT",
 ]);
 
+const SUSPICIOUS_REMARKS_PATTERN = /(error|mistake|wrong room|guest complain|per manager|accident)/i;
+const EXACT_RATES = new Set([49, 59, 69, 79, 89, 99, 109, 119, 129, 139, 149, 159, 169, 179, 189, 199]);
+
 function clerkAlertFor(ruleId, ruleName, severity, riskType, row, amount) {
   return {
-    id: `${ruleId}|${row.date || ""}|${row.username || ""}|${row.roomNumber || ""}|${round2(amount)}`,
+    id: `${ruleId}|${row.date || ""}|${row.username || ""}|${row.roomNumber || ""}|${round2(amount)}|${row.time || ""}`,
     ruleId,
     ruleName,
     severity,
@@ -380,13 +387,130 @@ function detectOffHoursAdjustments(rows, thresholds) {
     if (!isOffHours) continue;
     const amt = row.adjustedAmount ?? row.amount ?? 0;
     flags.push(clerkAlertFor(
-      CLERK_ANOMALY_TYPES.OFF_HOURS_ADJUSTMENT,
+      "off_hours_adjustment",
       "Off-Hours Adjustment",
       "MEDIUM",
       "Off-Hours Adjustment",
       row,
       amt,
     ));
+  }
+  return flags;
+}
+
+// Rule 5: Micro-Skimming (Salami Slicing)
+// >= 3 small cash refunds (< $20) by the same clerk in one day
+function detectMicroSkimming(refunds, thresholds) {
+  const buckets = new Map();
+  for (const r of refunds) {
+    const pt = String(r.paymentTypeRefunded || "").toUpperCase().trim();
+    const amt = Math.abs(Number(r.amount) || 0);
+    if (pt === "CASH" && amt > 0 && amt <= thresholds.microSkimMaxAmount) {
+      const key = `${r.username || "?"}|${(r.date || "").slice(0, 10)}`;
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(r);
+    }
+  }
+
+  const flags = [];
+  for (const group of buckets.values()) {
+    if (group.length >= thresholds.microSkimCount) {
+      for (const r of group) {
+        flags.push(clerkAlertFor(
+          "micro_skimming",
+          "Micro-Skimming Pattern",
+          "CRITICAL",
+          "Micro-Skimming",
+          r,
+          r.amount,
+        ));
+      }
+    }
+  }
+  return flags;
+}
+
+// Rule 6: Graveyard Shift Cash Grabs
+// Any cash refund between 01:00 and 05:00 AM
+function detectGraveyardCashGrabs(refunds, thresholds) {
+  const flags = [];
+  for (const r of refunds) {
+    const pt = String(r.paymentTypeRefunded || "").toUpperCase().trim();
+    if (pt !== "CASH") continue;
+    
+    const hour = hourOfTime(r.time);
+    if (hour === null || hour < thresholds.graveyardStart || hour >= thresholds.graveyardEnd) continue;
+    
+    flags.push(clerkAlertFor(
+      "graveyard_cash_grab",
+      "Graveyard Shift Cash Refund",
+      "CRITICAL",
+      "Graveyard Cash Skim",
+      r,
+      r.amount,
+    ));
+  }
+  return flags;
+}
+
+// Rule 7: Exact Rate Reversals
+// Adjustment exactly matching a standard room rate ($99, $109, etc.)
+function detectExactRateReversals(adjustments) {
+  const flags = [];
+  for (const a of adjustments) {
+    const amt = Math.abs(Number(a.adjustedAmount ?? a.amount) || 0);
+    if (EXACT_RATES.has(amt)) {
+      flags.push(clerkAlertFor(
+        "exact_rate_reversal",
+        "Exact Rate Reversal",
+        "HIGH",
+        "Revenue Suppression",
+        a,
+        a.adjustedAmount || a.amount || 0,
+      ));
+    }
+  }
+  return flags;
+}
+
+// Rule 8: Suspicious Remarks
+function detectSuspiciousRemarks(rows) {
+  const flags = [];
+  for (const row of rows) {
+    if (row.remarks && SUSPICIOUS_REMARKS_PATTERN.test(row.remarks)) {
+      const amt = Math.abs(Number(row.adjustedAmount ?? row.amount) || 0);
+      if (amt >= 20) {
+        flags.push(clerkAlertFor(
+          "suspicious_remarks",
+          "Suspicious Remarks",
+          "HIGH",
+          "Suspicious Justification",
+          row,
+          row.adjustedAmount ?? row.amount ?? 0,
+        ));
+      }
+    }
+  }
+  return flags;
+}
+
+// Rule 9: Round Number Fraud
+// Amounts perfectly divisible by $50.00
+function detectRoundNumberFraud(rows) {
+  const flags = [];
+  for (const row of rows) {
+    const amt = Math.abs(Number(row.adjustedAmount ?? row.amount) || 0);
+    // Exclude very small amounts and exact rate matches (which are usually .00)
+    if (amt >= 50 && amt % 50 === 0) {
+      flags.push(clerkAlertFor(
+        "round_number_fraud",
+        "Round Number Reversal",
+        "MEDIUM",
+        "Fictitious Manual Entry",
+        row,
+        row.adjustedAmount ?? row.amount ?? 0,
+      ));
+    }
   }
   return flags;
 }
@@ -401,7 +525,9 @@ function buildClerkRiskScores(flaggedAnomalies, adjustments, refunds, thresholds
         totalFlags: 0,
         totalRefundedAmount: 0,
         totalAdjustedAmount: 0,
+        totalCashRefunded: 0,
         riskLevel: "LOW",
+        behaviorAnalysis: "",
       });
     }
     return map.get(username);
@@ -422,17 +548,44 @@ function buildClerkRiskScores(flaggedAnomalies, adjustments, refunds, thresholds
   // Sum refund amounts per clerk
   for (const r of refunds) {
     if (r.username) {
-      ensure(r.username).totalRefundedAmount += Math.abs(Number(r.amount) || 0);
+      const u = ensure(r.username);
+      const amt = Math.abs(Number(r.amount) || 0);
+      u.totalRefundedAmount += amt;
+      if (String(r.paymentTypeRefunded || "").toUpperCase().trim() === "CASH") {
+        u.totalCashRefunded += amt;
+      }
     }
   }
 
-  // Assign risk levels
+  // Assign risk levels & AI Insights
   for (const score of map.values()) {
     score.totalAdjustedAmount = round2(score.totalAdjustedAmount);
     score.totalRefundedAmount = round2(score.totalRefundedAmount);
-    if (score.totalFlags >= thresholds.highRiskFlagCount || score.totalAdjustedAmount > thresholds.highRiskAdjustedAmount) {
+    score.totalCashRefunded = round2(score.totalCashRefunded);
+    
+    let cashRatio = 0;
+    if (score.totalRefundedAmount > 0) {
+      cashRatio = score.totalCashRefunded / score.totalRefundedAmount;
+    }
+    score.cashRatio = cashRatio;
+
+    // AI Behavior string generation
+    let insights = [];
+    if (cashRatio > 0.8 && score.totalCashRefunded > 100) {
+      insights.push(`Highly abnormal cash refund ratio (${Math.round(cashRatio * 100)}%). Probable cash skimming.`);
+    }
+    if (score.totalFlags >= thresholds.highRiskFlagCount) {
+      insights.push(`Frequent flagged behavior.`);
+    }
+    if (score.totalAdjustedAmount > thresholds.highRiskAdjustedAmount) {
+      insights.push(`Excessive write-offs.`);
+    }
+    
+    score.behaviorAnalysis = insights.length > 0 ? insights.join(" ") : "Normal behavior baseline.";
+
+    if (score.totalFlags >= thresholds.highRiskFlagCount || score.totalAdjustedAmount > thresholds.highRiskAdjustedAmount || cashRatio >= 0.85) {
       score.riskLevel = "HIGH";
-    } else if (score.totalFlags >= 1) {
+    } else if (score.totalFlags >= 1 || cashRatio >= 0.5) {
       score.riskLevel = "MEDIUM";
     } else {
       score.riskLevel = "LOW";
@@ -458,6 +611,11 @@ export function detectClerkAnomalies({ adjustments = [], refunds = [] }, options
     ...detectRepeatedAdjustmentLoop(adjustments, thresholds),
     ...detectLargeUncategorizedWriteoff(adjustments, thresholds),
     ...detectOffHoursAdjustments(allRows, thresholds),
+    ...detectMicroSkimming(refunds, thresholds),
+    ...detectGraveyardCashGrabs(refunds, thresholds),
+    ...detectExactRateReversals(adjustments),
+    ...detectSuspiciousRemarks(allRows),
+    ...detectRoundNumberFraud(allRows),
   ];
 
   // Dedupe by id (a row can trigger multiple rules)

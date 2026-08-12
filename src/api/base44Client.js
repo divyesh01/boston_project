@@ -380,7 +380,7 @@ function createEntityProxy(tableName) {
     'OccupancyDay', 'SourceDay', 'GrossRevenueDay', 'PaymentDay',
     'ClerkShiftRecord', 'UploadedReport', 'Expense', 'PayrollRun', 'Staff', 'HotelMetric',
     'TransactionLine', 'AnomalyAlert', 'Room', 'RoomStay', 'HousekeepingTask',
-    'WeatherSnapshot', 'Review'
+    'WeatherSnapshot', 'Review', 'AdjustmentRefund'
   ]);
 
   // Tables that are immutable append-only (audit trail integrity)

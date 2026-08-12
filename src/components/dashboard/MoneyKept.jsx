@@ -177,7 +177,11 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       const pid = r.property_id || "";
       const key = `${d}|${pid}`;
       hasSourceByKey.set(key, true);
-      if (taxableSources.has(classifyTaxSource(r))) {
+      // A source is taxable only if BOTH conditions hold:
+      // 1. Its tax-config bucket is marked taxable (classifyTaxSource → TAX_SOURCES)
+      // 2. The per-source commission rate entry does NOT have taxExempt === true
+      const srcInfo = commissionFor(r.source || r.code);
+      if (taxableSources.has(classifyTaxSource(r)) && !srcInfo.taxExempt) {
         taxBaseByKey.set(key, (taxBaseByKey.get(key) || 0) + (Number(r.net_revenue) || 0));
       }
       pushDateKey(key);

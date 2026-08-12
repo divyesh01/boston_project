@@ -235,3 +235,242 @@ export function detectAnomalies(rows, options = {}) {
 }
 
 export default detectAnomalies;
+
+// ─── Clerk Audit: Adjustments & Refunds Anomaly Detection ──────────────
+//
+// Separate detection pipeline for HotelKey "Adjustments and Refunds Activity"
+// CSV reports. Operates on parsed adjustment/refund objects (the shape produced
+// by scanAdjustmentsRefunds in reportParsers.js), NOT on TransactionLine rows.
+//
+// Detection rules:
+//   1. cash_refund_skimming       — cash refund ≥ $50, high risk of deposit
+//                                   return fraud.
+//   2. repeated_adjustment_loop   — 3+ adjustments on the same room in one day,
+//                                   possible revenue suppression pattern.
+//   3. large_uncategorized_writeoff — vague reason code with amount ≥ $50.
+//   4. off_hours_adjustment       — adjustment or refund posted 23:00–06:00.
+//
+// Additionally, a per-clerk risk score matrix aggregates total flags, refunded
+// amount, and adjusted amount into HIGH / MEDIUM / LOW risk levels.
+
+export const CLERK_ANOMALY_TYPES = {
+  CASH_REFUND_SKIMMING: "cash_refund_skimming",
+  REPEATED_ADJUSTMENT_LOOP: "repeated_adjustment_loop",
+  LARGE_UNCATEGORIZED_WRITEOFF: "large_uncategorized_writeoff",
+  OFF_HOURS_ADJUSTMENT: "off_hours_adjustment",
+};
+
+export const CLERK_THRESHOLDS = {
+  cashRefundMinAmount: 50,        // $50 minimum to flag a cash refund
+  repeatedAdjustmentCount: 3,     // 3+ adjustments on same room/day
+  largeWriteoffMinAmount: 50,     // $50 minimum for vague-reason flag
+  offHoursStart: 23,              // 23:00
+  offHoursEnd: 6,                 // 06:00 (exclusive)
+  highRiskFlagCount: 3,           // 3+ flags → HIGH risk clerk
+  highRiskAdjustedAmount: 300,    // >$300 total adjusted → HIGH risk clerk
+};
+
+const VAGUE_REASON_CODES = new Set([
+  "OTHER ADJUSTMENTS",
+  "AR BILLING ADJUSTMENT",
+  "HOSPITALITY ADJUSTMENT",
+]);
+
+function clerkAlertFor(ruleId, ruleName, severity, riskType, row, amount) {
+  return {
+    id: `${ruleId}|${row.date || ""}|${row.username || ""}|${row.roomNumber || ""}|${round2(amount)}`,
+    ruleId,
+    ruleName,
+    severity,
+    riskType,
+    date: row.date || "",
+    time: row.time || "",
+    username: row.username || "",
+    roomNumber: row.roomNumber || "",
+    reasonCode: row.reasonCode || "",
+    refundCode: row.refundCode || "",
+    paymentType: row.paymentTypeRefunded || "",
+    amount: round2(amount),
+    remarks: row.remarks || "",
+    transaction: row,
+  };
+}
+
+// Rule 1: Cash Refund / Deposit Skimming
+function detectCashRefundSkimming(refunds, thresholds) {
+  const min = thresholds.cashRefundMinAmount;
+  const flags = [];
+  for (const r of refunds) {
+    const pt = String(r.paymentTypeRefunded || "").toUpperCase().trim();
+    const amt = Math.abs(Number(r.amount) || 0);
+    if (pt === "CASH" && amt >= min) {
+      flags.push(clerkAlertFor(
+        CLERK_ANOMALY_TYPES.CASH_REFUND_SKIMMING,
+        "Cash Refund / Deposit Skimming",
+        "CRITICAL",
+        "Cash Refund / Deposit Skimming",
+        r,
+        r.amount,
+      ));
+    }
+  }
+  return flags;
+}
+
+// Rule 2: High-Frequency Reversal Loop — 3+ adjustments on the same room in
+// one calendar day.
+function detectRepeatedAdjustmentLoop(adjustments, thresholds) {
+  const minCount = thresholds.repeatedAdjustmentCount;
+  const buckets = new Map();
+  for (const a of adjustments) {
+    const key = `${a.roomNumber || "?"}|${(a.date || "").slice(0, 10)}`;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(a);
+  }
+
+  const flags = [];
+  for (const group of buckets.values()) {
+    if (group.length >= minCount) {
+      for (const a of group) {
+        flags.push(clerkAlertFor(
+          CLERK_ANOMALY_TYPES.REPEATED_ADJUSTMENT_LOOP,
+          "Repeated Adjustment Loop",
+          "HIGH",
+          "Repeated Adjustment Loop",
+          a,
+          a.adjustedAmount || a.amount || 0,
+        ));
+      }
+    }
+  }
+  return flags;
+}
+
+// Rule 3: Vague Reason Code & Large Write-Off
+function detectLargeUncategorizedWriteoff(adjustments, thresholds) {
+  const min = thresholds.largeWriteoffMinAmount;
+  const flags = [];
+  for (const a of adjustments) {
+    const code = String(a.reasonCode || "").toUpperCase().trim();
+    const amt = Math.abs(Number(a.adjustedAmount ?? a.amount) || 0);
+    if (VAGUE_REASON_CODES.has(code) && amt >= min) {
+      flags.push(clerkAlertFor(
+        CLERK_ANOMALY_TYPES.LARGE_UNCATEGORIZED_WRITEOFF,
+        "Large Uncategorized Write-Off",
+        "MEDIUM",
+        "Large Uncategorized Write-Off",
+        a,
+        a.adjustedAmount || a.amount || 0,
+      ));
+    }
+  }
+  return flags;
+}
+
+// Rule 4: Off-Hours Adjustments/Refunds (23:00–06:00)
+function detectOffHoursAdjustments(rows, thresholds) {
+  const start = thresholds.offHoursStart;  // 23
+  const end = thresholds.offHoursEnd;      // 6
+  const flags = [];
+  for (const row of rows) {
+    const hour = hourOfTime(row.time);
+    if (hour === null) continue;
+    // 23:00–23:59 or 00:00–05:59
+    const isOffHours = hour >= start || hour < end;
+    if (!isOffHours) continue;
+    const amt = row.adjustedAmount ?? row.amount ?? 0;
+    flags.push(clerkAlertFor(
+      CLERK_ANOMALY_TYPES.OFF_HOURS_ADJUSTMENT,
+      "Off-Hours Adjustment",
+      "MEDIUM",
+      "Off-Hours Adjustment",
+      row,
+      amt,
+    ));
+  }
+  return flags;
+}
+
+// Clerk Risk Score Matrix — aggregate flags and amounts per username.
+function buildClerkRiskScores(flaggedAnomalies, adjustments, refunds, thresholds) {
+  const map = new Map();
+  const ensure = (username) => {
+    if (!map.has(username)) {
+      map.set(username, {
+        username,
+        totalFlags: 0,
+        totalRefundedAmount: 0,
+        totalAdjustedAmount: 0,
+        riskLevel: "LOW",
+      });
+    }
+    return map.get(username);
+  };
+
+  // Count flags per clerk
+  for (const a of flaggedAnomalies) {
+    if (a.username) ensure(a.username).totalFlags += 1;
+  }
+
+  // Sum adjustment amounts per clerk
+  for (const a of adjustments) {
+    if (a.username) {
+      ensure(a.username).totalAdjustedAmount += Math.abs(Number(a.adjustedAmount ?? a.amount) || 0);
+    }
+  }
+
+  // Sum refund amounts per clerk
+  for (const r of refunds) {
+    if (r.username) {
+      ensure(r.username).totalRefundedAmount += Math.abs(Number(r.amount) || 0);
+    }
+  }
+
+  // Assign risk levels
+  for (const score of map.values()) {
+    score.totalAdjustedAmount = round2(score.totalAdjustedAmount);
+    score.totalRefundedAmount = round2(score.totalRefundedAmount);
+    if (score.totalFlags >= thresholds.highRiskFlagCount || score.totalAdjustedAmount > thresholds.highRiskAdjustedAmount) {
+      score.riskLevel = "HIGH";
+    } else if (score.totalFlags >= 1) {
+      score.riskLevel = "MEDIUM";
+    } else {
+      score.riskLevel = "LOW";
+    }
+  }
+
+  return [...map.values()].sort((a, b) => {
+    const order = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+    return (order[a.riskLevel] ?? 3) - (order[b.riskLevel] ?? 3) || b.totalFlags - a.totalFlags;
+  });
+}
+
+// Combined entry point for clerk audit anomaly detection.
+// Takes parsed adjustment and refund arrays (from scanAdjustmentsRefunds).
+// Returns { flaggedAnomalies, clerkRiskScores }.
+export function detectClerkAnomalies({ adjustments = [], refunds = [] }, options = {}) {
+  const thresholds = { ...CLERK_THRESHOLDS, ...options };
+
+  const allRows = [...adjustments, ...refunds];
+
+  const flaggedAnomalies = [
+    ...detectCashRefundSkimming(refunds, thresholds),
+    ...detectRepeatedAdjustmentLoop(adjustments, thresholds),
+    ...detectLargeUncategorizedWriteoff(adjustments, thresholds),
+    ...detectOffHoursAdjustments(allRows, thresholds),
+  ];
+
+  // Dedupe by id (a row can trigger multiple rules)
+  const seen = new Set();
+  const deduped = [];
+  for (const f of flaggedAnomalies) {
+    if (!seen.has(f.id)) {
+      seen.add(f.id);
+      deduped.push(f);
+    }
+  }
+
+  const clerkRiskScores = buildClerkRiskScores(deduped, adjustments, refunds, thresholds);
+
+  return { flaggedAnomalies: deduped, clerkRiskScores };
+}

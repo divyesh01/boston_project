@@ -12,7 +12,7 @@ import {
 } from '@/lib/transactionNorm';
 import { toCents, fromCents, sumCents } from '@/lib/decimal';
 import { neutralizeFormula } from '@/lib/securityUtils';
-import { detectAnomalies } from '@/lib/anomalyDetector';
+import { detectAnomalies, detectClerkAnomalies } from '@/lib/anomalyDetector';
 export { neutralizeFormula };
 
 // Serialize report imports to prevent double-click/parallel duplicate writes.
@@ -132,6 +132,7 @@ export const REPORT_TYPES = [
   { key: "clerk", label: "Clerk Shift & Cash Audit" },
   { key: "hotel_statistics", label: "Hotel Statistics (Universal)" },
   { key: "transactions", label: "All Transactions (Ledger)" },
+  { key: "adjustments_refunds", label: "Adjustments & Refunds Activity" },
   { key: "generic", label: "Any other spreadsheet" },
 ];
 
@@ -201,6 +202,7 @@ const ENTITY = {
   payments: "PaymentDay",
   hotel_statistics: "HotelMetric",
   transactions: "TransactionLine",
+  adjustments_refunds: "AdjustmentRefund",
 };
 const REVENUE_COL = {
   occupancy: "total_revenue",
@@ -323,6 +325,12 @@ function detectReportType(fileUrl, rawRows, meta) {
     const header = row.map((c) => String(c).trim().toLowerCase());
     const has = (kw) => header.some((h) => h.includes(kw));
 
+    // Adjustments & Refunds Activity — checked early because its header may
+    // overlap with the transactions ledger (both have "transaction type").
+    if (has("adjustment reason code") || has("payment type refunded")) {
+      return "adjustments_refunds";
+    }
+
     // All Transactions ledger. Checked before the flat-table types below because
     // its header also contains "transaction description", which the payments and
     // gross checks would otherwise claim. Requires the full signature, so a
@@ -356,6 +364,7 @@ function detectReportType(fileUrl, rawRows, meta) {
   }
 
   // Fallbacks by filename
+  if (/adjust.*refund|refund.*adjust/i.test(fileName)) return "adjustments_refunds";
   if (/hotel.?stat/i.test(fileName)) return "hotel_statistics";
   if (/all.?transactions?|transaction.?(list|ledger|detail)/i.test(fileName)) return "transactions";
   if (/clerk|shift|cash audit/i.test(fileName)) return "clerk";
@@ -408,6 +417,10 @@ export async function scanReport(type, fileUrl, meta = {}) {
 
   if (resolvedType === "clerk") {
     return scanClerkReport(rawRows, fullMeta, objects);
+  }
+
+  if (resolvedType === "adjustments_refunds") {
+    return scanAdjustmentsRefunds(rawRows, fullMeta);
   }
 
   // Occupancy, Source, Gross, Payments — flat tables
@@ -800,6 +813,183 @@ function scanClerkReport(rawRows, meta, objects = []) {
   };
 }
 
+// ─── Adjustments & Refunds Activity ────────────────────────────────────
+//
+// HotelKey "Adjustments and Refunds Activity" CSV exports contain TWO stacked
+// tables separated by blank lines:
+//   1. Adjustments table — header contains "Adjustment Reason Code"
+//   2. Refunds table     — header contains "Payment Type Refunded"
+// After those, a totals/summary section may follow.
+//
+// The parser uses a state machine over rawRows (already tokenized by parseCsvText)
+// to detect section boundaries and extract every cell without loss.
+
+function scanAdjustmentsRefunds(rawRows, meta) {
+  const adjustments = [];
+  const refunds = [];
+  const summary = {};
+
+  // State: IDLE → scanning for section headers
+  //        ADJUSTMENTS → inside adjustments table
+  //        REFUNDS → inside refunds table
+  //        SUMMARY → inside summary/totals section
+  let state = "IDLE";
+  let adjHeaders = null;
+  let refHeaders = null;
+
+  const headerIndex = (headers, ...keywords) => {
+    if (!headers) return -1;
+    return headers.findIndex((h) => {
+      const lower = h.toLowerCase().trim();
+      return keywords.some((kw) => lower.includes(kw));
+    });
+  };
+
+  for (let i = 0; i < rawRows.length; i++) {
+    const row = rawRows[i];
+
+    // Blank row → reset state
+    if (!row || row.length === 0 || row.every((c) => c.trim() === "")) {
+      // If we were in a table, the blank line ends it. Next header will re-enter.
+      if (state !== "IDLE") state = "IDLE";
+      continue;
+    }
+
+    const lower = row.map((c) => String(c).toLowerCase().trim());
+    const has = (kw) => lower.some((h) => h.includes(kw));
+
+    // Detect Adjustments header (some tables have "adjustment reason code", others omit it, but both have "adjusted amount" and "room number")
+    if (has("adjusted amount") && has("room number")) {
+      state = "ADJUSTMENTS";
+      adjHeaders = row.map((c) => String(c).trim());
+      continue;
+    }
+
+    // Detect Refunds header
+    if (has("payment type refunded")) {
+      state = "REFUNDS";
+      refHeaders = row.map((c) => String(c).trim());
+      continue;
+    }
+
+    // Detect totals/summary row (e.g. "Total", "Grand Total")
+    if (has("total") && (has("grand") || row.length <= 5)) {
+      state = "SUMMARY";
+      // Parse totals — typically label + value pairs
+      const label = String(row[0] || "").trim();
+      const value = parseAmount(row[row.length - 1]) ?? 0;
+      summary[label] = value;
+      continue;
+    }
+
+    // Parse adjustment row
+    if (state === "ADJUSTMENTS" && adjHeaders) {
+      // Skip sub-total rows
+      if (has("total") || has("sub-total") || has("subtotal")) {
+        const label = String(row[0] || "").trim();
+        summary[`adj_${label}`] = parseAmount(row[row.length - 1]) ?? 0;
+        continue;
+      }
+
+      const dateIdx      = headerIndex(adjHeaders, "date");
+      const timeIdx      = headerIndex(adjHeaders, "time");
+      const txnTypeIdx   = headerIndex(adjHeaders, "transaction type");
+      const chargeIdx    = headerIndex(adjHeaders, "charge type");
+      const guestIdx     = headerIndex(adjHeaders, "guest name", "name");
+      const txnNumIdx    = headerIndex(adjHeaders, "transaction number", "trans #", "trans no");
+      const roomIdx      = headerIndex(adjHeaders, "room number", "room #", "room");
+      const reasonIdx    = headerIndex(adjHeaders, "adjustment reason code", "reason code");
+      const adjAmtIdx    = headerIndex(adjHeaders, "adjusted amount");
+      const adjTaxIdx    = headerIndex(adjHeaders, "adjusted tax");
+      const userIdx      = headerIndex(adjHeaders, "username", "user name", "user");
+      const remarksIdx   = headerIndex(adjHeaders, "remarks", "remark", "notes", "comment");
+
+      const cell = (idx) => (idx >= 0 && idx < row.length) ? String(row[idx]).trim() : "";
+
+      adjustments.push({
+        record_type: "adjustment",
+        date: convertDate(cell(dateIdx)),
+        time: cell(timeIdx),
+        transactionType: cell(txnTypeIdx),
+        chargeType: cell(chargeIdx),
+        guestName: cell(guestIdx),
+        transactionNumber: cell(txnNumIdx),
+        roomNumber: cell(roomIdx),
+        reasonCode: cell(reasonIdx),
+        adjustedAmount: parseAmount(cell(adjAmtIdx)) ?? 0,
+        adjustedTax: parseAmount(cell(adjTaxIdx)) ?? 0,
+        username: cell(userIdx),
+        remarks: cell(remarksIdx),
+      });
+      continue;
+    }
+
+    // Parse refund row
+    if (state === "REFUNDS" && refHeaders) {
+      // Skip sub-total rows
+      if (has("total") || has("sub-total") || has("subtotal")) {
+        const label = String(row[0] || "").trim();
+        summary[`ref_${label}`] = parseAmount(row[row.length - 1]) ?? 0;
+        continue;
+      }
+
+      const dateIdx      = headerIndex(refHeaders, "date");
+      const timeIdx      = headerIndex(refHeaders, "time");
+      const guestIdx     = headerIndex(refHeaders, "guest name", "name");
+      const txnNumIdx    = headerIndex(refHeaders, "transaction number", "trans #", "trans no");
+      const roomIdx      = headerIndex(refHeaders, "room number", "room #", "room");
+      const payDetailIdx = headerIndex(refHeaders, "payment detail");
+      const refCodeIdx   = headerIndex(refHeaders, "refund code");
+      const payTypeIdx   = headerIndex(refHeaders, "payment type refunded");
+      const amtIdx       = headerIndex(refHeaders, "amount");
+      const userIdx      = headerIndex(refHeaders, "username", "user name", "user");
+      const remarksIdx   = headerIndex(refHeaders, "remarks", "remark", "notes", "comment");
+
+      const cell = (idx) => (idx >= 0 && idx < row.length) ? String(row[idx]).trim() : "";
+
+      refunds.push({
+        record_type: "refund",
+        date: convertDate(cell(dateIdx)),
+        time: cell(timeIdx),
+        guestName: cell(guestIdx),
+        transactionNumber: cell(txnNumIdx),
+        roomNumber: cell(roomIdx),
+        paymentDetail: cell(payDetailIdx),
+        refundCode: cell(refCodeIdx),
+        paymentTypeRefunded: cell(payTypeIdx),
+        amount: parseAmount(cell(amtIdx)) ?? 0,
+        username: cell(userIdx),
+        remarks: cell(remarksIdx),
+      });
+      continue;
+    }
+
+    // Summary state — capture any remaining totals rows
+    if (state === "SUMMARY") {
+      const label = String(row[0] || "").trim();
+      if (label) {
+        summary[label] = parseAmount(row[row.length - 1]) ?? 0;
+      }
+    }
+  }
+
+  const totalRows = adjustments.length + refunds.length;
+
+  return {
+    type: "adjustments_refunds",
+    sections: [
+      { name: "Adjustments", rows: adjustments.length, preview: adjustments.slice(0, 20) },
+      { name: "Refunds", rows: refunds.length, preview: refunds.slice(0, 20) },
+    ],
+    totalRows,
+    rowsToImport: [...adjustments, ...refunds],
+    adjustments,
+    refunds,
+    summary,
+    meta,
+  };
+}
+
 export async function importReport(scanResult, meta = {}) {
   const { forceImport = false, sourceFile = "", propertyId = "", propertyName = "", ...restMeta } = meta;
   
@@ -820,6 +1010,8 @@ export async function importReport(scanResult, meta = {}) {
     const rowCounts = {};
     if (scanResult.type === "clerk") {
       rowCounts["ClerkShiftRecord"] = result.count;
+    } else if (scanResult.type === "adjustments_refunds") {
+      rowCounts["AdjustmentRefund"] = result.count;
     } else if (ENTITY[scanResult.type]) {
       rowCounts[ENTITY[scanResult.type]] = result.count;
     }
@@ -895,6 +1087,89 @@ async function doImport(scanResult, meta, importId) {
     }
     const cleaned = await dedupePropertyRows("ClerkShiftRecord", restMeta.propertyId, keyFn);
     return { count: newRows.length, excluded: deduped.length - newRows.length, cleaned };
+  }
+
+  // ─── Adjustments & Refunds Activity ───
+  if (type === "adjustments_refunds") {
+    const adjustments = (scanResult.adjustments || []).map(addMetaFn);
+    const refunds = (scanResult.refunds || []).map(addMetaFn);
+    const all = [...adjustments, ...refunds];
+
+    const keyFn = (r) => [
+      r.record_type || "adj",
+      r.date || "",
+      r.time || "",
+      r.username || "",
+      r.roomNumber || "",
+      r.transactionNumber || "",
+      r.adjustedAmount ?? r.amount ?? 0,
+    ].join("|");
+
+    const deduped = dedupByKey(all, keyFn);
+    const existing = restMeta.propertyId
+      ? await db.entities.AdjustmentRefund.filter({ property_id: restMeta.propertyId })
+      : [];
+    const seen = new Set(existing.map(keyFn));
+    const newRows = forceImport ? deduped : deduped.filter((r) => !seen.has(keyFn(r)));
+
+    let createdIds = [];
+    if (newRows.length) {
+      for (let i = 0; i < newRows.length; i += 400) {
+        const batch = newRows.slice(i, i + 400);
+        const created = await db.entities.AdjustmentRefund.bulkCreate(batch);
+        createdIds.push(...created.map((r) => r.id));
+      }
+    }
+    if (createdIds.length) {
+      await recordCreatedIds("AdjustmentRefund", restMeta.propertyId, importId, createdIds);
+    }
+
+    // Run clerk-specific anomaly detection on imported adjustments/refunds
+    const anomalyInput = { adjustments, refunds };
+    const { flaggedAnomalies } = detectClerkAnomalies(anomalyInput);
+    let anomalyAudit = null;
+    if (flaggedAnomalies.length) {
+      const alertRows = flaggedAnomalies.map((a) => ({
+        ...a,
+        alert_type: a.ruleId,
+        severity: a.severity.toLowerCase(),
+        property_id: restMeta.propertyId || "",
+        property_name: restMeta.propertyName || "",
+        import_id: importId,
+        source_file: restMeta.sourceFile || "",
+        status: "open",
+        dedupe_key: a.id,
+      }));
+      const existingAlerts = restMeta.propertyId
+        ? await db.entities.AnomalyAlert.filter({ property_id: restMeta.propertyId })
+        : [];
+      const seenAlerts = new Set(existingAlerts.map((a) => a.dedupe_key));
+      const freshAlerts = alertRows.filter((a) => !seenAlerts.has(a.dedupe_key));
+      let alertIds = [];
+      if (freshAlerts.length) {
+        for (let i = 0; i < freshAlerts.length; i += 400) {
+          const batch = freshAlerts.slice(i, i + 400);
+          const created = await db.entities.AnomalyAlert.bulkCreate(batch);
+          alertIds.push(...created.map((r) => r.id));
+        }
+      }
+      if (alertIds.length) {
+        await recordCreatedIds("AnomalyAlert", restMeta.propertyId, importId, alertIds);
+      }
+      const types = [...new Set(freshAlerts.map((a) => a.alert_type))].sort();
+      anomalyAudit = alertIds.length
+        ? { propertyId: restMeta.propertyId, propertyName: restMeta.propertyName || "", importId, count: alertIds.length, types }
+        : null;
+    }
+
+    const cleaned = await dedupePropertyRows("AdjustmentRefund", restMeta.propertyId, keyFn);
+    return {
+      count: newRows.length,
+      excluded: deduped.length - newRows.length,
+      cleaned,
+      anomalies: flaggedAnomalies.length,
+      anomalyAudit,
+    };
   }
 
   if (type === "hotel_statistics") {

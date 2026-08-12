@@ -152,7 +152,9 @@ export class CalculationService {
     const taxBase = new Map();
     srcRows.forEach((r) => {
       const src = TAX_SOURCES.find((s) => s.key === classifySource(r));
-      if (!src || !src.taxable) return;
+      // Also respect per-source taxExempt from commission rate settings
+      const info = commissionFor(r.source || r.code);
+      if (!src || !src.taxable || info.taxExempt) return;
       const d = String(r.date).slice(0, 10);
       taxBase.set(d, (taxBase.get(d) || 0) + (Number(r.net_revenue) || 0));
     });

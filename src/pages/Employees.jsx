@@ -1,15 +1,34 @@
 import React, { useMemo, useState } from "react";
+import * as Tabs from "@radix-ui/react-tabs";
+import { motion } from "framer-motion";
 import { Users, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Info } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import KpiCard from "@/components/ui-exec/KpiCard";
-import { useClerkRecords } from "@/lib/useHotelData";
+import { useClerkRecords, useAdjustmentsRefunds, useClerkAnomalies } from "@/lib/useHotelData";
 import { money2, num, C } from "@/lib/hotel";
+import { detectClerkAnomalies } from "@/lib/anomalyDetector";
+import ClerkAuditMatrix from "@/components/dashboard/ClerkAuditMatrix";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 
 export default function Employees() {
   const { dateRange, property, properties, employee } = useGlobalFilters();
   const { data: records = [], isLoading } = useClerkRecords(dateRange, property);
+  const { data: adjRef = [], isLoading: isLoadingAdj } = useAdjustmentsRefunds(dateRange, property);
+  const { data: allAnomalies = [] } = useClerkAnomalies(dateRange, property);
   const [selected, setSelected] = useState(null);
+
+  const adjustments = useMemo(() => adjRef.filter(r => r.record_type === "adjustment"), [adjRef]);
+  const refunds = useMemo(() => adjRef.filter(r => r.record_type === "refund"), [adjRef]);
+
+  // We can either use persisted anomalies or recalculate on the fly for the dashboard.
+  // Using detectClerkAnomalies directly gives us both the flags (matching current thresholds)
+  // and the clerkRiskScores matrix instantly.
+  const { flaggedAnomalies, clerkRiskScores } = useMemo(() => {
+    // If you want to use strictly persisted alerts:
+    // const persisted = allAnomalies.filter(a => Object.values(CLERK_ANOMALY_TYPES).includes(a.alert_type));
+    // But detectClerkAnomalies generates everything needed for the UI in one pass:
+    return detectClerkAnomalies({ adjustments, refunds });
+  }, [adjustments, refunds]);
 
   // Clerk records imported from ClerkShift.csv come in three record types:
   //  - "payment": payment method totals (CASH, CHECK, AMEX...), NOT clerks
@@ -83,6 +102,8 @@ export default function Employees() {
     }).sort((a, b) => b.txnCount - a.txnCount);
   }, [clerkRecords, drops]);
 
+  const [activeTab, setActiveTab] = useState("cash_drops");
+
   const totalAdjusted = stats.reduce((a, s) => a + s.totalAdjusted, 0);
   const totalTxns = stats.reduce((a, s) => a + s.txnCount, 0);
   const totalDrops = stats.reduce((a, s) => a + s.dropCount, 0);
@@ -113,128 +134,173 @@ export default function Employees() {
           </p>
         </Card>
       ) : (
-        <>
-          {/* Data Quality Note */}
-          <div className="flex items-start gap-3 rounded-xl border border-[#FFB547]/20 bg-[#FFB547]/[0.06] p-4">
-            <Info className="mt-0.5 h-5 w-5 shrink-0 text-[#FFB547]" />
-            <div>
-              <p className="text-sm text-slate-200">Clerk Audit Data Quality Notice</p>
-              <p className="mt-1 text-xs text-slate-400">
-                {stats.length} clerks detected from {totalTxns} payment records imported from ClerkShift.csv.
-                Clerk performance is derived from the per-clerk payment activity and cash deposit records in the
-                report. Net amounts shown represent the difference between positive and negative payment activity
-                per clerk.
-              </p>
+        <Tabs.Root value={activeTab} onValueChange={setActiveTab}>
+          <div className="mb-6 flex items-center justify-between">
+            <Tabs.List className="relative flex w-fit rounded-full bg-[#0A1628]/80 p-1 backdrop-blur-md border border-white/5">
+              {["cash_drops", "anomalies"].map((tabId) => {
+                const isActive = activeTab === tabId;
+                return (
+                  <Tabs.Trigger
+                    key={tabId}
+                    value={tabId}
+                    className={`relative z-10 rounded-full px-5 py-2 text-sm font-medium outline-none transition-colors duration-300 ${
+                      isActive ? "text-white" : "text-slate-400 hover:text-slate-300"
+                    }`}
+                  >
+                    {isActive && (
+                      <motion.div
+                        layoutId="activeTabBadge"
+                        className="absolute inset-0 z-[-1] rounded-full bg-[#1A2C46] shadow-[0_0_15px_rgba(255,255,255,0.05)] border border-white/10"
+                        transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                      />
+                    )}
+                    {tabId === "cash_drops" ? "Shift Cash Audit" : "Fraud & Anomalies"}
+                  </Tabs.Trigger>
+                );
+              })}
+            </Tabs.List>
+          </div>
+
+          <Tabs.Content value="cash_drops" className="space-y-6 outline-none">
+            {/* Data Quality Note */}
+            <div className="flex items-start gap-3 rounded-xl border border-[#FFB547]/20 bg-[#FFB547]/[0.06] p-4">
+              <Info className="mt-0.5 h-5 w-5 shrink-0 text-[#FFB547]" />
+              <div>
+                <p className="text-sm text-slate-200">Clerk Audit Data Quality Notice</p>
+                <p className="mt-1 text-xs text-slate-400">
+                  {stats.length} clerks detected from {totalTxns} payment records imported from ClerkShift.csv.
+                  Clerk performance is derived from the per-clerk payment activity and cash deposit records in the
+                  report. Net amounts shown represent the difference between positive and negative payment activity
+                  per clerk.
+                </p>
+              </div>
             </div>
-          </div>
 
-          {/* KPI Cards */}
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <KpiCard label="Clerks Detected" value={num(stats.length)} sub="from payment records" accent={C.purple} icon={Users} />
-            <KpiCard label="Total Records" value={num(totalTxns)} sub="payment entries" accent={C.cyan} />
-            <KpiCard
-              label="Net Payments"
-              value={money2(totalAdjusted)}
-              sub={totalAdjusted >= 0 ? "Net positive" : "Net negative"}
-              accent={totalAdjusted >= 0 ? C.green : C.coral}
-            />
-            <KpiCard
-              label="Cash Drops"
-              value={num(totalDrops)}
-              sub={totalDrops ? "deposit records" : "no drop data"}
-              accent={C.amber}
-            />
-          </div>
+            {/* KPI Cards */}
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <KpiCard label="Clerks Detected" value={num(stats.length)} sub="from payment records" accent={C.purple} icon={Users} />
+              <KpiCard label="Total Records" value={num(totalTxns)} sub="payment entries" accent={C.cyan} />
+              <KpiCard
+                label="Net Payments"
+                value={money2(totalAdjusted)}
+                sub={totalAdjusted >= 0 ? "Net positive" : "Net negative"}
+                accent={totalAdjusted >= 0 ? C.green : C.coral}
+              />
+              <KpiCard
+                label="Cash Drops"
+                value={num(totalDrops)}
+                sub={totalDrops ? "deposit records" : "no drop data"}
+                accent={C.amber}
+              />
+            </div>
 
-          {/* Clerk Table */}
-          <Card title="Clerk Performance" subtitle="Click a row to see adjustment details">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-[11px] uppercase tracking-widest text-slate-500">
-                    <th className="pb-3 pr-4">Clerk</th>
-                    <th className="pb-3 pr-4 text-right">Records</th>
-                    <th className="pb-3 pr-4 text-right">Positive Adj.</th>
-                    <th className="pb-3 pr-4 text-right">Negative Adj.</th>
-                    <th className="pb-3 pr-4 text-right">Net Adjusted</th>
-                    {totalDrops > 0 && <th className="pb-3 pr-4 text-right">Cash Dropped</th>}
-                    <th className="pb-3 text-right">Audit Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {stats.map((s) => (
-                    <React.Fragment key={s.clerk}>
-                      <tr
-                        onClick={() => setSelected(selected === s.clerk ? null : s.clerk)}
-                        className="cursor-pointer border-t border-white/5 transition-colors hover:bg-white/[0.03]"
-                      >
-                        <td className="py-2.5 pr-4">
-                          <span className="flex items-center gap-2 text-slate-200">
-                            {selected === s.clerk ? <ChevronUp className="h-3.5 w-3.5 text-slate-500" /> : <ChevronDown className="h-3.5 w-3.5 text-slate-500" />}
-                            {s.clerk}
-                          </span>
-                        </td>
-                        <td className="py-2.5 pr-4 text-right tabular-nums text-slate-400">{num(s.txnCount)}</td>
-                        <td className="py-2.5 pr-4 text-right tabular-nums text-[#00E096]">{money2(s.positiveSum)}</td>
-                        <td className="py-2.5 pr-4 text-right tabular-nums text-[#FF6B6B]">{money2(s.negativeSum)}</td>
-                        <td className="py-2.5 pr-4 text-right tabular-nums text-white">
-                          {s.totalAdjusted >= 0 ? "+" : ""}{money2(s.totalAdjusted)}
-                        </td>
-                        {totalDrops > 0 && (
-                          <td className="py-2.5 pr-4 text-right tabular-nums text-slate-300">{money2(s.cashDropped)}</td>
-                        )}
-                        <td className="py-2.5 text-right">
-                          {s.status === "over" ? (
-                            <span className="flex items-center justify-end gap-1 text-xs text-[#FFB547]">
-                              <AlertTriangle className="h-3.5 w-3.5" /> Over
+            {/* Clerk Table */}
+            <Card title="Clerk Cash Drops & Shifts" subtitle="Click a row to see shift payment details">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-[11px] uppercase tracking-widest text-slate-500">
+                      <th className="pb-3 pr-4">Clerk</th>
+                      <th className="pb-3 pr-4 text-right">Records</th>
+                      <th className="pb-3 pr-4 text-right">Positive Adj.</th>
+                      <th className="pb-3 pr-4 text-right">Negative Adj.</th>
+                      <th className="pb-3 pr-4 text-right">Net Adjusted</th>
+                      {totalDrops > 0 && <th className="pb-3 pr-4 text-right">Cash Dropped</th>}
+                      <th className="pb-3 text-right">Audit Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.map((s) => (
+                      <React.Fragment key={s.clerk}>
+                        <tr
+                          onClick={() => setSelected(selected === s.clerk ? null : s.clerk)}
+                          className="cursor-pointer border-t border-white/5 transition-colors hover:bg-white/[0.03]"
+                        >
+                          <td className="py-2.5 pr-4">
+                            <span className="flex items-center gap-2 text-slate-200">
+                              {selected === s.clerk ? <ChevronUp className="h-3.5 w-3.5 text-slate-500" /> : <ChevronDown className="h-3.5 w-3.5 text-slate-500" />}
+                              {s.clerk}
                             </span>
-                          ) : s.status === "short" ? (
-                            <span className="flex items-center justify-end gap-1 text-xs text-[#FF6B6B]">
-                              <AlertTriangle className="h-3.5 w-3.5" /> Short
-                            </span>
-                          ) : (
-                            <span className="flex items-center justify-end gap-1 text-xs text-[#00E096]">
-                              <CheckCircle2 className="h-3.5 w-3.5" /> Balanced
-                            </span>
+                          </td>
+                          <td className="py-2.5 pr-4 text-right tabular-nums text-slate-400">{num(s.txnCount)}</td>
+                          <td className="py-2.5 pr-4 text-right tabular-nums text-[#00E096]">{money2(s.positiveSum)}</td>
+                          <td className="py-2.5 pr-4 text-right tabular-nums text-[#FF6B6B]">{money2(s.negativeSum)}</td>
+                          <td className="py-2.5 pr-4 text-right tabular-nums text-white">
+                            {s.totalAdjusted >= 0 ? "+" : ""}{money2(s.totalAdjusted)}
+                          </td>
+                          {totalDrops > 0 && (
+                            <td className="py-2.5 pr-4 text-right tabular-nums text-slate-300">{money2(s.cashDropped)}</td>
                           )}
-                        </td>
-                      </tr>
-                      {selected === s.clerk && (
-                        <tr className="border-t border-white/5">
-                          <td colSpan={totalDrops > 0 ? 7 : 6} className="bg-[#0A1628]/40 px-8 py-4">
-                            <p className="mb-3 text-[11px] uppercase tracking-widest text-slate-500">
-                              Payment details — {s.clerk} · {s.records.length} records
-                            </p>
-                            <div className="max-h-60 overflow-auto">
-                              <table className="w-full text-xs">
-                                <thead>
-                                  <tr className="text-left text-slate-500">
-                                    <th className="pb-2 pr-4">Payment Type</th>
-                                    <th className="pb-2 pr-4 text-right">Amount</th>
-                                    <th className="pb-2 text-right">Txns</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {s.records.slice(0, 100).map((r) => (
-                                    <tr key={r.id} className="border-t border-white/5">
-                                      <td className="py-1.5 pr-4 text-slate-300">{r.payment_type || "—"}</td>
-                                      <td className="py-1.5 pr-4 text-right tabular-nums text-slate-300">{money2(r.amount)}</td>
-                                      <td className="py-1.5 text-right tabular-nums text-slate-500">{r.transaction_count || "—"}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
+                          <td className="py-2.5 text-right">
+                            {s.status === "over" ? (
+                              <span className="flex items-center justify-end gap-1 text-xs text-[#FFB547]">
+                                <AlertTriangle className="h-3.5 w-3.5" /> Over
+                              </span>
+                            ) : s.status === "short" ? (
+                              <span className="flex items-center justify-end gap-1 text-xs text-[#FF6B6B]">
+                                <AlertTriangle className="h-3.5 w-3.5" /> Short
+                              </span>
+                            ) : (
+                              <span className="flex items-center justify-end gap-1 text-xs text-[#00E096]">
+                                <CheckCircle2 className="h-3.5 w-3.5" /> Balanced
+                              </span>
+                            )}
                           </td>
                         </tr>
-                      )}
-                    </React.Fragment>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        </>
+                        {selected === s.clerk && (
+                          <tr className="border-t border-white/5">
+                            <td colSpan={totalDrops > 0 ? 7 : 6} className="bg-[#0A1628]/40 px-8 py-4">
+                              <p className="mb-3 text-[11px] uppercase tracking-widest text-slate-500">
+                                Payment details — {s.clerk} · {s.records.length} records
+                              </p>
+                              <div className="max-h-60 overflow-auto">
+                                <table className="w-full text-xs">
+                                  <thead>
+                                    <tr className="text-left text-slate-500">
+                                      <th className="pb-2 pr-4">Payment Type</th>
+                                      <th className="pb-2 pr-4 text-right">Amount</th>
+                                      <th className="pb-2 text-right">Txns</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {s.records.slice(0, 100).map((r) => (
+                                      <tr key={r.id} className="border-t border-white/5">
+                                        <td className="py-1.5 pr-4 text-slate-300">{r.payment_type || "—"}</td>
+                                        <td className="py-1.5 pr-4 text-right tabular-nums text-slate-300">{money2(r.amount)}</td>
+                                        <td className="py-1.5 text-right tabular-nums text-slate-500">{r.transaction_count || "—"}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </Tabs.Content>
+
+          <Tabs.Content value="anomalies" className="outline-none">
+            {adjustments.length === 0 && refunds.length === 0 ? (
+               <Card title="No anomaly data available">
+                 <p className="text-sm text-slate-400">
+                   Import an <span className="text-slate-300">Adjustments & Refunds Activity</span> report to view clerk anomaly detection.
+                 </p>
+               </Card>
+            ) : (
+              <ClerkAuditMatrix
+                flaggedAnomalies={flaggedAnomalies}
+                clerkRiskScores={clerkRiskScores}
+                adjustments={adjustments}
+                refunds={refunds}
+              />
+            )}
+          </Tabs.Content>
+        </Tabs.Root>
       )}
     </div>
   );

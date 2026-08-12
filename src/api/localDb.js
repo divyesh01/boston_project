@@ -28,6 +28,7 @@ import Dexie from 'dexie';
  *   Reservation: import('dexie').Table<any, number>;
  *   RoomType: import('dexie').Table<any, number>;
  *   ChannelMap: import('dexie').Table<any, number>;
+ *   AdjustmentRefund: import('dexie').Table<any, number>;
  * }} */
 // @ts-ignore — augment the non-generic Dexie interface with the app's tables.
 const localDb = new Dexie('RedRoofIntelligence');
@@ -224,6 +225,11 @@ localDb.version(16).stores({
   HousekeepingTask: '++id, property_id, task_date, room_number, assignee, status, [property_id+task_date], [property_id+room_number], [property_id+task_date+status], created_date',
   WeatherSnapshot: '++id, property_id, date, kind, [property_id+date], [property_id+date+kind], created_date',
   Review: '++id, property_id, source, rating, sentiment, status, review_date, [property_id+review_date], [property_id+source+status], created_date',
+});
+
+// v17 — Add AdjustmentRefund for Clerk Audit.
+localDb.version(17).stores({
+  AdjustmentRefund: '++id, property_id, date, record_type, username, [property_id+date], [property_id+username], import_id, created_date',
 });
 
 // Guard: a table whose name collides with a Dexie instance property is created

@@ -134,6 +134,43 @@ export function useClerkRecords(dateRange, propertyId) {
   });
 }
 
+export function useAdjustmentsRefunds(dateRange, propertyId) {
+  return useQuery({
+    queryKey: ["adjustments-refunds", dateRange?.from, dateRange?.to, propertyId],
+    queryFn: async () => {
+      const filter = buildFilter(dateRange, propertyId);
+      if (filter.date) {
+        return db.entities.AdjustmentRefund.filter(filter, "date", 100000);
+      }
+      return db.entities.AdjustmentRefund.list("date", 100000);
+    },
+  });
+}
+
+export function useClerkAnomalies(dateRange, propertyId) {
+  return useQuery({
+    queryKey: ["clerk-anomalies", dateRange?.from, dateRange?.to, propertyId],
+    queryFn: async () => {
+      const filter = {};
+      if (propertyId && propertyId !== "all") {
+        if (Array.isArray(propertyId)) {
+          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
+        } else {
+          filter.property_id = propertyId;
+        }
+      }
+      // Assuming AnomalyAlert isn't purely date-indexed, filter dates in memory
+      const rows = await db.entities.AnomalyAlert.filter(filter, "date", 100000);
+      return rows.filter((r) => {
+        if (!dateRange || (!dateRange.from && !dateRange.to)) return true;
+        if (dateRange.from && r.date && r.date < dateRange.from) return false;
+        if (dateRange.to && r.date && r.date > dateRange.to) return false;
+        return true;
+      });
+    },
+  });
+}
+
 export function usePaymentData(dateRange, propertyId, months = []) {
   return useQuery({
     queryKey: ["payments", dateRange?.from, dateRange?.to, propertyId, (months || []).join(",")],

@@ -138,11 +138,14 @@ export function rowsToObjects(rawRows) {
 const SECTION_HEADERS = {
   payment_summary: ["payment type", "actual", "adjusted", "net today"],
   shift_log: ["username", "start time", "end time", "closed by"],
+  adjustments_detail: ["adjusted amount"],
+  refunds_detail: ["payment type refunded", "refund code"],
   employee_payments: ["username", "payment type", "amount"],
   expenses: ["expense type", "amount"],
   currency_conversion: ["type", "converted from", "conversion rate", "converted value"],
   deposit_drop: ["time", "username"],
 };
+
 
 function headerMatches(rowCells, headerKeywords) {
   const lower = rowCells.map((c) => c.toLowerCase().trim());

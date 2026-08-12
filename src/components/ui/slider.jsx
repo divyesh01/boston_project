@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Slider component for numeric range selection.
+ * Built on Radix UI Slider primitive with track and thumb elements.
+ * @module slider
+ */
 import * as React from "react"
 import * as SliderPrimitive from "@radix-ui/react-slider"
 

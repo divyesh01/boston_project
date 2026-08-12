@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Badge component for status indicators and labels.
+ * Uses class-variance-authority for variant-based styling.
+ * @module badge
+ */
 import * as React from "react"
 import { cva } from "class-variance-authority";
 
@@ -23,13 +28,17 @@ const badgeVariants = cva(
   }
 )
 
-function Badge(
-  /** @type {import('react').ComponentPropsWithoutRef<'div'> & {
-   *   variant?: 'default' | 'secondary' | 'destructive' | 'outline';
-   * }} */
-  { className, variant, ...props }
-) {
-  return (<div className={cn(badgeVariants({ variant }), className)} {...props} />);
-}
+const Badge = React.forwardRef(
+  (
+    /** @type {import('react').ComponentPropsWithoutRef<'div'> & {
+     *   variant?: 'default' | 'secondary' | 'destructive' | 'outline';
+     * }} */
+    { className, variant, ...props },
+    ref
+  ) => {
+    return (<div ref={ref} className={cn(badgeVariants({ variant }), className)} {...props} />);
+  }
+)
+Badge.displayName = "Badge"
 
 export { Badge, badgeVariants }

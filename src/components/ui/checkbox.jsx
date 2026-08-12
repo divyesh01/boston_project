@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Checkbox component for boolean input selection.
+ * Built on Radix UI Checkbox primitive with custom styling.
+ * @module checkbox
+ */
 import * as React from "react"
 import * as CheckboxPrimitive from "@radix-ui/react-checkbox"
 import { Check } from "lucide-react"

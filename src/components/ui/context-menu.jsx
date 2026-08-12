@@ -1,3 +1,8 @@
+/**
+ * @fileoverview ContextMenu component for right-click context menus.
+ * Built on Radix UI ContextMenu primitive with check and sub-menu support.
+ * @module context-menu
+ */
 import * as React from "react"
 import * as ContextMenuPrimitive from "@radix-ui/react-context-menu"
 import { Check, ChevronRight, Circle } from "lucide-react"

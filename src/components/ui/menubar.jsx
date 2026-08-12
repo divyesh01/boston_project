@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Menubar component for application menu bars.
+ * Built on Radix UI Menubar primitive with checkbox items, radio items, and sub-menus.
+ * @module menubar
+ */
 "use client"
 
 import * as React from "react"
@@ -178,7 +183,7 @@ const MenubarShortcut = ({
       {...props} />)
   );
 }
-MenubarShortcut.displayname = "MenubarShortcut"
+MenubarShortcut.displayName = "MenubarShortcut"
 
 export {
   Menubar,

@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Toaster component for rendering active toast notifications.
+ * Consumes the useToast hook and renders Toast components for each active toast.
+ * @module toaster
+ */
 import { useToast } from "@/components/ui/use-toast";
 import {
   Toast,

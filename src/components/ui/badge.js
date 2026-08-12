@@ -15,11 +15,12 @@ const badgeVariants = cva("inline-flex items-center rounded-md border px-2.5 py-
         variant: "default",
     },
 });
-function Badge(
+const Badge = React.forwardRef(
 /** @type {import('react').ComponentPropsWithoutRef<'div'> & {
  *   variant?: 'default' | 'secondary' | 'destructive' | 'outline';
  * }} */
-{ className, variant, ...props }) {
-    return (_jsx("div", { className: cn(badgeVariants({ variant }), className), ...props }));
-}
+({ className, variant, ...props }, ref) => {
+    return (_jsx("div", { ref: ref, className: cn(badgeVariants({ variant }), className), ...props }));
+});
+Badge.displayName = "Badge";
 export { Badge, badgeVariants };

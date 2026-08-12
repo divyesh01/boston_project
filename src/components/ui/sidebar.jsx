@@ -1,3 +1,9 @@
+/**
+ * @fileoverview Sidebar component for application navigation layout.
+ * Provides collapsible sidebar with sheet-based mobile overlay, keyboard shortcut support,
+ * and composable sub-components (SidebarHeader, SidebarContent, SidebarFooter, SidebarMenu, etc.).
+ * @module sidebar
+ */
 import * as React from "react"
 import { Slot } from "@radix-ui/react-slot"
 import { cva } from "class-variance-authority";

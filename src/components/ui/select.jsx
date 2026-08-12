@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Select component for dropdown selection menus.
+ * Built on Radix UI Select primitive with check indicators and scroll support.
+ * @module select
+ */
 "use client"
 
 import * as React from "react"

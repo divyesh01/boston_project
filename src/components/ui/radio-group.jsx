@@ -1,3 +1,8 @@
+/**
+ * @fileoverview RadioGroup component for single-selection from a set of options.
+ * Built on Radix UI RadioGroup primitive with custom indicator styling.
+ * @module radio-group
+ */
 import * as React from "react"
 import * as RadioGroupPrimitive from "@radix-ui/react-radio-group"
 import { Circle } from "lucide-react"

@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Sonner Toaster component for toast notifications using sonner library.
+ * Integrates with next-themes for light/dark mode support.
+ * @module sonner
+ */
 "use client";
 import { useTheme } from "next-themes"
 import { Toaster as Sonner } from "sonner"

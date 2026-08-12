@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Progress component for displaying completion status.
+ * Built on Radix UI Progress primitive with animated indicator.
+ * @module progress
+ */
 "use client"
 
 import * as React from "react"

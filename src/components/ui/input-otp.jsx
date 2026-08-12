@@ -1,3 +1,8 @@
+/**
+ * @fileoverview InputOTP component for one-time password / verification code entry.
+ * Built on input-otp library with separator and slot-based rendering.
+ * @module input-otp
+ */
 import * as React from "react"
 import { OTPInput, OTPInputContext } from "input-otp"
 import { Minus } from "lucide-react"

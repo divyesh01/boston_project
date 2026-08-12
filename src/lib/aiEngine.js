@@ -285,6 +285,16 @@ async function resolveProperty(question, defaultFilter, allowedPropertyIds = nul
     isAll: true,
   });
 
+  // Restored and improved line 294 logic to actually filter properties correctly
+  if (defaultFilter && defaultFilter !== "all") {
+    const ids = Array.isArray(defaultFilter) ? defaultFilter : [defaultFilter];
+    const hitProps = props.filter((p) => ids.includes(String(p.id)));
+    if (hitProps.length > 0) {
+      const label = hitProps.length === 1 ? hitProps[0].name : "Selected Properties";
+      return { ids: new Set(ids.map(String)), label, isAll: false };
+    }
+  }
+
   if (/\b(all properties|all\b.*portfolio|portfolio|everywhere)\b/i.test(q) && /all/i.test(q)) {
     return scopeAll();
   }
@@ -292,11 +302,19 @@ async function resolveProperty(question, defaultFilter, allowedPropertyIds = nul
     return scopeAll();
   }
 
-  const codeMatch = q.match(CODE_RE);
-  if (codeMatch) {
-    const target = codeMatch[1].toUpperCase();
-    const hit = props.find((p) => String(p.code || "").toUpperCase() === target);
-    if (hit) return { ids: new Set([String(hit.id)]), label: hit.name, isAll: false, code: hit.code };
+  const codeMatches = [...q.matchAll(new RegExp(CODE_RE.source, "gi"))];
+  if (codeMatches.length > 0) {
+    const hits = codeMatches
+      .map((m) => props.find((p) => String(p.code || "").toUpperCase() === m[1].toUpperCase()))
+      .filter(Boolean);
+    if (hits.length > 0) {
+      return {
+        ids: new Set(hits.map((h) => String(h.id))),
+        label: hits.map((h) => h.name).join(", "),
+        isAll: false,
+        code: hits.map((h) => h.code).join(", "),
+      };
+    }
   }
 
   let best = null;

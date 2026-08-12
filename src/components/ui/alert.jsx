@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Alert component for displaying important messages.
+ * Uses class-variance-authority for variant-based styling.
+ * @module alert
+ */
 import * as React from "react"
 import { cva } from "class-variance-authority";
 

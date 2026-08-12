@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Popover component for floating content panels.
+ * Built on Radix UI Popover primitive with portal rendering and animation.
+ * @module popover
+ */
 import * as React from "react"
 import * as PopoverPrimitive from "@radix-ui/react-popover"
 

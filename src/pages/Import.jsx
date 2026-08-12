@@ -419,7 +419,7 @@ export default function Import() {
     setQueue((prev) => prev.filter((q) => q.key !== key));
   };
 
-  const IMPORT_TABLES = ["OccupancyDay", "SourceDay", "GrossRevenueDay", "PaymentDay", "ClerkShiftRecord", "HotelMetric", "TransactionLine", "UploadedReport"];
+  const IMPORT_TABLES = ["OccupancyDay", "SourceDay", "GrossRevenueDay", "PaymentDay", "ClerkShiftRecord", "HotelMetric", "TransactionLine", "AdjustmentRefund", "AnomalyAlert", "UploadedReport"];
 
   const handleClearAll = async () => {
     if (clearing) return;

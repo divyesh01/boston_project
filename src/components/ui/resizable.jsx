@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Resizable component for resizable panel layouts.
+ * Built on react-resizable-panels with grip handle indicator.
+ * @module resizable
+ */
 "use client"
 
 import { GripVertical } from "lucide-react"

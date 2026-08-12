@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Toast component for notification display.
+ * Provides toast provider, viewport, and individual toast components with dismiss support.
+ * @module toast
+ */
 import * as React from "react";
 import { cva } from "class-variance-authority";
 import { X } from "lucide-react";

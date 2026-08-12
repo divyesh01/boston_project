@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Tabs component for tabbed content navigation.
+ * Built on Radix UI Tabs primitive with styled triggers and content panels.
+ * @module tabs
+ */
 import * as React from "react"
 import * as TabsPrimitive from "@radix-ui/react-tabs"
 

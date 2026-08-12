@@ -1,3 +1,8 @@
+/**
+ * @fileoverview HoverCard component for displaying content on hover.
+ * Built on Radix UI HoverCard primitive with animated popover.
+ * @module hover-card
+ */
 "use client"
 
 import * as React from "react"

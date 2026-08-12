@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Switch component for boolean toggle input.
+ * Built on Radix UI Switch primitive with custom styling.
+ * @module switch
+ */
 import * as React from "react"
 import * as SwitchPrimitives from "@radix-ui/react-switch"
 

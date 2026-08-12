@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Collapsible component for expandable/collapsible content sections.
+ * Thin wrapper around Radix UI Collapsible primitive.
+ * @module collapsible
+ */
 "use client"
 
 import * as CollapsiblePrimitive from "@radix-ui/react-collapsible"

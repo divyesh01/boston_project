@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Calendar component for date selection.
+ * Built on react-day-picker with custom navigation buttons and styling.
+ * @module calendar
+ */
 import * as React from "react"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import { DayPicker } from "react-day-picker"

@@ -1,3 +1,8 @@
+/**
+ * @fileoverview NavigationMenu component for main site navigation.
+ * Built on Radix UI NavigationMenu primitive with link support and viewport.
+ * @module navigation-menu
+ */
 import * as React from "react"
 import * as NavigationMenuPrimitive from "@radix-ui/react-navigation-menu"
 import { cva } from "class-variance-authority"

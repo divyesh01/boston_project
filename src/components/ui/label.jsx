@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Label component for form field labels.
+ * Built on Radix UI Label primitive with peer-disabled styling support.
+ * @module label
+ */
 import * as React from "react"
 import * as LabelPrimitive from "@radix-ui/react-label"
 import { cva } from "class-variance-authority";

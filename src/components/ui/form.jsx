@@ -1,3 +1,9 @@
+/**
+ * @fileoverview Form component for react-hook-form integration.
+ * Provides FormField, FormItem, FormLabel, FormControl, FormDescription, and FormMessage
+ * for accessible form validation with Radix UI primitives.
+ * @module form
+ */
 "use client";
 import * as React from "react"
 import { Slot } from "@radix-ui/react-slot"

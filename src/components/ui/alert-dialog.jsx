@@ -1,3 +1,8 @@
+/**
+ * @fileoverview AlertDialog component for confirmation and destructive action prompts.
+ * Built on Radix UI AlertDialog primitive with styled overlay, content, and action buttons.
+ * @module alert-dialog
+ */
 import * as React from "react"
 import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
 

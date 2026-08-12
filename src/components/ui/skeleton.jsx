@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Skeleton component for loading placeholder content.
+ * Renders an animated pulse placeholder div.
+ * @module skeleton
+ */
 import { cn } from "@/lib/utils"
 
 function Skeleton({

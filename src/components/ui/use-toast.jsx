@@ -1,3 +1,9 @@
+/**
+ * @fileoverview Toast state management hook and API.
+ * Provides useToast hook and toast() function for programmatic toast notifications.
+ * Uses a global reducer pattern with listener-based state synchronization.
+ * @module use-toast
+ */
 // Inspired by react-hot-toast library
 import { useState, useEffect } from "react";
 
@@ -152,7 +158,7 @@ function useToast() {
         listeners.splice(index, 1);
       }
     };
-  }, [state]);
+  }, []);
 
   return {
     ...state,

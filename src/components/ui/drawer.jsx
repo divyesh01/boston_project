@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Drawer component for bottom-sheet style panels.
+ * Built on vaul drawer primitive with scale background animation.
+ * @module drawer
+ */
 "use client"
 
 import * as React from "react"

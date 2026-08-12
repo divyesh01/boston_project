@@ -1,3 +1,8 @@
+/**
+ * @fileoverview ScrollArea component for custom-styled scrollable regions.
+ * Built on Radix UI ScrollArea primitive with configurable scrollbars.
+ * @module scroll-area
+ */
 import * as React from "react"
 import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area"
 

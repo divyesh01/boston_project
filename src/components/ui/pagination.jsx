@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Pagination component for navigating through paginated content.
+ * Provides navigation links, ellipsis for truncated page lists, and accessible ARIA attributes.
+ * @module pagination
+ */
 import * as React from "react"
 import { ChevronLeft, ChevronRight, MoreHorizontal } from "lucide-react"
 

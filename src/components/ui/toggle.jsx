@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Toggle component for on/off state switching.
+ * Uses Radix UI Toggle primitive with class-variance-authority for variant styling.
+ * @module toggle
+ */
 import * as React from "react"
 import * as TogglePrimitive from "@radix-ui/react-toggle"
 import { cva } from "class-variance-authority";

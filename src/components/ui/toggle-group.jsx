@@ -1,3 +1,8 @@
+/**
+ * @fileoverview ToggleGroup component for grouped toggle buttons.
+ * Uses Radix UI ToggleGroup primitive with context-based size/variant sharing.
+ * @module toggle-group
+ */
 "use client";
 import * as React from "react"
 import * as ToggleGroupPrimitive from "@radix-ui/react-toggle-group"

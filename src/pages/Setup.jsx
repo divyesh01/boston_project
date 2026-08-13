@@ -50,6 +50,7 @@ export default function Setup() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
+
     // Rate limiting
     const rateLimit = sensitiveActionRateLimiter.check();
     if (!rateLimit.allowed) {

@@ -43,7 +43,7 @@ export default function ForgotPassword() {
         return;
       }
 
-      const result = await db.auth.resetPasswordRequest({ identifier });
+      const result = await db.auth.resetPasswordRequest(identifier);
       if (result.token) {
         setResetToken(result.token);
       }

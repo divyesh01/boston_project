@@ -93,7 +93,7 @@ export default function ResetPassword() {
       const err = validatePasswordStrength(newPassword);
       if (err) throw new Error(err);
 
-      await db.auth.resetPassword({ resetToken, newPassword });
+      await db.auth.resetPassword(resetToken, newPassword);
       setSuccess(true);
       rotateCsrfToken();
       toast({ title: "Password reset successful", description: "You can now log in with your new password." });

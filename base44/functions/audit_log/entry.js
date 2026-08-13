@@ -1,4 +1,5 @@
 import { createClientFromRequest } from "npm:@base44/sdk@^0.8.41";
+import { secrets } from "base44:runtime";
 
 export default async function (req) {
   try {
@@ -36,6 +37,27 @@ export default async function (req) {
       return Response.json({ error: "Forbidden: Cannot log for another user" }, { status: 403 });
     }
 
+    // Server-authoritative tamper-evident chain. The client-supplied hash is
+    // IGNORED — we recompute the chain hash over trusted server fields using a
+    // server-held secret, so the audit trail cannot be forged client-side
+    // (previously the chain secret lived in localStorage / a window global).
+    const chainSecret = secrets.get('AUDIT_CHAIN_SECRET') || 'insecure-dev-audit-secret-change-me';
+    const lastEntries = await base44.asServiceRole.entities.AuditLog.filter({}, '-created_date', 1, 0);
+    const previousHash = (lastEntries && lastEntries[0] && lastEntries[0].hash) || '0'.repeat(64);
+    const nowIso = new Date().toISOString();
+    const canonical = JSON.stringify({
+      user_id: payload.user_id,
+      action: payload.action,
+      performed_by_id: payload.performed_by_id,
+      performed_by: payload.performed_by,
+      property_id: payload.property_id || null,
+      result: payload.result || 'success',
+      detail: payload.detail || '',
+      created_date: nowIso,
+      previous_hash: previousHash,
+    });
+    const serverHash = crypto.createHash('sha256').update(`${chainSecret}:${canonical}`).digest('hex');
+
     // Write audit log entry securely on the server
     const entry = await base44.asServiceRole.entities.AuditLog.create({
       user_id: payload.user_id,
@@ -49,9 +71,9 @@ export default async function (req) {
       property_name: payload.property_name || null,
       result: payload.result || 'success',
       detail: payload.detail || '',
-      created_date: new Date().toISOString(),
-      hash: payload.hash || null,
-      previous_hash: payload.previous_hash || null,
+      created_date: nowIso,
+      hash: serverHash,
+      previous_hash: previousHash,
     });
 
     return Response.json({ success: true, entry });

@@ -100,8 +100,31 @@ export default function Payments() {
 
   // Clerk payment activity (real per-clerk records from ClerkShift.csv)
   const [expandedClerk, setExpandedClerk] = useState(null);
+  // Payment Audit ledger: payment-method filter + two-tier amount sort
+  // (non-$100 audit-risk payments on top, standard $100 incidental deposits
+  // at the bottom).
+  const [auditMethod, setAuditMethod] = useState('ALL'); // 'ALL' | 'CASH' | 'CARD' | 'DIRECT_BILL'
+
+  const auditPaymentCategory = (r) => {
+    const t = String(r.payment_type || r.paymentTypeRefunded || "").toUpperCase();
+    if (t.includes("CASH")) return "CASH";
+    if (t.includes("DIRECT") || t.includes("AR BILLING") || t.includes("DB")) return "DIRECT_BILL";
+    if (
+      t.includes("CARD") || t.includes("CC") || t.includes("VISA") ||
+      t.includes("MASTER") || t.includes("AMEX") || t.includes("DISCOVER") || t.includes("CREDIT")
+    ) {
+      return "CARD";
+    }
+    return "OTHER";
+  };
+
+  const isStandard100 = (r) => Math.abs(parseFloat(r.amount) || 0) === 100;
+
   const clerkAdjustments = useMemo(() => {
-    const payments = clerk.filter((x) => x.record_type === "clerk_payment");
+    let payments = clerk.filter((x) => x.record_type === "clerk_payment");
+    if (auditMethod !== "ALL") {
+      payments = payments.filter((r) => auditPaymentCategory(r) === auditMethod);
+    }
     const map = new Map();
     payments.forEach((r) => {
       const name = r.clerk_name || "Unknown";
@@ -112,8 +135,18 @@ export default function Payments() {
       cur.records.push(r);
       map.set(name, cur);
     });
+    // Two-tier sort inside each clerk's drill-down: audit-risk (non-$100)
+    // amounts first, then standard $100 incidental deposits.
+    for (const cur of map.values()) {
+      cur.records.sort((a, b) => {
+        const a100 = isStandard100(a);
+        const b100 = isStandard100(b);
+        if (a100 !== b100) return a100 ? 1 : -1;
+        return String(b.date || "").localeCompare(String(a.date || ""));
+      });
+    }
     return [...map.values()].sort((a, b) => b.adjusted - a.adjusted);
-  }, [clerk]);
+  }, [clerk, auditMethod]);
 
   const propName = property === "all" ? "All Properties" : (Array.isArray(property) ? `${property.length} Properties` : (properties.find((p) => p.id === property)?.name || "Property"));
   const periodLabel = `${dateRange.from || "—"} → ${dateRange.to || "—"}`;
@@ -414,7 +447,35 @@ export default function Payments() {
 
           {/* Payment Audit with drill-down */}
           {clerkAdjustments.length > 0 && (
-            <Card title="Payment Audit" subtitle="Click a clerk to expand individual payment records">
+            <Card
+              title="Payment Audit"
+              subtitle="Click a clerk to expand individual payment records — audit-risk amounts first, standard $100 incidental deposits at the bottom"
+              right={
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {[
+                    { key: 'ALL', label: 'ALL' },
+                    { key: 'CASH', label: 'CASH' },
+                    { key: 'CARD', label: 'CARD' },
+                    { key: 'DIRECT_BILL', label: 'DIRECT BILL' },
+                  ].map((pill) => {
+                    const active = auditMethod === pill.key;
+                    return (
+                      <button
+                        key={pill.key}
+                        onClick={() => setAuditMethod(pill.key)}
+                        className={`rounded-full border px-3 py-1 text-[11px] font-bold uppercase tracking-wider transition-all duration-200 ${
+                          active
+                            ? 'border-[#00D4FF] bg-[#00D4FF]/15 text-[#00D4FF]'
+                            : 'border-white/10 bg-white/[0.03] text-slate-400 hover:border-white/20 hover:text-slate-200'
+                        }`}
+                      >
+                        {pill.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              }
+            >
               <div className="space-y-2">
                 {clerkAdjustments.map((c) => (
                   <div key={c.clerk}>

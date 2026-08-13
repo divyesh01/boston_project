@@ -4,7 +4,7 @@ import React, { useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { GitCompare, RotateCcw, Check, CalendarClock, FileDown, Building2 } from "lucide-react";
-import { exportToPdf } from "@/lib/pdfExport";
+
 import {
   useGlobalFilters, PERIODS, MONTHS_SHORT, MONTHS_LONG, PAGE_FILTERS,
 } from "@/lib/useGlobalFilters";
@@ -143,6 +143,7 @@ export default function GlobalControlBar() {
     if (exporting) return;
     setExporting(true);
     try {
+      const { exportToPdf } = await import("@/lib/pdfExport");
       const content = document.querySelector("[data-page-content]");
       if (content) {
         const propName = f.property === "all" ? "Portfolio" : (Array.isArray(f.property) ? `${f.property.length}_Properties` : (f.properties.find((p) => p.id === f.property)?.name || "Property"));

@@ -13,7 +13,7 @@ import { getRevenueThresholds, getRevenueColor, getRevenueGroup, getRevenueGroup
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function MonthlyCalendar() {
-  const { dateRange, property, properties, month, year, months } = useGlobalFilters();
+  const { dateRange, property, properties, month, year, months, period } = useGlobalFilters();
   const { data: occ = [] } = useOccupancy(dateRange, property, months);
   const { data: sources = [] } = useSources(dateRange, property, months);
   const [selectedDay, setSelectedDay] = useState(null);
@@ -44,53 +44,67 @@ export default function MonthlyCalendar() {
     return map;
   }, [sources]);
 
-  // Build calendar grid
+  // Build calendar grids. When the owner picks several months (e.g. Apr–Jul),
+  // render one grid per selected month instead of silently clamping to the first.
+  const isMultiMonth = period === "monthly" && months.length > 1;
+  const displayMonths = useMemo(() => {
+    if (isMultiMonth) return [...months].sort((a, b) => a - b);
+    const m = month !== null ? month : new Date().getMonth();
+    return [m];
+  }, [isMultiMonth, months, month]);
+
   const calYear = year || new Date().getFullYear();
-  const calMonth = month !== null ? month : new Date().getMonth();
-  const firstDay = new Date(calYear, calMonth, 1);
-  const lastDayNum = new Date(calYear, calMonth + 1, 0).getDate();
-  const startDow = firstDay.getDay();
-  const cells = [];
-  for (let i = 0; i < startDow; i++) cells.push(null);
-  for (let d = 1; d <= lastDayNum; d++) {
-    const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    cells.push({ date: dateStr, day: d, data: byDate.get(dateStr) });
-  }
+  const grids = useMemo(() => {
+    return displayMonths.map((m) => {
+      const firstDay = new Date(calYear, m, 1);
+      const lastDayNum = new Date(calYear, m + 1, 0).getDate();
+      const startDow = firstDay.getDay();
+      const cells = [];
+      for (let i = 0; i < startDow; i++) cells.push(null);
+      for (let d = 1; d <= lastDayNum; d++) {
+        const dateStr = `${calYear}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+        cells.push({ date: dateStr, day: d, data: byDate.get(dateStr) });
+      }
+      return { month: m, cells };
+    });
+  }, [displayMonths, calYear, byDate]);
 
-  // KPIs describe exactly the days drawn in the grid.
-  //
-  // They used to be computed over the whole global `dateRange` while the grid
-  // was built from `year`/`month`, so under a YTD, quarterly or custom range the
-  // header and the grid below it described different spans — the header could
-  // report eight months of revenue above a single month of squares.
-  const gridRows = useMemo(() => {
-    const monthPrefix = `${calYear}-${String(calMonth + 1).padStart(2, "0")}`;
-    return occRows.filter((r) => String(r.date).slice(0, 7) === monthPrefix);
-  }, [occRows, calYear, calMonth]);
+  const periodLabel = useMemo(() => {
+    if (isMultiMonth) {
+      return `${MONTHS_LONG[displayMonths[0]]} ${calYear} - ${MONTHS_LONG[displayMonths[displayMonths.length - 1]]} ${calYear}`;
+    }
+    return `${MONTHS_LONG[displayMonths[0]]} ${calYear}`;
+  }, [isMultiMonth, displayMonths, calYear]);
 
+  // KPIs describe the whole selected period — not just the first drawn month.
+  // Previously they were computed from a single-month slice, so selecting
+  // Apr–Jul showed April's $142,136 / 30 days above a badge reading
+  // "2026-04-01 to 2026-07-31". Now they aggregate over the full date range.
   const kpis = useMemo(() => {
-    const s = occupancyStats(gridRows, properties);
+    const s = occupancyStats(occRows, properties);
     return {
       revenue: s.revenue,
       occupancy: s.occupancy,
       adr: s.adr,
       revpar: s.revpar,
-      highest: gridRows.length ? Math.max(...gridRows.map((r) => r.total_revenue || 0)) : 0,
-      lowest: gridRows.length ? Math.min(...gridRows.map((r) => r.total_revenue || 0)) : 0,
+      highest: occRows.length ? Math.max(...occRows.map((r) => r.total_revenue || 0)) : 0,
+      lowest: occRows.length ? Math.min(...occRows.map((r) => r.total_revenue || 0)) : 0,
       days: s.days,
     };
-  }, [gridRows, properties]);
+  }, [occRows, properties]);
 
   const groups = useMemo(() => {
     const g = { high: [], medium: [], low: [], nodata: [] };
-    cells.forEach((c) => {
-      if (!c) return;
-      if (!c.data) { g.nodata.push(c); return; }
-      const group = getRevenueGroup(c.data.total_revenue || 0);
-      g[group].push(c);
+    grids.forEach((grid) => {
+      grid.cells.forEach((c) => {
+        if (!c) return;
+        if (!c.data) { g.nodata.push(c); return; }
+        const group = getRevenueGroup(c.data.total_revenue || 0);
+        g[group].push(c);
+      });
     });
     return g;
-  }, [cells]);
+  }, [grids]);
 
   const groupStats = (groupCells) => {
     if (!groupCells.length) return { days: 0, revenue: 0, pct: 0, occupancy: 0, adr: 0, revpar: 0 };
@@ -143,12 +157,12 @@ export default function MonthlyCalendar() {
         <p className="text-[11px] uppercase tracking-[0.3em] text-[#00D4FF]">Owner Intelligence</p>
         <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Monthly Calendar View</h1>
         <p className="mt-1 text-sm text-slate-400">
-          Visualize daily performance patterns, channel dominance, and yield rhythms for {MONTHS_LONG[calMonth]} {calYear}.
+          Visualize daily performance patterns, channel dominance, and yield rhythms for {periodLabel}.
         </p>
       </header>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        <KpiCard label="Total Monthly Revenue" value={money(kpis.revenue)} sub={`${kpis.days} days with data`} accent={C.purple} icon={DollarSign} />
+        <KpiCard label={isMultiMonth ? "Total Period Revenue" : "Total Monthly Revenue"} value={money(kpis.revenue)} sub={`${kpis.days} days with data`} accent={C.purple} icon={DollarSign} />
         <KpiCard label="Average Occupancy" value={pct(kpis.occupancy)} accent={C.cyan} icon={Percent} />
         <KpiCard label="Average ADR" value={money2(kpis.adr)} accent={C.amber} icon={Gauge} />
         <KpiCard label="Average RevPAR" value={money2(kpis.revpar)} accent={C.green} icon={Gauge} />
@@ -156,48 +170,51 @@ export default function MonthlyCalendar() {
         <KpiCard label="Lowest Day" value={money(kpis.lowest)} sub="Minimum revenue day" accent="#ff6b6b" icon={TrendingDown} />
       </div>
 
-      <Card
-        title={`${MONTHS_LONG[calMonth]} ${calYear} Calendar`}
-        subtitle={`Green ≥ ${money(revThresholds.highRevenueThreshold)} · Gray ${money(revThresholds.mediumRevenueThreshold)}–${money(revThresholds.highRevenueThreshold)} · Red < ${money(revThresholds.mediumRevenueThreshold)} (editable in Settings)`}
-      >
-        <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
-          {DOW.map((d) => (
-            <div key={d} className="pb-2 text-center text-xs font-medium text-slate-500">{d}</div>
-          ))}
-          {cells.map((cell, i) => {
-            if (!cell) return <div key={i} className="min-h-[90px] sm:min-h-[120px]" />;
-            const revenue = cell.data?.total_revenue || 0;
-            const color = cell.data ? getRevenueColor(revenue) : "transparent";
-            const occPct = cell.data?.occupancy ? (cell.data.occupancy > 1 ? cell.data.occupancy : cell.data.occupancy * 100) : 0;
-            return (
-              <button
-                key={i}
-                onClick={() => setSelectedDay(cell.date)}
-                className={`min-h-[90px] rounded-lg border p-2 text-left transition-all sm:min-h-[120px] ${
-                  selectedDay === cell.date ? "border-[#00D4FF] ring-1 ring-[#00D4FF]" : "border-white/5"
-                } ${!cell.data ? "bg-[#0A1628]/40" : ""}`}
-                style={cell.data ? { backgroundColor: `${color}15`, borderLeft: `3px solid ${color}` } : {}}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-white">{cell.day}</span>
-                  {cell.data && <span className="text-[10px] text-slate-400">{occPct.toFixed(0)}%</span>}
-                </div>
-                {cell.data ? (
-                  <div className="mt-1 space-y-0.5 text-[10px] text-slate-300">
-                    <div className="font-heading font-semibold text-sm tabular-nums text-white">{money(revenue)}</div>
-                    <div>ADR {money2(cell.data.adr || 0)}</div>
-                    <div>RevPAR {money2(cell.data.revpar || 0)}</div>
+      {grids.map((grid) => (
+        <Card
+          key={grid.month}
+          title={`${MONTHS_LONG[grid.month]} ${calYear} Calendar`}
+          subtitle={`Green ≥ ${money(revThresholds.highRevenueThreshold)} · Gray ${money(revThresholds.mediumRevenueThreshold)}–${money(revThresholds.highRevenueThreshold)} · Red < ${money(revThresholds.mediumRevenueThreshold)} (editable in Settings)`}
+        >
+          <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+            {DOW.map((d) => (
+              <div key={d} className="pb-2 text-center text-xs font-medium text-slate-500">{d}</div>
+            ))}
+            {grid.cells.map((cell, i) => {
+              if (!cell) return <div key={i} className="min-h-[90px] sm:min-h-[120px]" />;
+              const revenue = cell.data?.total_revenue || 0;
+              const color = cell.data ? getRevenueColor(revenue) : "transparent";
+              const occPct = cell.data?.occupancy ? (cell.data.occupancy > 1 ? cell.data.occupancy : cell.data.occupancy * 100) : 0;
+              return (
+                <button
+                  key={i}
+                  onClick={() => setSelectedDay(cell.date)}
+                  className={`min-h-[90px] rounded-lg border p-2 text-left transition-all sm:min-h-[120px] ${
+                    selectedDay === cell.date ? "border-[#00D4FF] ring-1 ring-[#00D4FF]" : "border-white/5"
+                  } ${!cell.data ? "bg-[#0A1628]/40" : ""}`}
+                  style={cell.data ? { backgroundColor: `${color}15`, borderLeft: `3px solid ${color}` } : {}}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-white">{cell.day}</span>
+                    {cell.data && <span className="text-[10px] text-slate-400">{occPct.toFixed(0)}%</span>}
                   </div>
-                ) : (
-                  <div className="mt-2 text-[10px] text-slate-600">No Data</div>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </Card>
+                  {cell.data ? (
+                    <div className="mt-1 space-y-0.5 text-[10px] text-slate-300">
+                      <div className="font-heading font-semibold text-sm tabular-nums text-white">{money(revenue)}</div>
+                      <div>ADR {money2(cell.data.adr || 0)}</div>
+                      <div>RevPAR {money2(cell.data.revpar || 0)}</div>
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-[10px] text-slate-600">No Data</div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+      ))}
 
-      {/* Monthly Performance Groups */}
+      {/* Performance Groups */}
       <div className="grid gap-4 lg:grid-cols-3">
         {["high", "medium", "low"].map((g) => {
           const stats = groupStats(groups[g]);
@@ -232,7 +249,7 @@ export default function MonthlyCalendar() {
       {groups.nodata.length > 0 && (
         <div className="rounded-xl border border-[#FFB547]/20 bg-[#FFB547]/[0.06] p-4">
           <p className="text-sm text-[#FFB547]">
-            ⚠ {groups.nodata.length} days have no imported data for {MONTHS_LONG[calMonth]} {calYear}. Import reports to see full performance.
+            ⚠ {groups.nodata.length} days have no imported data for {periodLabel}. Import reports to see full performance.
           </p>
         </div>
       )}

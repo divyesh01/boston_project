@@ -12,26 +12,59 @@ const ipMap = new Map();
 const RATE_LIMIT_WINDOW = 60000; // 1 minute
 const RATE_LIMIT_MAX = 20;
 
-server.on('upgrade', async (req, socket, head) => {
-  const origin = req.headers.origin;
-  const host = req.headers.host;
-  
-  // Strict Origin Validation for CSWSH protection
-  if (origin) {
-    try {
-      const originUrl = new URL(origin);
-      if (originUrl.host !== host) {
-        console.log(`[WS] Rejected connection: Cross-Origin request from ${origin}`);
-        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-        socket.destroy();
-        return;
+// CSWSH protection: validate the Origin header against a server-side allowlist.
+// We deliberately do NOT compare against the client-supplied `Host` header
+// (an attacker can forge it). Configure via ALLOWED_WS_ORIGINS (comma-separated
+// origins) and/or APP_ORIGIN. Missing configuration fails CLOSED (reject).
+const ALLOWED_WS_ORIGINS = (process.env.ALLOWED_WS_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const APP_ORIGIN = process.env.APP_ORIGIN || '';
+
+function originIsAllowed(origin) {
+  let originHost;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    return false;
+  }
+  if (ALLOWED_WS_ORIGINS.length > 0) {
+    return ALLOWED_WS_ORIGINS.some((o) => {
+      try {
+        return new URL(o).host === originHost;
+      } catch {
+        return false;
       }
-    } catch (e) {
-      console.log(`[WS] Rejected connection: Invalid origin ${origin}`);
-      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-      socket.destroy();
-      return;
+    });
+  }
+  if (APP_ORIGIN) {
+    try {
+      return new URL(APP_ORIGIN).host === originHost;
+    } catch {
+      return false;
     }
+  }
+  return false; // misconfigured -> fail closed
+}
+
+server.on('upgrade', async (req, socket, head) => {
+  // Strict Origin Validation for CSWSH protection. A missing Origin header
+  // (non-browser clients / scripts, or stripped by a proxy) must NEVER be
+  // trusted — reject it outright.
+  const origin = req.headers.origin;
+  if (!origin) {
+    console.log('[WS] Rejected connection: Missing Origin header (CSWSH protection)');
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+
+  if (!originIsAllowed(origin)) {
+    console.log(`[WS] Rejected connection: Origin ${origin} not in allowlist`);
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+    socket.destroy();
+    return;
   }
 
   const ip = req.socket.remoteAddress || 'unknown';

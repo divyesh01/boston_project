@@ -917,6 +917,9 @@ const auth = {
   async login(identifier, password, remember = false, totpToken = null) {
     try {
       const res = await functions.invoke('custom_auth_login', { email: identifier, password, mfa_token: totpToken, remember });
+      if (res.require_mfa_setup) {
+        return { mfaRequired: true, mfaSetup: true, secret: res.secret, uri: res.uri, userId: 'mfa_pending', username: identifier };
+      }
       if (res.require_mfa) {
         return { mfaRequired: true, userId: 'mfa_pending', username: identifier };
       }
@@ -948,6 +951,20 @@ const auth = {
     return functions.invoke('custom_auth_register', { userData });
   },
   async getCurrentSession() {
+    if (USE_LOCAL_AUTH) {
+      try {
+        const raw = localStorage.getItem(LOCAL_SESSION_KEY);
+        if (!raw) return null;
+        const { userId, expiresAt } = JSON.parse(raw);
+        if (new Date(expiresAt) < new Date()) {
+          localStorage.removeItem(LOCAL_SESSION_KEY);
+          return null;
+        }
+        return { userId, token: 'local' };
+      } catch {
+        return null;
+      }
+    }
     return { token: 'http-only' };
   },
   async setSessionToken(token) {
@@ -1149,7 +1166,7 @@ async function runLocalAutoPayroll(params = {}) {
 // ─── Local auth helpers (browser-only, no backend required) ───
 const LOCAL_SESSION_KEY = 'rr_local_session';
 
-async function browserHashPassword(password, salt) {
+export async function browserHashPassword(password, salt) {
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
     'raw', enc.encode(password), 'PBKDF2', false, ['deriveBits'],
@@ -1171,7 +1188,12 @@ function generateLocalId() {
 
 function publicUserLocal(user) {
   if (!user) return null;
-  const { password_hash, salt, mfa_secret, reset_token_hash, reset_token_expires_at, ...safe } = user;
+  // Never return credential material to the client/session.
+  const {
+    password, password_hash, salt, mfa_secret,
+    reset_token_hash, reset_token_expires_at,
+    ...safe
+  } = user;
   return safe;
 }
 
@@ -1249,7 +1271,8 @@ const ROLE_DEFAULTS_LOCAL = {
 };
 const defaultPermissionsForRoleLocal = (role) => ({ ...(ROLE_DEFAULTS_LOCAL[role] || ROLE_DEFAULTS_LOCAL.read_only) });
 
-async function handleLocalUserAdmin({ action }) {
+async function handleLocalUserAdmin(params = {}) {
+  const { action } = params;
   if (action === 'initialized') {
     const all = await getAllLocalUsers();
     const owners = all.filter((u) => u.role === 'owner');
@@ -1263,7 +1286,58 @@ async function handleLocalUserAdmin({ action }) {
     const all = await getAllLocalUsers();
     return { users: all.map(publicUserLocal) };
   }
+  if (action === 'set_status') {
+    const { id, status } = params || {};
+    const user = await localDb.User.get(id);
+    if (!user) throw new Error('User not found');
+    let updates;
+    if (status === 'disabled') updates = { is_active: false, is_locked: false };
+    else if (status === 'enabled') updates = { is_active: true, is_locked: false };
+    else if (status === 'locked') updates = { is_locked: true, is_active: true };
+    else if (status === 'unlocked') updates = { is_locked: false, is_active: true };
+    else throw new Error(`Unknown status: ${status}`);
+    await localDb.User.update(id, updates);
+    // Instant cross-tab revocation for any state that must end the session.
+    if (status === 'disabled' || status === 'locked') {
+      postSessionRevoked({ type: 'SESSION_REVOKED', targetUserId: id, status, reason: `User ${status}` });
+    }
+    return { user: publicUserLocal({ ...user, ...updates }) };
+  }
   throw new Error(`Local fallback does not support action: ${action}`);
+}
+
+async function handleLocalAuditLog(params = {}) {
+  const row = {
+    action: params.action,
+    created_date: params.created_date || new Date().toISOString(),
+    ip_address: params.ip_address || 'client-side',
+    device: params.device || 'browser',
+    user_id: params.user_id ?? null,
+    username: params.username || 'unknown',
+    performed_by_id: params.performed_by_id ?? null,
+    performed_by: params.performed_by || 'system',
+    property_id: params.property_id ?? null,
+    property_name: params.property_name ?? null,
+    result: params.result || 'success',
+    detail: params.detail || '',
+    hash: params.hash || null,
+    previous_hash: params.previous_hash || null,
+  };
+  await localDb.AuditLog.add(row);
+  return { success: true, entry: row };
+}
+
+async function handleLocalAuditList({ filter = {}, limit = 500 } = {}) {
+  let logs = await localDb.AuditLog.toArray();
+  if (filter && filter.action) logs = logs.filter((l) => l.action === filter.action);
+  if (typeof limit === 'number') logs = logs.slice(-limit);
+  return { logs };
+}
+
+async function handleLocalAuditClear() {
+  await localDb.AuditLog.clear();
+  publishChange('AuditLog', 'clear', {});
+  return { success: true };
 }
 
 async function handleLocalAuthRegister({ userData }) {
@@ -1363,7 +1437,93 @@ async function handleLocalAuthLogout() {
   return { success: true };
 }
 
-// ─── Server functions: graceful fallback ───
+// Mirror a user returned by the hosted backend into localDb so subsequent
+// offline (or 404-backend) logins keep working. When a plaintext password is
+// available (login time), it is re-hashed with PBKDF2 for browser-side verify.
+async function mirrorRemoteUserIntoLocal(user, plaintextPassword) {
+  if (!user || (!user.id && !user.email)) return null;
+  const existing = (await findLocalUser(user.email || '')) || (await findLocalUser(user.username || ''));
+  const salt = existing?.salt || generateLocalId().replace(/-/g, '').substring(0, 32);
+  const role = user.role || existing?.role || 'read_only';
+  const password_hash = plaintextPassword
+    ? '$pbkdf2$' + await browserHashPassword(plaintextPassword, salt)
+    : (existing?.password_hash || '');
+  const full = {
+    id: existing?.id || user.id || generateLocalId(),
+    username: user.username || existing?.username || '',
+    email: (user.email || existing?.email || '').toLowerCase(),
+    full_name: user.full_name || existing?.full_name || '',
+    role,
+    permissions: user.permissions || existing?.permissions || defaultPermissionsForRoleLocal(role),
+    property_access: user.property_access || existing?.property_access || 'all',
+    is_active: user.is_active !== false,
+    is_locked: !!user.is_locked,
+    must_change_password: user.must_change_password ?? existing?.must_change_password ?? false,
+    failed_login_count: 0,
+    salt,
+    password_hash,
+    created_date: existing?.created_date || new Date().toISOString(),
+    updated_date: new Date().toISOString(),
+  };
+  if (existing) await localDb.User.update(existing.id, full);
+  else await localDb.User.add(full);
+  return full;
+}
+
+function localSessionExpiry(remember) {
+  return remember
+    ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+    : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+}
+
+async function tryRemote(functionName, params) {
+  try {
+    return await realClient.functions.invoke(functionName, params);
+  } catch (e) {
+    console.warn(`[localAuth] remote fallback for ${functionName} unavailable:`, e?.message || e);
+    return null;
+  }
+}
+
+// ─── Environment-gated auth routing (Zero-Trust default) ───
+// The in-browser auth handlers are NOT a security boundary: they trust
+// localStorage / IndexedDB as the source of truth and are therefore unsafe for
+// production. They run ONLY when an explicit local-development flag is set. In
+// every other build the auth/session calls go straight to the secure
+// serverless functions in base44/functions/ (password hashing, MFA, RBAC,
+// property isolation, and audit are all enforced server-side).
+//
+//   Production build (no flag)  -> backend serverless functions (SECURE)
+//   `npm run dev` w/ .env.local -> local-first dev shims (DEV ONLY)
+//
+// The flag is read from Vite (import.meta.env) first, then from process.env so
+// Node test harnesses can opt in without a bundler.
+const USE_LOCAL_AUTH =
+  (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_USE_LOCAL_AUTH === 'true') ||
+  (typeof process !== 'undefined' && !!process.env && process.env.VITE_USE_LOCAL_AUTH === 'true');
+
+// Authoritative backend delegation. Used directly in production and as the
+// fallback inside the local-first dev path.
+async function invokeBackend(functionName, params) {
+  try {
+    const res = await realClient.functions.invoke(functionName, params);
+    if (functionName === 'deleteAccount') {
+      await Promise.all(localDb.tables.map((t) => t.clear()));
+      localStorage.clear();
+    } else if (functionName === 'audit_clear') {
+      await localDb.AuditLog.clear();
+      publishChange('AuditLog', 'clear', {});
+    }
+    return res;
+  } catch (e) {
+    console.error(`[realClient] failed to invoke ${functionName}:`, e);
+    if (e.response && e.response.data && e.response.data.error) {
+      throw new Error(e.response.data.error);
+    }
+    throw e;
+  }
+}
+
 const functions = {
   async invoke(functionName, params = {}) {
     if (functionName === 'aiAssistant' || functionName === 'query_database') {
@@ -1399,8 +1559,27 @@ const functions = {
       return runLocalAutoPayroll(params);
     }
 
-    // ─── Local auth fallbacks (no backend required) ───
+    // ─── Local-first dev path: ONLY when explicitly enabled (VITE_USE_LOCAL_AUTH) ───
+    // When the flag is OFF (production default) we skip the untrusted local
+    // auth shims entirely and delegate to the authoritative backend below.
+    if (!USE_LOCAL_AUTH) {
+      return invokeBackend(functionName, params);
+    }
+
+    // ─── Local auth fallbacks (offline dev only) ───
     if (functionName === 'custom_user_admin') {
+      if (params?.action === 'initialized') {
+        try {
+          const local = await handleLocalUserAdmin({ action: 'initialized' });
+          if (local.initialized) return local;
+          const remote = await tryRemote('custom_user_admin', params);
+          if (remote && remote.initialized) return { initialized: true };
+          return local;
+        } catch (e) {
+          console.error(`[localAuth] custom_user_admin failed:`, e);
+          throw e;
+        }
+      }
       try {
         return await handleLocalUserAdmin(params);
       } catch (e) {
@@ -1409,24 +1588,53 @@ const functions = {
       }
     }
     if (functionName === 'custom_auth_register') {
+      // Local-first bootstrap. Falls back to the hosted backend only when the
+      // local path is unavailable, then mirrors the created user so offline
+      // logins keep working.
       try {
         return await handleLocalAuthRegister(params);
-      } catch (e) {
-        console.error(`[localAuth] custom_auth_register failed:`, e);
-        throw e;
+      } catch (localErr) {
+        if (/Unauthorized|first account|already/i.test(localErr?.message || '')) throw localErr;
+        const remote = await tryRemote('custom_auth_register', params);
+        if (remote && remote.user) {
+          const mirrored = await mirrorRemoteUserIntoLocal(remote.user, params?.userData?.password);
+          return { success: true, user: publicUserLocal(mirrored) };
+        }
+        throw localErr;
       }
     }
     if (functionName === 'custom_auth_login') {
       try {
         return await handleLocalAuthLogin(params);
-      } catch (e) {
-        console.error(`[localAuth] custom_auth_login failed:`, e);
-        throw e;
+      } catch (localErr) {
+        // A local "invalid credentials" or "needs backend hash" can mean the
+        // account only exists on the hosted backend — try it, then mirror.
+        if (/Invalid email or password|Backend authentication required/i.test(localErr?.message || '')) {
+          const remote = await tryRemote('custom_auth_login', params);
+          if (remote && remote.user) {
+            const mirrored = await mirrorRemoteUserIntoLocal(remote.user, params?.password);
+            if (mirrored) {
+              localStorage.setItem(
+                LOCAL_SESSION_KEY,
+                JSON.stringify({ userId: mirrored.id, expiresAt: localSessionExpiry(!!params?.remember) }),
+              );
+              return { success: true, user: publicUserLocal(mirrored) };
+            }
+          }
+        }
+        throw localErr;
       }
     }
     if (functionName === 'custom_auth_me') {
       try {
-        return await handleLocalAuthMe();
+        const local = await handleLocalAuthMe();
+        if (local.user) return local;
+        const remote = await tryRemote('custom_auth_me', params);
+        if (remote && remote.user) {
+          const mirrored = await mirrorRemoteUserIntoLocal(remote.user);
+          return { user: publicUserLocal(mirrored) || remote.user };
+        }
+        return local;
       } catch (e) {
         console.error(`[localAuth] custom_auth_me failed:`, e);
         throw e;
@@ -1440,28 +1648,33 @@ const functions = {
         throw e;
       }
     }
-    
-    // Delegate to real Base44 backend for server functions
-    try {
-      const res = await realClient.functions.invoke(functionName, params);
-      
-      // Handle local side-effects for successful mutations
-      if (functionName === 'deleteAccount') {
-        await Promise.all(localDb.tables.map(t => t.clear()));
-        localStorage.clear();
-      } else if (functionName === 'audit_clear') {
-        await localDb.AuditLog.clear();
-        publishChange('AuditLog', 'clear', {});
+    if (functionName === 'audit_log') {
+      try {
+        return await handleLocalAuditLog(params);
+      } catch (e) {
+        console.error(`[localAuth] audit_log failed:`, e);
+        throw e;
       }
-      
-      return res;
-    } catch (e) {
-      console.error(`[realClient] failed to invoke ${functionName}:`, e);
-      if (e.response && e.response.data && e.response.data.error) {
-        throw new Error(e.response.data.error);
-      }
-      throw e;
     }
+    if (functionName === 'audit_list') {
+      try {
+        return await handleLocalAuditList(params);
+      } catch (e) {
+        console.error(`[localAuth] audit_list failed:`, e);
+        throw e;
+      }
+    }
+    if (functionName === 'audit_clear') {
+      try {
+        return await handleLocalAuditClear();
+      } catch (e) {
+        console.error(`[localAuth] audit_clear failed:`, e);
+        throw e;
+      }
+    }
+
+    // ─── Production / default: backend is authoritative. Never trust local storage. ───
+    return invokeBackend(functionName, params);
   },
 };
 

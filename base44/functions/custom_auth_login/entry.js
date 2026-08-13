@@ -85,6 +85,15 @@ function verifyTotpToken(secretBase32, token, window = 1) {
   return false;
 }
 
+function generateBase32Secret(length = 32) {
+  let secret = '';
+  const bytes = crypto.randomBytes(length);
+  for (let i = 0; i < length; i++) {
+    secret += BASE32_ALPHABET[bytes[i] % 32];
+  }
+  return secret;
+}
+
 export function publicUser(user) {
   if (!user) return null;
   const { password_hash, salt, mfa_secret, reset_token_hash, reset_token_expires_at, session_created, session_expires, ...safe } = user;
@@ -193,6 +202,28 @@ export default async function (req) {
       }
       if (!user.mfa_secret || !verifyTotpToken(user.mfa_secret, mfa_token)) {
         return Response.json({ error: "Invalid authentication code" }, { status: 401 });
+      }
+    } else if (user.role === 'owner' || user.role === 'admin') {
+      let secretBase32 = user.mfa_secret_pending;
+      if (!secretBase32) {
+        secretBase32 = generateBase32Secret(32);
+        await base44.asServiceRole.entities.User.update(user.id, { mfa_secret_pending: secretBase32 });
+      }
+      const appName = "RRI Executive";
+      const uri = `otpauth://totp/${encodeURIComponent(appName)}:${encodeURIComponent(user.email || user.username)}?secret=${secretBase32}&issuer=${encodeURIComponent(appName)}`;
+      
+      if (mfa_token) {
+        if (verifyTotpToken(secretBase32, mfa_token)) {
+          await base44.asServiceRole.entities.User.update(user.id, {
+            mfa_enabled: true,
+            mfa_secret: secretBase32,
+            mfa_secret_pending: null
+          });
+        } else {
+          return Response.json({ error: "Invalid authentication code" }, { status: 401 });
+        }
+      } else {
+        return Response.json({ require_mfa_setup: true, secret: secretBase32, uri }, { status: 200 });
       }
     }
 

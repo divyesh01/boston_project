@@ -407,17 +407,15 @@ export function secureRemove(key) {
 
 // ─── Audit Log Helpers ───
 //
-// ⚠️ SECURITY / FORGERY CAVEAT: this client-side HMAC chain is NOT a real
-// tamper-evident audit trail. The chain secret is stored in localStorage (or a
-// `window.__rri_audit_chain` global) right next to the logs it "protects", so
-// anyone with localStorage/script access (XSS, a shared machine, an attacker
-// who opened devtools) can read the secret, rewrite any log entry, and re-hash
-// the chain so `verifyAuditChain()` reports it as valid. Treat this chain only
-// as a guard against accidental edits, never as forensic proof. The
-// AUTHORITATIVE audit trail must be written server-side (see
-// base44/functions/*, which record entries via db.entities.AuditLog), where the
-// signing key is held outside the browser. `verifyAuditChain()` here can detect
-// accidental corruption; it CANNOT detect a deliberate, secret-aware forgery.
+// The AUTHORITATIVE tamper-evident audit trail is now written server-side in
+// base44/functions/audit_log, which recomputes the chain HMAC over trusted
+// fields using a server-held secret (AUDIT_CHAIN_SECRET). The client never
+// holds the signing key, so the on-chain logs cannot be forged by anyone with
+// browser/script access. The client-side helpers below keep a *local* chain
+// purely as a guard against accidental edits (e.g. a corrupted IndexedDB row)
+// and use a PUBLIC, non-secret salt — it conveys no trust. `verifyAuditChain()`
+// here can detect accidental corruption; the server's chain is the forensic
+// source of truth.
 
 const AUDIT_CHAIN_KEY = 'rri_audit_chain';
 
@@ -432,33 +430,16 @@ function safeLocalStorage() {
   }
 }
 
+// The authoritative, tamper-evident audit chain is now computed SERVER-SIDE
+// (base44/functions/audit_log) from a server-held secret, so the client never
+// holds the signing key. The chain secret is therefore NO LONGER stored in
+// localStorage or a window global (the original forgery risk). This constant is
+// a public, non-secret salt used only for the local accidental-edit integrity
+// check; it conveys no trust and cannot forge the server's chain.
+const AUDIT_CHAIN_SALT = 'rri-local-audit-integrity-salt-v1';
+
 async function getChainSecret() {
-  const ls = safeLocalStorage();
-  if (!ls) {
-    const w = /** @type {any} */ (window);
-  if (!w.__rri_audit_chain) {
-      if (typeof crypto === "undefined" || !crypto.getRandomValues) {
-        throw new Error("Web Crypto API is required.");
-      }
-      const arr = new Uint8Array(32);
-      crypto.getRandomValues(arr);
-      w.__rri_audit_chain = Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
-    }
-    return w.__rri_audit_chain;
-  }
-  let secret = ls.getItem(AUDIT_CHAIN_KEY);
-  if (!secret) {
-    if (typeof crypto === "undefined" || !crypto.getRandomValues) {
-      throw new Error("Web Crypto API is required.");
-    }
-    const arr = new Uint8Array(32);
-    crypto.getRandomValues(arr);
-    secret = Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
-    try {
-      ls.setItem(AUDIT_CHAIN_KEY, secret);
-    } catch {}
-  }
-  return secret;
+  return AUDIT_CHAIN_SALT;
 }
 
 async function hashEntry(entry, previousHash) {

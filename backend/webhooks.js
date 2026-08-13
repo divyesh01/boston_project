@@ -26,7 +26,12 @@ export function ingestWebhook(reqOrEvent) {
   };
 
   // 1. Rate Limiting
-  const ip = getHeader('x-forwarded-for') || (reqOrEvent.socket && reqOrEvent.socket.remoteAddress) || 'unknown';
+  // Prefer the network-layer peer address. X-Forwarded-For is fully
+  // attacker-controlled and must never be the primary key for throttling.
+  const ip =
+    (reqOrEvent && reqOrEvent.socket && reqOrEvent.socket.remoteAddress) ||
+    getHeader('x-forwarded-for') ||
+    'unknown';
   const now = Date.now();
   const times = ipMap.get(ip) || [];
   const recent = times.filter(t => now - t < RATE_LIMIT_WINDOW);
@@ -57,15 +62,22 @@ export function ingestWebhook(reqOrEvent) {
     throw new Error('Internal server error configuration');
   }
 
-  const payload = reqOrEvent.rawBody 
-    ? reqOrEvent.rawBody 
-    : (typeof reqOrEvent.body === 'string' 
-        ? reqOrEvent.body 
-        : JSON.stringify(reqOrEvent.body || reqOrEvent));
+  // Verify the HMAC over the RAW request body (buffer/string) — never over a
+  // re-serialized JSON object, whose byte layout can differ from what the
+  // sender signed. Fail closed if no raw body is available.
+  const rawPayload = reqOrEvent.rawBody
+    ? (Buffer.isBuffer(reqOrEvent.rawBody)
+        ? reqOrEvent.rawBody.toString('utf8')
+        : String(reqOrEvent.rawBody))
+    : (typeof reqOrEvent.body === 'string' ? reqOrEvent.body : null);
+
+  if (rawPayload === null) {
+    throw new Error('Missing raw webhook body; cannot verify signature');
+  }
 
   const expectedSignature = crypto
     .createHmac('sha256', secret)
-    .update(payload)
+    .update(rawPayload)
     .digest('hex');
 
   const sigBuffer = Buffer.from(signature);

@@ -65,6 +65,10 @@
       "type": "string",
       "description": "TOTP secret (base32) used for authenticator apps. Kept server-side only."
     },
+    "mfa_secret_pending": {
+      "type": "string",
+      "description": "Temporary TOTP secret during setup before verification."
+    },
     "reset_token_hash": {
       "type": "string",
       "description": "Hashed single-use password-reset token."

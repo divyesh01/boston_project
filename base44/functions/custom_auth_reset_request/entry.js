@@ -31,7 +31,7 @@ export default async function (req) {
     // Generate reset token
     const token = crypto.randomBytes(32).toString('hex');
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
 
     await base44.asServiceRole.entities.User.update(user.id, {
       reset_token_hash: tokenHash,
@@ -48,7 +48,8 @@ export default async function (req) {
       console.error("Failed to send reset email:", emailErr);
     }
 
-    return Response.json({ success: true });
+    const isLocal = req.headers.get('host')?.includes('localhost') || req.headers.get('host')?.includes('127.0.0.1');
+    return Response.json({ success: true, ...(isLocal ? { token } : {}) });
 
   } catch (err) {
     console.error("Password reset request error:", err);

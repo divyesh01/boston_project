@@ -13,6 +13,8 @@ export default defineConfig({
     globals: true,
     environment: "jsdom",
     setupFiles: ["./src/test-setup.js"],
+    // Tests exercise the local/offline auth shim, so opt into local auth mode.
+    env: { VITE_USE_LOCAL_AUTH: "true" },
     css: false,
     coverage: {
       provider: "v8",

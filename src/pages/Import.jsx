@@ -69,7 +69,10 @@ function UndoImportButton({ upload: u, disabled, onDone }) {
       // contributing to the Dashboard's pre-summed metrics.
       rebuildDailyAggregates({ propertyId: u.property_id })
         .then(() => queryClientInstance.invalidateQueries({ queryKey: ["daily-aggregates"] }))
-        .catch(() => {});
+        .catch((e) => {
+          console.warn("Daily aggregate rebuild failed:", e);
+          setError("Failed to rebuild daily aggregates");
+        });
       onDone?.();
     } catch (e) {
       setError(e.message || "Undo failed");

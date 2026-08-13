@@ -38,9 +38,9 @@ if (typeof navigator === 'undefined' || navigator.userAgent === undefined) {
   Object.defineProperty(globalThis, 'navigator', { value: { userAgent: 'bulletproof-harness', language: 'en-US' }, configurable: true });
 }
 
-const { db } = await import('@/api/base44Client');
+const { db, browserHashPassword } = await import('@/api/base44Client');
 const localDb = (await import('@/api/localDb')).default;
-const { hashPassword, generateSalt } = await import('@/lib/security.js');
+const { generateSalt } = await import('@/lib/security.js');
 const {
   canAccessRoute, isRouteMapped, PUBLIC_ROUTES, ROUTE_PERMISSIONS, defaultPermissionsForRole,
 } = await import('@/lib/permissions');
@@ -93,18 +93,20 @@ function createTab(name, knownUserId, knownUsername) {
 }
 
 async function seedUsers() {
+  // The local auth verifier (handleLocalAuthLogin) only trusts $pbkdf2$-prefixed
+  // hashes produced by browserHashPassword, so seed with that exact format.
   const ownerSalt = generateSalt();
   const ownerId = await localDb.User.add({
     username: 'boss', email: 'boss@x.com', role: 'owner', permissions: 'all',
     property_access: 'all', is_active: true, is_locked: false, failed_attempts: 0,
-    salt: ownerSalt, password_hash: await hashPassword('S3cure!Pass', ownerSalt),
+    salt: ownerSalt, password_hash: '$pbkdf2$' + await browserHashPassword('S3cure!Pass', ownerSalt),
   });
   const victimSalt = generateSalt();
   const victimId = await localDb.User.add({
     username: 'staff', email: 'staff@x.com', role: 'read_only',
     permissions: defaultPermissionsForRole('read_only'), property_access: ['prop_1'],
     is_active: true, is_locked: false, failed_attempts: 0,
-    salt: victimSalt, password_hash: await hashPassword('S3cure!Pass', victimSalt),
+    salt: victimSalt, password_hash: '$pbkdf2$' + await browserHashPassword('S3cure!Pass', victimSalt),
   });
   return { ownerId, victimId };
 }

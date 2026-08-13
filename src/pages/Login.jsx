@@ -91,9 +91,13 @@ export default function Login() {
     try {
       const result = await login(normalizeIdentifier(identifier), password, remember);
       if (result?.mfaRequired) {
-        // MFA required but no token provided - move to MFA verification step.
-        // Keep `password` in memory; the verify step still needs it.
-        setMfaStep('verify');
+        if (result.mfaSetup) {
+          setMfaStep('setup');
+          setMfaSecret(result.secret);
+          setMfaUri(result.uri);
+        } else {
+          setMfaStep('verify');
+        }
         setMfaUserId(result.userId);
         setMfaUsername(result.username);
         setError("");

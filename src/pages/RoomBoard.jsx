@@ -156,7 +156,9 @@ export default function RoomBoard() {
       folio_number: newFolio || "",
       status: "occupied",
     });
-    await db.entities.Room.update(room.id, { status: "occupied" }).catch(() => {});
+    await db.entities.Room.update(room.id, { status: "occupied" }).catch((e) => {
+          console.warn("Room update failed:", e);
+        });
     invalidateBoard();
     setNewGuest(""); setNewRate(""); setNewFolio(""); setNewOut("");
     setNotice({ type: "ok", text: `Checked in ${newGuest} to room ${newRoom}.` });

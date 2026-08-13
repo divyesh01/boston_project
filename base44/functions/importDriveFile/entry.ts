@@ -34,6 +34,37 @@ export default async function(req) {
     const fileName = body.fileName || fileId;
     if (!fileId) return Response.json({ error: 'fileId required' }, { status: 400 });
 
+    // IDOR mitigation: the caller may only import a Drive file they are
+    // authorized for. Prefer an explicit UploadedReport linkage (verified to
+    // belong to a property the caller can access and to match fileId); otherwise
+    // require a property the caller can access. Without an authorization
+    // context we refuse (fail closed).
+    const allowedPropertyIds =
+      user.property_access === 'all' || !Array.isArray(user.property_access)
+        ? null
+        : user.property_access.map(String);
+
+    const uploadedReportId = body.uploadedReportId;
+    if (uploadedReportId) {
+      const report = await base44.asServiceRole.entities.UploadedReport.get(uploadedReportId);
+      if (!report) return Response.json({ error: 'Unknown uploaded report' }, { status: 404 });
+      if (allowedPropertyIds && !allowedPropertyIds.includes(String(report.property_id))) {
+        return Response.json({ error: 'Forbidden: not authorized for this report' }, { status: 403 });
+      }
+      if (report.drive_file_id && report.drive_file_id !== fileId) {
+        return Response.json({ error: 'Forbidden: fileId does not match the referenced report' }, { status: 403 });
+      }
+    } else if (body.propertyId) {
+      if (allowedPropertyIds && !allowedPropertyIds.includes(String(body.propertyId))) {
+        return Response.json({ error: 'Forbidden: not authorized for this property' }, { status: 403 });
+      }
+    } else {
+      return Response.json(
+        { error: 'Authorization context required: provide uploadedReportId or propertyId' },
+        { status: 400 },
+      );
+    }
+
     const { accessToken } = await db.asServiceRole.connectors.getConnection("googledrive");
 
     const driveRes = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`, {

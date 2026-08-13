@@ -2,34 +2,70 @@ const db = globalThis.__B44_DB__ || { auth:{ isAuthenticated: async()=>false, me
 
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import * as crypto from 'node:crypto';
+import * as dns from 'node:dns';
+import { promisify } from 'node:util';
+
+const dnsLookup = promisify(dns.lookup);
 
 const DRIVE_API = "https://www.googleapis.com/drive/v3";
 
-// Reject URLs targeting local/private networks to prevent SSRF.
-function isBlockedUrl(raw) {
-  if (typeof raw !== "string" || !raw) return true;
+// Reject URLs targeting local/private networks to prevent SSRF. Covers the
+// private ranges the original allowlist missed (CGNAT 100.64/10, 192.0.0/24,
+// benchmarking 198.18/15, TEST-NETs) and resolves DNS before connecting to
+// blunt DNS-rebinding (TOCTOU) attacks.
+function ip4IsPrivate(ip) {
+  const parts = String(ip).split('.').map(Number);
+  const [a, b, c] = parts;
+  if (a === 0) return true;                               // 0.0.0.0/8
+  if (a === 10) return true;                              // 10.0.0.0/8
+  if (a === 127) return true;                             // 127.0.0.0/8
+  if (a === 169 && b === 254) return true;                // 169.254.0.0/16 (link-local / cloud metadata)
+  if (a === 172 && b >= 16 && b <= 31) return true;       // 172.16.0.0/12
+  if (a === 192 && b === 168) return true;                // 192.168.0.0/16
+  if (a === 100 && b >= 64 && b <= 127) return true;      // 100.64.0.0/10 (CGNAT)
+  if (a === 192 && b === 0) return true;                  // 192.0.0.0/24
+  if (a === 198 && (b === 18 || b === 19)) return true;   // 198.18.0.0/15 (benchmarking)
+  if (a === 198 && b === 51 && c === 100) return true;    // 198.51.100.0/24 (TEST-NET-2)
+  if (a === 203 && b === 0 && c === 113) return true;     // 203.0.113.0/24 (TEST-NET-3)
+  return false;
+}
+
+function ipIsPrivate(ip) {
+  if (typeof ip !== 'string') return true;
+  const lower = ip.toLowerCase().replace(/[[\]]/g, '');
+  // IPv6: loopback (::1, ::), unique-local (fc/fd), link-local (fe8x-febx)
+  if (lower.startsWith('::1') || lower === '::' || lower.startsWith('fc') || lower.startsWith('fd') || /^fe[89ab]/.test(lower)) return true;
+  // IPv4-mapped IPv6
+  const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return ip4IsPrivate(mapped[1]);
+  // IPv4 literal
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(lower)) return ip4IsPrivate(lower);
+  return false;
+}
+
+async function isUrlBlocked(raw) {
+  if (typeof raw !== 'string' || !raw) return true;
   let url;
   try {
     url = new URL(raw);
   } catch {
     return true;
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") return true;
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return true;
   const host = url.hostname.toLowerCase();
-  // IPv6 literals: loopback (::1, ::), unique-local (fc/fd), link-local (fe8-feb)
-  if (host.startsWith("[::") || host.startsWith("[fc") || host.startsWith("[fd") || /^\[fe[89ab]/.test(host)) return true;
-  // IPv4 literals: private/loopback/link-local/metadata ranges
-  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (ipv4) {
-    const a = +ipv4[1], b = +ipv4[2];
-    if (a === 127 || a === 0 || a === 10 || (a === 169 && b === 254)) return true;
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
-    return false;
-  }
   // Reserved hostnames
-  if (host === "localhost" || host === "0.0.0.0" || host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".localdomain") || host.endsWith(".localhost")) return true;
-  return false;
+  if (host === 'localhost' || host === '0.0.0.0' || host.endsWith('.local') || host.endsWith('.internal') || host.endsWith('.localdomain') || host.endsWith('.localhost')) return true;
+  // IP literal
+  if (host.startsWith('[') || /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || /^[0-9a-f:]+$/i.test(host)) {
+    return ipIsPrivate(host);
+  }
+  // Hostname: resolve and validate every returned address pre-connect.
+  try {
+    const addresses = await dnsLookup(host, { all: true });
+    return addresses.some((a) => ipIsPrivate(a.address));
+  } catch {
+    return true; // resolution failure -> block
+  }
 }
 
 async function sanitizeDriveFolder(name) {
@@ -90,7 +126,7 @@ export default async function(req) {
     const body = await req.json();
     const { fileUrl, fileName, propertyName, year, month, reportType, uploadedReportId } = body;
     if (!fileUrl || !fileName) return Response.json({ error: "fileUrl and fileName required" }, { status: 400 });
-    if (isBlockedUrl(fileUrl)) {
+    if (await isUrlBlocked(fileUrl)) {
       return Response.json({ error: "fileUrl is not an allowed http(s) URL" }, { status: 400 });
     }
 

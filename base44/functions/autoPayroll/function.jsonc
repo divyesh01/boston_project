@@ -1,15 +1,4 @@
 {
   "name": "autoPayroll",
-  "entry": "entry.ts",
-  "automations": [
-    {
-      "name": "Auto Payroll - Last Day of Month",
-      "description": "Automatically executes payroll for all active staff on the final calendar day of every month (handles 28, 29, 30 and 31-day months). All generated runs default to Approved.",
-      "type": "scheduled",
-      "schedule_mode": "recurring",
-      "schedule_type": "cron",
-      "cron_expression": "0 9 28-31 * *",
-      "is_active": true
-    }
-  ]
+  "entry": "entry.ts"
 }

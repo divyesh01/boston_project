@@ -1,5 +1,11 @@
 {
   "properties": {
+    "username": {
+      "type": "string"
+    },
+    "display_name": {
+      "type": "string"
+    },
     "role": {
       "type": "string",
       "description": "Highest privilege in the app. `owner` (app admin) and `admin` (manager) bypass per-property restrictions; the remaining roles are restricted to `property_access`.",
@@ -83,7 +89,9 @@
       "type": "string"
     }
   },
-  "required": [],
+  "required": [
+    "username"
+  ],
   "name": "User",
   "type": "object"
 }

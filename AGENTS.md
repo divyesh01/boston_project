@@ -2,6 +2,10 @@ const db = globalThis.__B44_DB__ || { auth:{ isAuthenticated: async()=>false, me
 
 # AGENTS.md
 
+## 🔒 Protected Files
+
+**CRITICAL: Before modifying ANY file, check [`PROTECTED_FILES.md`](./PROTECTED_FILES.md).** Files listed there are permanently locked from AI modification. No AI agent (Gemini, Antigravity, Claude, OpenCode, Cursor, Copilot, or any other) may create, modify, delete, rename, or overwrite protected files without explicit owner authorization. See `.agents/rules/no-modify-protected.md` for enforcement details.
+
 ## Project Context
 
 This is a Base44 app repository. Treat it as user-owned application code, keep changes focused on the user's request, and preserve existing project conventions.

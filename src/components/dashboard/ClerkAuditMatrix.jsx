@@ -12,6 +12,48 @@ export default function ClerkAuditMatrix({
   const [selectedClerk, setSelectedClerk] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: 'severityScore', direction: 'desc' });
   
+  // Refunds Ledger: payment method filter + two-tier amount sorting
+  const [selectedMethod, setSelectedMethod] = useState('ALL'); // 'ALL' | 'CASH' | 'CARD' | 'DIRECT_BILL'
+  const [hideStandard100, setHideStandard100] = useState(false);
+
+  // Adjustments Ledger: reason / method filters + smart anomaly grouping
+  const [adjReasonFilter, setAdjReasonFilter] = useState('ALL'); // 'ALL' | 'AR_BILLING' | 'HOSPITALITY'
+  const [adjMethodFilter, setAdjMethodFilter] = useState('ALL'); // 'ALL' | 'DIRECT_BILL' | 'CARD' | 'CASH'
+  const [hideZeroAdj, setHideZeroAdj] = useState(false);
+
+  function getAdjustmentMethodCode(row) {
+    const str = [row.transactionType, row.chargeType, row.reasonCode, row.remarks]
+      .map(s => String(s || '').toUpperCase()).join(' ');
+    if (str.includes('DIRECT') || str.includes('AR BILLING') || str.includes(' DB ') || str.includes('DB')) return 'DIRECT_BILL';
+    if (str.includes('CARD') || str.includes('CB') || str.includes('VISA') || str.includes('MASTER') || str.includes('AMEX') || str.includes('DISCOVER') || str.includes('CREDIT')) return 'CARD';
+    if (str.includes('CASH') || str.includes('CH')) return 'CASH';
+    return 'OTHER';
+  }
+
+  function getAdjustmentReasonCategory(row) {
+    const code = String(row.reasonCode || '').toUpperCase();
+    if (code.includes('AR BILLING')) return 'AR_BILLING';
+    if (code.includes('HOSPITALITY')) return 'HOSPITALITY';
+    return 'OTHER';
+  }
+
+  function getPaymentCategory(row) {
+    const typeStr = (row.type || row.payment_method || row.paymentTypeRefunded || '').toUpperCase();
+    if (typeStr.includes('CASH')) return 'CASH';
+    if (typeStr.includes('DIRECT') || typeStr.includes('AR BILLING')) return 'DIRECT_BILL';
+    if (
+      typeStr.includes('CARD') ||
+      typeStr.includes('FPCC') ||
+      typeStr.includes('VISA') ||
+      typeStr.includes('MASTER') ||
+      typeStr.includes('AMEX') ||
+      typeStr.includes('DISCOVER')
+    ) {
+      return 'CARD';
+    }
+    return 'OTHER';
+  }
+  
   // Rolling Number Effect
   const useRollingNumber = (value) => {
     const [display, setDisplay] = useState(0);
@@ -97,6 +139,103 @@ export default function ClerkAuditMatrix({
     if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
     setSortConfig({ key, direction });
   };
+
+  // Two-tier Refunds Ledger processing: filter by payment method, optionally
+  // hide $100 deposit returns, and force non-$100 (audit-risk) amounts to the top.
+  const processedRefunds = useMemo(() => {
+    if (!selectedClerk) return [];
+    const clerkRefunds = refunds.filter(r => r.username === selectedClerk.username);
+    return clerkRefunds
+      .filter(row => {
+        if (selectedMethod === 'ALL') return true;
+        return getPaymentCategory(row) === selectedMethod;
+      })
+      .filter(row => {
+        if (!hideStandard100) return true;
+        const amt = Math.abs(parseFloat(row.amount || 0));
+        return amt !== 100;
+      })
+      .sort((a, b) => {
+        const amtA = Math.abs(parseFloat(a.amount || 0));
+        const amtB = Math.abs(parseFloat(b.amount || 0));
+        const is100A = amtA === 100;
+        const is100B = amtB === 100;
+        if (!is100A && is100B) return -1;
+        if (is100A && !is100B) return 1;
+        return new Date(b.time || b.date) - new Date(a.time || a.date);
+      });
+  }, [refunds, selectedClerk, selectedMethod, hideStandard100]);
+
+  // Adjustments Ledger processing: filter by reason + method, optionally hide
+  // $0.00 lines, then 3-tier sort — rapid/repeat overrides (Tier 1), high-value
+  // dollar-impact (Tier 2), and routine zero-dollar lines (Tier 3) at the bottom.
+  const processedAdjustments = useMemo(() => {
+    if (!selectedClerk) return [];
+    const clerkAdjs = adjustments.filter(a => a.username === selectedClerk.username);
+    const filtered = clerkAdjs
+      .filter(row => {
+        if (adjReasonFilter === 'ALL') return true;
+        return getAdjustmentReasonCategory(row) === adjReasonFilter;
+      })
+      .filter(row => {
+        if (adjMethodFilter === 'ALL') return true;
+        return getAdjustmentMethodCode(row) === adjMethodFilter;
+      })
+      .filter(row => {
+        if (!hideZeroAdj) return true;
+        return Math.abs(parseFloat(row.adjustedAmount ?? row.amount ?? 0)) !== 0;
+      });
+
+    // Rapid-repeat detection: same room + same date with 2+ posts.
+    const groupCounts = new Map();
+    for (const a of filtered) {
+      const key = `${a.roomNumber || '?'}|${(a.date || '').slice(0, 10)}`;
+      groupCounts.set(key, (groupCounts.get(key) || 0) + 1);
+    }
+    const isRapidRepeat = (a) =>
+      (groupCounts.get(`${a.roomNumber || '?'}|${(a.date || '').slice(0, 10)}`) || 0) >= 2;
+
+    const getAmt = (a) => parseFloat(a.adjustedAmount ?? a.amount ?? 0);
+
+    const tierOf = (a) => {
+      if (isRapidRepeat(a)) return 1;                         // rapid/repeat overrides
+      if (Math.abs(getAmt(a)) === 0) return 3;                 // routine zero-dollar
+      return 2;                                               // high-value impact
+    };
+
+    return filtered
+      .map(a => ({ ...a, _tier: tierOf(a), _rapid: isRapidRepeat(a) }))
+      .sort((a, b) => {
+        if (a._tier !== b._tier) return a._tier - b._tier;    // tier 1 → 2 → 3
+        if (a._tier === 1) {
+          // cluster by room, then newest date/time first
+          if (a.roomNumber !== b.roomNumber) return String(a.roomNumber) < String(b.roomNumber) ? -1 : 1;
+          const dt = new Date(b.date) - new Date(a.date);
+          if (dt !== 0) return dt;
+          return String(b.time) < String(a.time) ? -1 : 1;
+        }
+        if (a._tier === 2) return getAmt(a) - getAmt(b);      // largest negative first
+        // tier 3: newest first
+        const dt = new Date(b.date) - new Date(a.date);
+        if (dt !== 0) return dt;
+        return String(b.time) < String(a.time) ? -1 : 1;
+      });
+  }, [adjustments, selectedClerk, adjReasonFilter, adjMethodFilter, hideZeroAdj]);
+
+  const adjSummary = useMemo(() => {
+    const amt = (a) => parseFloat(a.adjustedAmount ?? a.amount ?? 0);
+    let count = 0, net = 0, hospitality = 0, arBilling = 0, zeroCount = 0;
+    for (const a of processedAdjustments) {
+      const v = amt(a);
+      count += 1;
+      net += v;
+      if (Math.abs(v) === 0) zeroCount += 1;
+      const cat = getAdjustmentReasonCategory(a);
+      if (cat === 'HOSPITALITY') hospitality += v;
+      else if (cat === 'AR_BILLING') arBilling += v;
+    }
+    return { count, net, hospitality, arBilling, zeroCount };
+  }, [processedAdjustments]);
 
   const SortIcon = ({ columnKey }) => {
     if (sortConfig.key !== columnKey) return null;
@@ -368,6 +507,89 @@ export default function ClerkAuditMatrix({
                     </div>
                     <h4 className="text-xl font-semibold text-white tracking-tight">Adjustments Ledger</h4>
                   </div>
+                  {/* Summary KPI Bar */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                    <div className="rounded-xl border border-white/5 bg-white/[0.02] p-3">
+                      <p className="text-[10px] uppercase tracking-wider text-slate-500">Total Adjustments</p>
+                      <p className="font-heading text-lg font-semibold text-white tabular-nums">{adjSummary.count}</p>
+                      <p className="text-xs text-slate-400 font-mono">{money2(adjSummary.net)} net</p>
+                    </div>
+                    <div className="rounded-xl border border-white/5 bg-white/[0.02] p-3">
+                      <p className="text-[10px] uppercase tracking-wider text-slate-500">Hospitality ($)</p>
+                      <p className="font-heading text-lg font-semibold text-[#FFB547] tabular-nums font-mono">{money2(adjSummary.hospitality)}</p>
+                    </div>
+                    <div className="rounded-xl border border-white/5 bg-white/[0.02] p-3">
+                      <p className="text-[10px] uppercase tracking-wider text-slate-500">AR Billing ($)</p>
+                      <p className="font-heading text-lg font-semibold text-cyan-300 tabular-nums font-mono">{money2(adjSummary.arBilling)}</p>
+                    </div>
+                    <div className="rounded-xl border border-white/5 bg-white/[0.02] p-3">
+                      <p className="text-[10px] uppercase tracking-wider text-slate-500">Zero-Dollar Attempts</p>
+                      <p className="font-heading text-lg font-semibold text-slate-300 tabular-nums">{adjSummary.zeroCount}</p>
+                    </div>
+                  </div>
+
+                  {/* Filter Control Bar */}
+                  <div className="flex flex-col gap-3 mb-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] uppercase tracking-wider text-slate-500 mr-1">Reason</span>
+                      {[
+                        { key: 'ALL', label: 'ALL' },
+                        { key: 'AR_BILLING', label: 'AR BILLING' },
+                        { key: 'HOSPITALITY', label: 'HOSPITALITY' },
+                      ].map(pill => {
+                        const active = adjReasonFilter === pill.key;
+                        return (
+                          <button
+                            key={pill.key}
+                            onClick={() => setAdjReasonFilter(pill.key)}
+                            className={`px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wider border transition-all duration-200 ${
+                              active
+                                ? 'bg-purple-500/20 border-purple-400 text-purple-200 shadow-[0_0_12px_rgba(168,85,247,0.3)]'
+                                : 'bg-white/[0.03] border-white/10 text-slate-400 hover:text-slate-200 hover:border-white/20'
+                            }`}
+                          >
+                            {pill.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[10px] uppercase tracking-wider text-slate-500 mr-1">Method</span>
+                        {[
+                          { key: 'ALL', label: 'ALL' },
+                          { key: 'DIRECT_BILL', label: 'DIRECT BILL (db)' },
+                          { key: 'CARD', label: 'CARD (cb)' },
+                          { key: 'CASH', label: 'CASH (ch)' },
+                        ].map(pill => {
+                          const active = adjMethodFilter === pill.key;
+                          return (
+                            <button
+                              key={pill.key}
+                              onClick={() => setAdjMethodFilter(pill.key)}
+                              className={`px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wider border transition-all duration-200 ${
+                                active
+                                  ? 'bg-purple-500/20 border-purple-400 text-purple-200 shadow-[0_0_12px_rgba(168,85,247,0.3)]'
+                                  : 'bg-white/[0.03] border-white/10 text-slate-400 hover:text-slate-200 hover:border-white/20'
+                              }`}
+                            >
+                              {pill.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-400">
+                        <input
+                          type="checkbox"
+                          checked={hideZeroAdj}
+                          onChange={(e) => setHideZeroAdj(e.target.checked)}
+                          className="w-4 h-4 rounded accent-purple-500 cursor-pointer"
+                        />
+                        Hide $0.00 Adjustments
+                      </label>
+                    </div>
+                  </div>
+
                   <div className="bg-[#040D1A]/80 border border-white/10 rounded-2xl overflow-hidden shadow-inner">
                     <table className="w-full text-sm text-left">
                       <thead className="text-slate-400 text-[11px] uppercase tracking-widest border-b border-white/10 bg-white/[0.02]">
@@ -379,29 +601,60 @@ export default function ClerkAuditMatrix({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/5">
-                        {adjustments
-                          .filter(a => a.username === selectedClerk.username)
-                          .map((adj, i) => {
+                        {(() => {
+                          const tier1 = processedAdjustments.filter(a => a._tier === 1);
+                          const tier2 = processedAdjustments.filter(a => a._tier === 2);
+                          const tier3 = processedAdjustments.filter(a => a._tier === 3);
+
+                          const renderRow = (adj, i) => {
                             const isFlagged = flaggedAnomalies.some(f => f.transaction === adj || (f.username === adj.username && f.date === adj.date && f.time === adj.time && f.amount === (adj.adjustedAmount ?? adj.amount)));
+                            const methodCode = getAdjustmentMethodCode(adj);
+                            const methodLabel = methodCode === 'DIRECT_BILL' ? 'db' : methodCode === 'CARD' ? 'cb' : methodCode === 'CASH' ? 'ch' : '—';
+                            const isZero = Math.abs(parseFloat(adj.adjustedAmount ?? adj.amount ?? 0)) === 0;
                             return (
-                              <tr key={i} className={`hover:bg-white/[0.04] transition-colors ${isFlagged ? 'bg-[#FF6B6B]/[0.05] border-l-[3px] border-l-[#FF6B6B]' : 'border-l-[3px] border-l-transparent'}`}>
+                              <tr key={i} className={`hover:bg-white/[0.04] transition-colors ${isFlagged ? 'bg-[#FF6B6B]/[0.05] border-l-[3px] border-l-[#FF6B6B]' : adj._rapid ? 'bg-amber-500/[0.06] border-l-[3px] border-l-amber-400' : 'border-l-[3px] border-l-transparent'}`}>
                                 <td className="px-5 py-3 text-slate-300 whitespace-nowrap font-mono text-xs flex flex-col">
                                   <span>{adj.date}</span>
                                   <span className="text-slate-500">{adj.time}</span>
                                 </td>
                                 <td className="px-5 py-3 text-slate-200 font-mono">{adj.roomNumber}</td>
                                 <td className="px-5 py-3">
-                                  <div className="text-slate-300 font-medium mb-1">{adj.reasonCode}</div>
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <span className="text-slate-300 font-medium">{adj.reasonCode}</span>
+                                    {adj._rapid && (
+                                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-400/40">Anomaly</span>
+                                    )}
+                                    <span className="px-1.5 py-0.5 rounded text-[9px] font-mono uppercase tracking-wider bg-white/5 text-slate-400 border border-white/10">{methodLabel}</span>
+                                  </div>
                                   <div className="text-slate-500 text-[11px] leading-tight max-w-[200px] truncate" title={adj.remarks}>{adj.remarks || 'No remarks'}</div>
                                 </td>
-                                <td className="px-5 py-3 text-right font-mono text-slate-200 whitespace-nowrap">
+                                <td className={`px-5 py-3 text-right font-mono whitespace-nowrap ${isZero ? 'text-slate-500' : 'text-slate-200'}`}>
                                   {money2(adj.adjustedAmount ?? adj.amount)}
                                   {isFlagged && <AlertTriangle className="inline w-3 h-3 ml-2 text-[#FF6B6B]" />}
                                 </td>
                               </tr>
                             );
-                        })}
-                        {adjustments.filter(a => a.username === selectedClerk.username).length === 0 && (
+                          };
+
+                          const divider = (key, label) => (
+                            <tr key={key}>
+                              <td colSpan={4} className="px-5 py-2 text-[10px] uppercase tracking-[0.2em] text-slate-500 bg-white/[0.02] border-y border-white/5">
+                                {label}
+                              </td>
+                            </tr>
+                          );
+
+                          const parts = [
+                            ...tier1.map((a, i) => renderRow(a, `t1-${i}`)),
+                            tier1.length > 0 && tier2.length > 0 ? divider('d1', 'High-Value Adjustments') : null,
+                            ...tier2.map((a, i) => renderRow(a, `t2-${i}`)),
+                            (tier1.length > 0 || tier2.length > 0) && tier3.length > 0 ? divider('d2', 'Routine / Zero-Dollar Adjustments') : null,
+                            ...tier3.map((a, i) => renderRow(a, `t3-${i}`)),
+                          ].filter(Boolean);
+
+                          return parts;
+                        })()}
+                        {processedAdjustments.length === 0 && (
                           <tr><td colSpan={4} className="px-5 py-8 text-center text-slate-500">No adjustments posted.</td></tr>
                         )}
                       </tbody>
@@ -417,6 +670,43 @@ export default function ClerkAuditMatrix({
                     </div>
                     <h4 className="text-xl font-semibold text-white tracking-tight">Refunds Ledger</h4>
                   </div>
+
+                  {/* Filter Control Bar */}
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {[
+                        { key: 'ALL', label: 'ALL' },
+                        { key: 'CASH', label: 'CASH' },
+                        { key: 'CARD', label: 'CARD' },
+                        { key: 'DIRECT_BILL', label: 'DIRECT BILL' },
+                      ].map(pill => {
+                        const active = selectedMethod === pill.key;
+                        return (
+                          <button
+                            key={pill.key}
+                            onClick={() => setSelectedMethod(pill.key)}
+                            className={`px-3.5 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wider border transition-all duration-200 ${
+                              active
+                                ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_12px_rgba(34,211,238,0.3)]'
+                                : 'bg-white/[0.03] border-white/10 text-slate-400 hover:text-slate-200 hover:border-white/20'
+                            }`}
+                          >
+                            {pill.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-400">
+                      <input
+                        type="checkbox"
+                        checked={hideStandard100}
+                        onChange={(e) => setHideStandard100(e.target.checked)}
+                        className="w-4 h-4 rounded accent-cyan-500 cursor-pointer"
+                      />
+                      Hide $100 Deposit Returns
+                    </label>
+                  </div>
+
                   <div className="bg-[#040D1A]/80 border border-white/10 rounded-2xl overflow-hidden shadow-inner">
                     <table className="w-full text-sm text-left">
                       <thead className="text-slate-400 text-[11px] uppercase tracking-widest border-b border-white/10 bg-white/[0.02]">
@@ -428,9 +718,8 @@ export default function ClerkAuditMatrix({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/5">
-                        {refunds
-                          .filter(r => r.username === selectedClerk.username)
-                          .map((ref, i) => {
+                        {(() => {
+                          const rows = processedRefunds.map((ref, i) => {
                             const isFlagged = flaggedAnomalies.some(f => f.transaction === ref || (f.username === ref.username && f.date === ref.date && f.time === ref.time && f.amount === ref.amount));
                             const isCash = String(ref.paymentTypeRefunded || '').toUpperCase() === 'CASH';
                             return (
@@ -451,8 +740,25 @@ export default function ClerkAuditMatrix({
                                 </td>
                               </tr>
                             );
-                        })}
-                        {refunds.filter(r => r.username === selectedClerk.username).length === 0 && (
+                          });
+
+                          const tier1 = processedRefunds.filter(r => Math.abs(parseFloat(r.amount || 0)) !== 100);
+                          const tier2 = processedRefunds.filter(r => Math.abs(parseFloat(r.amount || 0)) === 100);
+                          const rendered = [
+                            ...tier1.map((ref, i) => rows[i]),
+                            tier1.length > 0 && tier2.length > 0 ? (
+                              <tr key="divider">
+                                <td colSpan={4} className="px-5 py-2 text-[10px] uppercase tracking-[0.2em] text-slate-500 bg-white/[0.02] border-y border-white/5">
+                                  Standard $100 Incidental Deposit Returns
+                                </td>
+                              </tr>
+                            ) : null,
+                            ...tier2.map((ref, i) => rows[tier1.length + i]),
+                          ].filter(Boolean);
+
+                          return rendered;
+                        })()}
+                        {processedRefunds.length === 0 && (
                           <tr><td colSpan={4} className="px-5 py-8 text-center text-slate-500">No refunds posted.</td></tr>
                         )}
                       </tbody>

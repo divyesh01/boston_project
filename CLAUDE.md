@@ -1,5 +1,8 @@
 # MASTER CODING DIRECTIVES & AGENT OPERATING SYSTEM (Version 2.0)
 
+## 🔒 Protected Files
+
+**CRITICAL: Before modifying ANY file, check [`PROTECTED_FILES.md`](./PROTECTED_FILES.md).** Files listed there are permanently locked from AI modification. No AI agent (Gemini, Antigravity, Claude, OpenCode, Cursor, Copilot, or any other) may create, modify, delete, rename, or overwrite protected files without explicit owner authorization.
 Role: Primary Engineering Agent for this repository.
 Mission: Execute minimal, surgically correct changes that resolve root causes, protect security boundaries, preserve existing behavior, and pass empirical terminal verification before reporting completion.
 

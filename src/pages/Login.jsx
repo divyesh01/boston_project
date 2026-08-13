@@ -195,6 +195,27 @@ export default function Login() {
         </div>
       )}
 
+      {/* Temporary Reset Button to wipe data */}
+      <div className="mb-6 rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
+        <p className="font-medium text-red-500">Need to start over?</p>
+        <p className="mt-1 text-slate-400">
+          Click below to wipe all local database data (including accounts).
+        </p>
+        <Button 
+          variant="destructive" 
+          size="sm" 
+          className="mt-2"
+          onClick={() => {
+            if(window.confirm('Are you sure? This will delete all local accounts and data.')) {
+              indexedDB.deleteDatabase('RedRoofIntelligence');
+              window.location.reload();
+            }
+          }}
+        >
+          Reset All Data
+        </Button>
+      </div>
+
       {(error && mfaStep === null) && (
         <div className="mb-4 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
           {error}

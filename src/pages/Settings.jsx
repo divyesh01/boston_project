@@ -260,6 +260,11 @@ export default function Settings() {
     setPropMsg("");
     try {
       const sanitizedCode = sanitizeAlphanumeric(newPropCode.trim()).toUpperCase();
+      const existing = await db.entities.Property.filter({ code: sanitizedCode });
+      if (existing.length > 0) {
+        setPropMsg("A property with this code already exists.");
+        return;
+      }
       const sanitizedName = sanitizeCsvCell(sanitizeText(newPropName.trim()));
       const sanitizedRooms = Math.max(1, Math.min(10000, Number(newPropRooms) || 100));
       await db.entities.Property.create({

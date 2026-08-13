@@ -1,0 +1,32 @@
+{
+  "properties": {
+    "ip": {
+      "type": "string",
+      "description": "Client IP the rate bucket applies to"
+    },
+    "action": {
+      "type": "string",
+      "description": "The action being rate limited (e.g. \"login\")"
+    },
+    "count": {
+      "type": "integer",
+      "description": "Number of attempts recorded in the current window"
+    },
+    "reset_at": {
+      "type": "string",
+      "description": "ISO date-time when the bucket resets"
+    },
+    "created_date": {
+      "type": "string"
+    },
+    "updated_date": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "ip",
+    "action"
+  ],
+  "name": "RateLimit",
+  "type": "object"
+}

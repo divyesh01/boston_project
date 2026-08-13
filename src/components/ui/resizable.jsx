@@ -10,6 +10,9 @@ import * as ResizablePrimitive from "react-resizable-panels"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * @param {React.ComponentPropsWithoutRef<typeof ResizablePrimitive.PanelGroup>} props
+ */
 const ResizablePanelGroup = ({
   className,
   ...props

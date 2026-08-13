@@ -2,11 +2,20 @@ import localDb from '@/api/localDb';
 import { answerQuestion } from '@/lib/aiEngine';
 import { toCents, fromCents } from '@/lib/decimal';
 import { reconcileTimecards } from '@/lib/timecardCalc';
-import { secureStore, secureRetrieve, secureRemove, createAuditEntry, getClientIpHint, getCsrfToken } from '@/lib/securityUtils';
+import { secureStore, secureRetrieve, createAuditEntry, getClientIpHint, getCsrfToken } from '@/lib/securityUtils';
 import { postSessionRevoked } from '@/lib/sessionChannel';
 import { publishChange } from '@/lib/realtime';
 import { recalculationService } from '@/lib/recalculationService';
 import { isValidEmail } from '@/lib/validator';
+import { createClient } from '@base44/sdk';
+
+const realClient = createClient({
+  appId: import.meta.env?.VITE_BASE44_APP_ID || "6a7d6856ee1cc714b1803c0e",
+  serverUrl: import.meta.env?.VITE_BASE44_BACKEND_URL || "",
+  headers: {
+    "X-CSRF-Token": getCsrfToken()
+  }
+});
 
 // ─── Tables that trigger recalculation when modified ───
 const RECALCULATION_TABLES = new Set([
@@ -658,67 +667,6 @@ const entitiesHandler = {
 
 const entities = new Proxy({}, entitiesHandler);
 
-// ─── Session management ───
-const SESSION_KEY = 'rri_session_v1';
-const SECURE_SESSION_KEY = 'rri_session_secure';
-
-function now() {
-  return Date.now();
-}
-
-async function getSession() {
-  try {
-    // Try secure storage first
-    const secureSession = await secureRetrieve(SECURE_SESSION_KEY);
-    if (secureSession && secureSession.userId && secureSession.token) {
-      return secureSession;
-    }
-    // Migration: if secure storage is empty but localStorage has a session,
-    // migrate it to secure storage and remove from localStorage
-    const raw = localStorage.getItem(SESSION_KEY);
-    if (raw) {
-      try {
-        const s = JSON.parse(raw);
-        if (s && s.userId && s.token) {
-          await secureStore(SECURE_SESSION_KEY, s);
-          localStorage.removeItem(SESSION_KEY);
-          return s;
-        }
-      } catch {
-        // Invalid localStorage data, remove it
-        localStorage.removeItem(SESSION_KEY);
-      }
-    }
-    return null;
-  } catch (e) {
-    return null;
-  }
-}
-
-async function setSession(session) {
-  try {
-    // Store in secure storage only — no plaintext fallback
-    await secureStore(SECURE_SESSION_KEY, session);
-  } catch (e) {
-    console.error('[session] failed to store securely:', e);
-    throw e; // Do not fall back to plaintext storage
-  }
-}
-
-function clearSession() {
-  try { localStorage.removeItem(SESSION_KEY); } catch {}
-  secureRemove(SECURE_SESSION_KEY);
-}
-
-function isSessionExpired(session) {
-  if (!session || !session.expiresAt) return true;
-  return now() > session.expiresAt;
-}
-
-// Default idle timeout (ms) — 30 minutes. Remember-me extends to 30 days.
-const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
-const REMEMBER_TIMEOUT_MS = 30 * 24 * 60 * 60 * 1000;
-
 function deviceInfo() {
   try {
     const ua = navigator.userAgent || '';
@@ -956,19 +904,19 @@ const audit = {
 const auth = {
   async isAuthenticated() {
     try {
-      const res = await functions.invoke('auth_me');
+      const res = await functions.invoke('custom_auth_me');
       return !!res.user;
     } catch { return false; }
   },
   async me() {
     try {
-      const res = await functions.invoke('auth_me');
+      const res = await functions.invoke('custom_auth_me');
       return res.user;
     } catch { return null; }
   },
   async login(identifier, password, remember = false, totpToken = null) {
     try {
-      const res = await functions.invoke('auth_login', { email: identifier, password, mfa_token: totpToken, remember });
+      const res = await functions.invoke('custom_auth_login', { email: identifier, password, mfa_token: totpToken, remember });
       if (res.require_mfa) {
         return { mfaRequired: true, userId: 'mfa_pending', username: identifier };
       }
@@ -986,18 +934,18 @@ const auth = {
   },
   async logout(redirect) {
     try {
-      await functions.invoke('auth_logout');
+      await functions.invoke('custom_auth_logout');
     } catch {}
     if (redirect) window.location.href = redirect;
   },
   async resetPasswordRequest(identifier) {
-    return functions.invoke('auth_reset_request', { identifier });
+    return functions.invoke('custom_auth_reset_request', { identifier });
   },
   async resetPassword(token, newPassword) {
-    return functions.invoke('auth_reset_password', { token, newPassword });
+    return functions.invoke('custom_auth_reset_password', { token, newPassword });
   },
   async registerUser(userData) {
-    return functions.invoke('auth_register', { userData });
+    return functions.invoke('custom_auth_register', { userData });
   },
   async getCurrentSession() {
     return { token: 'http-only' };
@@ -1198,6 +1146,223 @@ async function runLocalAutoPayroll(params = {}) {
   };
 }
 
+// ─── Local auth helpers (browser-only, no backend required) ───
+const LOCAL_SESSION_KEY = 'rr_local_session';
+
+async function browserHashPassword(password, salt) {
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw', enc.encode(password), 'PBKDF2', false, ['deriveBits'],
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: enc.encode(salt), iterations: 310000, hash: 'SHA-256' },
+    keyMaterial, 256,
+  );
+  return Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function generateLocalId() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
+function publicUserLocal(user) {
+  if (!user) return null;
+  const { password_hash, salt, mfa_secret, reset_token_hash, reset_token_expires_at, ...safe } = user;
+  return safe;
+}
+
+function getAllLocalUsers() {
+  return localDb.User.toArray();
+}
+
+async function findLocalUser(identifier) {
+  const normalized = String(identifier).toLowerCase();
+  const all = await getAllLocalUsers();
+  return (
+    all.find((u) => (u.email || '').toLowerCase() === normalized) ||
+    all.find((u) => (u.username || '').toLowerCase() === normalized) ||
+    null
+  );
+}
+
+async function getLocalSessionUser() {
+  const raw = localStorage.getItem(LOCAL_SESSION_KEY);
+  if (!raw) return null;
+  try {
+    const { userId, expiresAt } = JSON.parse(raw);
+    if (new Date(expiresAt) < new Date()) {
+      localStorage.removeItem(LOCAL_SESSION_KEY);
+      return null;
+    }
+    const user = await localDb.User.get(userId);
+    if (!user || !user.is_active || user.is_locked) return null;
+    return publicUserLocal(user);
+  } catch {
+    localStorage.removeItem(LOCAL_SESSION_KEY);
+    return null;
+  }
+}
+
+const PERMISSION_KEYS = [
+  'view_dashboard', 'import_reports', 'delete_imports', 'replace_imports',
+  'export_reports', 'manage_expenses', 'manage_ota_commissions', 'manage_properties',
+  'manage_users', 'view_financial_reports', 'manage_settings', 'view_audit_logs',
+  'backup_restore', 'system_administration', 'manage_pricing',
+];
+const allPermissions = () => PERMISSION_KEYS.reduce((acc, k) => ({ ...acc, [k]: true }), {});
+
+const ROLE_DEFAULTS_LOCAL = {
+  owner: allPermissions(),
+  admin: allPermissions(),
+  manager: {
+    view_dashboard: true, import_reports: true, delete_imports: true, replace_imports: true,
+    export_reports: true, manage_expenses: true, manage_ota_commissions: true,
+    manage_properties: false, manage_users: false, view_financial_reports: true,
+    manage_settings: false, view_audit_logs: false, backup_restore: false,
+    system_administration: false, manage_pricing: true,
+  },
+  front_desk: {
+    view_dashboard: true, import_reports: true, delete_imports: false, replace_imports: false,
+    export_reports: false, manage_expenses: false, manage_ota_commissions: false,
+    manage_properties: false, manage_users: false, view_financial_reports: false,
+    manage_settings: false, view_audit_logs: false, backup_restore: false,
+    system_administration: false,
+  },
+  accountant: {
+    view_dashboard: true, import_reports: false, delete_imports: false, replace_imports: false,
+    export_reports: true, manage_expenses: true, manage_ota_commissions: true,
+    manage_properties: false, manage_users: false, view_financial_reports: true,
+    manage_settings: false, view_audit_logs: false, backup_restore: false,
+    system_administration: false,
+  },
+  read_only: {
+    view_dashboard: true, import_reports: false, delete_imports: false, replace_imports: false,
+    export_reports: false, manage_expenses: false, manage_ota_commissions: false,
+    manage_properties: false, manage_users: false, view_financial_reports: true,
+    manage_settings: false, view_audit_logs: false, backup_restore: false,
+    system_administration: false,
+  },
+};
+const defaultPermissionsForRoleLocal = (role) => ({ ...(ROLE_DEFAULTS_LOCAL[role] || ROLE_DEFAULTS_LOCAL.read_only) });
+
+async function handleLocalUserAdmin({ action }) {
+  if (action === 'initialized') {
+    const all = await getAllLocalUsers();
+    const owners = all.filter((u) => u.role === 'owner');
+    return { initialized: owners.length > 0 };
+  }
+  if (action === 'list') {
+    const all = await getAllLocalUsers();
+    return { users: all.map(publicUserLocal) };
+  }
+  if (action === 'search') {
+    const all = await getAllLocalUsers();
+    return { users: all.map(publicUserLocal) };
+  }
+  throw new Error(`Local fallback does not support action: ${action}`);
+}
+
+async function handleLocalAuthRegister({ userData }) {
+  const {
+    username, email, password, role = 'read_only', assigned_property_ids = [],
+    property_access, full_name = '', must_change_password = true,
+  } = userData || {};
+
+  if (!username || !email || !password) {
+    throw new Error('Username, email, and password are required');
+  }
+
+  const all = await getAllLocalUsers();
+  const owners = all.filter((u) => u.role === 'owner');
+
+  if (owners.length > 0) {
+    throw new Error('Unauthorized');
+  }
+  if (role !== 'owner') {
+    throw new Error('The first account must be the Owner');
+  }
+
+  if (all.some((u) => (u.email || '').toLowerCase() === email.toLowerCase())) {
+    throw new Error('Email is already registered.');
+  }
+  if (all.some((u) => u.username === username)) {
+    throw new Error('Username is already taken.');
+  }
+
+  const salt = generateLocalId().replace(/-/g, '').substring(0, 32);
+  const password_hash = '$pbkdf2$' + await browserHashPassword(password, salt);
+
+  const newUser = {
+    id: generateLocalId(),
+    username,
+    email: email.toLowerCase(),
+    full_name: full_name || '',
+    role,
+    permissions: defaultPermissionsForRoleLocal(role),
+    property_access: property_access || 'all',
+    is_active: true,
+    is_locked: false,
+    must_change_password: !!must_change_password,
+    failed_login_count: 0,
+    salt,
+    password_hash,
+    created_date: new Date().toISOString(),
+    updated_date: new Date().toISOString(),
+  };
+
+  await localDb.User.add(newUser);
+  return { success: true, user: publicUserLocal(newUser) };
+}
+
+async function handleLocalAuthLogin({ email, password, mfa_token: _mfa_token, remember = false }) {
+  const identifier = email;
+  if (!identifier || !password) {
+    throw new Error('Email and password are required');
+  }
+
+  const user = await findLocalUser(identifier);
+  if (!user) throw new Error('Invalid email or password');
+  if (user.is_locked) throw new Error('Account is locked');
+  if (!user.is_active) throw new Error('Account is inactive');
+
+  const isBrowserHash = (user.password_hash || '').startsWith('$pbkdf2$');
+  if (!isBrowserHash) {
+    throw new Error('Backend authentication required. Please start the server with "base44 dev".');
+  }
+
+  const computed = '$pbkdf2$' + await browserHashPassword(password, user.salt);
+  if (computed !== user.password_hash) {
+    const failed = (user.failed_login_count || 0) + 1;
+    await localDb.User.update(user.id, { failed_login_count: failed });
+    throw new Error('Invalid email or password');
+  }
+
+  if (user.failed_login_count > 0) {
+    await localDb.User.update(user.id, { failed_login_count: 0 });
+  }
+
+  const expiresAt = remember
+    ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+    : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ userId: user.id, expiresAt }));
+
+  return { success: true, user: publicUserLocal(user) };
+}
+
+async function handleLocalAuthMe() {
+  const user = await getLocalSessionUser();
+  return { user };
+}
+
+async function handleLocalAuthLogout() {
+  localStorage.removeItem(LOCAL_SESSION_KEY);
+  return { success: true };
+}
+
 // ─── Server functions: graceful fallback ───
 const functions = {
   async invoke(functionName, params = {}) {
@@ -1230,34 +1395,73 @@ const functions = {
         },
       };
     }
-    if (functionName === 'deleteAccount' || functionName === 'audit_clear' || functionName.startsWith('auth_') || functionName === 'user_admin') {
-      const res = await fetch(`/api/functions/${functionName}`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'X-CSRF-Token': getCsrfToken()
-        },
-        body: JSON.stringify(params)
-      });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => null);
-        throw new Error((errData && errData.error) ? errData.error : `HTTP Error ${res.status}`);
+    if (functionName === 'autoPayroll') {
+      return runLocalAutoPayroll(params);
+    }
+
+    // ─── Local auth fallbacks (no backend required) ───
+    if (functionName === 'custom_user_admin') {
+      try {
+        return await handleLocalUserAdmin(params);
+      } catch (e) {
+        console.error(`[localAuth] custom_user_admin failed:`, e);
+        throw e;
       }
-      const data = await res.json();
+    }
+    if (functionName === 'custom_auth_register') {
+      try {
+        return await handleLocalAuthRegister(params);
+      } catch (e) {
+        console.error(`[localAuth] custom_auth_register failed:`, e);
+        throw e;
+      }
+    }
+    if (functionName === 'custom_auth_login') {
+      try {
+        return await handleLocalAuthLogin(params);
+      } catch (e) {
+        console.error(`[localAuth] custom_auth_login failed:`, e);
+        throw e;
+      }
+    }
+    if (functionName === 'custom_auth_me') {
+      try {
+        return await handleLocalAuthMe();
+      } catch (e) {
+        console.error(`[localAuth] custom_auth_me failed:`, e);
+        throw e;
+      }
+    }
+    if (functionName === 'custom_auth_logout') {
+      try {
+        return await handleLocalAuthLogout();
+      } catch (e) {
+        console.error(`[localAuth] custom_auth_logout failed:`, e);
+        throw e;
+      }
+    }
+    
+    // Delegate to real Base44 backend for server functions
+    try {
+      const res = await realClient.functions.invoke(functionName, params);
       
+      // Handle local side-effects for successful mutations
       if (functionName === 'deleteAccount') {
         await Promise.all(localDb.tables.map(t => t.clear()));
         localStorage.clear();
       } else if (functionName === 'audit_clear') {
         await localDb.AuditLog.clear();
+        publishChange('AuditLog', 'clear', {});
       }
-      return data;
+      
+      return res;
+    } catch (e) {
+      console.error(`[realClient] failed to invoke ${functionName}:`, e);
+      if (e.response && e.response.data && e.response.data.error) {
+        throw new Error(e.response.data.error);
+      }
+      throw e;
     }
-    if (functionName === 'autoPayroll') {
-      return runLocalAutoPayroll(params);
-    }
-    console.warn(`[local] Unknown function invoked: ${functionName}`);
-    return { data: {} };
   },
 };
 
@@ -1284,69 +1488,69 @@ async function assertNotLastOwner(target) {
 
 const users = {
   async list() {
-    const res = await functions.invoke('user_admin', { action: 'list' });
+    const res = await functions.invoke('custom_user_admin', { action: 'list' });
     return res.users || [];
   },
 
   async search(query) {
-    const res = await functions.invoke('user_admin', { action: 'search', query });
+    const res = await functions.invoke('custom_user_admin', { action: 'search', query });
     return res.users || [];
   },
 
   async getById(id) {
-    const res = await functions.invoke('user_admin', { action: 'getById', id });
+    const res = await functions.invoke('custom_user_admin', { action: 'getById', id });
     return res.user || null;
   },
 
   async create(actor, data = {}) {
-    const res = await functions.invoke('user_admin', { action: 'create', data });
+    const res = await functions.invoke('custom_user_admin', { action: 'create', data });
     return res.user;
   },
 
   async update(actor, id, data = {}) {
-    const res = await functions.invoke('user_admin', { action: 'update', id, data });
+    const res = await functions.invoke('custom_user_admin', { action: 'update', id, data });
     return res.user;
   },
 
   async setStatus(actor, id, status) {
-    const res = await functions.invoke('user_admin', { action: 'set_status', id, status });
+    const res = await functions.invoke('custom_user_admin', { action: 'set_status', id, status });
     return res.user;
   },
 
   async resetPassword(actor, id, newPassword) {
-    return functions.invoke('user_admin', { action: 'reset_password', id, newPassword });
+    return functions.invoke('custom_user_admin', { action: 'reset_password', id, newPassword });
   },
 
   async setPassword(actor, id, newPassword) {
-    return functions.invoke('user_admin', { action: 'set_password', id, newPassword });
+    return functions.invoke('custom_user_admin', { action: 'set_password', id, newPassword });
   },
 
   async changeOwnPassword(user, currentPassword, newPassword) {
-    return functions.invoke('user_admin', { action: 'change_own_password', id: user && user.id, currentPassword, newPassword });
+    return functions.invoke('custom_user_admin', { action: 'change_own_password', id: user && user.id, currentPassword, newPassword });
   },
 
   async enableMfa(actor, id) {
-    return functions.invoke('user_admin', { action: 'enable_mfa', id });
+    return functions.invoke('custom_user_admin', { action: 'enable_mfa', id });
   },
 
   async disableMfa(actor, id) {
-    return functions.invoke('user_admin', { action: 'disable_mfa', id });
+    return functions.invoke('custom_user_admin', { action: 'disable_mfa', id });
   },
 
   async verifyMfa(actor, id, token) {
-    return functions.invoke('user_admin', { action: 'verify_mfa', id, token });
+    return functions.invoke('custom_user_admin', { action: 'verify_mfa', id, token });
   },
 
   async delete(actor, id) {
-    return functions.invoke('user_admin', { action: 'delete', id });
+    return functions.invoke('custom_user_admin', { action: 'delete', id });
   },
 
   async inviteUser(email, role = 'read_only') {
-    return functions.invoke('user_admin', { action: 'invite', email, role });
+    return functions.invoke('custom_user_admin', { action: 'invite', email, role });
   },
 
   async initialized() {
-    const res = await functions.invoke('user_admin', { action: 'initialized' });
+    const res = await functions.invoke('custom_user_admin', { action: 'initialized' });
     return !!res.initialized;
   },
 };

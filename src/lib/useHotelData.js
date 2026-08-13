@@ -44,6 +44,28 @@ function buildFilter(dateRange, propertyId) {
   return filter;
 }
 
+// Calculate an intelligent row limit based on date range and portfolio size to prevent over-fetching
+function getDynamicLimit(dateRange, propertyId, fallbackLimit = 100000) {
+  if (!dateRange || !dateRange.from || !dateRange.to) return fallbackLimit;
+  
+  const from = new Date(dateRange.from);
+  const to = new Date(dateRange.to);
+  if (isNaN(from.valueOf()) || isNaN(to.valueOf())) return fallbackLimit;
+  
+  const days = Math.max(1, Math.ceil((to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24)));
+  
+  // Assume ~5 records per day per property max for most entities (to leave room for duplicates/adjustments)
+  const multiplier = 5; 
+  let propCount = 50; // Max properties assumption for 'all'
+  
+  if (propertyId && propertyId !== "all") {
+    propCount = Array.isArray(propertyId) ? propertyId.length : 1;
+  }
+  
+  // Add base buffer of 1000, cap at fallbackLimit
+  return Math.min(fallbackLimit, (days + 2) * propCount * multiplier + 1000);
+}
+
 // Client-side filter: keep only rows whose date falls in one of the selected months
 //
 // The month is read straight out of the "YYYY-MM-DD" string. It used to go
@@ -71,11 +93,12 @@ export function useOccupancy(dateRange, propertyId, months = [], enabled = true)
     enabled,
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
+      const limit = getDynamicLimit(dateRange, propertyId);
       let rows;
       if (filter.date) {
-        rows = await db.entities.OccupancyDay.filter(filter, "date", 100000);
+        rows = await db.entities.OccupancyDay.filter(filter, "date", limit);
       } else {
-        rows = await db.entities.OccupancyDay.list("date", 100000);
+        rows = await db.entities.OccupancyDay.list("date", limit);
       }
       return filterByMonths(rows, months);
     },
@@ -87,11 +110,12 @@ export function useSources(dateRange, propertyId, months = []) {
     queryKey: ["sources", dateRange?.from, dateRange?.to, propertyId, (months || []).join(",")],
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
+      const limit = getDynamicLimit(dateRange, propertyId);
       let rows;
       if (filter.date) {
-        rows = await db.entities.SourceDay.filter(filter, "date", 100000);
+        rows = await db.entities.SourceDay.filter(filter, "date", limit);
       } else {
-        rows = await db.entities.SourceDay.list("date", 100000);
+        rows = await db.entities.SourceDay.list("date", limit);
       }
       return filterByMonths(rows, months);
     },
@@ -103,11 +127,12 @@ export function useGrossRevenue(dateRange, propertyId, months = []) {
     queryKey: ["gross", dateRange?.from, dateRange?.to, propertyId, (months || []).join(",")],
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
+      const limit = getDynamicLimit(dateRange, propertyId);
       let rows;
       if (filter.date) {
-        rows = await db.entities.GrossRevenueDay.filter(filter, "date", 100000);
+        rows = await db.entities.GrossRevenueDay.filter(filter, "date", limit);
       } else {
-        rows = await db.entities.GrossRevenueDay.list("date", 100000);
+        rows = await db.entities.GrossRevenueDay.list("date", limit);
       }
       return filterByMonths(rows, months);
     },
@@ -131,7 +156,8 @@ export function useClerkRecords(dateRange, propertyId) {
           filter.property_id = propertyId;
         }
       }
-      const raw = await db.entities.ClerkShiftRecord.filter(filter, "-shift_date", 100000);
+      const limit = getDynamicLimit(dateRange, propertyId, 100000);
+      const raw = await db.entities.ClerkShiftRecord.filter(filter, "-shift_date", limit);
       // Deduplicate: repeated imports of the same CSV create duplicate rows.
       // Canonical key preserves record identity across imports — earliest
       // created_date wins so the oldest import's copy is kept.
@@ -165,10 +191,11 @@ export function useAdjustmentsRefunds(dateRange, propertyId) {
     queryKey: ["adjustments-refunds", dateRange?.from, dateRange?.to, propertyId],
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
+      const limit = getDynamicLimit(dateRange, propertyId);
       if (filter.date) {
-        return db.entities.AdjustmentRefund.filter(filter, "date", 100000);
+        return db.entities.AdjustmentRefund.filter(filter, "date", limit);
       }
-      return db.entities.AdjustmentRefund.list("date", 100000);
+      return db.entities.AdjustmentRefund.list("date", limit);
     },
   });
 }
@@ -185,8 +212,8 @@ export function useClerkAnomalies(dateRange, propertyId) {
           filter.property_id = propertyId;
         }
       }
-      // Assuming AnomalyAlert isn't purely date-indexed, filter dates in memory
-      const rows = await db.entities.AnomalyAlert.filter(filter, "date", 100000);
+      const limit = getDynamicLimit(dateRange, propertyId);
+      const rows = await db.entities.AnomalyAlert.filter(filter, "date", limit);
       return rows.filter((r) => {
         if (!dateRange || (!dateRange.from && !dateRange.to)) return true;
         if (dateRange.from && r.date && r.date < dateRange.from) return false;
@@ -202,11 +229,12 @@ export function usePaymentData(dateRange, propertyId, months = []) {
     queryKey: ["payments", dateRange?.from, dateRange?.to, propertyId, (months || []).join(",")],
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
+      const limit = getDynamicLimit(dateRange, propertyId);
       let rows;
       if (filter.date) {
-        rows = await db.entities.PaymentDay.filter(filter, "date", 100000);
+        rows = await db.entities.PaymentDay.filter(filter, "date", limit);
       } else {
-        rows = await db.entities.PaymentDay.list("date", 100000);
+        rows = await db.entities.PaymentDay.list("date", limit);
       }
       return filterByMonths(rows, months);
     },
@@ -361,9 +389,10 @@ export function useTransactions(dateRange, propertyId, months = [], enabled = tr
     enabled,
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
+      const limit = getDynamicLimit(dateRange, propertyId, 200000);
       const rows = filter.date
-        ? await db.entities.TransactionLine.filter(filter, "date", 200000)
-        : await db.entities.TransactionLine.list("date", 200000);
+        ? await db.entities.TransactionLine.filter(filter, "date", limit)
+        : await db.entities.TransactionLine.list("date", limit);
       return filterByMonths(rows, months);
     },
   });
@@ -403,9 +432,10 @@ export function useRoomStays(dateRange, propertyId, months = []) {
     ],
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
+      const limit = getDynamicLimit(dateRange, propertyId);
       const rows = filter.date
-        ? await db.entities.RoomStay.filter(filter, "date", 100000)
-        : await db.entities.RoomStay.list("date", 100000);
+        ? await db.entities.RoomStay.filter(filter, "date", limit)
+        : await db.entities.RoomStay.list("date", limit);
       return filterByMonths(rows, months);
     },
   });
@@ -430,7 +460,8 @@ export function useHousekeepingTasks(dateRange, propertyId) {
           filter.property_id = propertyId;
         }
       }
-      return db.entities.HousekeepingTask.filter(filter, "-task_date", 100000);
+      const limit = getDynamicLimit(dateRange, propertyId);
+      return db.entities.HousekeepingTask.filter(filter, "-task_date", limit);
     },
   });
 }
@@ -454,7 +485,8 @@ export function useReviews(dateRange, propertyId) {
           filter.property_id = propertyId;
         }
       }
-      return db.entities.Review.filter(filter, "-review_date", 100000);
+      const limit = getDynamicLimit(dateRange, propertyId);
+      return db.entities.Review.filter(filter, "-review_date", limit);
     },
   });
 }

@@ -1,0 +1,41 @@
+{
+  "properties": {
+    "user_id": {
+      "type": "string",
+      "description": "ID of the user this session belongs to"
+    },
+    "token_hash": {
+      "type": "string",
+      "description": "SHA-256 hash of the session token"
+    },
+    "expires_at": {
+      "type": "string",
+      "description": "ISO date string when the session expires"
+    },
+    "ip_address": {
+      "type": "string",
+      "description": "IP address of the client (for anomaly detection)"
+    },
+    "user_agent": {
+      "type": "string",
+      "description": "User-Agent string of the client"
+    },
+    "is_revoked": {
+      "type": "boolean",
+      "description": "If true, this session has been forcefully revoked"
+    },
+    "created_date": {
+      "type": "string"
+    },
+    "updated_date": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "user_id",
+    "token_hash",
+    "expires_at"
+  ],
+  "name": "Session",
+  "type": "object"
+}

@@ -18,6 +18,7 @@ const DEFAULT_RATES = {
   "SABRE": { type: "percentage", rate: 0.10, taxExempt: false },
   "AIRBNB": { type: "percentage", rate: 0.03, taxExempt: false },
   "IDS": { type: "percentage", rate: 0.12, taxExempt: false },
+  "OTHER OTA": { type: "percentage", rate: 0.15, taxExempt: false },
   "WALK-IN": { type: "none", rate: 0, taxExempt: true },
   "PROPERTY BOOKING": { type: "none", rate: 0, taxExempt: true },
   "RR WEBSITE": { type: "none", rate: 0, taxExempt: true },

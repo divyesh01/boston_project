@@ -5,6 +5,9 @@
  */
 import { cn } from "@/lib/utils"
 
+/**
+ * @param {any} props
+ */
 function Skeleton({
   className,
   ...props

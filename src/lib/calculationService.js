@@ -147,7 +147,7 @@ export class CalculationService {
 
   static calculateTaxLiability(srcRows = [], grossRows = [], propertyId = null, dateRange = { from: '', to: '' }) {
     const taxConfig = getTaxConfig();
-    if (!taxConfig.taxEnabled && getTaxSettings().length === 0) return { state: 0, city: 0, other: 0, total: 0 };
+    if (!taxConfig.taxEnabled || getTaxSettings().length === 0) return { state: 0, city: 0, other: 0, total: 0 };
 
     const taxBase = new Map();
     srcRows.forEach((r) => {
@@ -208,7 +208,7 @@ export class CalculationService {
     const expInPeriod = expenses.filter(e => inRange(e.expense_date, dateRange.from, dateRange.to));
     const payInPeriod = payroll.filter(p => inRange(p.pay_period_start, dateRange.from, dateRange.to));
     const totalPayroll = sum(payInPeriod, 'total_pay');
-    const operatingExpenses = expInPeriod.filter(e => e.category !== 'payroll').reduce((a, e) => a + (e.amount || 0), 0);
+    const operatingExpenses = expInPeriod.filter(e => !(String(e.category || '').toLowerCase() === 'payroll')).reduce((a, e) => a + (e.amount || 0), 0);
 
     const taxLiability = this.calculateTaxLiability(srcRows, grossRows, propertyId, dateRange);
     const estimatedTaxes = taxLiability.total;
@@ -227,7 +227,7 @@ export class CalculationService {
       estimatedTaxes,
       totalDeductions,
       kept,
-      keepRate: gross > 0 ? kept / gross : 0,
+      keepRate: gross > 0 ? kept / (gross - refunds - estimatedTaxes) : 0,
     };
   }
 
@@ -239,7 +239,7 @@ export class CalculationService {
     const expensesInPeriod = expenses.filter(e => inRange(e.expense_date, dateRange.from, dateRange.to));
     const payrollInPeriod = payroll.filter(p => inRange(p.pay_period_start, dateRange.from, dateRange.to));
     const totalPayroll = sum(payrollInPeriod, 'total_pay');
-    const operatingExpenses = expensesInPeriod.filter(e => e.category !== 'payroll').reduce((a, e) => a + (e.amount || 0), 0);
+    const operatingExpenses = expensesInPeriod.filter(e => !(String(e.category || '').toLowerCase() === 'payroll')).reduce((a, e) => a + (e.amount || 0), 0);
     const totalCosts = totalPayroll + operatingExpenses;
 
     const operatingProfit = netRevenue - totalCosts;

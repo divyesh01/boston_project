@@ -311,9 +311,14 @@ export class DataScanner {
     const issues = [];
 
     const commonHeaders = [];
-    headers1.forEach((h1) => {
-      const h2 = headers2.find((h) => h.toLowerCase().trim() === String(h1).toLowerCase().trim());
-      if (h2 !== undefined) commonHeaders.push({ name: h1, idx1: headers1.indexOf(h1), idx2: headers2.indexOf(h2) });
+    const used2 = new Set();
+    headers1.forEach((h1, i1) => {
+      const lower = String(h1).toLowerCase().trim();
+      const idx2 = headers2.findIndex((h, i) => !used2.has(i) && String(h).toLowerCase().trim() === lower);
+      if (idx2 !== -1) {
+        used2.add(idx2);
+        commonHeaders.push({ name: h1, idx1: i1, idx2 });
+      }
     });
 
     if (commonHeaders.length === 0) return [];

@@ -155,7 +155,11 @@ MenubarCheckboxItem.displayName = MenubarPrimitive.CheckboxItem.displayName
 
 /** @type {React.ForwardRefExoticComponent<any>} */
 /** @type {React.ForwardRefExoticComponent<any>} */
-const MenubarRadioItem = React.forwardRef(({ className, children, ...props }, ref) => (
+const MenubarRadioItem = React.forwardRef(
+  /**
+   * @param {React.ComponentPropsWithoutRef<typeof MenubarPrimitive.RadioItem>} props
+   */
+  ({ className, children, ...props }, ref) => (
   <MenubarPrimitive.RadioItem
     ref={ref}
     className={cn(

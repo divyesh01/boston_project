@@ -1,0 +1,347 @@
+import { toCents, fromCents } from '@/lib/decimal';
+
+/**
+ * Timecard reconciliation engine.
+ *
+ * The rest of the payroll pipeline treats `Staff.hours` as a hand-typed
+ * per-period constant. This module closes that gap: it pairs raw clock-in /
+ * clock-out timestamps into shifts, handles overnight shifts, applies unpaid
+ * meal-break policy, buckets hours into workweeks, and derives regular vs
+ * overtime hours (1.5x after 40 hours/week).
+ *
+ * Design rules:
+ *   * Pure functions over plain data — no Dexie, no React, fully testable.
+ *   * Never guess a missing punch into real pay. A shift with a missing clock
+ *     out is flagged for manager review and excluded from paid hours, so the
+ *     engine cannot silently short-pay or over-pay someone.
+ *   * Overtime is computed per workweek (a shift can straddle two weeks; the
+ *     hour is attributed to the day it STARTS on).
+*  * All money math goes through integer cents (see src/lib/decimal).
+ *
+ * Time format accepted by `parseTime`: "HH:MM" 24h, "H:MM AM/PM", or a full
+ * ISO datetime string whose time part is read.
+ */
+
+const MS_PER_MIN = 60 * 1000;
+const MIN_PER_HOUR = 60;
+const DEFAULT_WEEKLY_OT_HOURS = 40;
+const DEFAULT_OT_MULTIPLIER = 1.5;
+const DEFAULT_BREAK_MINUTES = 30;
+const DEFAULT_BREAK_AFTER_HOURS = 6;
+
+/**
+ * Parse a clock time into minutes since local midnight.
+ * @param {string|number} value
+ * @returns {number|null} minutes since midnight, or null if unparseable.
+ */
+export function parseTime(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? Math.round(value) : null;
+  }
+  const s = String(value).trim();
+  if (!s) return null;
+
+  // Full datetime "2026-03-07 03:21 PM" — take the time portion (the time can
+  // itself contain a space, e.g. "03:21 PM", so capture to end of string).
+  const iso = s.match(/^\d{4}-\d{2}-\d{2}[T ](.*)$/);
+  const timePart = (iso ? iso[1] : s).trim();
+
+  // "HH:MM AM/PM" or "H:MM am"
+  let m = timePart.match(/^(\d{1,2}):(\d{2})\s*([AaPp][Mm])$/);
+  if (m) {
+    let h = Number(m[1]) % 12;
+    if (/p/i.test(m[3])) h += 12;
+    return h * MIN_PER_HOUR + Number(m[2]);
+  }
+  // "HH:MM" 24h
+  m = timePart.match(/^(\d{1,2}):(\d{2})$/);
+  if (m) {
+    const h = Number(m[1]);
+    if (h < 0 || h > 23) return null;
+    const min = Number(m[2]);
+    if (min < 0 || min > 59) return null;
+    return h * MIN_PER_HOUR + min;
+  }
+  // Bare "HH" 24h
+  m = timePart.match(/^(\d{1,2})$/);
+  if (m) {
+    const h = Number(m[1]);
+    if (h < 0 || h > 23) return null;
+    return h * MIN_PER_HOUR;
+  }
+  return null;
+}
+
+/**
+ * Minutes between two times-of-day, handling an overnight crossing.
+ * If `out < in`, the shift crossed midnight (+24h).
+ */
+export function minutesBetween(inMin, outMin) {
+  let delta = outMin - inMin;
+  if (delta < 0) delta += 24 * MIN_PER_HOUR;
+  return delta;
+}
+
+/**
+ * True if the given day is within [periodStart, periodEnd] (both YYYY-MM-DD).
+ */
+export function inPeriod(day, periodStart, periodEnd) {
+  if (!day) return false;
+  if (periodStart && day < periodStart) return false;
+  if (periodEnd && day > periodEnd) return false;
+  return true;
+}
+
+/**
+ * First day of the workweek containing `day` (YYYY-MM-DD). Weeks start on
+ * `weekStart` (0=Sunday..6=Saturday, defaults to Sunday).
+ * Returns { weekStart, weekEnd }.
+ */
+export function weekBounds(day, weekStart = 0) {
+  const [y, m, d] = String(day || "").split("-").map((n) => Number(n));
+  if (!y || !m || !d) return null;
+  const dt = new Date(y, m - 1, d);
+  const dow = dt.getDay();
+  const offset = (dow - weekStart + 7) % 7;
+  const start = new Date(y, m - 1, d - offset);
+  const end = new Date(y, m - 1, d - offset + 6);
+  const pad = (n) => String(n).padStart(2, "0");
+  return {
+    weekStart: `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`,
+    weekEnd: `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())}`,
+  };
+}
+
+/**
+ * Normalise a raw punch row into { employeeKey, employeeName, department,
+ * date, clockIn, clockOut, flags }.
+ *
+ * `clockIn`/`clockOut` are minutes since midnight. A missing clock-out leaves
+ * clockOut null; the shift is flagged (never silently paid).
+ *
+ * @param {any} [p]  a raw punch row (any shape; only the known fields are read).
+ *   Recognised: p.date or p.shift_date (YYYY-MM-DD the shift started),
+ *   p.clock_in / p.time_in / p.start_time, p.clock_out / p.time_out /
+ *   p.end_time, p.employee_name, p.employee_id, p.department.
+ * @returns {Object|null} normalised shift or null if no usable time at all
+ */
+export function normalisePunch(p = /** @type {Object} */ ({})) {
+  const date = String(p.date || p.shift_date || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return { date: "", clockIn: null, clockOut: null, employeeKey: keyOf(p), employeeName: nameOf(p), department: p.department || "", flags: ["missing_date"] };
+  }
+  const clockIn = parseTime(p.clock_in ?? p.time_in ?? p.start_time);
+  const clockOut = parseTime(p.clock_out ?? p.time_out ?? p.end_time);
+  const flags = [];
+  if (clockIn === null) flags.push("missing_clock_in");
+  if (clockOut === null) flags.push("missing_clock_out");
+
+  // A shift that comes back as a full 24h is two days mislabeled as one —
+  // flag it rather than pay an impossible duration. Same-time punches can only
+  // be a 24h double-day or a keying error; either way it needs review.
+  if (clockIn !== null && clockOut !== null) {
+    const dur = clockOut === clockIn ? 24 * MIN_PER_HOUR : minutesBetween(clockIn, clockOut);
+    if (dur >= 24 * MIN_PER_HOUR) flags.push("shift_exceeds_24h");
+  }
+
+  return {
+    date,
+    clockIn,
+    clockOut,
+    employeeKey: keyOf(p),
+    employeeName: nameOf(p),
+    department: p.department || "",
+    employeeId: p.employee_id || p.employeeId || "",
+    flags,
+  };
+}
+
+function keyOf(p) {
+  // `||` (not `??`) so an empty-string employee_id falls through to the name:
+  // imports seed employee_id as "" when the export lacks a number, and a blank
+  // key must never collapse different employees into one payroll row.
+  const id = String(p.employee_key ?? p.employeeKey ?? p.employee_id ?? p.employeeId ?? "").trim();
+  return id || String(p.employee_name ?? "").trim();
+}
+
+function nameOf(p) {
+  return String(p.employee_name ?? "").trim() || String(p.employee_id ?? "").trim();
+}
+
+/**
+ * Round a shift's duration to a workable clock precision. Shifts are counted to
+ * the minute; a 0-min shift is dropped unless it was flagged.
+ */
+export function shiftDurationMinutes(shift) {
+  if (shift.clockIn === null || shift.clockOut === null) return 0;
+  return minutesBetween(shift.clockIn, shift.clockOut);
+}
+
+/**
+ * Apply unpaid meal-break policy to a shift.
+ *
+ * Hospitality roles run long shifts; a break is normally unpaid. If the shift
+ * has an explicit `break_minutes` field it wins; otherwise a default unpaid
+ * break is deducted once a shift exceeds `breakAfterHours`.
+ *
+ * @returns {{ hours: number, paidMinutes: number, breakMinutes: number, flags: string[] }}
+ */
+export function applyBreaks(shift, options = {}) {
+  const {
+    breakMinutes = DEFAULT_BREAK_MINUTES,
+    breakAfterHours = DEFAULT_BREAK_AFTER_HOURS,
+    deductBreaks = true,
+  } = options;
+
+  const rawMinutes = shiftDurationMinutes(shift);
+  const flags = [...(shift.flags || [])];
+
+  if (!deductBreaks || rawMinutes === 0) {
+    return { hours: rawMinutes / MIN_PER_HOUR, paidMinutes: rawMinutes, breakMinutes: 0, flags };
+  }
+
+  const explicitBreak = Number(shift.break_minutes ?? shift.breakMinutes ?? NaN);
+  const applied = Number.isFinite(explicitBreak)
+    ? Math.max(0, explicitBreak)
+    : rawMinutes > breakAfterHours * MIN_PER_HOUR
+      ? breakMinutes
+      : 0;
+
+  const paidMinutes = Math.max(0, rawMinutes - applied);
+  if (applied > 0) flags.push("unpaid_break_applied");
+  return { hours: paidMinutes / MIN_PER_HOUR, paidMinutes, breakMinutes: applied, flags };
+}
+
+/**
+ * Reconcile a set of shifts into per-employee, per-week totals.
+ *
+ * @param {Array<Object>} punches  raw punch rows (see normalisePunch)
+ * @param {Object} [options]
+ * @param {number} [options.weeklyOvertimeHours=40]
+ * @param {number} [options.weekStart=0] 0=Sunday..6=Saturday
+ * @param {boolean} [options.deductBreaks=true]
+ * @param {number} [options.breakMinutes=30]
+ * @param {number} [options.breakAfterHours=6]
+ * @param {Object} [options.rates] employeeKey -> { base_rate, overtime_rate }
+ *   Overtime defaults to 1.5x base.
+ *
+ * @returns {Array<Object>} one row per (employee, workweek):
+ *   { employeeKey, employeeName, department, weekStart, weekEnd,
+ *     shifts, flags, hours, overtime_hours, unpaid_break_minutes,
+ *     regular_pay, overtime_pay, total_pay }
+ */
+export function reconcileTimecards(punches = [], options = {}) {
+  const {
+    weeklyOvertimeHours = DEFAULT_WEEKLY_OT_HOURS,
+    weekStart = 0,
+    deductBreaks = true,
+    breakMinutes = DEFAULT_BREAK_MINUTES,
+    breakAfterHours = DEFAULT_BREAK_AFTER_HOURS,
+    rates = {},
+  } = options;
+
+  const rows = new Map();
+
+  for (const p of punches) {
+    const shift = normalisePunch(p);
+    if (!shift) continue;
+
+    const bounds = weekBounds(shift.date, weekStart);
+    if (!bounds) {
+      continue;
+    }
+
+    const key = `${shift.employeeKey}||${bounds.weekStart}`;
+    let row = rows.get(key);
+    if (!row) {
+      row = {
+        employeeKey: shift.employeeKey,
+        employeeName: shift.employeeName,
+        department: shift.department,
+        weekStart: bounds.weekStart,
+        weekEnd: bounds.weekEnd,
+        shifts: [],
+        flags: new Set(),
+        hours: 0,
+        overtime_hours: 0,
+        unpaid_break_minutes: 0,
+      };
+      rows.set(key, row);
+    }
+
+    if (shift.date) row.shifts.push(shift);
+    for (const f of shift.flags || []) row.flags.add(f);
+
+    // Only pay shifts with both punches. A missing punch is reviewed, not paid.
+    if (shift.clockIn === null || shift.clockOut === null) continue;
+
+    const paid = applyBreaks(shift, { deductBreaks, breakMinutes, breakAfterHours });
+    row.unpaid_break_minutes += paid.breakMinutes;
+    row.hours += paid.hours;
+    for (const f of paid.flags) row.flags.add(f);
+  }
+
+  const out = [];
+  for (const row of rows.values()) {
+    // Regular vs overtime: hours above the weekly cap are overtime, paid at the
+    // OT multiplier. Split per week so a 50h week gets 40 regular + 10 OT rather
+    // than paying everything as OT.
+    const otHours = Math.max(0, row.hours - weeklyOvertimeHours);
+    row.overtime_hours = Math.round(otHours * 100) / 100;
+    row.hours = Math.round((row.hours - otHours) * 100) / 100;
+
+    const r = rates[row.employeeKey] || {};
+    const baseRate = Number(r.base_rate) || 0;
+    const otRate = Number(r.overtime_rate) || baseRate * DEFAULT_OT_MULTIPLIER;
+
+    row.regular_pay = fromCents(Math.round(toCents(baseRate) * row.hours));
+    row.overtime_pay = fromCents(Math.round(toCents(otRate) * row.overtime_hours));
+    row.total_pay = fromCents(toCents(row.regular_pay) + toCents(row.overtime_pay));
+    row.rate = { base_rate: baseRate, overtime_rate: otRate };
+    row.flags = [...row.flags];
+    out.push(row);
+  }
+
+  out.sort((a, b) => (a.employeeKey < b.employeeKey ? -1 : a.employeeKey > b.employeeKey ? 1 : 0) || (a.weekStart < b.weekStart ? -1 : 1));
+  return out;
+}
+
+/**
+ * Build PayrollRun-shaped records from reconciled weeks, ready for bulkCreate.
+ * Mirrors buildPayrollRunRecord in payrollCalc.js so downstream consumers
+ * (dashboard Money Kept, Action Center, Expenses) read identical shapes.
+ *
+ * @param {Array} weeks   output of reconcileTimecards
+ * @param {Object} meta   { propertyId, propertyName, periodStart, periodEnd, status }
+ * @returns {Array<Object>} rows with payroll_status committed (approved/paid)
+ *   only when `status` is committed; drafts carry the status verbatim.
+ */
+export function weeksToPayrollRuns(weeks = [], meta = {}) {
+  const now = new Date().toISOString();
+  return weeks.map((w) => ({
+    employee_name: w.employeeName,
+    department: w.department || "",
+    pay_type: "hourly",
+    base_rate: w.rate?.base_rate || 0,
+    hours: w.hours,
+    overtime_hours: w.overtime_hours,
+    overtime_rate: w.rate?.overtime_rate || 0,
+    overtime_pay: w.overtime_pay,
+    bonus: 0,
+    deductions: 0,
+    regular_pay: w.regular_pay,
+    total_pay: w.total_pay,
+    pay_period_start: w.weekStart,
+    pay_period_end: w.weekEnd,
+    payroll_status: meta.status || "draft",
+    property_id: meta.propertyId || "",
+    property_name: meta.propertyName || "",
+    auto_generated: true,
+    timecard_derived: true,
+    flags: w.flags || [],
+    employee_id: "",
+    created_date: now,
+    updated_date: now,
+  }));
+}

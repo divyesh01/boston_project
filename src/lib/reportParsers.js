@@ -266,8 +266,31 @@ function dedupByKey(rows, keyFn) {
 }
 
 async function skipExisting(entity, rows, keyFn, propertyId) {
+  if (!rows || rows.length === 0) return [];
+
   const filter = propertyId ? { property_id: propertyId } : {};
-  const existing = await db.entities[entity].filter(filter, "date", 100000);
+  
+  // Optimization: Find the relevant date field used in this entity to limit the scan.
+  const sample = rows[0];
+  let dateField = null;
+  if ('date' in sample) dateField = 'date';
+  else if ('business_date' in sample) dateField = 'business_date';
+  else if ('shift_date' in sample) dateField = 'shift_date';
+  else if ('review_date' in sample) dateField = 'review_date';
+
+  let existing = [];
+  if (dateField) {
+    const dates = [...new Set(rows.map(r => r[dateField]).filter(Boolean))];
+    if (dates.length > 0) {
+       filter[dateField] = { $in: dates };
+       existing = await db.entities[entity].filter(filter, dateField, 100000);
+    } else {
+       existing = await db.entities[entity].filter(filter, "created_date", 100000);
+    }
+  } else {
+    existing = await db.entities[entity].filter(filter, "created_date", 100000);
+  }
+
   const seen = new Set(existing.map(keyFn));
   
   // Also track import_ids to prevent cross-session duplicates

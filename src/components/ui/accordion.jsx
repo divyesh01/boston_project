@@ -72,9 +72,14 @@ const Accordion = AccordionPrimitive.Root
  *   <AccordionContent>Hidden content</AccordionContent>
  * </AccordionItem>
  */
-const AccordionItem = React.forwardRef(({ className, ...props }, ref) => (
-  <AccordionPrimitive.Item ref={ref} className={cn("border-b", className)} {...props} />
-))
+const AccordionItem = React.forwardRef(
+  /**
+   * @param {React.ComponentPropsWithoutRef<typeof AccordionPrimitive.Item>} props
+   */
+  ({ className, ...props }, ref) => (
+    <AccordionPrimitive.Item ref={ref} className={cn("border-b", className)} {...props} />
+  )
+)
 AccordionItem.displayName = "AccordionItem"
 
 /**

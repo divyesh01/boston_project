@@ -43,10 +43,19 @@ export default function MFASetup({
 
   const generateBackupCodes = () => {
     const codes = [];
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    // Generate enough random bytes for 10 codes * 8 characters = 80 bytes
+    const randomBytes = new Uint8Array(80);
+    window.crypto.getRandomValues(randomBytes);
+    
+    let byteIndex = 0;
     for (let i = 0; i < 10; i++) {
-      const code = Array.from({ length: 8 }, () => 
-        'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]
-      ).join('');
+      let code = '';
+      for (let j = 0; j < 8; j++) {
+        // Modulo 32 is safe here because 256 is evenly divisible by 32 (no modulo bias)
+        code += alphabet[randomBytes[byteIndex] % 32];
+        byteIndex++;
+      }
       codes.push(`${code.slice(0,4)}-${code.slice(4)}`);
     }
     return codes;

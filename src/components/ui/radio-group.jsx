@@ -18,9 +18,13 @@ RadioGroup.displayName = RadioGroupPrimitive.Root.displayName
 
 /** @type {React.ForwardRefExoticComponent<any>} */
 /** @type {React.ForwardRefExoticComponent<any>} */
-const RadioGroupItem = React.forwardRef(({ className, ...props }, ref) => {
-  return (
-    (<RadioGroupPrimitive.Item
+const RadioGroupItem = React.forwardRef(
+  /**
+   * @param {React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>} props
+   */
+  ({ className, ...props }, ref) => {
+    return (
+      (<RadioGroupPrimitive.Item
       ref={ref}
       className={cn(
         "aspect-square h-4 w-4 rounded-full border border-primary text-primary shadow focus:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",

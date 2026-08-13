@@ -239,6 +239,11 @@ export default function Payroll() {
     try {
       const p = propFor();
       const propertyId = property !== "all" ? (Array.isArray(property) ? property[0] : property) : "";
+      if (!propertyId) {
+        setQuickErr("Please select a specific property from the global filter before adding payroll.");
+        setRunning(false);
+        return;
+      }
       const propertyName = p?.name || "";
 
       // Match against the staff directory so the run carries the same

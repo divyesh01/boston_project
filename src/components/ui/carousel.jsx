@@ -49,7 +49,7 @@ const CarouselContext = React.createContext(null)
  * @throws {Error} If used outside of Carousel component
  *
  * @typedef {Object} CarouselContextValue
- * @property {HTMLElement} carouselRef - The scroll container element
+ * @property {(node: HTMLElement | null) => void} carouselRef - Ref callback for the scroll container
  * @property {any} api - Embla Carousel API instance
  * @property {any} opts - Embla Carousel options
  * @property {"horizontal" | "vertical"} orientation - Layout direction

@@ -1,0 +1,75 @@
+{
+  "name": "AuditLog",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "description": "The action performed (e.g., 'User Created', 'delete_account', 'auto_payroll')"
+    },
+    "user_id": {
+      "type": "string",
+      "description": "User ID the audit entry is about"
+    },
+    "username": {
+      "type": "string",
+      "description": "Username of the user the entry is about"
+    },
+    "performed_by_id": {
+      "type": "string",
+      "description": "User ID of the person who performed the action"
+    },
+    "performed_by": {
+      "type": "string",
+      "description": "Username/email of the person who performed the action"
+    },
+    "ip_address": {
+      "type": "string",
+      "description": "Client IP that performed the action"
+    },
+    "device": {
+      "type": "string",
+      "description": "Device/fingerprint of the client"
+    },
+    "property_id": {
+      "type": "string"
+    },
+    "property_name": {
+      "type": "string"
+    },
+    "result": {
+      "type": "string",
+      "description": "success | failed"
+    },
+    "detail": {
+      "type": "string",
+      "description": "Additional context of the action"
+    },
+    "hash": {
+      "type": "string",
+      "description": "Hash of this entry for the tamper-evident chain"
+    },
+    "previous_hash": {
+      "type": "string",
+      "description": "Hash of the previous entry in the chain"
+    },
+    "created_date": {
+      "type": "string"
+    },
+    "updated_date": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "rls": {
+    "read": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "create": true,
+    "update": false,
+    "delete": false
+  }
+}

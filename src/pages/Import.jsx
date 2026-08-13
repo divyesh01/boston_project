@@ -251,7 +251,7 @@ export default function Import() {
   const importMeta = (sourceFile) => ({
     propertyId,
     propertyName: selectedProperty?.name || "",
-    importId: `imp_${Date.now()}`,
+    importId: crypto.randomUUID(),
     sourceFile: sourceFile || "",
   });
 
@@ -271,7 +271,11 @@ export default function Import() {
   };
 
   const handleFiles = async (fileList) => {
-    const rawFiles = Array.from(fileList).filter((f) => /\.(csv|xlsx|xls)$/i.test(f.name));
+    const rawFiles = Array.from(fileList).filter((f) => {
+      const isExtValid = /\.(csv|xlsx|xls)$/i.test(f.name);
+      const isMimeValid = !f.type || f.type.includes('csv') || f.type.includes('excel') || f.type.includes('spreadsheet') || f.type === 'text/plain';
+      return isExtValid && isMimeValid;
+    });
     if (!rawFiles.length) return;
     const MAX_SIZE = 10 * 1024 * 1024;
     const files = [];
@@ -294,7 +298,7 @@ export default function Import() {
       error: "",
       count: 0,
       excluded: 0,
-      importId: `imp_${stamp}_${i}`,
+      importId: crypto.randomUUID(),
       // Operator-supplied statement date, set from the queue row and only used by
       // Hotel Statistics (which ships no date column). Declared here rather than
       // appearing on first edit so the queue item has one stable shape.

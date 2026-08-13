@@ -104,7 +104,11 @@ ContextMenuCheckboxItem.displayName =
 
 /** @type {React.ForwardRefExoticComponent<any>} */
 /** @type {React.ForwardRefExoticComponent<any>} */
-const ContextMenuRadioItem = React.forwardRef(({ className, children, ...props }, ref) => (
+const ContextMenuRadioItem = React.forwardRef(
+  /**
+   * @param {React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.RadioItem>} props
+   */
+  ({ className, children, ...props }, ref) => (
   <ContextMenuPrimitive.RadioItem
     ref={ref}
     className={cn(

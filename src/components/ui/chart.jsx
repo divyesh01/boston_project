@@ -315,10 +315,10 @@ const ChartTooltipContent = React.forwardRef((
                             indicator === "dashed",
                           "my-0.5": nestLabel && indicator === "dashed",
                         })}
-                        style={{
+                        style={/** @type {React.CSSProperties} */ ({
                           "--color-bg": indicatorColor,
                           "--color-border": indicatorColor
-                        }} />
+                        })} />
                     )
                   )}
                   <div

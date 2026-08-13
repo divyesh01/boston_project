@@ -96,14 +96,14 @@
   ],
   "rls": {
     "read": {
-      "": [
+      "$and": [
         {
           "user_condition": {
             "is_active": true
           }
         },
         {
-          "": [
+          "$and": [
             {
               "user_condition": {
                 "role": "admin"
@@ -116,7 +116,7 @@
             },
             {
               "data.property_id": {
-                "": "{{user.property_access}}"
+                "$in": "{{user.property_access}}"
               }
             }
           ]
@@ -124,14 +124,14 @@
       ]
     },
     "write": {
-      "": [
+      "$or": [
         {
           "user_condition": {
             "is_active": true
           }
         },
         {
-          "": [
+          "$or": [
             {
               "user_condition": {
                 "role": "admin"
@@ -144,7 +144,7 @@
             },
             {
               "data.property_id": {
-                "": "{{user.property_access}}"
+                "$in": "{{user.property_access}}"
               }
             }
           ]

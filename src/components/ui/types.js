@@ -21,7 +21,7 @@
  * Props for components that render Radix UI primitives.
  * Extends base props with Radix's composed event handlers.
  * 
- * @template T - The Radix primitive component type
+ * @template {React.ElementType} T - The Radix primitive component type
  * @typedef {React.ComponentPropsWithoutRef<T> & BaseProps} RadixProps
  */
 

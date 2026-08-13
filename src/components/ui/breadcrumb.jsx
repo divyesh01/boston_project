@@ -170,10 +170,6 @@ BreadcrumbPage.displayName = "BreadcrumbPage"
  * Visual divider between breadcrumb items. Defaults to a chevron-right icon.
  * Hidden from screen readers (aria-hidden) as it is purely decorative.
  *
- * @type {React.ComponentPropsWithoutRef<"li"> & { children?: React.ReactNode }}
- * @property {React.ReactNode} [children] - Custom separator content (default: ChevronRight)
- * @property {string} [className] - Additional CSS classes
- *
  * @example
  * <BreadcrumbSeparator />
  *
@@ -181,6 +177,9 @@ BreadcrumbPage.displayName = "BreadcrumbPage"
  * <BreadcrumbSeparator>
  *   <SlashIcon className="h-4 w-4" />
  * </BreadcrumbSeparator>
+ */
+/**
+ * @param {any} props
  */
 const BreadcrumbSeparator = ({
   children,
@@ -203,11 +202,11 @@ BreadcrumbSeparator.displayName = "BreadcrumbSeparator"
  * Used to indicate truncated breadcrumb items. Renders as a small
  * square button with a horizontal dots icon. Hidden from screen readers.
  *
- * @type {React.HTMLAttributes<HTMLSpanElement>}
- * @property {string} [className] - Additional CSS classes
- *
  * @example
  * <BreadcrumbEllipsis className="h-8 w-8" />
+ */
+/**
+ * @param {any} props
  */
 const BreadcrumbEllipsis = ({
   className,

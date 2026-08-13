@@ -51,6 +51,12 @@ export default defineConfig({
         entryFileNames: 'assets/[name]-[hash].js',
         chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash].[ext]',
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'chart-vendor': ['recharts'],
+          'ui-vendor': ['lucide-react', 'framer-motion', 'clsx', 'tailwind-merge'],
+          'map-vendor': ['leaflet', 'react-leaflet']
+        }
       },
     },
   },

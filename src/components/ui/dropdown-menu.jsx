@@ -108,7 +108,11 @@ DropdownMenuCheckboxItem.displayName =
 
 /** @type {React.ForwardRefExoticComponent<any>} */
 /** @type {React.ForwardRefExoticComponent<any>} */
-const DropdownMenuRadioItem = React.forwardRef(({ className, children, ...props }, ref) => (
+const DropdownMenuRadioItem = React.forwardRef(
+  /**
+   * @param {React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.RadioItem>} props
+   */
+  ({ className, children, ...props }, ref) => (
   <DropdownMenuPrimitive.RadioItem
     ref={ref}
     className={cn(

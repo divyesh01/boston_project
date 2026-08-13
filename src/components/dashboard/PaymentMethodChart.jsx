@@ -67,7 +67,7 @@ export default function PaymentMethodChart({ payRows }) {
     >
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="h-[280px]">
-          <PieDonut data={chart} type="donut" height="100%" outerRadius={90} formatter={money2} />
+          <PieDonut data={chart} type="donut" height="100%" formatter={money2} />
         </div>
 
         <div className="space-y-2">

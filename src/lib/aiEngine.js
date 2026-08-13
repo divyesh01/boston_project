@@ -207,7 +207,9 @@ function resolveRange(question, defaults = {}) {
     const f = latest || iso(now);
     const d = new Date(`${f}T00:00:00`);
     d.setDate(d.getDate() + 1);
-    return { from: iso(d), to: iso(d).slice(0, 8) + pad(Math.min(31, d.getDate() + 6)), single: false, label: "Next week", specified: true };
+    const end = new Date(d);
+    end.setDate(d.getDate() + 6);
+    return { from: iso(d), to: iso(end), single: false, label: "Next week", specified: true };
   }
 
   if (/\b(?:this|current)\s+month\b/i.test(q)) {

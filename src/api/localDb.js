@@ -31,6 +31,7 @@ import Dexie from 'dexie';
  *   AdjustmentRefund: import('dexie').Table<any, number>;
  *   TimecardPunch: import('dexie').Table<any, number>;
  *   DailyFinancialAggregate: import('dexie').Table<any, number>;
+ *   LocalSession: import('dexie').Table<any, number>;
  * }} */
 // @ts-ignore — augment the non-generic Dexie interface with the app's tables.
 const localDb = new Dexie('RedRoofIntelligence');
@@ -255,6 +256,11 @@ localDb.version(19).stores({
 // stay canonical; this cache is recomputed, never hand-edited.
 localDb.version(20).stores({
   DailyFinancialAggregate: '++id, property_id, business_date, [property_id+business_date], created_date',
+});
+
+// v21 — local auth session table (browser-only mode, no backend required).
+localDb.version(21).stores({
+  LocalSession: '++id, user_id, token_hash, is_revoked, expires_at, created_date',
 });
 
 // Guard: a table whose name collides with a Dexie instance property is created

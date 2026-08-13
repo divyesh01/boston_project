@@ -6,7 +6,25 @@ import pluginUnusedImports from "eslint-plugin-unused-imports";
 
 export default [
   {
-    ignores: ["Anthropic/**/*", "node_modules/**/*", "dist/**/*", ".opencode/**/*", "base44/**/*"],
+    ignores: [
+      "Anthropic/**/*",
+      "node_modules/**/*",
+      "dist/**/*",
+      ".opencode/**/*",
+      "base44/**/*",
+      // Root-level scratch / tooling files (backups, one-off patch scripts,
+      // manual probes). These are not part of the application bundle and are
+      // excluded from linting to keep `npm run lint` clean.
+      "*.cjs",
+      "*.py",
+      "old_ai.js",
+      "old_chart.jsx",
+      "temp.js",
+      "temp2.js",
+      "roomboard_transformed.js",
+      "verify-login.js",
+      "wipe-users.js",
+    ],
   },
   {
     files: [

@@ -8,6 +8,7 @@ import AuthLayout from "@/components/AuthLayout";
 import { useAuth } from "@/lib/AuthContext";
 import { db } from "@/api/base44Client";
 import { validatePasswordStrength } from "@/lib/security";
+import { isValidEmail } from "@/lib/validator";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeAlphanumeric, sanitizeEmail, sanitizeText, sanitizeCsvCell } from "@/lib/securityUtils";
 
 export default function Setup() {
@@ -66,6 +67,11 @@ export default function Setup() {
     }
     if (password !== confirm) {
       setError("Passwords do not match.");
+      return;
+    }
+    // Validate email format before dispatching the network request (spec 2.A.1).
+    if (!isValidEmail(email)) {
+      setError("Please enter a valid email address.");
       return;
     }
     const strengthError = validatePasswordStrength(password);

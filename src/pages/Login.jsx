@@ -61,6 +61,14 @@ export default function Login() {
     return () => { mounted = false; };
   }, []);
 
+  // Normalize the login identifier: trim whitespace and lowercase the email
+  // branch so credential lookups are case-insensitive (spec A.1). Usernames are
+  // left untouched.
+  const normalizeIdentifier = (value) => {
+    const v = String(value || "").trim();
+    return v.includes("@") ? v.toLowerCase() : v;
+  };
+
   const handlePasswordSubmit = async (e) => {
     e.preventDefault();
     setError("");
@@ -81,20 +89,33 @@ export default function Login() {
     }
     setLoading(true);
     try {
-      const result = await login(identifier, password, remember);
+      const result = await login(normalizeIdentifier(identifier), password, remember);
       if (result?.mfaRequired) {
-        // MFA required but no token provided - move to MFA verification step
+        // MFA required but no token provided - move to MFA verification step.
+        // Keep `password` in memory; the verify step still needs it.
         setMfaStep('verify');
         setMfaUserId(result.userId);
         setMfaUsername(result.username);
         setError("");
       } else {
         // Login successful (no MFA or MFA already verified)
+        setPassword("");
         rotateCsrfToken();
         window.location.href = returnTo;
       }
     } catch (err) {
-      setError(err.message || "Invalid username/email or password");
+      // Never leak the specific failure reason. Only distinguish network
+      // outages so the user gets an actionable message (spec C.1 / C.3).
+      const isNetworkError =
+        (typeof navigator !== "undefined" && navigator.onLine === false) ||
+        /network|server|offline|failed to fetch|timeout|econn/i.test(err?.message || "");
+      setError(
+        isNetworkError
+          ? "Unable to reach authentication server. Please check your connection."
+          : "Invalid email or password"
+      );
+      // Retain the entered identifier, but always clear the password field.
+      setPassword("");
     } finally {
       setLoading(false);
     }
@@ -115,7 +136,8 @@ export default function Login() {
     }
     setLoading(true);
     try {
-      await login(identifier, password, remember, mfaToken);
+      await login(normalizeIdentifier(identifier), password, remember, mfaToken);
+      setPassword("");
       rotateCsrfToken();
       window.location.href = returnTo;
     } catch (err) {
@@ -135,7 +157,8 @@ export default function Login() {
     // Verify the token during setup
     setLoading(true);
     try {
-      await login(identifier, password, remember, token);
+      await login(normalizeIdentifier(identifier), password, remember, token);
+      setPassword("");
       rotateCsrfToken();
       window.location.href = returnTo;
     } catch (err) {

@@ -16,7 +16,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Eye, EyeOff, Loader2, Lock, LockOpen, Plus, RefreshCw, Search, Trash2, UserCog, UserX, UserCheck, Shield, ShieldOff } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
-import db from "@/api/base44Client";
+import { db } from "@/api/base44Client";
 import { useProperties } from "@/lib/useHotelData";
 import { ROLES, PERMISSIONS, PERMISSION_KEYS, defaultPermissionsForRole } from "@/lib/permissions";
 import { isCryptoAvailable, validatePasswordStrength, generateTemporaryPassword } from "@/lib/security";
@@ -311,7 +311,7 @@ export default function Users() {
           description: `MFA has been enabled for ${u.username}. Share the setup details securely with the user.`,
         });
         // In a real app, you'd show the secret/QR code here for the admin to share
-        console.log('MFA Setup for user:', u.username, result);
+
       } else if (type === "disable_mfa") {
         await db.users.disableMfa(me, u.id);
         toast({ title: "MFA Disabled", description: `MFA has been disabled for ${u.username}.` });

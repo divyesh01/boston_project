@@ -9,6 +9,8 @@ import { Minus } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const InputOTP = React.forwardRef(
   (
     /** @type {{
@@ -34,6 +36,8 @@ const InputOTP = React.forwardRef(
 ))
 InputOTP.displayName = "InputOTP"
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const InputOTPGroup = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<'div'>} */
@@ -44,6 +48,8 @@ const InputOTPGroup = React.forwardRef(
 ))
 InputOTPGroup.displayName = "InputOTPGroup"
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const InputOTPSlot = React.forwardRef(
   (
     /** @type {{ index: number; className?: string; children?: import('react').ReactNode }} */
@@ -74,6 +80,8 @@ const InputOTPSlot = React.forwardRef(
 })
 InputOTPSlot.displayName = "InputOTPSlot"
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const InputOTPSeparator = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<'div'>} */

@@ -70,7 +70,7 @@ function propKey(property) {
   return Array.isArray(property) ? property.join(",") : property;
 }
 
-export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, property }) {
+export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, property, aggPayRows, aggExpenses }) {
   const ccFee = getCcFeeRate();
   const ccFeeRefunds = getCcFeeOnRefunds();
   const settingsVersion = useSettingsVersion();
@@ -106,8 +106,10 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
   const data = useMemo(() => {
     const from = dateRange?.from || "";
     const to = dateRange?.to || "";
-    const payRows = payRecords.filter((r) => inRange(r.date, from, to));
-    const expInPeriod = expenses.filter((e) => inRange(e.expense_date, from, to));
+    // When the materialized daily aggregate is available, use its pre-summed
+    // payment/expense rows instead of scanning the raw ledgers (instant at scale).
+    const payRows = (aggPayRows && aggPayRows.length) ? aggPayRows : payRecords.filter((r) => inRange(r.date, from, to));
+    const expInPeriod = (aggExpenses && aggExpenses.length) ? aggExpenses : expenses.filter((e) => inRange(e.expense_date, from, to));
     // Only approved/paid runs reduce cash. Drafts are proposals, and counting
     // them here made money kept drop the moment a run was keyed in.
     const payInPeriod = filterCommittedPay(payroll).filter((p) =>
@@ -300,10 +302,25 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       const first = sorted[0];
       if (!RECUR_MONTHS[first.freq] && first.freq !== "weekly") return;
       const entered = new Set(s.entries.map((x) => x.date));
-      let date = first.date;
+
+      // Guard against runaway projection: a date range that extends years into
+      // the future must not spin the recurrence forward indefinitely, and we
+      // must never evaluate occurrences that fall before the selected window.
+      // The series therefore starts at max(firstDate, from) and is capped at a
+      // hard 5-year horizon from `from`.
+      const HORIZON_DAYS = 1825;
+      const effectiveFrom = from || first.date;
+      const floorDate = first.date < effectiveFrom ? effectiveFrom : first.date;
+      let projEnd = to;
+      if (effectiveFrom && to) {
+        const horizonEnd = new Date(new Date(effectiveFrom + "T00:00:00").getTime() + HORIZON_DAYS * 86400000)
+          .toISOString().slice(0, 10);
+        if (!projEnd || projEnd > horizonEnd) projEnd = horizonEnd;
+      }
+      let date = floorDate;
       let guard = 0;
-      while (date <= to && guard++ < 600) {
-        if (date >= from && !entered.has(date)) {
+      while (date <= (projEnd || effectiveFrom) && guard++ < 2000) {
+        if (date >= effectiveFrom && !entered.has(date)) {
           recurringExtras.push({ expense_name: first.name, vendor: "Recurring", category: first.category, expense_date: date, amount: first.amount });
         }
         date = addPeriod(date, first.freq);
@@ -367,6 +384,10 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       detail: "Closed balance folio + loyalty discount",
       amount: d.refunds,
     }));
+
+    // Total refunded amount across the period — excluded from the keep-rate
+    // denominator because money returned to the guest was never truly "kept".
+    const refundsTotal = refundRecords.reduce((a, x) => a + x.amount, 0);
 
     const refundFeeRecords = dayTotals.filter((d) => d.refundFee > 0).map((d) => ({
       name: d.date,
@@ -519,6 +540,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
 
     return {
       gross, items, totalDeductions, kept, pieData, barData, trendData, from, to,
+      refundsTotal, passThrough,
       tax: {
         state: liabState, city: liabCity, other: liabOther,
         passThrough, estimated: estimatedTaxFromRates, effectiveRate: effectiveTaxRate,
@@ -527,10 +549,16 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
         otherRecords: taxRecords["Other Taxes"],
       },
     };
-  }, [occRows, srcRows, grossRows, payRecords, expenses, payroll, dateRange, property, ccFee, ccFeeRefunds, trendMode, settingsVersion]);
+  }, [occRows, srcRows, grossRows, payRecords, expenses, payroll, dateRange, property, ccFee, ccFeeRefunds, trendMode, settingsVersion, aggPayRows, aggExpenses]);
 
-  const { gross, items, totalDeductions, kept, pieData, barData, trendData, from, to, tax } = data;
-  const keepRate = gross > 0 ? kept / gross : 0;
+  const { gross, items, totalDeductions, kept, pieData, barData, trendData, from, to, tax, refundsTotal, passThrough } = data;
+  // Keep rate = money kept against the *net-revenue base*, not raw gross.
+  // Refunds (returned to guest) and pass-through taxes (collected on behalf of
+  // the government, never the owner's to keep) are removed from the denominator
+  // so the percentage reflects true net-revenue efficiency rather than an
+  // artificially inflated share of uncollected gross.
+  const netRevenueBase = gross - refundsTotal - passThrough;
+  const keepRate = netRevenueBase > 0 ? kept / netRevenueBase : (gross > 0 ? kept / gross : 0);
   const periodLabel = `${from || "—"} → ${to || "—"}`;
   const taxTotal = tax.state + tax.city + tax.other;
 
@@ -571,6 +599,9 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
             </p>
             <p className="mt-1 text-xs text-slate-500">
               {gross > 0 ? `${money(gross)} gross · keep rate ${pct(keepRate)}` : "No revenue in selected period"}
+            </p>
+            <p className="mt-0.5 text-[10px] text-slate-600">
+              {netRevenueBase > 0 ? `rate measured on net base ${money(netRevenueBase)} = gross − refunds − pass-through tax` : ""}
             </p>
           </div>
           <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">
@@ -637,7 +668,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
               <span className="font-heading text-base font-semibold tabular-nums text-[#00E096]">
                 {kept >= 0 ? "" : "-"}{money(Math.abs(kept))}
                 <span className="ml-1.5 text-xs font-normal text-slate-400">
-                  {gross > 0 ? `(${pct(kept / gross)})` : "(—)"}
+                  {gross > 0 ? `(${pct(keepRate)})` : "(—)"}
                 </span>
               </span>
             </div>

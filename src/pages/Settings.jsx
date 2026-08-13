@@ -331,12 +331,16 @@ export default function Settings() {
     setDeleting(true);
     setDeleteError("");
     try {
-      await db.functions.invoke("deleteAccount", {});
+      // Destructive action: pass the server-mandated confirmation token
+      // ("DELETE:<userId>") so a stray/replayed call can never trigger the wipe.
+      // Only an active Owner/Admin is permitted (enforced in functions.invoke).
+      const confirmToken = `DELETE:${me?.id ?? ""}`;
+      await db.functions.invoke("deleteAccount", { confirm: confirmToken });
       localStorage.removeItem("rri_commission_rates_v2");
       localStorage.removeItem("rri_cc_fee_rate");
       await db.auth.logout(true);
     } catch (e) {
-      setDeleteError("Your account could not be deleted. You are still signed in, and no logout was performed.");
+      setDeleteError(e?.message || "Your account could not be deleted. You are still signed in, and no logout was performed.");
       setDeleting(false);
     }
   };

@@ -1,14 +1,14 @@
 // Weather data configuration (feature 5).
 //
-// Stores the OpenWeather API key and property coordinates in localStorage (the
-// same simple persistence used by commissionRates/alertThresholds). The key is a
-// personal secret — it is kept out of git and never logged. Runtime values are
-// read through getWeatherConfig() so every caller shares one source of truth.
+// Stores only non-secret property coordinates in localStorage (the same simple
+// persistence used by commissionRates/alertThresholds). The OpenWeather API key
+// is a server-side secret (#29): the frontend calls the `getWeather` backend
+// function, which reads the key from Base44 secrets and proxies the request, so
+// the key is never shipped to or stored in the browser.
 
 const KEY = "rri_weather_config";
 
 const DEFAULTS = {
-  apiKey: "",
   lat: 41.89, // Middleborough, MA (RRI1416) — user-editable
   lon: -70.91,
 };
@@ -22,9 +22,16 @@ export function getWeatherConfig() {
 }
 
 export function saveWeatherConfig(cfg) {
-  try { localStorage.setItem(KEY, JSON.stringify({ ...getWeatherConfig(), ...cfg })); } catch {}
+  // Never persist an apiKey — the key is server-side only. Strip it defensively
+  // in case an older client wrote one to the same storage key.
+  const { apiKey, ...safe } = cfg || {};
+  void apiKey;
+  try { localStorage.setItem(KEY, JSON.stringify({ ...getWeatherConfig(), ...safe })); } catch {}
 }
 
 export function hasApiKey() {
-  return Boolean(getWeatherConfig().apiKey && getWeatherConfig().apiKey.trim());
+  // The key no longer lives in the browser. The server `getWeather` function
+  // decides whether a key is configured. Keep a hook so callers can ask without
+  // storing anything; it reflects only whether a key was configured server-side.
+  return false;
 }

@@ -27,12 +27,11 @@ export function generateSalt() {
 }
 
 function secureRandomBytes(len) {
-  const arr = new Uint8Array(len);
-  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-    crypto.getRandomValues(arr);
-  } else {
-    for (let i = 0; i < len; i++) arr[i] = Math.floor(Math.random() * 256);
+  if (typeof crypto === "undefined" || !crypto.getRandomValues) {
+    throw new Error("Web Crypto API is required.");
   }
+  const arr = new Uint8Array(len);
+  crypto.getRandomValues(arr);
   return arr;
 }
 
@@ -89,7 +88,12 @@ export function generateTemporaryPassword() {
   const digits = "23456789";
   const special = "!@#$%^&*";
   const all = lower + upper + digits + special;
-  const rnd = (n) => Math.floor((secureRandomBytes(4)[0] / 0x100000000) * n);
+  const rnd = (n) => {
+    if (typeof crypto === "undefined" || !crypto.getRandomValues) throw new Error("Web Crypto API is required.");
+    const arr = new Uint32Array(1);
+    crypto.getRandomValues(arr);
+    return Math.floor((arr[0] / (0xffffffff + 1)) * n);
+  };
   const pick = (set) => set[rnd(set.length)];
   // Ensure at least one of each required type
   let pw = pick(upper) + pick(lower) + pick(digits) + pick(special);
@@ -104,12 +108,11 @@ export function generateTemporaryPassword() {
 }
 
 export function generateToken() {
-  const arr = new Uint8Array(32); // Increased from 24
-  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-    crypto.getRandomValues(arr);
-  } else {
-    for (let i = 0; i < 32; i++) arr[i] = Math.floor(Math.random() * 256);
+  if (typeof crypto === "undefined" || !crypto.getRandomValues) {
+    throw new Error("Web Crypto API is required.");
   }
+  const arr = new Uint8Array(32); // Increased from 24
+  crypto.getRandomValues(arr);
   return toHex(arr);
 }
 

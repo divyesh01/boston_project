@@ -61,7 +61,7 @@ const Accordion = AccordionPrimitive.Root
  * Each item must have a unique `value` prop that identifies it
  * within the accordion's state management.
  * 
- * @type {React.ComponentPropsWithoutRef<typeof AccordionPrimitive.Item>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} value - Unique identifier for this item (required)
  * @property {boolean} [disabled] - Whether this specific item is disabled
  * @property {string} [className] - Additional CSS classes for the item border
@@ -84,7 +84,7 @@ AccordionItem.displayName = "AccordionItem"
  * the item's expanded state. Includes a rotating chevron indicator
  * that rotates 180° when the item is open.
  * 
- * @type {React.ComponentPropsWithoutRef<typeof AccordionPrimitive.Trigger>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {boolean} [disabled] - Whether the trigger is disabled
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Trigger content (usually text)
@@ -118,7 +118,7 @@ AccordionTrigger.displayName = AccordionPrimitive.Trigger.displayName
  * for smooth expand/collapse transitions. The content is
  * hidden from screen readers when collapsed.
  * 
- * @type {React.ComponentPropsWithoutRef<typeof AccordionPrimitive.Content>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {boolean} [forceMount] - Force mount content even when closed (for SSR)
  * @property {string} [className] - Additional CSS classes for the inner content div
  * @property {React.ReactNode} children - Content to display when expanded

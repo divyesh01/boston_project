@@ -74,5 +74,63 @@
   },
   "required": [
     "employee_name"
-  ]
+  ],
+  "rls": {
+    "read": {
+      "": [
+        {
+          "user_condition": {
+            "is_active": true
+          }
+        },
+        {
+          "": [
+            {
+              "user_condition": {
+                "role": "admin"
+              }
+            },
+            {
+              "user_condition": {
+                "role": "owner"
+              }
+            },
+            {
+              "data.property_id": {
+                "": "{{user.property_access}}"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "write": {
+      "": [
+        {
+          "user_condition": {
+            "is_active": true
+          }
+        },
+        {
+          "": [
+            {
+              "user_condition": {
+                "role": "admin"
+              }
+            },
+            {
+              "user_condition": {
+                "role": "owner"
+              }
+            },
+            {
+              "data.property_id": {
+                "": "{{user.property_access}}"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
 }

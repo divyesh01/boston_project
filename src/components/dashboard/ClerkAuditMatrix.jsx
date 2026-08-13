@@ -40,6 +40,18 @@ export default function ClerkAuditMatrix({
   const totalCashRefunds = refunds.reduce((acc, r) => String(r.paymentTypeRefunded || '').toUpperCase() === 'CASH' ? acc + Math.abs(Number(r.amount) || 0) : acc, 0);
   const displayCashRefunds = useRollingNumber(totalCashRefunds);
   
+  // Deposit refund detection: exactly $100 = deposit return, other amounts = room rent refund
+  const DEPOSIT_REFUND_AMOUNT = 100;
+  const DEPOSIT_TOLERANCE = 0.01;
+  const totalDepositRefunds = refunds.reduce((acc, r) => {
+    const amt = Math.abs(Number(r.amount) || 0);
+    return Math.abs(amt - DEPOSIT_REFUND_AMOUNT) <= DEPOSIT_TOLERANCE ? acc + amt : acc;
+  }, 0);
+  const totalRoomRentRefunds = refunds.reduce((acc, r) => {
+    const amt = Math.abs(Number(r.amount) || 0);
+    return Math.abs(amt - DEPOSIT_REFUND_AMOUNT) > DEPOSIT_TOLERANCE ? acc + amt : acc;
+  }, 0);
+  
   const highRiskClerks = clerkRiskScores.filter(c => c.riskLevel === 'HIGH').length;
   const displayHighRisk = useRollingNumber(highRiskClerks);
   
@@ -121,6 +133,8 @@ export default function ClerkAuditMatrix({
         {[
           { label: "Anomalies Flagged", val: Math.round(displayAnomalies), raw: totalAnomalies, icon: AlertTriangle, color: "#FF6B6B" },
           { label: "Cash Refunds (Risk)", val: money2(displayCashRefunds), raw: totalCashRefunds, icon: DollarSign, color: "#FFB547" },
+          { label: "Deposit Refunds ($100)", val: money2(totalDepositRefunds), raw: totalDepositRefunds, icon: CheckCircle2, color: "#00E096" },
+          { label: "Room Rent Refunds", val: money2(totalRoomRentRefunds), raw: totalRoomRentRefunds, icon: AlertTriangle, color: "#FF9F7A" },
           { label: "High-Risk Clerks", val: Math.round(displayHighRisk), raw: highRiskClerks, icon: UserX, color: "#FF6B6B" },
           { label: "Total Adjusted", val: money2(displayAdjusted), raw: totalAdjusted, icon: LogOut, color: "#6C63FF" },
         ].map((kpi, i) => (
@@ -160,11 +174,13 @@ export default function ClerkAuditMatrix({
               <thead className="text-slate-400 text-[11px] uppercase tracking-wider border-b border-white/5 bg-white/[0.01]">
                 <tr>
                   <th className="px-6 py-4 font-medium">Clerk Name</th>
-                  <th className="px-6 py-4 font-medium text-right">Adjustments</th>
-                  <th className="px-6 py-4 font-medium text-right">Cash Refunds</th>
-                  <th className="px-6 py-4 font-medium text-right">Flags</th>
-                  <th className="px-6 py-4 font-medium">AI Behavior Analysis</th>
-                  <th className="px-6 py-4 font-medium text-center">Risk Level</th>
+                <th className="px-6 py-4 font-medium text-right">Adjustments</th>
+                <th className="px-6 py-4 font-medium text-right">Cash Refunds</th>
+                <th className="px-6 py-4 font-medium text-right" style={{ color: "#00E096" }}>Dep. Refs</th>
+                <th className="px-6 py-4 font-medium text-right" style={{ color: "#FFB547" }}>Rm Rent Refs</th>
+                <th className="px-6 py-4 font-medium text-right">Flags</th>
+                <th className="px-6 py-4 font-medium">AI Behavior Analysis</th>
+                <th className="px-6 py-4 font-medium text-center">Risk Level</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
@@ -180,6 +196,8 @@ export default function ClerkAuditMatrix({
                     </td>
                     <td className="px-6 py-4 text-right text-slate-300 font-mono">{money2(clerk.totalAdjustedAmount)}</td>
                     <td className="px-6 py-4 text-right text-slate-300 font-mono">{money2(clerk.totalRefundedAmount)}</td>
+                    <td className="px-6 py-4 text-right text-[#00E096] font-mono">{money2(clerk.totalDepositRefunds || 0)}</td>
+                    <td className="px-6 py-4 text-right text-[#FFB547] font-mono">{money2(clerk.totalRoomRentRefunds || 0)}  </td>
                     <td className="px-6 py-4 text-right font-mono">
                       <span className={`px-2.5 py-1 rounded-md bg-white/5 border border-white/10 ${clerk.totalFlags > 0 ? 'text-[#FF6B6B]' : 'text-slate-400'}`}>
                         {clerk.totalFlags}
@@ -318,8 +336,18 @@ export default function ClerkAuditMatrix({
                   </h3>
                   <p className="text-sm text-slate-400 mt-1 flex items-center gap-2">
                     <span style={getBadgeStyle(selectedClerk.riskLevel)} className="px-2 py-0.5 rounded text-[10px] font-bold tracking-wider">{selectedClerk.riskLevel} RISK</span>
-                    • {selectedClerk.totalFlags} flagged items across adjustments and refunds
+                    • {selectedClerk.totalFlags} flagged items
                   </p>
+                  <div className="mt-2 flex flex-wrap gap-3 text-xs">
+                    <span className="flex items-center gap-1 text-slate-400">
+                      <span className="w-2 h-2 rounded-full bg-[#00E096]"></span>
+                      Deposit Refunds: {money2(selectedClerk.totalDepositRefunds || 0)} ({selectedClerk.depositRefundCount || 0})
+                    </span>
+                    <span className="flex items-center gap-1 text-slate-400">
+                      <span className="w-2 h-2 rounded-full bg-[#FFB547]"></span>
+                      Room Rent Refunds: {money2(selectedClerk.totalRoomRentRefunds || 0)} ({selectedClerk.roomRentRefundCount || 0})
+                    </span>
+                  </div>
                 </div>
                 <button 
                   onClick={() => setSelectedClerk(null)}
@@ -374,7 +402,7 @@ export default function ClerkAuditMatrix({
                             );
                         })}
                         {adjustments.filter(a => a.username === selectedClerk.username).length === 0 && (
-                          <tr><td colSpan="4" className="px-5 py-8 text-center text-slate-500">No adjustments posted.</td></tr>
+                          <tr><td colSpan={4} className="px-5 py-8 text-center text-slate-500">No adjustments posted.</td></tr>
                         )}
                       </tbody>
                     </table>
@@ -425,7 +453,7 @@ export default function ClerkAuditMatrix({
                             );
                         })}
                         {refunds.filter(r => r.username === selectedClerk.username).length === 0 && (
-                          <tr><td colSpan="4" className="px-5 py-8 text-center text-slate-500">No refunds posted.</td></tr>
+                          <tr><td colSpan={4} className="px-5 py-8 text-center text-slate-500">No refunds posted.</td></tr>
                         )}
                       </tbody>
                     </table>

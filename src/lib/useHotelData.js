@@ -1,6 +1,8 @@
 import { db } from '@/api/base44Client';
 
 import { useQuery } from "@tanstack/react-query";
+import { purgeExpiredUploadedReportRawRows } from '@/lib/uploadRetention';
+import { getDailyAggregates, buildSyntheticRows } from '@/lib/dailyAggregates';
 
 export function useReservations(dateRange, propertyId) {
   return useQuery({
@@ -115,7 +117,7 @@ export function useGrossRevenue(dateRange, propertyId, months = []) {
 export function useClerkRecords(dateRange, propertyId) {
   return useQuery({
     queryKey: ["clerk", dateRange?.from, dateRange?.to, propertyId],
-    queryFn: () => {
+    queryFn: async () => {
       // ClerkShiftRecord carries an indexed shift_date (YYYY-MM-DD); scope by
       // the selected period so the Clerk Audit agrees with the dashboard range.
       const filter = {};
@@ -129,7 +131,31 @@ export function useClerkRecords(dateRange, propertyId) {
           filter.property_id = propertyId;
         }
       }
-      return db.entities.ClerkShiftRecord.filter(filter, "-shift_date", 100000);
+      const raw = await db.entities.ClerkShiftRecord.filter(filter, "-shift_date", 100000);
+      // Deduplicate: repeated imports of the same CSV create duplicate rows.
+      // Canonical key preserves record identity across imports — earliest
+      // created_date wins so the oldest import's copy is kept.
+      const seen = new Map();
+      for (const r of raw) {
+        const key = [
+          r.record_type || "",
+          r.clerk_name || "",
+          r.payment_type || "",
+          r.amount ?? "",
+          r.shift_date || "",
+        ].join("|");
+        const cur = seen.get(key);
+        if (!cur) {
+          seen.set(key, r);
+          continue;
+        }
+        const curCreated = new Date(cur.created_date || 0).getTime();
+        const rCreated = new Date(r.created_date || 0).getTime();
+        if (rCreated < curCreated || (rCreated === curCreated && Number(r.id) < Number(cur.id))) {
+          seen.set(key, r);
+        }
+      }
+      return [...seen.values()];
     },
   });
 }
@@ -190,7 +216,13 @@ export function usePaymentData(dateRange, propertyId, months = []) {
 export function useUploads() {
   return useQuery({
     queryKey: ["uploads"],
-    queryFn: () => db.entities.UploadedReport.list("-created_date", 50),
+    queryFn: async () => {
+      const rows = await db.entities.UploadedReport.list("-created_date", 50);
+      // Background retention sweep: null out raw-row previews past their TTL so
+      // IndexedDB stays lean. Fire-and-forget — never blocks the import history.
+      purgeExpiredUploadedReportRawRows().catch(() => {});
+      return rows;
+    },
   });
 }
 
@@ -282,6 +314,29 @@ export function useMetricDates(propertyId) {
         .sort((a, b) => (a < b ? 1 : -1));
     },
     staleTime: 60 * 1000,
+  });
+}
+
+// Materialized daily financial aggregates (see src/lib/dailyAggregates.js).
+//
+// Reads the pre-summed DailyFinancialAggregate cache and reconstructs the
+// synthetic per-day rows CalculationService consumes, so the Dashboard loads
+// from a few hundred rows instead of scanning the raw ledgers. Returns null
+// when the cache is empty so callers can fall back to live computation.
+export function useDailyFinancialAggregates(dateRange, propertyId, enabled = true) {
+  return useQuery({
+    queryKey: ["daily-aggregates", dateRange?.from, dateRange?.to, Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
+    enabled,
+    queryFn: async () => {
+      const aggs = await getDailyAggregates({
+        propertyId,
+        from: dateRange?.from || "",
+        to: dateRange?.to || "",
+      });
+      if (!aggs.length) return null;
+      return buildSyntheticRows(aggs);
+    },
+    staleTime: 30 * 1000,
   });
 }
 

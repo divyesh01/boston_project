@@ -2,16 +2,17 @@
 //
 // Pulls a 5-day OpenWeather forecast for a property's coordinates and caches it
 // in the WeatherSnapshot Dexie table (one row per property+date+kind) to respect
-// the API rate limit. When no API key is configured — or the network is
-// unavailable — it falls back to a clearly-labelled deterministic demo forecast
-// so the dashboard panel never shows a broken/blank state (UI_UX).
+// the API rate limit. The OpenWeather API key is a server-side secret (#29): the
+// dashboard panel calls the `getWeather` backend function (via a caller-supplied
+// `invoke`), which proxies OpenWeather without ever exposing the key to the
+// browser. When the server is unreachable or has no key configured — or the
+// network is unavailable — it falls back to a clearly-labelled deterministic
+// demo forecast so the dashboard panel never shows a broken/blank state (UI_UX).
 //
-// Node-testable surfaces (no DOM/fetch coupling required):
+// Node-testable surfaces (no DOM/fetch/DB coupling required):
 //   * buildDemoForecast()  — deterministic demo data
 //   * forecastRows()       — normalize raw OpenWeather payload into snapshot rows
 //   * cacheIsFresh()       — whether the cache for a property+date is fresh
-
-import { getWeatherConfig, hasApiKey } from "@/lib/weatherSettings";
 
 export const WEATHER_KINDS = ["current", "forecast"];
 
@@ -94,23 +95,22 @@ export function forecastRows(propertyId, date, raw) {
   return rows;
 }
 
-// Fetch the OpenWeather One Call forecast with a loadout suitable for the app.
-// Throws when no key is set; callers decide between real data and the demo.
-export async function fetchOpenWeatherForecast({ lat, lon, apiKey }) {
-  const clean = String(apiKey || getWeatherConfig().apiKey || "").trim();
-  if (!clean) throw new Error("No OpenWeather API key configured.");
-  const url =
-    `https://api.openweathermap.org/data/3.0/onecall?lat=${lat}&lon=${lon}` +
-    `&exclude=minutely&units=metric&appid=${encodeURIComponent(clean)}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`OpenWeather request failed: HTTP ${res.status}`);
-  return res.json();
+// Fetch the OpenWeather forecast through the server-side `getWeather` backend
+// function. The caller must supply an `invoke(name, params)` connector (e.g.
+// db.functions.invoke) so the API key stays server-side. Returns the raw
+// OpenWeather payload. Throws when the server is unreachable or has no key.
+export async function fetchOpenWeatherForecast({ lat, lon, invoke }) {
+  if (typeof invoke !== "function") throw new Error("No server weather connector provided.");
+  const res = await invoke("getWeather", { lat: Number(lat), lon: Number(lon) });
+  if (!res || !res.data) throw new Error("Server weather function returned no data.");
+  if (res.data.error) throw new Error(res.data.error);
+  return res.data;
 }
 
 // High-level loader used by the dashboard panel: uses cached rows when fresh,
-// otherwise fetches (if a key is set) and persists rows, otherwise returns the
-// demo forecast flagged as demo. Needs the Dexie table + owner write permissions,
-// so callers pass an object `{ fetch, persist }`.
+// otherwise fetches via the server proxy (if a connector is provided) and
+// persists rows, otherwise returns the demo forecast flagged as demo. Needs the
+// Dexie table + owner write permissions, so callers pass `{ fetchFn, persistFn }`.
 /**
  * @param {{
  *   propertyId: string,
@@ -124,10 +124,9 @@ export async function loadWeather({ propertyId, date, cacheRows, fetchFn, persis
   if (cacheIsFresh(cacheRows, date)) {
     return { rows: cacheRows, source: "cache" };
   }
-  if (hasApiKey()) {
-    const cfg = getWeatherConfig();
+  if (typeof fetchFn === "function") {
     try {
-      const raw = await (fetchFn || (() => fetchOpenWeatherForecast(cfg)))();
+      const raw = await fetchFn();
       const rows = forecastRows(propertyId, date, raw);
       await persistFn(rows);
       return { rows, source: "api" };

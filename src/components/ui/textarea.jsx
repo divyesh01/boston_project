@@ -31,7 +31,7 @@ import { cn } from "@/lib/utils"
  * and placeholder styling. Includes responsive font sizing for
  * mobile devices and minimum height constraint.
  * 
- * @type {React.ComponentPropsWithoutRef<"textarea">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {string} [placeholder] - Placeholder text
  * @property {boolean} [disabled] - Whether textarea is disabled

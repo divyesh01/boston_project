@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Command } from 'cmdk';
 import { useNavigate } from 'react-router-dom';
-import { Search, Building2 } from 'lucide-react';
+import { Search, Building2, RotateCcw } from 'lucide-react';
 import { NAV } from '@/lib/navigation';
 import { useAuth } from '@/lib/AuthContext';
 import { useGlobalFilters } from '@/lib/useGlobalFilters';
@@ -108,6 +108,15 @@ export default function CommandMenu() {
               ))}
             </Command.Group>
           )}
+          <Command.Group heading="Quick Actions" className="mt-2 text-xs font-medium text-slate-400 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 border-t border-white/5 pt-2">
+            <Command.Item
+              onSelect={() => { window.location.reload(); setOpen(false); }}
+              className="flex cursor-pointer select-none items-center gap-2 rounded-lg px-2 py-2.5 text-sm text-slate-200 transition-colors aria-selected:bg-[#6C63FF]/20 aria-selected:text-white"
+            >
+              <RotateCcw className="h-4 w-4" />
+              Refresh Dashboard
+            </Command.Item>
+          </Command.Group>
         </Command.List>
       </div>
     </Command.Dialog>

@@ -16,9 +16,49 @@ export default function Employees() {
   const { data: adjRef = [], isLoading: isLoadingAdj } = useAdjustmentsRefunds(dateRange, property);
   const { data: allAnomalies = [] } = useClerkAnomalies(dateRange, property);
   const [selected, setSelected] = useState(null);
+  const [clerkFilter, setClerkFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
+  // The Fraud & Anomalies tab has its own Clerk + Payment Type filters, kept
+  // separate from the Shift Cash Audit filters above because they read a
+  // different data source (PMS adjustments/refunds, not ClerkShift payments).
+  const [fraudClerk, setFraudClerk] = useState("all");
+  const [fraudType, setFraudType] = useState("all");
 
   const adjustments = useMemo(() => adjRef.filter(r => r.record_type === "adjustment"), [adjRef]);
   const refunds = useMemo(() => adjRef.filter(r => r.record_type === "refund"), [adjRef]);
+
+  // Fraud-tab filters narrow the INPUTS to the anomaly engine so every derived
+  // view (KPIs, risk matrix, ledger, drill-down) recomputes consistently.
+  // Adjustments carry no payment tender, so Payment Type narrows refunds only;
+  // the Clerk filter narrows both. Default "all"/"all" returns the same array
+  // references, preserving current behavior exactly.
+  const fraudAdjustments = useMemo(() => {
+    if (fraudClerk === "all") return adjustments;
+    return adjustments.filter((a) => a.username === fraudClerk);
+  }, [adjustments, fraudClerk]);
+
+  const fraudRefunds = useMemo(() => {
+    let r = refunds;
+    if (fraudClerk !== "all") r = r.filter((x) => x.username === fraudClerk);
+    if (fraudType !== "all") r = r.filter((x) => (x.paymentTypeRefunded || "—") === fraudType);
+    return r;
+  }, [refunds, fraudClerk, fraudType]);
+
+  // Dropdown options come from the UNFILTERED data so choosing one value never
+  // hides the others. Clerk options union adjustment + refund usernames; payment
+  // types exist on refunds only.
+  const fraudClerkOptions = useMemo(() => {
+    const set = new Set();
+    for (const a of adjustments) if (a.username) set.add(a.username);
+    for (const r of refunds) if (r.username) set.add(r.username);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [adjustments, refunds]);
+
+  const fraudTypeOptions = useMemo(() => {
+    const set = new Set();
+    for (const r of refunds) if (r.paymentTypeRefunded) set.add(r.paymentTypeRefunded);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [refunds]);
 
   // We can either use persisted anomalies or recalculate on the fly for the dashboard.
   // Using detectClerkAnomalies directly gives us both the flags (matching current thresholds)
@@ -27,8 +67,8 @@ export default function Employees() {
     // If you want to use strictly persisted alerts:
     // const persisted = allAnomalies.filter(a => Object.values(CLERK_ANOMALY_TYPES).includes(a.alert_type));
     // But detectClerkAnomalies generates everything needed for the UI in one pass:
-    return detectClerkAnomalies({ adjustments, refunds });
-  }, [adjustments, refunds]);
+    return detectClerkAnomalies({ adjustments: fraudAdjustments, refunds: fraudRefunds });
+  }, [fraudAdjustments, fraudRefunds]);
 
   // Clerk records imported from ClerkShift.csv come in three record types:
   //  - "payment": payment method totals (CASH, CHECK, AMEX...), NOT clerks
@@ -48,6 +88,13 @@ export default function Employees() {
     return r;
   }, [records, employee]);
 
+  // Payment-type filter narrows the clerk payment activity that feeds the
+  // per-clerk aggregation (net amounts, positive/negative sums, txn counts).
+  const typeFilteredClerkRecords = useMemo(() => {
+    if (typeFilter === "all") return clerkRecords;
+    return clerkRecords.filter((r) => (r.payment_type || "—") === typeFilter);
+  }, [clerkRecords, typeFilter]);
+
   const stats = useMemo(() => {
     if (!clerkRecords.length && !drops.length) return [];
 
@@ -66,7 +113,7 @@ export default function Employees() {
       return map.get(k);
     };
 
-    clerkRecords.forEach((r) => {
+    typeFilteredClerkRecords.forEach((r) => {
       const k = r.clerk_name || "Unknown";
       const s = ensure(k);
       const adj = Number(r.amount) || 0;
@@ -100,7 +147,23 @@ export default function Employees() {
         status,
       };
     }).sort((a, b) => b.txnCount - a.txnCount);
-  }, [clerkRecords, drops]);
+  }, [typeFilteredClerkRecords, drops]);
+
+  // Clerk filter narrows which clerk rows are shown in the table (the audit
+  // aggregation/KPIs above still reflect the payment-type filter).
+  const filteredStats = useMemo(() => {
+    if (clerkFilter === "all") return stats;
+    return stats.filter((s) => s.clerk === clerkFilter);
+  }, [stats, clerkFilter]);
+
+  const clerkOptions = useMemo(
+    () => [...new Set(stats.map((s) => s.clerk))].sort((a, b) => a.localeCompare(b)),
+    [stats]
+  );
+  const typeOptions = useMemo(() => {
+    const set = new Set(clerkRecords.map((r) => (r.payment_type || "—")).filter(Boolean));
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [clerkRecords]);
 
   const [activeTab, setActiveTab] = useState("cash_drops");
 
@@ -194,6 +257,36 @@ export default function Employees() {
               />
             </div>
 
+            {/* Filters */}
+            <div className="flex flex-wrap items-end gap-4">
+              <label className="flex flex-col gap-1 text-xs text-slate-400">
+                Clerk
+                <select
+                  value={clerkFilter}
+                  onChange={(e) => setClerkFilter(e.target.value)}
+                  className="min-w-[10rem] rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-sm text-slate-200 outline-none transition-colors focus:border-[#00D4FF]/40"
+                >
+                  <option value="all">All Clerks</option>
+                  {clerkOptions.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-slate-400">
+                Payment Type
+                <select
+                  value={typeFilter}
+                  onChange={(e) => setTypeFilter(e.target.value)}
+                  className="min-w-[10rem] rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-sm text-slate-200 outline-none transition-colors focus:border-[#00D4FF]/40"
+                >
+                  <option value="all">All Types</option>
+                  {typeOptions.map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
             {/* Clerk Table */}
             <Card title="Clerk Cash Drops & Shifts" subtitle="Click a row to see shift payment details">
               <div className="overflow-x-auto">
@@ -209,8 +302,8 @@ export default function Employees() {
                       <th className="pb-3 text-right">Audit Status</th>
                     </tr>
                   </thead>
-                  <tbody>
-                    {stats.map((s) => (
+                   <tbody>
+                     {filteredStats.map((s) => (
                       <React.Fragment key={s.clerk}>
                         <tr
                           onClick={() => setSelected(selected === s.clerk ? null : s.clerk)}
@@ -271,8 +364,11 @@ export default function Employees() {
                                       </tr>
                                     ))}
                                   </tbody>
-                                </table>
-                              </div>
+                 </table>
+                {filteredStats.length === 0 && (
+                  <p className="px-1 py-4 text-sm text-slate-500">No clerks match the selected filters.</p>
+                )}
+               </div>
                             </td>
                           </tr>
                         )}
@@ -302,12 +398,53 @@ export default function Employees() {
                  </p>
                </Card>
             ) : (
-              <ClerkAuditMatrix
-                flaggedAnomalies={flaggedAnomalies}
-                clerkRiskScores={clerkRiskScores}
-                adjustments={adjustments}
-                refunds={refunds}
-              />
+              <div className="space-y-6">
+                {/* Filters */}
+                <div className="flex flex-wrap items-end gap-4">
+                  <label className="flex flex-col gap-1 text-xs text-slate-400">
+                    Clerk
+                    <select
+                      value={fraudClerk}
+                      onChange={(e) => setFraudClerk(e.target.value)}
+                      className="min-w-[10rem] rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-sm text-slate-200 outline-none transition-colors focus:border-[#00D4FF]/40"
+                    >
+                      <option value="all">All Clerks</option>
+                      {fraudClerkOptions.map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs text-slate-400">
+                    Payment Type
+                    <select
+                      value={fraudType}
+                      onChange={(e) => setFraudType(e.target.value)}
+                      className="min-w-[10rem] rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-sm text-slate-200 outline-none transition-colors focus:border-[#00D4FF]/40"
+                    >
+                      <option value="all">All Types</option>
+                      {fraudTypeOptions.map((t) => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  </label>
+                  {(fraudClerk !== "all" || fraudType !== "all") && (
+                    <button
+                      type="button"
+                      onClick={() => { setFraudClerk("all"); setFraudType("all"); }}
+                      className="rounded-lg border border-white/10 px-3 py-2 text-sm text-slate-400 outline-none transition-colors hover:border-white/20 hover:text-slate-200"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+                <ClerkAuditMatrix
+                  flaggedAnomalies={flaggedAnomalies}
+                  clerkRiskScores={clerkRiskScores}
+                  adjustments={fraudAdjustments}
+                  refunds={fraudRefunds}
+                />
+              </div>
             )}
           </Tabs.Content>
         </Tabs.Root>

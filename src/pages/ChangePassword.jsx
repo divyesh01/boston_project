@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Eye, EyeOff, Loader2, KeyRound } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
-import db from "@/api/base44Client";
+import { db } from "@/api/base44Client";
 import { isCryptoAvailable, validatePasswordStrength } from "@/lib/security";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
 

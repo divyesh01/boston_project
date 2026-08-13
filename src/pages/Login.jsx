@@ -9,7 +9,7 @@ import { LogIn, Mail, Lock, Eye, EyeOff, Loader2, Smartphone, RotateCcw, Shield 
 import AuthLayout from "@/components/AuthLayout";
 import { safeReturnTo } from "@/lib/authReturnTo";
 import { useAuth } from "@/lib/AuthContext";
-import db from "@/api/base44Client";
+import { db } from "@/api/base44Client";
 import { getCsrfToken, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
 import { isValidEmail } from "@/lib/validator";
 import MFASetup from "@/components/MFASetup";
@@ -52,11 +52,10 @@ export default function Login() {
     let mounted = true;
     (async () => {
       try {
-        const count = await db.entities.User.filter({});
-        if (mounted) setSetupRequired(count.length === 0);
+        const initialized = await db.users.initialized();
+        if (mounted) setSetupRequired(!initialized);
       } catch (e) {
-        const all = await db.entities.User.list();
-        if (mounted) setSetupRequired(all.length === 0);
+        if (mounted) setSetupRequired(true);
       }
     })();
     return () => { mounted = false; };

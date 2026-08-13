@@ -9,7 +9,10 @@ import { num } from "@/lib/hotel";
 import { REPORT_TYPES, scanReport, importReport } from "@/lib/reportParsers";
 import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
 import { useAuth } from "@/lib/AuthContext";
-import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
+import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sha256File } from "@/lib/securityUtils";
+import { rebuildDailyAggregates } from "@/lib/dailyAggregates";
+import { queryClientInstance } from "@/lib/query-client";
+import localDb from "@/api/localDb";
 
 // Per-import undo. Deletes exactly the rows one import created, via the
 // rollback ledger — unlike "Clear all imported data", which wipes every table.
@@ -62,6 +65,11 @@ function UndoImportButton({ upload: u, disabled, onDone }) {
       // is gone. Leaving it would imply the rows are still queryable.
       await db.entities.UploadedReport.delete(u.id);
       rotateCsrfToken();
+      // Rebuild the materialized daily aggregate so the removed rows stop
+      // contributing to the Dashboard's pre-summed metrics.
+      rebuildDailyAggregates({ propertyId: u.property_id })
+        .then(() => queryClientInstance.invalidateQueries({ queryKey: ["daily-aggregates"] }))
+        .catch(() => {});
       onDone?.();
     } catch (e) {
       setError(e.message || "Undo failed");
@@ -184,15 +192,30 @@ const DATE_SOURCE_LABEL = {
   import_date: "defaulted to today — check it",
 };
 
-// Flatten a scan result into plain rows usable by the Chart Builder's custom datasets
+// Flatten a scan result into plain rows usable by the Chart Builder's custom datasets.
+// HARD CAP: only the first 100 rows are retained as a preview. Storing every raw
+// row for every import would balloon IndexedDB for no analytical benefit — the
+// canonical data lives in the typed tables. A TTL sweep (see purgeExpiredUploadedReportRawRows)
+// later nulls these previews out entirely once they age past RAW_ROWS_TTL_DAYS.
+const RAW_ROWS_PREVIEW_LIMIT = 100;
+const RAW_ROWS_TTL_DAYS = 90;
+
 function scanRawRows(scan) {
   if (!scan) return [];
-  if (Array.isArray(scan.rowsToImport) && scan.rowsToImport.length) return scan.rowsToImport;
-  const combined = [];
-  for (const arr of [scan.payments, scan.drops, scan.clerkPayments]) {
-    if (Array.isArray(arr)) combined.push(...arr);
+  let combined = [];
+  if (Array.isArray(scan.rowsToImport) && scan.rowsToImport.length) combined = scan.rowsToImport;
+  else {
+    for (const arr of [scan.payments, scan.drops, scan.clerkPayments]) {
+      if (Array.isArray(arr)) combined.push(...arr);
+    }
   }
-  return combined.slice(0, 5000);
+  return combined.slice(0, RAW_ROWS_PREVIEW_LIMIT);
+}
+
+function rawRowsTtlExpiry() {
+  const d = new Date();
+  d.setDate(d.getDate() + RAW_ROWS_TTL_DAYS);
+  return d.toISOString();
 }
 
 export default function Import() {
@@ -218,6 +241,7 @@ export default function Import() {
   const [selectedFiles, setSelectedFiles] = useState(new Set());
   const [driveImporting, setDriveImporting] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
   const [incompleteImports, setIncompleteImports] = useState([]);
   const [checkingImports, setCheckingImports] = useState(false);
 
@@ -247,7 +271,17 @@ export default function Import() {
   };
 
   const handleFiles = async (fileList) => {
-    const files = Array.from(fileList).filter((f) => /\.(csv|xlsx|xls)$/i.test(f.name));
+    const rawFiles = Array.from(fileList).filter((f) => /\.(csv|xlsx|xls)$/i.test(f.name));
+    if (!rawFiles.length) return;
+    const MAX_SIZE = 10 * 1024 * 1024;
+    const files = [];
+    for (const f of rawFiles) {
+      if (f.size > MAX_SIZE) {
+        alert(`File ${f.name} exceeds the 10MB limit and will not be processed.`);
+      } else {
+        files.push(f);
+      }
+    }
     if (!files.length) return;
     const stamp = Date.now();
     const newQueue = files.map((file, i) => ({
@@ -297,7 +331,9 @@ export default function Import() {
           businessDate: item.businessDate || "",
           csvText,
         });
-        setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "ready", scan, file_url } : q)));
+        // Content hash (SHA-256) for duplicate detection before the import runs.
+        const contentHash = await sha256File(item.file);
+        setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "ready", scan, file_url, contentHash } : q)));
       } catch (e) {
         setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: e.message || "Could not read file" } : q)));
       }
@@ -350,6 +386,23 @@ export default function Import() {
     }
     setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "importing" } : q)));
     try {
+      // ── Duplicate guard: a re-uploaded file hashes identically, so cancel the
+      // import before it touches any financial calculation. Only skipped when the
+      // operator explicitly forces the re-import.
+      if (item.contentHash && !forceImport) {
+        const existing = await db.entities.UploadedReport.filter({
+          content_hash: item.contentHash,
+          property_id: propertyId,
+        });
+        if (existing && existing.length > 0) {
+          setQueue((prev) => prev.map((q) => (q.key === item.key ? {
+            ...q,
+            status: "duplicate",
+            error: "Duplicate file — already imported. Use Force Import to re-import.",
+          } : q)));
+          return { name: item.name, ok: false, duplicate: true, error: "Duplicate file" };
+        }
+      }
       const result = await importReport(item.scan, {
         propertyId,
         propertyName: selectedProperty?.name || "",
@@ -368,15 +421,29 @@ export default function Import() {
         property_name: selectedProperty?.name || "",
         import_id: result.importId || item.importId,
         source_file: item.name,
+        content_hash: item.contentHash || null,
         raw_rows: scanRawRows(item.scan),
+        raw_rows_ttl: rawRowsTtlExpiry(),
       });
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "done", count: result.count, excluded: result.excluded || 0 } : q)));
       rotateCsrfToken();
+      // Pre-compute the daily financial aggregates so the Dashboard reads a few
+      // hundred pre-summed rows instead of the raw ledgers. Fire-and-forget: a
+      // failure here must never fail the import that already succeeded.
+      refreshAggregates(propertyId);
       return { name: item.name, ok: true, count: result.count, excluded: result.excluded || 0 };
     } catch (e) {
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: e.message || "Import failed" } : q)));
       return { name: item.name, ok: false, error: e.message || "Import failed" };
     }
+  };
+
+  // Rebuild the materialized daily aggregate for a property and drop the stale
+  // cache so the Dashboard recomputes from the fresh pre-summed rows.
+  const refreshAggregates = (pid) => {
+    rebuildDailyAggregates({ propertyId: pid })
+      .then(() => queryClientInstance.invalidateQueries({ queryKey: ["daily-aggregates"] }))
+      .catch((e) => console.warn("[import] daily aggregate rebuild skipped:", e?.message));
   };
 
   const handleImportAll = async () => {
@@ -419,7 +486,7 @@ export default function Import() {
     setQueue((prev) => prev.filter((q) => q.key !== key));
   };
 
-  const IMPORT_TABLES = ["OccupancyDay", "SourceDay", "GrossRevenueDay", "PaymentDay", "ClerkShiftRecord", "HotelMetric", "TransactionLine", "AdjustmentRefund", "AnomalyAlert", "UploadedReport"];
+  const IMPORT_TABLES = ["OccupancyDay", "SourceDay", "GrossRevenueDay", "PaymentDay", "ClerkShiftRecord", "HotelMetric", "TransactionLine", "AdjustmentRefund", "AnomalyAlert", "UploadedReport", "TimecardPunch"];
 
   const handleClearAll = async () => {
     if (clearing) return;
@@ -445,6 +512,11 @@ export default function Import() {
       for (const table of IMPORT_TABLES) {
         await db.entities[table].clear();
       }
+      // The materialized daily aggregate is derived from the ledgers above, so it
+      // must be wiped too or the Dashboard would keep showing stale pre-summed
+      // numbers after a clear-all.
+      await localDb.DailyFinancialAggregate.clear();
+      queryClientInstance.invalidateQueries({ queryKey: ["daily-aggregates"] });
       setQueue([]);
       setResults([]);
       refetch();
@@ -454,6 +526,25 @@ export default function Import() {
       window.alert(`Could not clear data: ${e.message || "unknown error"}`);
     } finally {
       setClearing(false);
+    }
+  };
+
+  // Backfill the materialized daily aggregate for existing (already-imported) data
+  // without re-importing files. Runs over the selected property, or every
+  // property when "All" is selected. The Dashboard falls back to live ledgers
+  // until this completes, then reads the pre-summed cache.
+  const handleRebuildAggregates = async () => {
+    if (rebuilding) return;
+    setRebuilding(true);
+    try {
+      const target = propertyId && propertyId !== "all" ? propertyId : "all";
+      await rebuildDailyAggregates({ propertyId: target });
+      queryClientInstance.invalidateQueries({ queryKey: ["daily-aggregates"] });
+    } catch (e) {
+      console.error("Failed to rebuild aggregates:", e);
+      window.alert(`Could not rebuild aggregates: ${e?.message || "unknown error"}`);
+    } finally {
+      setRebuilding(false);
     }
   };
 
@@ -502,7 +593,9 @@ export default function Import() {
           source_file: fileName,
           drive_file_id: fileId,
           raw_rows: scanRawRows(scan),
+          raw_rows_ttl: rawRowsTtlExpiry(),
         });
+        refreshAggregates(propertyId);
         setResults((prev) => [...prev, { name: fileName, ok: true, count: result.count, excluded: result.excluded || 0 }]);
       } catch (e) {
         setResults((prev) => [...prev, { name: fileName, ok: false, error: e.response?.data?.error || e.message || "Import failed" }]);
@@ -801,6 +894,30 @@ export default function Import() {
         {JSON.stringify(q.scan.sections.find((s) => s.rows > 0)?.preview?.slice(0, 3) || [], null, 2)}
       </pre>
     )}
+    {q.scan.validation && (q.scan.validation.errors?.length > 0 || q.scan.validation.warnings?.length > 0) && (
+      <div className="rounded-lg border border-white/10 bg-[#040D1A]/60 p-3">
+        <p className={`mb-2 text-xs ${q.scan.validation.ok ? "text-[#FFB547]" : "text-[#FF6B6B]"}`}>
+          {q.scan.validation.ok
+            ? `${q.scan.validation.warnings.length} thing(s) worth checking`
+            : `${q.scan.validation.errors.length} problem(s) that will block this import`}
+        </p>
+        <ul className="space-y-1">
+          {[...q.scan.validation.errors, ...q.scan.validation.warnings].map((f, i) => (
+            <li key={i} className="flex items-start gap-2 text-xs">
+              <span className={`mt-0.5 shrink-0 rounded px-1 text-[10px] ${f.severity === "error" ? "bg-[#FF6B6B]/15 text-[#FF6B6B]" : "bg-[#FFB547]/15 text-[#FFB547]"}`}>
+                {f.severity === "error" ? "BLOCKS" : "WARN"}
+              </span>
+              <span className="text-slate-300">
+                <span className="font-medium text-white">[{f.code}]</span> {f.message}
+              </span>
+            </li>
+          ))}
+        </ul>
+        {!forceImport && !q.scan.validation.ok && (
+          <p className="mt-2 text-[11px] text-[#FF6B6B]">This import will be rejected. Tick "Force import" on the batch to proceed anyway.</p>
+        )}
+      </div>
+    )}
     {q.scan.debug && q.scan.debug.sampleObject && (
       <details className="mt-2">
         <summary className="text-xs text-slate-500 cursor-pointer">Show raw first row</summary>
@@ -934,14 +1051,25 @@ export default function Import() {
         subtitle={`${uploads.length} total imports · ${filtered.length} matching`}
         right={
           uploads.length > 0 && (
-            <button
-              onClick={handleClearAll}
-              disabled={clearing || busy || importing}
-              className="flex shrink-0 items-center gap-2 rounded-lg border border-[#FF6B6B]/30 px-3 py-1.5 text-xs text-[#FF6B6B] transition-colors hover:bg-[#FF6B6B]/10 hover:border-[#FF6B6B]/60 disabled:opacity-50"
-            >
-              {clearing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-              {clearing ? "Clearing…" : "Clear all imported data"}
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                onClick={handleRebuildAggregates}
+                disabled={rebuilding || clearing || busy || importing}
+                title="Pre-compute the daily financial aggregate for fast Dashboard loads"
+                className="flex items-center gap-2 rounded-lg border border-[#00E096]/30 px-3 py-1.5 text-xs text-[#00E096] transition-colors hover:bg-[#00E096]/10 hover:border-[#00E096]/60 disabled:opacity-50"
+              >
+                {rebuilding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                {rebuilding ? "Rebuilding…" : "Rebuild cached aggregates"}
+              </button>
+              <button
+                onClick={handleClearAll}
+                disabled={clearing || busy || importing}
+                className="flex shrink-0 items-center gap-2 rounded-lg border border-[#FF6B6B]/30 px-3 py-1.5 text-xs text-[#FF6B6B] transition-colors hover:bg-[#FF6B6B]/10 hover:border-[#FF6B6B]/60 disabled:opacity-50"
+              >
+                {clearing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                {clearing ? "Clearing…" : "Clear all imported data"}
+              </button>
+            </div>
           )
         }
       >

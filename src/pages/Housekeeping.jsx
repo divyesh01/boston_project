@@ -10,6 +10,7 @@ import {
   defaultChecklist, checklistComplete, checklistProgress,
   housekeepingRollup, roomHkByRoom, roomHkStatus,
 } from "@/lib/housekeepingService";
+import { generateHousekeepingSchedule } from "@/lib/laborOptimization";
 
 const STATUS_COLOR = {
   pending: { color: "#9CA3AF", label: "Pending" },
@@ -44,6 +45,8 @@ export default function Housekeeping() {
 
   const isPortfolio = property === "all" || Array.isArray(property);
   const singlePropertyId = !isPortfolio ? property : null;
+
+  const laborPlan = useMemo(() => generateHousekeepingSchedule(rooms.length, rooms.length), [rooms]);
 
   const rollup = useMemo(() => housekeepingRollup(tasks), [tasks]);
   const overdue = useMemo(() => tasks.filter((t) => !["completed", "inspected"].includes(t.status) &&
@@ -117,6 +120,9 @@ export default function Housekeeping() {
           Cleaning readiness for {dateRange.from || "—"} → {dateRange.to || "—"} · {rooms.length} rooms
         </p>
       </header>
+      <div className="rounded-xl border border-white/5 bg-[#0F1F35]/60 p-3 text-sm text-slate-200">
+        <strong>Labor Optimization:</strong> {laborPlan.schedule} · {laborPlan.requiredMinutes} minutes required.
+      </div>
 
       {notice && (
         <div

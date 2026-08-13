@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Mail, Loader2, AlertCircle, CheckCircle, Copy } from "lucide-react";
 import AuthLayout from "@/components/AuthLayout";
-import db from "@/api/base44Client";
+import { db } from "@/api/base44Client";
 import { toast } from "@/components/ui/use-toast";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
 import { isValidEmail } from "@/lib/validator";

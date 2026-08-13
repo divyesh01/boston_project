@@ -1,7 +1,8 @@
-import { Suspense, lazy, useEffect, Component } from 'react'
-import { Toaster } from "@/components/ui/toaster"
-import { QueryClientProvider } from '@tanstack/react-query'
-import { queryClientInstance } from '@/lib/query-client'
+import { Suspense, lazy, useEffect, Component } from 'react';
+import { Toaster } from "@/components/ui/toaster";
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClientInstance } from '@/lib/query-client';
+import { YDocProvider } from '@/crdt';
 import { BrowserRouter as Router, Route, Routes, Navigate, useLocation } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
@@ -42,6 +43,7 @@ const ChangePassword = lazy(() => import('@/pages/ChangePassword'));
 const Housekeeping = lazy(() => import('@/pages/Housekeeping'));
 const Reviews = lazy(() => import('@/pages/Reviews'));
 const Pricing = lazy(() => import('@/pages/Pricing'));
+const DemoYDoc = lazy(() => import('@/pages/DemoYDoc'));
 
 const PageFallback = () => (
   <div className="flex min-h-[50vh] items-center justify-center">
@@ -89,12 +91,13 @@ class TopLevelErrorBoundary extends Component {
 class LazyErrorBoundary extends Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false };
+    this.state = { hasError: false, error: null, info: null };
   }
   static getDerivedStateFromError(error) {
-    return { hasError: true };
+    return { hasError: true, error };
   }
   componentDidCatch(error, info) {
+    this.setState({ info });
     console.error('[lazy-error-boundary]', error, info);
   }
   handleReset = () => {
@@ -104,9 +107,14 @@ class LazyErrorBoundary extends Component {
     if (this.state.hasError) {
       return (
         <div className="flex min-h-screen items-center justify-center bg-[#040D1A] p-6">
-          <div className="text-center">
+          <div className="text-center w-full max-w-2xl rounded-2xl border border-red-500/30 bg-[#0F1F35] p-6">
             <h2 className="text-xl text-white">Failed to load page</h2>
-            <p className="mt-2 text-sm text-slate-400">This page could not be loaded.</p>
+            <p className="mt-2 text-sm text-red-400 font-mono text-left bg-black/40 p-3 rounded">
+              {this.state.error?.message || this.state.error?.toString() || 'Unknown error'}
+            </p>
+            <p className="mt-2 text-xs text-slate-400 text-left bg-black/40 p-3 rounded max-h-64 overflow-auto">
+              {this.state.info?.componentStack || 'No stack trace available'}
+            </p>
             <button onClick={() => window.location.reload()} className="mt-4 rounded bg-[#6C63FF] px-4 py-2 text-white">
               Reload
             </button>
@@ -159,7 +167,6 @@ const RequirePermission = ({ children }) => {
   const location = useLocation();
   const allowed = canAccessRoute(location.pathname);
 
-  // Log every denied route attempt — including unmapped (default-deny) routes.
   useEffect(() => {
     if (!allowed) {
       logAuditEvent('Unauthorized Route Access', {
@@ -203,10 +210,10 @@ const ProtectedRoutes = () => {
         }
       >
         <Route path="/" element={<Suspended><Dashboard /></Suspended>} />
-         <Route path="/action-center" element={<Suspended><ActionCenterPage /></Suspended>} />
-         <Route path="/compare" element={<Suspended><Compare /></Suspended>} />
-         <Route path="/data-intelligence" element={<Suspended><DataIntelligence /></Suspended>} />
-         <Route path="/rooms" element={<Suspended><RoomBoard /></Suspended>} />
+        <Route path="/action-center" element={<Suspended><ActionCenterPage /></Suspended>} />
+        <Route path="/compare" element={<Suspended><Compare /></Suspended>} />
+        <Route path="/data-intelligence" element={<Suspended><DataIntelligence /></Suspended>} />
+        <Route path="/rooms" element={<Suspended><RoomBoard /></Suspended>} />
         <Route path="/charts" element={<Suspended><ChartBuilder /></Suspended>} />
         <Route path="/employees" element={<Suspended><Employees /></Suspended>} />
         <Route path="/payments" element={<Suspended><Payments /></Suspended>} />
@@ -229,6 +236,7 @@ const ProtectedRoutes = () => {
         <Route path="/housekeeping" element={<Suspended><Housekeeping /></Suspended>} />
         <Route path="/reviews" element={<Suspended><Reviews /></Suspended>} />
         <Route path="/pricing" element={<Suspended><Pricing /></Suspended>} />
+        <Route path="/demo" element={<Suspended><DemoYDoc /></Suspended>} />
       </Route>
       <Route path="*" element={<PageNotFound />} />
     </Routes>
@@ -272,18 +280,18 @@ function App() {
   return (
     <TopLevelErrorBoundary>
       <AuthProvider>
-        <QueryClientProvider client={queryClientInstance}>
-          <Router>
-            <TopLevelErrorBoundary>
+        <YDocProvider name="app-root">
+          <QueryClientProvider client={queryClientInstance}>
+            <Router>
               <ScrollToTop />
               <AuthenticatedApp />
-            </TopLevelErrorBoundary>
-          </Router>
-          <Toaster />
-        </QueryClientProvider>
+            </Router>
+            <Toaster />
+          </QueryClientProvider>
+        </YDocProvider>
       </AuthProvider>
     </TopLevelErrorBoundary>
-  )
+  );
 }
 
-export default App
+export default App;

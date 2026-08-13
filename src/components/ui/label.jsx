@@ -13,6 +13,8 @@ const labelVariants = cva(
   "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
 )
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const Label = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof LabelPrimitive.Root>} */

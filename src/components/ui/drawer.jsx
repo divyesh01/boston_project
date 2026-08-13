@@ -24,6 +24,8 @@ const DrawerPortal = DrawerPrimitive.Portal
 
 const DrawerClose = DrawerPrimitive.Close
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const DrawerOverlay = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof DrawerPrimitive.Overlay>} */
@@ -37,6 +39,8 @@ const DrawerOverlay = React.forwardRef(
 ))
 DrawerOverlay.displayName = DrawerPrimitive.Overlay.displayName
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const DrawerContent = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof DrawerPrimitive.Content>} */
@@ -77,6 +81,8 @@ const DrawerFooter = (
 )
 DrawerFooter.displayName = "DrawerFooter"
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const DrawerTitle = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof DrawerPrimitive.Title>} */
@@ -90,6 +96,8 @@ const DrawerTitle = React.forwardRef(
 ))
 DrawerTitle.displayName = DrawerPrimitive.Title.displayName
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const DrawerDescription = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof DrawerPrimitive.Description>} */

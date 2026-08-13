@@ -201,8 +201,30 @@ export async function fetchCsvRows(fileUrl) {
   const cleanUrl = fileUrl.split('#')[0];
   const res = await fetch(cleanUrl);
   if (!res.ok) throw new Error(`Failed to fetch CSV: ${res.statusText}`);
+  
+  const contentLength = res.headers.get('content-length');
+  if (contentLength && parseInt(contentLength, 10) > 10 * 1024 * 1024) {
+    throw new Error('File exceeds 10MB size limit');
+  }
+
   const text = await res.text();
-  return parseCsvText(text);
+  if (text.length > 10 * 1024 * 1024) {
+    throw new Error('File exceeds 10MB size limit');
+  }
+
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./parser.worker.js', import.meta.url), { type: 'module' });
+    worker.onmessage = (e) => {
+      if (e.data.error) reject(new Error(e.data.error));
+      else resolve(e.data.rows);
+      worker.terminate();
+    };
+    worker.onerror = (e) => {
+      reject(e);
+      worker.terminate();
+    };
+    worker.postMessage({ text });
+  });
 }
 
 export function isCsvFile(fileUrl) {

@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { RefreshCw, Search, ShieldCheck, ShieldAlert } from "lucide-react";
-import db from "@/api/base44Client";
+import { db } from "@/api/base44Client";
 import { verifyAuditChain } from "@/lib/securityUtils";
 
 const ACTION_BADGE = (action) => {

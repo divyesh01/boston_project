@@ -31,7 +31,7 @@ import { cn } from "@/lib/utils"
  * Manages loading state for the image child and triggers fallback
  * display when the image fails to load or is still loading.
  * 
- * @type {React.ComponentPropsWithoutRef<typeof AvatarPrimitive.Root>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {'default' | 'loading'} [delayDuration] - Delay before showing fallback (ms)
  * @property {string} [className] - Additional CSS classes for sizing/shape
  * 
@@ -58,7 +58,7 @@ Avatar.displayName = AvatarPrimitive.Root.displayName
  * handles loading events to communicate with the parent Avatar component.
  * If the image fails to load, the AvatarFallback is displayed instead.
  * 
- * @type {React.ComponentPropsWithoutRef<typeof AvatarPrimitive.Image>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} src - Image URL (required)
  * @property {string} [alt] - Alt text for accessibility
  * @property {string} [className] - Additional CSS classes
@@ -85,7 +85,7 @@ AvatarImage.displayName = AvatarPrimitive.Image.displayName
  * Typically contains user initials or an icon. Styled as a centered,
  * muted-background container that fills the Avatar dimensions.
  * 
- * @type {React.ComponentPropsWithoutRef<typeof AvatarPrimitive.Fallback>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {number} [delayDuration] - Delay in ms before showing fallback
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Fallback content (initials, icon, etc.)

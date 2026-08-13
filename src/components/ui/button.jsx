@@ -91,7 +91,7 @@ const buttonVariants = cva(
  * `asChild` is true (useful for React Router Link integration).
  * Includes focus-visible ring, disabled state, and automatic icon sizing.
  * 
- * @type {React.ForwardRefExoticComponent<ButtonProps & React.RefAttributes<HTMLButtonElement>>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {'default' | 'destructive' | 'outline' | 'secondary' | 'ghost' | 'link'} [variant='default'] - Visual style
  * @property {'default' | 'sm' | 'lg' | 'icon'} [size='default'] - Size preset
  * @property {boolean} [asChild=false] - Render as child element

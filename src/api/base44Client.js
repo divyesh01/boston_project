@@ -1,20 +1,12 @@
 import localDb from '@/api/localDb';
 import { answerQuestion } from '@/lib/aiEngine';
-import {
-  generateSalt,
-  hashPassword,
-  validatePasswordStrength,
-  generateToken,
-  isCryptoAvailable,
-} from '@/lib/security';
 import { toCents, fromCents } from '@/lib/decimal';
-import { verifyPassword, generateTemporaryPassword, generateTotpSecret, formatTotpUri, verifyTotpToken } from '@/lib/security';
-import { defaultPermissionsForRole, canUser } from '@/lib/permissions';
-import { loginRateLimiter, sanitizeEmail, sanitizeAlphanumeric, secureStore, secureRetrieve, secureRemove, createAuditEntry, getDeviceFingerprint, getClientIpHint } from '@/lib/securityUtils';
+import { reconcileTimecards } from '@/lib/timecardCalc';
+import { secureStore, secureRetrieve, secureRemove, createAuditEntry, getClientIpHint, getCsrfToken } from '@/lib/securityUtils';
 import { postSessionRevoked } from '@/lib/sessionChannel';
 import { publishChange } from '@/lib/realtime';
 import { recalculationService } from '@/lib/recalculationService';
-import { isValidEmail, isValidUsername } from '@/lib/validator';
+import { isValidEmail } from '@/lib/validator';
 
 // ─── Tables that trigger recalculation when modified ───
 const RECALCULATION_TABLES = new Set([
@@ -179,7 +171,6 @@ export async function rollbackImportSession(importId) {
   }
 
   let totalDeleted = 0;
-  await localDb.transaction('rw', localDb.ImportRecordIds, async () => {
     for (const row of pending) {
       const ids = row.record_ids;
       if (!ids?.length) continue;
@@ -190,7 +181,6 @@ export async function rollbackImportSession(importId) {
         rolled_back_at: new Date().toISOString(),
       });
     }
-  });
 
   const sessions = await getImportSessions();
   const idx = sessions.findIndex((s) => s.importId === importId);
@@ -399,9 +389,7 @@ function createEntityProxy(tableName) {
   // Get current user's property access from session
   async function getUserPropertyAccess() {
     try {
-      const session = await getSession();
-      if (!session) return null;
-      const user = await findUserById(session.userId);
+      const user = await auth.me();
       if (!user) return null;
       // Owner/admin have access to all properties
       if (user.role === 'owner' || user.role === 'admin') return 'all';
@@ -931,7 +919,8 @@ const audit = {
         detail: entry.detail || '',
       });
       
-      await localDb.AuditLog.add({
+      // Persist to server audit log securely
+      await functions.invoke('audit_log', {
         user_id: auditEntry.userId,
         username: auditEntry.username,
         action: auditEntry.action,
@@ -953,14 +942,12 @@ const audit = {
   },
 
   async list(filter = {}, limit = 500) {
-    let rows = await localDb.AuditLog.toArray();
-    rows = rows.filter((r) => matchesFilter(r, filter));
-    rows = sortRows(rows, '-created_date');
-    return rows.slice(0, limit);
+    const res = await functions.invoke('audit_list', { filter, limit });
+    return res.logs || [];
   },
 
   async clear() {
-    await localDb.AuditLog.clear();
+    await functions.invoke('audit_clear', {});
     return { success: true };
   },
 };
@@ -968,354 +955,58 @@ const audit = {
 // ─── Auth: real local authentication ───
 const auth = {
   async isAuthenticated() {
-    const session = await getSession();
-    if (!session) return false;
-    if (isSessionExpired(session)) {
-      clearSession();
-      return false;
-    }
-    const user = await findUserById(session.userId);
-    if (!user) {
-      clearSession();
-      return false;
-    }
-    if (user.is_active === false || user.is_locked === true) {
-      clearSession();
-      return false;
-    }
-    // If user has MFA enabled but session doesn't have mfa_verified, require re-auth
-    if (user.mfa_enabled && !session.mfa_verified) {
-      clearSession();
-      return false;
-    }
-    return true;
+    try {
+      const res = await functions.invoke('auth_me');
+      return !!res.user;
+    } catch { return false; }
   },
-
   async me() {
-    const session = await getSession();
-    if (!session || isSessionExpired(session)) return null;
-    const user = await findUserById(session.userId);
-    if (!user) return null;
-    if (user.is_active === false || user.is_locked === true) return null;
-    if (user.mfa_enabled && !session.mfa_verified) return null;
-    return publicUser(user);
+    try {
+      const res = await functions.invoke('auth_me');
+      return res.user;
+    } catch { return null; }
   },
-
   async login(identifier, password, remember = false, totpToken = null) {
-    // Server-side rate limiting check (by identifier)
-    const rateLimit = await serverLoginRateLimiter.check(identifier);
-    if (!rateLimit.allowed) {
-      await audit.log({
-        username: String(identifier || '').toLowerCase(),
-        action: 'Login',
-        result: 'failed',
-        detail: `Rate limited. Try again in ${rateLimit.retryAfter} seconds.`,
-      });
-      throw new Error(`Too many login attempts. Please try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
-    }
-
-    // Format guard before any lookups; same generic message as a bad password
-    // so the error channel cannot be used for account enumeration.
-    if (!isValidIdentifier(identifier)) {
-      await audit.log({
-        username: String(identifier || '').toLowerCase(),
-        action: 'Login',
-        result: 'failed',
-        detail: 'Malformed identifier format',
-      });
-      throw new Error('Invalid username/email or password.');
-    }
-
-    const user = await findUserByIdentity(identifier);
-    if (!user) {
-      await audit.log({
-        username: String(identifier || '').toLowerCase(),
-        action: 'Login',
-        result: 'failed',
-        detail: 'Unknown username/email',
-      });
-      throw new Error('Invalid username/email or password.');
-    }
-    if (user.is_locked === true) {
-      await audit.log({ user_id: user.id, username: user.username, action: 'Login', result: 'failed', detail: 'Account locked' });
-      throw new Error('This account is locked. Contact the administrator.');
-    }
-    if (user.is_active === false) {
-      await audit.log({ user_id: user.id, username: user.username, action: 'Login', result: 'failed', detail: 'Account disabled' });
-      throw new Error('This account is disabled. Contact the administrator.');
-    }
-    if (!user.password_hash || !user.salt) {
-      await audit.log({ user_id: user.id, username: user.username, action: 'Login', result: 'failed', detail: 'No password set' });
-      throw new Error('This account has no password set. Contact the administrator.');
-    }
-    const ok = await verifyPassword(password, user.salt, user.password_hash);
-    if (!ok) {
-      const attempts = (user.failed_attempts || 0) + 1;
-      const shouldLock = attempts >= 5;
-      await localDb.User.update(user.id, { failed_attempts: shouldLock ? 0 : attempts, is_locked: shouldLock ? true : user.is_locked });
-      await audit.log({ user_id: user.id, username: user.username, action: 'Failed Login Attempt', result: 'failed', detail: shouldLock ? 'Account locked after repeated failures' : 'Incorrect password' });
-      if (shouldLock) throw new Error('Too many failed attempts. Account locked. Contact the administrator.');
-      throw new Error('Invalid username/email or password.');
-    }
-
-    // Check MFA if enabled
-    if (user.mfa_enabled) {
-      if (!totpToken) {
-        await audit.log({ user_id: user.id, username: user.username, action: 'Login', result: 'mfa_required', detail: 'MFA token required' });
-        return { mfaRequired: true, userId: user.id, username: user.username };
+    try {
+      const res = await functions.invoke('auth_login', { email: identifier, password, mfa_token: totpToken, remember });
+      if (res.require_mfa) {
+        return { mfaRequired: true, userId: 'mfa_pending', username: identifier };
       }
-      const totpValid = await verifyTotpToken(user.mfa_secret, totpToken);
-      if (!totpValid) {
-        await audit.log({ user_id: user.id, username: user.username, action: 'Login', result: 'failed', detail: 'Invalid MFA token' });
-        throw new Error('Invalid MFA token. Please try again.');
-      }
+      return { user: res.user, session: { token: 'http-only' } };
+    } catch (err) {
+      throw new Error(err.message || 'Login failed');
     }
-
-    // Reset server-side rate limiter on successful login
-    await serverLoginRateLimiter.reset(identifier);
-
-    const expiresAt = now() + (remember ? REMEMBER_TIMEOUT_MS : IDLE_TIMEOUT_MS);
-    const session = {
-      userId: user.id,
-      token: generateToken(),
-      remember: !!remember,
-      expiresAt,
-      lastActivity: now(),
-      mfa_verified: user.mfa_enabled ? true : false,
-    };
-    await setSession(session);
-
-    await localDb.User.update(user.id, { last_login: new Date().toISOString(), failed_attempts: 0 });
-    await audit.log({ user_id: user.id, username: user.username, action: 'Login', result: 'success' });
-
-    const updated = await findUserById(user.id);
-    return { user: publicUser(updated), session };
   },
-
   async touchSession() {
-    const session = await getSession();
-    if (!session) return;
-    session.lastActivity = now();
-    if (session.remember) session.expiresAt = now() + REMEMBER_TIMEOUT_MS;
-    else session.expiresAt = now() + IDLE_TIMEOUT_MS;
-    await setSession(session);
+    // Handled automatically by auth_me slide expiry
   },
-
+  async rotateSession() {
+    // Session is handled via cookies
+    return { token: 'http-only' };
+  },
   async logout(redirect) {
-    const session = await getSession();
-    if (session) {
-      const user = await findUserById(session.userId);
-      await audit.log({
-        user_id: session.userId,
-        username: user?.username || 'unknown',
-        action: 'Logout',
-        result: 'success',
-      });
-      // Tell every other open tab/window that this user's session is gone.
-      postSessionRevoked({
-        type: 'SESSION_REVOKED',
-        targetUserId: session.userId,
-        status: 'logged_out',
-        reason: 'User logged out',
-      });
-    }
-    clearSession();
-    if (redirect && typeof redirect === 'string') {
-      window.location.href = redirect;
-    }
+    try {
+      await functions.invoke('auth_logout');
+    } catch {}
+    if (redirect) window.location.href = redirect;
   },
-
   async resetPasswordRequest(identifier) {
-    const rateLimit = await serverSensitiveActionRateLimiter.check(identifier);
-    if (!rateLimit.allowed) {
-      await audit.log({
-        username: String(identifier || '').toLowerCase(),
-        action: 'Password Reset Requested',
-        result: 'failed',
-        detail: `Rate limited. Try again in ${rateLimit.retryAfter} seconds.`,
-      });
-      throw new Error(`Too many requests. Please try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
-    }
-
-    const term = String(identifier || '').trim().toLowerCase();
-    if (!isValidIdentifier(term)) throw new Error('Username or email is required.');
-
-    const user = await findUserByIdentity(term);
-    if (!user) {
-      // Always show success to prevent user enumeration
-      await audit.log({
-        username: term,
-        action: 'Password Reset Requested',
-        result: 'success',
-        detail: 'Request processed (user not found, but response is generic)',
-      });
-      return { success: true, message: 'If an account exists, a reset token has been generated.' };
-    }
-
-    if (user.is_active === false) {
-      await audit.log({ user_id: user.id, username: user.username, action: 'Password Reset Requested', result: 'failed', detail: 'Account disabled' });
-      throw new Error('This account is disabled. Contact the administrator.');
-    }
-
-    // Generate a secure reset token
-    const token = generateToken();
-    const expiresAt = Date.now() + 60 * 60 * 1000; // 1 hour
-
-    // Store the reset request in Dexie
-    await localDb.PasswordResetRequest.add({
-      user_id: user.id,
-      token,
-      expires_at: expiresAt,
-      used: false,
-      created_date: new Date().toISOString(),
-    });
-
-    await audit.log({
-      user_id: user.id,
-      username: user.username,
-      action: 'Password Reset Requested',
-      result: 'success',
-      detail: 'Reset token generated for self-service password reset',
-    });
-
-    // In a real app, this would email the token. For local dev, we log it to console
-    // NEVER return the token to the client directly.
-    console.log(`[local dev] Password reset token for ${user.username}: ${token}`);
-    return { success: true, expiresAt, message: 'If an account exists, a reset token has been generated.' };
+    return functions.invoke('auth_reset_request', { identifier });
   },
-
-  async resetPassword({ resetToken, newPassword }) {
-    if (!resetToken || !newPassword) {
-      throw new Error('Reset token and new password are required.');
-    }
-
-    const rateLimit = await serverSensitiveActionRateLimiter.check(`reset:${resetToken.slice(0,8)}`);
-    if (!rateLimit.allowed) throw new Error('Too many attempts. Try again later.');
-
-    const strengthErr = validatePasswordStrength(newPassword);
-    if (strengthErr) throw new Error(strengthErr);
-
-    const resetReq = await localDb.PasswordResetRequest.where('token').equals(resetToken).first();
-    if (!resetReq) {
-      await audit.log({
-        action: 'Password Reset Attempt',
-        result: 'failed',
-        detail: 'Invalid or unknown reset token',
-      });
-      throw new Error('Invalid or expired reset token.');
-    }
-
-    if (resetReq.used) {
-      await audit.log({
-        action: 'Password Reset Attempt',
-        result: 'failed',
-        detail: 'Reset token already used',
-      });
-      throw new Error('This reset token has already been used.');
-    }
-
-    if (Date.now() > resetReq.expires_at) {
-      await audit.log({
-        action: 'Password Reset Attempt',
-        result: 'failed',
-        detail: 'Reset token expired',
-      });
-      throw new Error('This reset token has expired. Please request a new one.');
-    }
-
-    const user = await findUserById(resetReq.user_id);
-    if (!user) {
-      throw new Error('User associated with this token no longer exists.');
-    }
-
-    if (user.is_active === false || user.is_locked === true) {
-      throw new Error('This account is disabled or locked. Contact the administrator.');
-    }
-
-    // Hash the new password
-    const salt = generateSalt();
-    const password_hash = await hashPassword(newPassword, salt);
-
-    // Update user and mark token as used
-    await localDb.User.update(user.id, {
-      salt,
-      password_hash,
-      must_change_password: false,
-      failed_attempts: 0,
-      is_locked: false,
-    });
-    await localDb.PasswordResetRequest.update(resetReq.id, { used: true });
-
-    await audit.log({
-      user_id: user.id,
-      username: user.username,
-      action: 'Password Reset Completed',
-      result: 'success',
-      detail: 'Self-service password reset completed',
-    });
-
-    return { success: true, message: 'Password has been reset. You can now log in.' };
+  async resetPassword(token, newPassword) {
+    return functions.invoke('auth_reset_password', { token, newPassword });
   },
-
-  async registerUser({ username, email, password, role = 'read_only', assigned_property_ids = [] }) {
-    // This is an admin-only operation; caller should verify permissions
-    if (!isValidUsername(username)) throw new Error('Username must be 3-30 alphanumeric or underscore characters.');
-    if (!isValidEmail(email)) throw new Error('Invalid email address.');
-    if (!password) throw new Error('A password is required.');
-    if (!isCryptoAvailable()) throw new Error('Password hashing is not available in this browser.');
-    const strengthErr = validatePasswordStrength(password);
-    if (strengthErr) throw new Error(strengthErr);
-
-    const all = await localDb.User.toArray();
-    if (all.some((u) => u.username && u.username.toLowerCase() === username.toLowerCase())) {
-      throw new Error(`Username "${username}" is already taken.`);
-    }
-    if (all.some((u) => u.email && u.email.toLowerCase() === email.toLowerCase())) {
-      throw new Error(`Email "${email}" is already registered.`);
-    }
-
-    const salt = generateSalt();
-    const password_hash = await hashPassword(password, salt);
-
-    const record = {
-      username,
-      email: email.toLowerCase(),
-      full_name: '',
-      role,
-      permissions: defaultPermissionsForRole(role),
-      property_access: assigned_property_ids.length > 0 ? assigned_property_ids : [],
-      is_active: true,
-      is_locked: false,
-      must_change_password: true,
-      last_login: null,
-      failed_attempts: 0,
-      salt,
-      password_hash,
-    };
-    const id = await localDb.User.add(record);
-    await audit.log({
-      user_id: id, username,
-      action: 'User Registered',
-      performed_by_id: null, performed_by: 'system',
-      result: 'success',
-      detail: `Role: ${role}, Self-registration or admin creation`,
-    });
-    return publicUser({ ...record, id });
+  async registerUser(userData) {
+    return functions.invoke('auth_register', { userData });
   },
-
   async getCurrentSession() {
-    return getSession();
+    return { token: 'http-only' };
   },
-
-  async setSessionToken(token, remember = false) {
-    // A session must only be set after identity is confirmed.
-    // The previous implementation stored userId: null, creating dead sessions.
-    // We remove this function and rely on explicit session creation during login.
-    throw new Error('setSessionToken must not be called directly. Use normal auth flows.');
-  },
+  async setSessionToken(token) {
+    // No-op for HttpOnly cookies
+  }
 };
 
-// ─── Integrations: local file handling ───
 const integrations = {
   Core: {
     async UploadFile({ file }) {
@@ -1404,13 +1095,43 @@ async function runLocalAutoPayroll(params = {}) {
     };
   }
 
-  const staff = await localDb.Staff.filter((s) => s.active !== false).toArray();
+  let staff = await localDb.Staff.filter((s) => s.active !== false).toArray();
+  if (params.propertyId) staff = staff.filter((s) => s.property_id === params.propertyId);
   if (staff.length === 0) {
     return { data: { status: "ok", message: "No active staff found — nothing to process.", periodStart, periodEnd, createdCount: 0, skippedCount: 0 } };
   }
 
   const existing = await localDb.PayrollRun.filter((r) => r.pay_period_end === periodEnd).toArray();
   const paidKeys = new Set(existing.map((r) => `${r.property_id || "all"}::${String(r.employee_name || "").toLowerCase()}`));
+
+  let timecardWeeks = [];
+  try {
+    const allPunches = await localDb.TimecardPunch.toArray() || [];
+    const punches = allPunches.filter(
+      (p) =>
+        (!params.propertyId || p.property_id === params.propertyId) &&
+        String(p.shift_date || "").slice(0, 10) >= periodStart &&
+        String(p.shift_date || "").slice(0, 10) <= periodEnd
+    );
+    if (punches.length) {
+      const staffNames = new Set(staff.map((s) => String(s.employee_name).trim().toLowerCase()));
+      timecardWeeks = reconcileTimecards(punches).filter((w) => staffNames.has(String(w.employeeKey || "").toLowerCase()));
+    }
+  } catch (err) {
+    timecardWeeks = [];
+  }
+
+  const byEmployee = (low) => {
+    const weeks = timecardWeeks.filter((w) => String(w.employeeKey || "").toLowerCase() === low);
+    if (!weeks.length) return null;
+    return weeks.reduce(
+      (acc, w) => ({
+        hours: acc.hours + (Number(w.hours) || 0),
+        overtime_hours: acc.overtime_hours + (Number(w.overtime_hours) || 0),
+      }),
+      { hours: 0, overtime_hours: 0 }
+    );
+  };
 
   const created = [];
   const skipped = [];
@@ -1425,8 +1146,9 @@ async function runLocalAutoPayroll(params = {}) {
       continue;
     }
     const baseRate = Number(s.base_rate) || 0;
-    const hours = Number(s.hours) || 0;
-    const otHours = Number(s.overtime_hours) || 0;
+    const tc = byEmployee(String(s.employee_name || "").toLowerCase());
+    const hours = tc ? Number(tc.hours) || 0 : Number(s.hours) || 0;
+    const otHours = tc ? Number(tc.overtime_hours) || 0 : Number(s.overtime_hours) || 0;
     const otRate = Number(s.overtime_rate) || baseRate * 1.5;
     const bonus = Number(s.bonus) || 0;
     const deductions = Number(s.deductions) || 0;
@@ -1455,6 +1177,7 @@ async function runLocalAutoPayroll(params = {}) {
       pay_period_end: periodEnd,
       payroll_date: periodEnd,
       payroll_status: "approved",
+      timecard_derived: !!tc,
       auto_generated: true,
     };
     await localDb.PayrollRun.add({ ...record, created_date: now.toISOString(), updated_date: now.toISOString() });
@@ -1507,11 +1230,28 @@ const functions = {
         },
       };
     }
-    if (functionName === 'deleteAccount') {
-      // Clear all local data
-      await Promise.all(localDb.tables.map(t => t.clear()));
-      localStorage.clear();
-      return { success: true };
+    if (functionName === 'deleteAccount' || functionName === 'audit_clear' || functionName.startsWith('auth_') || functionName === 'user_admin') {
+      const res = await fetch(`/api/functions/${functionName}`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': getCsrfToken()
+        },
+        body: JSON.stringify(params)
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error((errData && errData.error) ? errData.error : `HTTP Error ${res.status}`);
+      }
+      const data = await res.json();
+      
+      if (functionName === 'deleteAccount') {
+        await Promise.all(localDb.tables.map(t => t.clear()));
+        localStorage.clear();
+      } else if (functionName === 'audit_clear') {
+        await localDb.AuditLog.clear();
+      }
+      return data;
     }
     if (functionName === 'autoPayroll') {
       return runLocalAutoPayroll(params);
@@ -1544,274 +1284,70 @@ async function assertNotLastOwner(target) {
 
 const users = {
   async list() {
-    const rows = await localDb.User.toArray();
-    return rows.map(publicUser);
+    const res = await functions.invoke('user_admin', { action: 'list' });
+    return res.users || [];
   },
 
   async search(query) {
-    const q = String(query || '').trim().toLowerCase();
-    let rows = await localDb.User.toArray();
-    if (q) {
-      rows = rows.filter((u) =>
-        (u.username || '').toLowerCase().includes(q) ||
-        (u.email || '').toLowerCase().includes(q) ||
-        (u.full_name || '').toLowerCase().includes(q) ||
-        (u.role || '').toLowerCase().includes(q)
-      );
-    }
-    return rows.map(publicUser);
+    const res = await functions.invoke('user_admin', { action: 'search', query });
+    return res.users || [];
   },
 
   async getById(id) {
-    const u = await findUserById(id);
-    return publicUser(u);
+    const res = await functions.invoke('user_admin', { action: 'getById', id });
+    return res.user || null;
   },
 
   async create(actor, data = {}) {
-    assertAdmin(actor);
-    const username = String(data.username || '').trim();
-    const email = String(data.email || '').trim().toLowerCase();
-    const password = data.password || '';
-    if (!isValidUsername(username)) throw new Error('Username must be 3-30 alphanumeric or underscore characters.');
-    if (!isValidEmail(email)) throw new Error('Invalid email address.');
-
-    const all = await localDb.User.toArray();
-    if (all.some((u) => u.username && u.username.toLowerCase() === username.toLowerCase())) {
-      throw new Error(`Username "${username}" is already taken.`);
-    }
-    if (all.some((u) => u.email && u.email.toLowerCase() === email.toLowerCase())) {
-      throw new Error(`Email "${email}" is already registered.`);
-    }
-    if (!password) throw new Error('A password is required when creating a user.');
-    if (!isCryptoAvailable()) throw new Error('Password hashing is not available in this browser.');
-    const strengthErr = validatePasswordStrength(password);
-    if (strengthErr) throw new Error(strengthErr);
-
-    const salt = generateSalt();
-    const password_hash = await hashPassword(password, salt);
-
-    const record = {
-      username,
-      email,
-      full_name: data.full_name || '',
-      role: data.role || 'read_only',
-      permissions: data.permissions === 'all' ? defaultPermissionsForRole(data.role || 'owner') : (data.permissions || defaultPermissionsForRole(data.role || 'read_only')),
-      property_access: data.property_access === 'all' ? 'all' : (Array.isArray(data.property_access) ? data.property_access : []),
-      is_active: data.is_active !== false,
-      is_locked: false,
-      must_change_password: data.must_change_password === true,
-      last_login: null,
-      failed_attempts: 0,
-      salt,
-      password_hash,
-    };
-    const id = await localDb.User.add(record);
-    await audit.log({
-      user_id: id, username,
-      action: 'User Created',
-      performed_by_id: actor.id, performed_by: actor.username || actor.email,
-      result: 'success',
-      detail: `Role: ${record.role}`,
-    });
-    return publicUser({ ...record, id });
+    const res = await functions.invoke('user_admin', { action: 'create', data });
+    return res.user;
   },
 
   async update(actor, id, data = {}) {
-    assertAdmin(actor);
-    const user = await findUserById(id);
-    if (!user) throw new Error('User not found.');
-
-    const isSelf = String(actor.id) === String(id);
-    // Users may only edit their own profile fields — never role/permissions/access/status.
-    const adminOnlyFields = ['role', 'permissions', 'property_access', 'is_active', 'is_locked', 'must_change_password'];
-    if (isSelf && adminOnlyFields.some((f) => f in data)) {
-      throw new Error('You cannot change your own role, permissions, property access, or status.');
-    }
-
-    const patch = {};
-    if ('username' in data) {
-      const username = String(data.username || '').trim();
-      if (!username) throw new Error('Username cannot be empty.');
-      // Format is enforced only when the username actually changes, so legacy
-      // accounts created under the older, looser sanitizer stay editable.
-      if (username !== String(user.username || '')) {
-        if (!isValidUsername(username)) throw new Error('Username must be 3-30 alphanumeric or underscore characters.');
-      }
-      const all = await localDb.User.toArray();
-      if (all.some((u) => u.id !== user.id && u.username && u.username.toLowerCase() === username.toLowerCase())) {
-        throw new Error(`Username "${username}" is already taken.`);
-      }
-      patch.username = username;
-    }
-    if ('email' in data) {
-      const email = String(data.email || '').trim().toLowerCase();
-      if (!isValidEmail(email)) throw new Error('Invalid email address.');
-      const all = await localDb.User.toArray();
-      if (all.some((u) => u.id !== user.id && u.email && u.email.toLowerCase() === email.toLowerCase())) {
-        throw new Error(`Email "${email}" is already registered.`);
-      }
-      patch.email = email;
-    }
-    if ('full_name' in data) patch.full_name = data.full_name;
-    if ('role' in data) {
-      // Users cannot promote themselves to an admin/owner role.
-      if (String(actor.id) === String(id) && ['owner', 'admin'].includes(String(data.role))) {
-        throw new Error('You cannot change your own role.');
-      }
-      // Never demote the last remaining Owner.
-      if (user.role === 'owner' && data.role !== 'owner') await assertNotLastOwner(user);
-      patch.role = data.role;
-      if ('permissions' in data) patch.permissions = data.permissions || defaultPermissionsForRole(data.role);
-    }
-    if ('permissions' in data) patch.permissions = data.permissions || defaultPermissionsForRole(user.role);
-    if ('property_access' in data) {
-      patch.property_access = data.property_access === 'all' ? 'all' : (Array.isArray(data.property_access) ? data.property_access : []);
-    }
-    if ('must_change_password' in data) patch.must_change_password = data.must_change_password === true;
-
-    await localDb.User.update(user.id, patch);
-    await audit.log({
-      user_id: user.id, username: patch.username || user.username,
-      action: 'User Updated',
-      performed_by_id: actor.id, performed_by: actor.username || actor.email,
-      result: 'success',
-    });
-    return publicUser(await findUserById(user.id));
+    const res = await functions.invoke('user_admin', { action: 'update', id, data });
+    return res.user;
   },
 
   async setStatus(actor, id, status) {
-    assertAdmin(actor);
-    const user = await findUserById(id);
-    if (!user) throw new Error('User not found.');
-    if (status === 'disabled') {
-      await assertNotSelf(actor.id, id);
-      await assertNotLastOwner(user);
-      await localDb.User.update(user.id, { is_active: false, is_locked: false });
-      await audit.log({ user_id: user.id, username: user.username, action: 'User Disabled', performed_by_id: actor.id, performed_by: actor.username || actor.email, result: 'success' });
-      // Instantly revoke every open tab/window of this user.
-      postSessionRevoked({
-        type: 'SESSION_REVOKED',
-        targetUserId: user.id,
-        status: 'disabled',
-        reason: 'Account status updated by administrator',
-      });
-    } else if (status === 'enabled') {
-      await localDb.User.update(user.id, { is_active: true, is_locked: false, failed_attempts: 0 });
-      await audit.log({ user_id: user.id, username: user.username, action: 'User Enabled', performed_by_id: actor.id, performed_by: actor.username || actor.email, result: 'success' });
-    } else if (status === 'locked') {
-      await assertNotSelf(actor.id, id);
-      await assertNotLastOwner(user);
-      await localDb.User.update(user.id, { is_locked: true });
-      await audit.log({ user_id: user.id, username: user.username, action: 'User Locked', performed_by_id: actor.id, performed_by: actor.username || actor.email, result: 'success' });
-      // Instantly revoke every open tab/window of this user.
-      postSessionRevoked({
-        type: 'SESSION_REVOKED',
-        targetUserId: user.id,
-        status: 'locked',
-        reason: 'Account status updated by administrator',
-      });
-    } else if (status === 'unlocked') {
-      await localDb.User.update(user.id, { is_locked: false, failed_attempts: 0 });
-      await audit.log({ user_id: user.id, username: user.username, action: 'User Unlocked', performed_by_id: actor.id, performed_by: actor.username || actor.email, result: 'success' });
-    } else {
-      throw new Error(`Unknown status: ${status}`);
-    }
-    return publicUser(await findUserById(user.id));
+    const res = await functions.invoke('user_admin', { action: 'set_status', id, status });
+    return res.user;
   },
 
   async resetPassword(actor, id, newPassword) {
-    assertAdmin(actor);
-    const user = await findUserById(id);
-    if (!user) throw new Error('User not found.');
-    const err = validatePasswordStrength(newPassword);
-    if (err) throw new Error(err);
-    const salt = generateSalt();
-    const password_hash = await hashPassword(newPassword, salt);
-    await localDb.User.update(user.id, { salt, password_hash, must_change_password: true, failed_attempts: 0, is_locked: false });
-    await audit.log({ user_id: user.id, username: user.username, action: 'Password Reset', performed_by_id: actor.id, performed_by: actor.username || actor.email, result: 'success' });
-    return { success: true };
+    return functions.invoke('user_admin', { action: 'reset_password', id, newPassword });
   },
 
   async setPassword(actor, id, newPassword) {
-    // Same as resetPassword but does NOT force change at next login
-    assertAdmin(actor);
-    const user = await findUserById(id);
-    if (!user) throw new Error('User not found.');
-    if (newPassword && newPassword.length < 8) throw new Error('Password must be at least 8 characters.');
-    const salt = generateSalt();
-    const password_hash = await hashPassword(newPassword, salt);
-    await localDb.User.update(user.id, { salt, password_hash, must_change_password: false, failed_attempts: 0, is_locked: false });
-    await audit.log({ user_id: user.id, username: user.username, action: 'Password Changed', performed_by_id: actor.id, performed_by: actor.username || actor.email, result: 'success' });
-    return { success: true };
+    return functions.invoke('user_admin', { action: 'set_password', id, newPassword });
   },
 
   async changeOwnPassword(user, currentPassword, newPassword) {
-    if (!user) throw new Error('Not authenticated.');
-    const dbUser = await findUserById(user.id);
-    if (!dbUser) throw new Error('User not found.');
-    const ok = await verifyPassword(currentPassword, dbUser.salt, dbUser.password_hash);
-    if (!ok) throw new Error('Current password is incorrect.');
-    if (newPassword && newPassword.length < 12) throw new Error('Password must be at least 12 characters.');
-    const salt = generateSalt();
-    const password_hash = await hashPassword(newPassword, salt);
-    await localDb.User.update(dbUser.id, { salt, password_hash, must_change_password: false, failed_attempts: 0 });
-    await audit.log({ user_id: dbUser.id, username: dbUser.username, action: 'Password Changed', performed_by_id: dbUser.id, performed_by: dbUser.username, result: 'success', detail: 'By user' });
-    return { success: true };
+    return functions.invoke('user_admin', { action: 'change_own_password', id: user && user.id, currentPassword, newPassword });
   },
 
   async enableMfa(actor, id) {
-    assertAdmin(actor);
-    const user = await findUserById(id);
-    if (!user) throw new Error('User not found.');
-    const secret = generateTotpSecret();
-    await localDb.User.update(user.id, { mfa_enabled: true, mfa_secret: secret });
-    await audit.log({ user_id: user.id, username: user.username, action: 'MFA Enabled', performed_by_id: actor.id, performed_by: actor.username || actor.email, result: 'success' });
-    return { secret, uri: formatTotpUri(secret, user.email, 'Red Roof Intelligence') };
+    return functions.invoke('user_admin', { action: 'enable_mfa', id });
   },
 
   async disableMfa(actor, id) {
-    assertAdmin(actor);
-    const user = await findUserById(id);
-    if (!user) throw new Error('User not found.');
-    await localDb.User.update(user.id, { mfa_enabled: false, mfa_secret: null });
-    await audit.log({ user_id: user.id, username: user.username, action: 'MFA Disabled', performed_by_id: actor.id, performed_by: actor.username || actor.email, result: 'success' });
-    return { success: true };
+    return functions.invoke('user_admin', { action: 'disable_mfa', id });
   },
 
   async verifyMfa(actor, id, token) {
-    const user = await findUserById(id);
-    if (!user) throw new Error('User not found.');
-    if (!user.mfa_enabled || !user.mfa_secret) throw new Error('MFA not enabled for this user.');
-    const valid = await verifyTotpToken(user.mfa_secret, token);
-    if (!valid) throw new Error('Invalid MFA token.');
-    await audit.log({ user_id: user.id, username: user.username, action: 'MFA Verified', performed_by_id: actor.id, performed_by: actor.username || actor.email, result: 'success' });
-    return { success: true };
+    return functions.invoke('user_admin', { action: 'verify_mfa', id, token });
   },
 
   async delete(actor, id) {
-    assertAdmin(actor);
-    const user = await findUserById(id);
-    if (!user) throw new Error('User not found.');
-    await assertNotSelf(actor.id, id);
-    await assertNotLastOwner(user);
-    await audit.log({ user_id: user.id, username: user.username, action: 'User Deleted', performed_by_id: actor.id, performed_by: actor.username || actor.email, result: 'success' });
-    await localDb.User.delete(user.id);
-    return { success: true };
+    return functions.invoke('user_admin', { action: 'delete', id });
   },
 
-  // Backward-compatible convenience
   async inviteUser(email, role = 'read_only') {
-    if (!isValidEmail(email)) throw new Error('Invalid email address.');
-    const existing = await localDb.User.where('email').equals(String(email).toLowerCase()).first();
-    if (existing) return publicUser(existing);
-    const actor = await auth.me();
-    const tempPassword = generateTemporaryPassword();
-    // Derive a schema-valid username from the email's local part, so the
-    // stricter username rule below cannot reject addresses whose local part
-    // contains dots, hyphens or other non-alphanumeric characters.
-    const local = String(email).split('@')[0].replace(/[^A-Za-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
-    const username = local.length >= 3 ? local.slice(0, 30) : `${local || 'user'}${Date.now().toString(36).slice(-4)}`;
-    return users.create(actor, { username, email, role, password: tempPassword, must_change_password: true });
+    return functions.invoke('user_admin', { action: 'invite', email, role });
+  },
+
+  async initialized() {
+    const res = await functions.invoke('user_admin', { action: 'initialized' });
+    return !!res.initialized;
   },
 };
 

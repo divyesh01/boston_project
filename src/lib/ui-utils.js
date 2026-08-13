@@ -33,7 +33,7 @@ export function composeRefs(...refs) {
       if (typeof ref === "function") {
         ref(instance);
       } else if (ref != null) {
-        ref.current = instance;
+        /** @type {any} */ (ref).current = instance;
       }
     });
   };
@@ -73,7 +73,7 @@ export function useUniqueId(prefix = "id") {
  * @returns {T | undefined} Previous value
  */
 export function usePrevious(value) {
-  const ref = React.useRef();
+  const ref = React.useRef(/** @type {T | undefined} */ (undefined));
   React.useEffect(() => {
     ref.current = value;
   });

@@ -1,5 +1,6 @@
+// @refresh reset
 import React, { createContext, useState, useContext, useEffect, useCallback, useRef } from 'react';
-import db from '@/api/base44Client';
+import { db } from '@/api/base44Client';
 import { canUser, canAccessRoute as checkRouteAccess } from '@/lib/permissions';
 import { subscribeSessionRevoked } from '@/lib/sessionChannel';
 import { logAuditEvent } from '@/lib/auditLogger';
@@ -21,15 +22,15 @@ export const AuthProvider = ({ children }) => {
   const authenticatedRef = useRef(false);
   const crossTabRevokingRef = useRef(false);
 
-  console.log('[AuthProvider] Component mounted, initial state:', { isLoadingAuth, authChecked, isAuthenticated });
+
 
   const refreshUser = useCallback(async () => {
-    console.log('[AuthProvider] refreshUser called');
+
     try {
       const ok = await db.auth.isAuthenticated();
-      console.log('[AuthProvider] isAuthenticated result:', ok);
+
       if (!ok) {
-        console.log('[AuthProvider] Not authenticated, resetting state');
+
         setUser(null);
         setIsAuthenticated(false);
         authenticatedRef.current = false;
@@ -38,13 +39,13 @@ export const AuthProvider = ({ children }) => {
         return false;
       }
       const me = await db.auth.me();
-      console.log('[AuthProvider] me() result:', me ? 'user found' : 'no user');
+
       setUser(me);
       setIsAuthenticated(true);
       authenticatedRef.current = true;
       setAuthChecked(true);
       setIsLoadingAuth(false);
-      console.log('[AuthProvider] Authentication complete, state updated');
+
       return true;
     } catch (e) {
       console.error('[AuthProvider] refreshUser error:', e);
@@ -58,10 +59,10 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const checkUserAuth = useCallback(async () => {
-    console.log('[AuthProvider] checkUserAuth called');
+
     setIsLoadingAuth(true);
     await refreshUser();
-    console.log('[AuthProvider] checkUserAuth completed');
+
   }, [refreshUser]);
 
   const checkAppState = useCallback(async () => {
@@ -86,7 +87,7 @@ export const AuthProvider = ({ children }) => {
 
   // Initial auth check + idle polling
   useEffect(() => {
-    console.log('[AuthProvider] Initial auth check useEffect running');
+
     checkUserAuth();
     const interval = setInterval(async () => {
       const ok = await db.auth.isAuthenticated();
@@ -115,8 +116,10 @@ export const AuthProvider = ({ children }) => {
     setAuthError(null);
     try {
       const result = await db.auth.login(identifier, password, remember, totpToken);
-      setUser(result.user);
-      setIsAuthenticated(true);
+      if (result.user) {
+        setUser(result.user);
+        setIsAuthenticated(true);
+      }
       setAuthChecked(true);
       setIsLoadingAuth(false);
       return result;
@@ -162,14 +165,11 @@ export const AuthProvider = ({ children }) => {
     // current session so Disabled/Locked accounts are revoked on the next route
     // navigation/action instead of waiting for the 30s idle poll.
     try {
-      const session = await db.auth.getCurrentSession();
-      if (!session) return { valid: false, status: 'revoked' };
-      const record = await db.entities.User.get(session.userId);
-      if (!record) return { valid: false, status: 'revoked' };
-      if (record.is_active === false) return { valid: false, status: 'disabled' };
-      if (record.is_locked === true) return { valid: false, status: 'locked' };
       const me = await db.auth.me();
-      return { valid: true, user: me || record };
+      if (!me) return { valid: false, status: 'revoked' };
+      if (me.is_active === false) return { valid: false, status: 'disabled' };
+      if (me.is_locked === true) return { valid: false, status: 'locked' };
+      return { valid: true, user: me };
     } catch (e) {
       console.error('[AuthProvider] validateCurrentAccountStatus error:', e);
       return { valid: false, status: 'revoked' };
@@ -222,7 +222,7 @@ export const AuthProvider = ({ children }) => {
     });
   }, [handleCrossTabRevocation]);
 
-  console.log('[AuthProvider] Rendering context provider, state:', { isLoadingAuth, authChecked, isAuthenticated, hasUser: !!user });
+
 
   return (
     <AuthContext.Provider value={{

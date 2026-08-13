@@ -9,8 +9,7 @@
  * @since 2.0.0
  * @example
  * ```jsx
- * /** @typedef {import('@/types/ui').BaseProps} BaseProps *\/
- * /** @typedef {import('@/types/ui').RadixProps} RadixProps *\/
+ * import { BaseProps, RadixProps } from '@/types/ui';
  * ```
  */
 
@@ -229,7 +228,7 @@
  */
 
 /**
- * @typedef {Object} LoadingProps
+ * @typedef {Object} LoadingComponentProps
  * Props for Loading component.
  * @property {string} [size='md'] - Size preset (sm, md, lg)
  * @property {string} [text] - Loading text to display

@@ -30,3 +30,46 @@ dist-ssr
 .env
 .vite
 base44/.app.jsonc
+
+# Secrets / credentials — never commit
+*.pem
+*.key
+*.secret
+
+# Local AI update tooling (contains API keys)
+ai_update.py
+ai_update.py.txt
+
+# Python artifacts
+__pycache__/
+*.pyc
+
+# Real business data — never commit (HotelKey/PMS exports)
+scripts/data/*.csv
+*.csv
+export-report.json
+user_inputs.json
+acceptance-report.json
+
+# Dev artifacts / logs / scratch files
+dev.log
+dev.err
+dev-server.log
+dev-probe*.log
+harness-out.txt
+snap-out.txt
+temp_root.js
+temp_log.txt
+temp*.js
+fix_security.cjs
+fix_rls.js
+test-app.cjs
+dev/
+
+# Dev Artifacts
+dev.log
+dev.err
+harness-out.txt
+snap-out.txt
+temp_root.js
+

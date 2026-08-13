@@ -10,6 +10,8 @@ import { cn } from "@/lib/utils"
 
 const Tabs = TabsPrimitive.Root
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const TabsList = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof TabsPrimitive.List>} */
@@ -26,6 +28,8 @@ const TabsList = React.forwardRef(
 ))
 TabsList.displayName = TabsPrimitive.List.displayName
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const TabsTrigger = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof TabsPrimitive.Trigger>} */
@@ -42,6 +46,8 @@ const TabsTrigger = React.forwardRef(
 ))
 TabsTrigger.displayName = TabsPrimitive.Trigger.displayName
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const TabsContent = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof TabsPrimitive.Content>} */

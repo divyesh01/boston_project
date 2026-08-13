@@ -34,7 +34,7 @@ import { cn } from "@/lib/utils"
  * placeholder styling, and file input support. Includes responsive
  * font sizing for mobile devices.
  * 
- * @type {React.ComponentPropsWithoutRef<"input">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [type] - Input type (text, email, password, file, etc.)
  * @property {string} [className] - Additional CSS classes
  * @property {string} [placeholder] - Placeholder text

@@ -6,8 +6,8 @@ import { Label } from "@/components/ui/label";
 import { ShieldCheck, Eye, EyeOff, Loader2 } from "lucide-react";
 import AuthLayout from "@/components/AuthLayout";
 import { useAuth } from "@/lib/AuthContext";
-import db from "@/api/base44Client";
-import { isCryptoAvailable, validatePasswordStrength } from "@/lib/security";
+import { db } from "@/api/base44Client";
+import { validatePasswordStrength } from "@/lib/security";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeAlphanumeric, sanitizeEmail, sanitizeText, sanitizeCsvCell } from "@/lib/securityUtils";
 
 export default function Setup() {
@@ -28,8 +28,8 @@ export default function Setup() {
     let mounted = true;
     (async () => {
       try {
-        const all = await db.entities.User.list();
-        if (mounted) setAlreadyExists(all.length > 0);
+        const initialized = await db.users.initialized();
+        if (mounted) setAlreadyExists(initialized);
       } catch (e) {
         if (mounted) setAlreadyExists(false);
       } finally {
@@ -50,10 +50,6 @@ export default function Setup() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
-    if (!isCryptoAvailable()) {
-      setError("Password hashing is not available in this browser. Open the app via localhost or HTTPS.");
-      return;
-    }
     // Rate limiting
     const rateLimit = sensitiveActionRateLimiter.check();
     if (!rateLimit.allowed) {
@@ -86,20 +82,17 @@ export default function Setup() {
     }
     setLoading(true);
     try {
-      await db.users.create(
-        { id: "setup", username: sanitizedUsername || "owner", email: sanitizedEmail || "owner", role: "owner", is_active: true },
-        {
-          username: sanitizedUsername,
-          email: sanitizedEmail,
-          full_name: sanitizedFullName,
-          role: "owner",
-          permissions: "all",
-          property_access: "all",
-          is_active: true,
-          password,
-          must_change_password: false,
-        }
-      );
+      await db.auth.registerUser({
+        username: sanitizedUsername,
+        email: sanitizedEmail,
+        full_name: sanitizedFullName,
+        role: "owner",
+        permissions: "all",
+        property_access: "all",
+        is_active: true,
+        password,
+        must_change_password: false,
+      });
       await login(sanitizedUsername, password, true);
       rotateCsrfToken();
       window.location.href = "/";

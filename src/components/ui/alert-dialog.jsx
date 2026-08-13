@@ -15,6 +15,8 @@ const AlertDialogTrigger = AlertDialogPrimitive.Trigger
 
 const AlertDialogPortal = AlertDialogPrimitive.Portal
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const AlertDialogOverlay = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Overlay>} */
@@ -31,6 +33,8 @@ const AlertDialogOverlay = React.forwardRef(
 ))
 AlertDialogOverlay.displayName = AlertDialogPrimitive.Overlay.displayName
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const AlertDialogContent = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content>} */
@@ -70,6 +74,8 @@ const AlertDialogFooter = (
 )
 AlertDialogFooter.displayName = "AlertDialogFooter"
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const AlertDialogTitle = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Title>} */
@@ -80,6 +86,8 @@ const AlertDialogTitle = React.forwardRef(
 ))
 AlertDialogTitle.displayName = AlertDialogPrimitive.Title.displayName
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const AlertDialogDescription = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Description>} */
@@ -94,6 +102,8 @@ const AlertDialogDescription = React.forwardRef(
 AlertDialogDescription.displayName =
   AlertDialogPrimitive.Description.displayName
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const AlertDialogAction = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Action>} */
@@ -104,6 +114,8 @@ const AlertDialogAction = React.forwardRef(
 ))
 AlertDialogAction.displayName = AlertDialogPrimitive.Action.displayName
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const AlertDialogCancel = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Cancel>} */

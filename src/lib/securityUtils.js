@@ -186,13 +186,11 @@ export function sanitizeAlphanumeric(str, maxLength = 50) {
 }
 
 // Sanitize general text input (allow common punctuation, strip scripts)
+import DOMPurify from 'dompurify';
+
 export function sanitizeText(str, maxLength = 1000) {
   if (typeof str !== 'string') return '';
-  return str
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
-    .replace(/on\w+\s*=/gi, 'data-on-=')
-    .slice(0, maxLength);
+  return DOMPurify.sanitize(str.slice(0, maxLength));
 }
 
 // ─── CSV Formula Injection Defense ───
@@ -221,12 +219,11 @@ const CSRF_TOKEN_KEY = 'rri_csrf_token';
 const CSRF_TOKEN_LENGTH = 32;
 
 function generateCsrfToken() {
-  const arr = new Uint8Array(CSRF_TOKEN_LENGTH);
-  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-    crypto.getRandomValues(arr);
-  } else {
-    for (let i = 0; i < CSRF_TOKEN_LENGTH; i++) arr[i] = Math.floor(Math.random() * 256);
+  if (typeof crypto === "undefined" || !crypto.getRandomValues) {
+    throw new Error("Web Crypto API is required for secure operation.");
   }
+  const arr = new Uint8Array(CSRF_TOKEN_LENGTH);
+  crypto.getRandomValues(arr);
   return Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
@@ -241,13 +238,13 @@ function safeSessionStorage() {
   }
 }
 
+// ─── CSRF Token ───
 export function getCsrfToken() {
-  const ss = safeSessionStorage();
-  if (!ss) return generateCsrfToken();
-  let token = ss.getItem(CSRF_TOKEN_KEY);
+  const match = document.cookie.match(/csrf_token=([^;]+)/);
+  let token = match ? match[1] : null;
   if (!token) {
-    token = generateCsrfToken();
-    ss.setItem(CSRF_TOKEN_KEY, token);
+    token = crypto.randomUUID();
+    document.cookie = `csrf_token=${token}; Path=/; SameSite=Lax`;
   }
   return token;
 }
@@ -271,40 +268,58 @@ export function validateCsrfToken(token) {
 }
 
 // ─── Secure Storage Helpers ───
-
-// Encrypt sensitive data before storing in localStorage
+//
+// ⚠️ SECURITY / HONESTY: This layer is OBFUSCATION, not encryption-at-rest.
+// The AES-GCM key has to live somewhere the same origin can reach — either
+// sessionStorage or an in-memory variable — so any script running in this page
+// (XSS, a malicious dependency, devtools on a shared machine) can read BOTH the
+// key and the ciphertext and decrypt everything. It does NOT create a
+// confidentiality boundary against same-origin code, local malware, or an
+// attacker who can run JS in the page. What it does buy you is marginal: the
+// stored value is not immediately greppable as plaintext, and the key is not
+// persisted to disk in localStorage itself.
+//
+// If a value must be TRULY confidential (session secrets, credentials), the
+// only correct place for it is server-side storage the browser cannot reach
+// (HttpOnly cookies / a server-held session store). Treat anything returned by
+// secureRetrieve() as readable by the page, never as a secret.
 const ENCRYPTION_KEY_PREFIX = 'rri_enc_';
+
+// In-memory fallback key (module-scoped, never attached to `window`). Used only
+// when sessionStorage is unavailable. Keeping it off the global object means it
+// is not enumerable via `window.__rri_enc_key` in devtools, but note it is STILL
+// readable by same-origin code — see the honesty note above.
+let memoryEncryptionKey = null;
+
+function generateHexKey() {
+  if (typeof crypto === "undefined" || !crypto.getRandomValues) {
+    throw new Error("Web Crypto API is required for secure operation.");
+  }
+  const arr = new Uint8Array(32);
+  crypto.getRandomValues(arr);
+  return Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 async function getEncryptionKey() {
   const ss = safeSessionStorage();
   if (!ss) {
-    // Fallback: generate a per-session in-memory key
-    const w = /** @type {any} */ (window);
-    if (!w.__rri_enc_key) {
-      const arr = new Uint8Array(32);
-      if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-        crypto.getRandomValues(arr);
-      } else {
-        for (let i = 0; i < 32; i++) arr[i] = Math.floor(Math.random() * 256);
-      }
-      w.__rri_enc_key = Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
-    }
-    return w.__rri_enc_key;
+    if (!memoryEncryptionKey) memoryEncryptionKey = generateHexKey();
+    return memoryEncryptionKey;
   }
   let key = ss.getItem(ENCRYPTION_KEY_PREFIX + 'key');
   if (!key) {
-    const arr = new Uint8Array(32);
-    if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-      crypto.getRandomValues(arr);
-    } else {
-      for (let i = 0; i < 32; i++) arr[i] = Math.floor(Math.random() * 256);
-    }
-    key = Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
+    key = generateHexKey();
     try {
       ss.setItem(ENCRYPTION_KEY_PREFIX + 'key', key);
     } catch {}
   }
   return key;
+}
+
+// Reset the in-memory fallback key (e.g. on logout) so a later session cannot
+// reuse a key another user's data was sealed with.
+export function resetEncryptionKey() {
+  memoryEncryptionKey = null;
 }
 
 async function importKey(keyHex) {
@@ -371,6 +386,18 @@ export function secureRemove(key) {
 }
 
 // ─── Audit Log Helpers ───
+//
+// ⚠️ SECURITY / FORGERY CAVEAT: this client-side HMAC chain is NOT a real
+// tamper-evident audit trail. The chain secret is stored in localStorage (or a
+// `window.__rri_audit_chain` global) right next to the logs it "protects", so
+// anyone with localStorage/script access (XSS, a shared machine, an attacker
+// who opened devtools) can read the secret, rewrite any log entry, and re-hash
+// the chain so `verifyAuditChain()` reports it as valid. Treat this chain only
+// as a guard against accidental edits, never as forensic proof. The
+// AUTHORITATIVE audit trail must be written server-side (see
+// base44/functions/*, which record entries via db.entities.AuditLog), where the
+// signing key is held outside the browser. `verifyAuditChain()` here can detect
+// accidental corruption; it CANNOT detect a deliberate, secret-aware forgery.
 
 const AUDIT_CHAIN_KEY = 'rri_audit_chain';
 
@@ -390,24 +417,22 @@ async function getChainSecret() {
   if (!ls) {
     const w = /** @type {any} */ (window);
   if (!w.__rri_audit_chain) {
-      const arr = new Uint8Array(32);
-      if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-        crypto.getRandomValues(arr);
-      } else {
-        for (let i = 0; i < 32; i++) arr[i] = Math.floor(Math.random() * 256);
+      if (typeof crypto === "undefined" || !crypto.getRandomValues) {
+        throw new Error("Web Crypto API is required.");
       }
+      const arr = new Uint8Array(32);
+      crypto.getRandomValues(arr);
       w.__rri_audit_chain = Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
     }
     return w.__rri_audit_chain;
   }
   let secret = ls.getItem(AUDIT_CHAIN_KEY);
   if (!secret) {
-    const arr = new Uint8Array(32);
-    if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-      crypto.getRandomValues(arr);
-    } else {
-      for (let i = 0; i < 32; i++) arr[i] = Math.floor(Math.random() * 256);
+    if (typeof crypto === "undefined" || !crypto.getRandomValues) {
+      throw new Error("Web Crypto API is required.");
     }
+    const arr = new Uint8Array(32);
+    crypto.getRandomValues(arr);
     secret = Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
     try {
       ls.setItem(AUDIT_CHAIN_KEY, secret);
@@ -500,10 +525,39 @@ export async function verifyAuditChain() {
 }
 
 export function getClientIpHint() {
-  // In a real deployment, this would come from a trusted proxy header
-  // For local/client-side, we can't reliably get the IP
-  // This is a placeholder for server-side integration
+  // ⚠️ SECURITY: this is a PLACEHOLDER, not a real IP. A browser cannot
+  // reliably learn its own public IP, and this constant is written into audit
+  // entries as if it were trustworthy. For any real audit, the IP must be read
+  // from a trusted proxy header on the SERVER (e.g. req.headers.get('x-forwarded-for'))
+  // and recorded in the server-side AuditLog row, not fabricated client-side.
   return 'client-side';
+}
+
+// SHA-256 content digest of an uploaded file. Used for duplicate-detection: a
+// re-uploaded clerk/PMS file hashes identically, so we can cancel the duplicate
+// import before it touches any financial calculation.
+export async function sha256File(file) {
+  try {
+    if (!file || typeof file.arrayBuffer !== 'function') return null;
+    const buf = await file.arrayBuffer();
+    const digest = await crypto.subtle.digest('SHA-256', buf);
+    return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return null;
+  }
+}
+
+// SHA-256 hex digest of a string. Used to bind a session token to a user record
+// WITHOUT storing the plaintext token at rest (see #13). The server holds the
+// plaintext session; the local user row only ever stores this digest.
+export async function sha256Hex(value) {
+  try {
+    const buf = new TextEncoder().encode(String(value ?? ''));
+    const digest = await crypto.subtle.digest('SHA-256', buf);
+    return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return null;
+  }
 }
 
 export function getDeviceFingerprint() {
@@ -527,12 +581,11 @@ export function getDeviceFingerprint() {
 
 export function getCspNonce() {
   // Generate a nonce for inline scripts/styles if needed
-  const arr = new Uint8Array(16);
-  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-    crypto.getRandomValues(arr);
-  } else {
-    for (let i = 0; i < 16; i++) arr[i] = Math.floor(Math.random() * 256);
+  if (typeof crypto === "undefined" || !crypto.getRandomValues) {
+    throw new Error("Web Crypto API is required.");
   }
+  const arr = new Uint8Array(16);
+  crypto.getRandomValues(arr);
   return Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 

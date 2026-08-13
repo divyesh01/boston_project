@@ -258,6 +258,8 @@ export const CLERK_ANOMALY_TYPES = {
   REPEATED_ADJUSTMENT_LOOP: "repeated_adjustment_loop",
   LARGE_UNCATEGORIZED_WRITEOFF: "large_uncategorized_writeoff",
   OFF_HOURS_ADJUSTMENT: "off_hours_adjustment",
+  DEPOSIT_REFUND: "deposit_refund",
+  ROOM_RENT_REFUND: "room_rent_refund",
 };
 
 export const CLERK_THRESHOLDS = {
@@ -272,6 +274,8 @@ export const CLERK_THRESHOLDS = {
   microSkimMaxAmount: 20,         // under $20 is considered a micro-skim
   graveyardStart: 1,              // 01:00 AM
   graveyardEnd: 5,                // 05:00 AM
+  depositRefundAmount: 100,       // exactly $100 = likely deposit refund
+  depositRefundTolerance: 0.01,   // tolerance for floating point
 };
 
 const VAGUE_REASON_CODES = new Set([
@@ -515,6 +519,39 @@ function detectRoundNumberFraud(rows) {
   return flags;
 }
 
+// Rule 10: Deposit Refund Detection
+// Exactly $100.00 refunds are typically deposit returns (guest gets deposit back)
+// Other amounts (79, 84, 107, etc.) are likely room rent adjustments
+function detectDepositRefunds(refunds, thresholds) {
+  const flags = [];
+  for (const r of refunds) {
+    const amt = Math.abs(Number(r.amount) || 0);
+    const isDepositRefund = Math.abs(amt - thresholds.depositRefundAmount) <= thresholds.depositRefundTolerance;
+    
+    if (isDepositRefund) {
+      flags.push(clerkAlertFor(
+        CLERK_ANOMALY_TYPES.DEPOSIT_REFUND,
+        "Deposit Refund Returned",
+        "LOW",
+        "Deposit Refund",
+        r,
+        r.amount,
+      ));
+    } else if (amt > 0) {
+      // Room rent refund - flag for review
+      flags.push(clerkAlertFor(
+        CLERK_ANOMALY_TYPES.ROOM_RENT_REFUND,
+        "Room Rent Refund",
+        "MEDIUM",
+        "Room Rent Refund",
+        r,
+        r.amount,
+      ));
+    }
+  }
+  return flags;
+}
+
 // Clerk Risk Score Matrix — aggregate flags and amounts per username.
 function buildClerkRiskScores(flaggedAnomalies, adjustments, refunds, thresholds) {
   const map = new Map();
@@ -526,6 +563,10 @@ function buildClerkRiskScores(flaggedAnomalies, adjustments, refunds, thresholds
         totalRefundedAmount: 0,
         totalAdjustedAmount: 0,
         totalCashRefunded: 0,
+        totalDepositRefunds: 0,
+        totalRoomRentRefunds: 0,
+        depositRefundCount: 0,
+        roomRentRefundCount: 0,
         riskLevel: "LOW",
         behaviorAnalysis: "",
       });
@@ -545,7 +586,7 @@ function buildClerkRiskScores(flaggedAnomalies, adjustments, refunds, thresholds
     }
   }
 
-  // Sum refund amounts per clerk
+  // Sum refund amounts per clerk - track deposit vs room rent separately
   for (const r of refunds) {
     if (r.username) {
       const u = ensure(r.username);
@@ -553,6 +594,15 @@ function buildClerkRiskScores(flaggedAnomalies, adjustments, refunds, thresholds
       u.totalRefundedAmount += amt;
       if (String(r.paymentTypeRefunded || "").toUpperCase().trim() === "CASH") {
         u.totalCashRefunded += amt;
+      }
+      // Classify as deposit refund ($100) or room rent refund (other amounts)
+      const isDepositRefund = Math.abs(amt - thresholds.depositRefundAmount) <= thresholds.depositRefundTolerance;
+      if (isDepositRefund) {
+        u.totalDepositRefunds += amt;
+        u.depositRefundCount += 1;
+      } else if (amt > 0) {
+        u.totalRoomRentRefunds += amt;
+        u.roomRentRefundCount += 1;
       }
     }
   }
@@ -562,6 +612,8 @@ function buildClerkRiskScores(flaggedAnomalies, adjustments, refunds, thresholds
     score.totalAdjustedAmount = round2(score.totalAdjustedAmount);
     score.totalRefundedAmount = round2(score.totalRefundedAmount);
     score.totalCashRefunded = round2(score.totalCashRefunded);
+    score.totalDepositRefunds = round2(score.totalDepositRefunds);
+    score.totalRoomRentRefunds = round2(score.totalRoomRentRefunds);
     
     let cashRatio = 0;
     if (score.totalRefundedAmount > 0) {
@@ -580,12 +632,23 @@ function buildClerkRiskScores(flaggedAnomalies, adjustments, refunds, thresholds
     if (score.totalAdjustedAmount > thresholds.highRiskAdjustedAmount) {
       insights.push(`Excessive write-offs.`);
     }
+    // Deposit vs Room Rent analysis
+    if (score.depositRefundCount > 0) {
+      insights.push(`${score.depositRefundCount} deposit refund(s) totaling ${round2(score.totalDepositRefunds).toFixed(2)} — likely legitimate guest deposit returns.`);
+    }
+    if (score.roomRentRefundCount > 0) {
+      insights.push(`${score.roomRentRefundCount} room rent refund(s) totaling ${round2(score.totalRoomRentRefunds).toFixed(2)} — review for rate disputes or comps.`);
+    }
+    // High room rent refund ratio could indicate issues
+    if (score.roomRentRefundCount > 3 && score.totalRoomRentRefunds > 200) {
+      insights.push(`High volume of room rent refunds — possible rate override abuse.`);
+    }
     
     score.behaviorAnalysis = insights.length > 0 ? insights.join(" ") : "Normal behavior baseline.";
 
     if (score.totalFlags >= thresholds.highRiskFlagCount || score.totalAdjustedAmount > thresholds.highRiskAdjustedAmount || cashRatio >= 0.85) {
       score.riskLevel = "HIGH";
-    } else if (score.totalFlags >= 1 || cashRatio >= 0.5) {
+    } else if (score.totalFlags >= 1 || cashRatio >= 0.5 || score.roomRentRefundCount > 2) {
       score.riskLevel = "MEDIUM";
     } else {
       score.riskLevel = "LOW";
@@ -616,6 +679,7 @@ export function detectClerkAnomalies({ adjustments = [], refunds = [] }, options
     ...detectExactRateReversals(adjustments),
     ...detectSuspiciousRemarks(allRows),
     ...detectRoundNumberFraud(allRows),
+    ...detectDepositRefunds(refunds, thresholds),
   ];
 
   // Dedupe by id (a row can trigger multiple rules)

@@ -49,17 +49,22 @@ const REQUIRED_FIELDS = {
 // cents value stored as dollars, not to second-guess a good night.
 const FIELD_RANGES = {
   occupancy: { min: 0, max: 1, unit: "ratio (0-1)" },
-  adr: { min: 0, max: 10000, unit: "dollars" },
-  revpar: { min: 0, max: 10000, unit: "dollars" },
+  // Negative ADR/RevPAR is legitimate in PMS exports — correction and refund
+  // days post negative. The range check exists to catch a cents-vs-dollars unit
+  // error (e.g. ADR of 12000), not to block real negative corrections.
+  adr: { min: -10000, max: 10000, unit: "dollars" },
+  revpar: { min: -10000, max: 10000, unit: "dollars" },
   rooms_sold: { min: 0, max: 10000, unit: "rooms" },
   total_rooms: { min: 0, max: 10000, unit: "rooms" },
 };
 
 // Fields where a negative value is a real, expected occurrence rather than a
-// sign error — refunds, adjustments and corrections all post negative.
+// sign error — refunds, adjustments, corrections and ADR/RevPAR on bad days
+// can all be legitimately negative.
 const NEGATIVE_OK = new Set([
   "amount", "net_today", "adjusted", "actual", "total",
   "loyalty_discount", "non_revenue",
+  "adr", "revpar",
 ]);
 
 // ── Layer 1: structural ────────────────────────────────────────────────────
@@ -339,6 +344,20 @@ export function validateSemantics({ rows = [], type, today = new Date() }) {
 // when an earlier one fails, so the preview can show the full picture — but
 // `firstFailingLayer` lets the UI lead with the root cause instead of the noise
 // it cascades into.
+/**
+ * @typedef {Object} ValidateImportInput
+ * @property {Array} [rawRows]
+ * @property {Array} [rows]
+ * @property {string} [type]
+ * @property {Set} [knownColumns]
+ * @property {Array} [coercions]
+ * @property {number} [dateFailures]
+ * @property {Date} [today]
+ */
+
+/**
+ * @param {ValidateImportInput} [input]
+ */
 export function validateImport({
   rawRows = [],
   rows = [],

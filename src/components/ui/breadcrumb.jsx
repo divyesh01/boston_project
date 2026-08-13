@@ -47,7 +47,7 @@ import { cn } from "@/lib/utils"
  * Renders as a semantic `<nav>` element with appropriate aria-label.
  * Wraps the ordered list of breadcrumb items.
  *
- * @type {React.ComponentPropsWithoutRef<"nav">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [aria-label="breadcrumb"] - Accessible label
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - BreadcrumbList component
@@ -68,7 +68,7 @@ Breadcrumb.displayName = "Breadcrumb"
  * Renders as an ordered list (`<ol>`) with flex layout and wrapped items.
  * Applies muted text color and consistent gap spacing.
  *
- * @type {React.ComponentPropsWithoutRef<"ol">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - BreadcrumbItem components
  */
@@ -88,7 +88,7 @@ BreadcrumbList.displayName = "BreadcrumbList"
  *
  * Renders as an inline-flex list item for horizontal breadcrumb layouts.
  *
- * @type {React.ComponentPropsWithoutRef<"li">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - BreadcrumbLink or BreadcrumbPage
  */
@@ -117,7 +117,7 @@ BreadcrumbItem.displayName = "BreadcrumbItem"
  * when `asChild` is true (useful for React Router Link integration).
  * Applies hover color transition styling.
  *
- * @type {BreadcrumbLinkProps}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {boolean} [asChild] - Merge props onto child element
  * @property {string} [href] - Link destination
  * @property {string} [className] - Additional CSS classes
@@ -149,7 +149,7 @@ BreadcrumbLink.displayName = "BreadcrumbLink"
  * Renders as a non-interactive span with appropriate ARIA attributes
  * indicating it represents the current page.
  *
- * @type {React.ComponentPropsWithoutRef<"span">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Page name
  */

@@ -17,6 +17,8 @@ const SelectGroup = SelectPrimitive.Group
 
 const SelectValue = SelectPrimitive.Value
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const SelectTrigger = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger>} */
@@ -38,6 +40,8 @@ const SelectTrigger = React.forwardRef(
 ))
 SelectTrigger.displayName = SelectPrimitive.Trigger.displayName
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const SelectScrollUpButton = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof SelectPrimitive.ScrollUpButton>} */
@@ -53,6 +57,8 @@ const SelectScrollUpButton = React.forwardRef(
 ))
 SelectScrollUpButton.displayName = SelectPrimitive.ScrollUpButton.displayName
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const SelectScrollDownButton = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof SelectPrimitive.ScrollDownButton>} */
@@ -69,6 +75,8 @@ const SelectScrollDownButton = React.forwardRef(
 SelectScrollDownButton.displayName =
   SelectPrimitive.ScrollDownButton.displayName
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const SelectContent = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof SelectPrimitive.Content> & { position?: 'popper' | 'item-aligned' }} */
@@ -98,6 +106,8 @@ const SelectContent = React.forwardRef(
 ))
 SelectContent.displayName = SelectPrimitive.Content.displayName
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const SelectLabel = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof SelectPrimitive.Label>} */
@@ -111,6 +121,8 @@ const SelectLabel = React.forwardRef(
 ))
 SelectLabel.displayName = SelectPrimitive.Label.displayName
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const SelectItem = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof SelectPrimitive.Item>} */
@@ -134,6 +146,8 @@ const SelectItem = React.forwardRef(
 ))
 SelectItem.displayName = SelectPrimitive.Item.displayName
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const SelectSeparator = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof SelectPrimitive.Separator>} */

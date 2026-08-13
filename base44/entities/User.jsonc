@@ -2,10 +2,14 @@
   "properties": {
     "role": {
       "type": "string",
-      "description": "Highest privilege in the app. `owner` (app admin) and `admin` (manager) bypass per-property restrictions; `user` is restricted to `property_access`.",
+      "description": "Highest privilege in the app. `owner` (app admin) and `admin` (manager) bypass per-property restrictions; the remaining roles are restricted to `property_access`.",
       "enum": [
-        "admin",
         "owner",
+        "admin",
+        "manager",
+        "front_desk",
+        "accountant",
+        "read_only",
         "user"
       ]
     },
@@ -53,12 +57,27 @@
     "display_name": {
       "type": "string"
     },
+    "full_name": {
+      "type": "string"
+    },
     "password_hash": {
       "type": "string",
-      "description": "PBKDF2 hash (never the plaintext password)."
+      "description": "SCrypt hash (never the plaintext password)."
     },
     "salt": {
       "type": "string"
+    },
+    "mfa_secret": {
+      "type": "string",
+      "description": "TOTP secret (base32) used for authenticator apps. Kept server-side only."
+    },
+    "reset_token_hash": {
+      "type": "string",
+      "description": "Hashed single-use password-reset token."
+    },
+    "reset_token_expires_at": {
+      "type": "string",
+      "description": "ISO date-time when the reset token expires."
     },
     "last_login": {
       "type": "string"

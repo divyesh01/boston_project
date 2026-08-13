@@ -86,7 +86,7 @@ function useCarousel() {
  * Manages carousel state, keyboard navigation, and scroll controls.
  * Wraps content in a region with appropriate ARIA attributes.
  *
- * @type {CarouselProps}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {"horizontal" | "vertical"} [orientation="horizontal"] - Layout direction
  * @property {any} [opts] - Embla Carousel configuration (e.g., { loop: true })
  * @property {(api: any) => void} [setApi] - Callback to access Embla API instance
@@ -200,7 +200,7 @@ Carousel.displayName = "Carousel"
  * Contains the scrollable flex track that holds all CarouselItem
  * children. Applies negative margins for proper gap spacing.
  *
- * @type {React.HTMLAttributes<HTMLDivElement>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes for the track
  * @property {React.ReactNode} children - CarouselItem components
  */
@@ -228,7 +228,7 @@ CarouselContent.displayName = "CarouselContent"
  * Each slide takes full width/height of the carousel container.
  * Applies flex-basis constraints and appropriate padding.
  *
- * @type {React.HTMLAttributes<HTMLDivElement>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Slide content
  */
@@ -256,7 +256,7 @@ CarouselItem.displayName = "CarouselItem"
  * Renders as an absolutely positioned button that scrolls to
  * the previous slide. Disabled state when at the start.
  *
- * @type {React.ComponentPropsWithoutRef<typeof Button>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {"default" | "destructive" | "outline" | "secondary" | "ghost" | "link"} [variant="outline"] - Button style
  * @property {"default" | "sm" | "lg" | "icon"} [size="icon"] - Button size
  * @property {string} [className] - Additional CSS classes
@@ -288,7 +288,7 @@ CarouselPrevious.displayName = "CarouselPrevious"
  * Renders as an absolutely positioned button that scrolls to
  * the next slide. Disabled state when at the end.
  *
- * @type {React.ComponentPropsWithoutRef<typeof Button>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {"default" | "destructive" | "outline" | "secondary" | "ghost" | "link"} [variant="outline"] - Button style
  * @property {"default" | "sm" | "lg" | "icon"} [size="icon"] - Button size
  * @property {string} [className] - Additional CSS classes

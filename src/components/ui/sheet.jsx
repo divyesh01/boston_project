@@ -89,7 +89,7 @@ const SheetPortal = SheetPrimitive.Portal
  * Semi-transparent backdrop rendered behind the sheet content.
  * Clicking the overlay closes the sheet.
  * 
- * @type {React.ComponentPropsWithoutRef<typeof SheetPrimitive.Overlay>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {boolean} [forceMount] - Force mount for SSR
  */
@@ -138,7 +138,7 @@ const sheetVariants = cva(
  * Includes a close button (X) in the top-right corner.
  * Default side is right with max-width on small screens.
  * 
- * @type {React.ForwardRefExoticComponent<{side: 'top' | 'bottom' | 'left' | 'right'} & React.ComponentPropsWithoutRef<typeof SheetPrimitive.Content>>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {'top' | 'bottom' | 'left' | 'right'} [side='right'] - Slide direction
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Sheet content
@@ -166,7 +166,7 @@ SheetContent.displayName = SheetPrimitive.Content.displayName
  * Container for the sheet title and description.
  * Uses flexbox column layout with centered text on mobile.
  * 
- * @type {React.HTMLAttributes<HTMLDivElement>}
+ * @type {React.FC<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - SheetTitle and SheetDescription
  */
@@ -183,7 +183,7 @@ SheetHeader.displayName = "SheetHeader"
  * Container for action buttons. Uses responsive flexbox layout
  * that stacks vertically on mobile and horizontally on desktop.
  * 
- * @type {React.HTMLAttributes<HTMLDivElement>}
+ * @type {React.FC<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Action buttons
  */
@@ -199,7 +199,7 @@ SheetFooter.displayName = "SheetFooter"
  * 
  * Bold heading for the sheet panel. Required for accessibility.
  * 
- * @type {React.ComponentPropsWithoutRef<typeof SheetPrimitive.Title>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Title text
  */
@@ -216,7 +216,7 @@ SheetTitle.displayName = SheetPrimitive.Title.displayName
  * 
  * Secondary text providing additional context for the sheet.
  * 
- * @type {React.ComponentPropsWithoutRef<typeof SheetPrimitive.Description>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Description text
  */

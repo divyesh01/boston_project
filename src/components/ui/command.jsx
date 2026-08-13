@@ -47,7 +47,7 @@ import { Dialog, DialogContent } from "@/components/ui/dialog"
  * Wraps cmdk's Command primitive with consistent styling. Provides
  * fuzzy search, keyboard navigation, and item selection out of the box.
  *
- * @type {React.ComponentPropsWithoutRef<typeof CommandPrimitive>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {string} [label] - Accessible label for the command menu
  * @property {boolean} [shouldFilter] - Enable/disable filtering (default: true)
@@ -81,7 +81,7 @@ Command.displayName = CommandPrimitive.displayName
  * Combines the Command component with a modal Dialog for global
  * search overlays. Typically triggered via Cmd+K keyboard shortcut.
  *
- * @type {React.FC<CommandDialogProps>}
+ * @type {React.FC<any>}
  */
 const CommandDialog = ({ children, ...props }) => {
   return (
@@ -102,7 +102,7 @@ const CommandDialog = ({ children, ...props }) => {
  * Renders with a search icon prefix. Handles keyboard input
  * for filtering the command list items via fuzzy search.
  *
- * @type {React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {string} [placeholder] - Input placeholder text
  */
@@ -127,7 +127,7 @@ CommandInput.displayName = CommandPrimitive.Input.displayName
  * Scrollable container for CommandItem children. Handles
  * empty state display and keyboard navigation between items.
  *
- * @type {React.ComponentPropsWithoutRef<typeof CommandPrimitive.List>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - CommandItem components
  */
@@ -145,7 +145,7 @@ CommandList.displayName = CommandPrimitive.List.displayName
  *
  * Displayed when no items match the current search query.
  *
- * @type {React.ComponentPropsWithoutRef<typeof CommandPrimitive.Empty>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  */
 const CommandEmpty = React.forwardRef((props, ref) => (
@@ -160,7 +160,7 @@ CommandEmpty.displayName = CommandPrimitive.Empty.displayName
  * Groups related command items under a styled heading.
  * Headings are muted and smaller than item text.
  *
- * @type {React.ComponentPropsWithoutRef<typeof CommandPrimitive.Group>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [heading] - Group heading text
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - CommandItem components
@@ -182,7 +182,7 @@ CommandGroup.displayName = CommandPrimitive.Group.displayName
  *
  * Visual divider between command items or groups.
  *
- * @type {React.ComponentPropsWithoutRef<typeof CommandPrimitive.Separator>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  */
 const CommandSeparator = React.forwardRef(({ className, ...props }, ref) => (
@@ -196,7 +196,7 @@ CommandSeparator.displayName = CommandPrimitive.Separator.displayName
  * Selectable item with hover/selected states. Supports disabled
  * state and icon rendering via SVG child elements.
  *
- * @type {React.ComponentPropsWithoutRef<typeof CommandPrimitive.Item>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {boolean} [disabled] - Whether item is non-selectable
  * @property {string} [value] - Item value for filtering/selection
@@ -220,7 +220,7 @@ CommandItem.displayName = CommandPrimitive.Item.displayName
  * Renders keyboard shortcut text (e.g., "⌘K") aligned to the
  * right side of a CommandItem. Uses muted text color.
  *
- * @type {React.HTMLAttributes<HTMLSpanElement>}
+ * @type {React.FC<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Shortcut text
  */

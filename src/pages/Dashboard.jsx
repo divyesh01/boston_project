@@ -1,4 +1,5 @@
-import React, { useMemo, useState, useRef } from "react";
+import React, { useMemo, useState, useRef, useEffect } from "react";
+import confetti from "canvas-confetti";
 import { DollarSign, BedDouble, Percent, Gauge, RefreshCw, FileDown, TrendingDown, Lightbulb, AlertTriangle, TrendingUp } from "lucide-react";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import Card from "@/components/ui-exec/Card";
@@ -11,7 +12,7 @@ import MoneyKept from "@/components/dashboard/MoneyKept";
 import PropertyRanking from "@/components/dashboard/PropertyRanking";
 import LowOccAlert from "@/components/dashboard/LowOccAlert";
 import ModuleCards from "@/components/dashboard/ModuleCards";
-import { useOccupancy, useSources, useClerkRecords, useGrossRevenue, usePaymentData } from "@/lib/useHotelData";
+import { useOccupancy, useSources, useClerkRecords, useGrossRevenue, usePaymentData, useDailyFinancialAggregates, filterByMonths } from "@/lib/useHotelData";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { exportToPdf } from "@/lib/pdfExport";
 import { money, money2, num, pct, sum, inRange, C, getOccThreshold } from "@/lib/hotel";
@@ -37,12 +38,22 @@ export default function Dashboard() {
   // fresh without manual refresh. Default on for the operational data sets.
   useRealtimeInvalidation(["occupancy", "sources", "gross", "clerk", "payments", "expenses", "payroll", "anomaly-alerts", "rooms", "reservations", "weather"]);
 
+  // The raw-ledger hooks still run (they feed the explicit Compare view and act
+  // as the aggregate's fallback), but the Dashboard no longer blocks render on
+  // them — the materialized aggregate drives the initial paint.
   const { data: occ = [], isLoading, refetch: refOcc } = useOccupancy(dateRange, property, months);
   const { data: prevOcc = [] } = useOccupancy(compareOn ? compareDateRange : { from: "", to: "" }, property, compareOn ? compareMonths : [], compareOn);
   const { data: sources = [], refetch: refSrc } = useSources(dateRange, property, months);
   const { data: clerk = [], refetch: refClerk } = useClerkRecords(dateRange, property);
   const { data: gross = [], refetch: refGross } = useGrossRevenue(dateRange, property, months);
   const { data: payRows = [] } = usePaymentData(dateRange, property, months);
+
+  // Materialized daily aggregates (rebuilt on every import). When present, the
+  // headline metrics, charts and owner-intelligence panels read a few hundred
+  // pre-summed rows instead of the raw ledgers — instant at 10k+ rows. Falls
+  // back to the live ledgers when the cache is empty (e.g. nothing imported yet).
+  const agg = useDailyFinancialAggregates(dateRange, property);
+  const aggData = agg.data;
   
   // Fetch expenses and payroll for owner intelligence
   const propertyKey = Array.isArray(property) ? property.join(",") : property;
@@ -87,16 +98,28 @@ export default function Dashboard() {
     return { from: prevFrom.toISOString().slice(0, 10), to: prevTo.toISOString().slice(0, 10) };
   }, [dateRange]);
   const { data: alertPrevOcc = [] } = useOccupancy(alertPrevRange, property, [], !!(alertPrevRange.from && alertPrevRange.to));
+  // Previous-period aggregate for trend alerts — mirrors the current-period one so
+  // the alerts need not wait on the raw-ledger fetch when the cache is populated.
+  const aggPrev = useDailyFinancialAggregates(alertPrevRange, property);
+  const aggPrevData = aggPrev.data;
   const [exporting, setExporting] = useState(false);
   const contentRef = useRef(null);
 
-  const occRows = useMemo(() => occ.filter((r) => inRange(r.date, dateRange.from, dateRange.to)), [occ, dateRange]);
+  const occRows = useMemo(() => {
+    const base = aggData ? aggData.occRows : occ.filter((r) => inRange(r.date, dateRange.from, dateRange.to));
+    return filterByMonths(base, months);
+  }, [aggData, occ, dateRange, months]);
   const srcRows = useMemo(() => {
-    let r = sources.filter((x) => inRange(x.date, dateRange.from, dateRange.to));
+    let r = aggData ? aggData.srcRows : sources.filter((x) => inRange(x.date, dateRange.from, dateRange.to));
     if (channel !== "all") r = r.filter((x) => x.source === channel || x.code === channel);
-    return r;
-  }, [sources, dateRange, channel]);
-  const grossRows = useMemo(() => gross.filter((r) => inRange(r.date, dateRange.from, dateRange.to)), [gross, dateRange]);
+    return filterByMonths(r, months);
+  }, [aggData, sources, dateRange, channel, months]);
+  const grossRows = useMemo(() => {
+    const base = aggData ? aggData.grossRows : gross.filter((r) => inRange(r.date, dateRange.from, dateRange.to));
+    return filterByMonths(base, months);
+  }, [aggData, gross, dateRange, months]);
+  const aggPayRows = useMemo(() => (aggData ? aggData.payRows : payRows), [aggData, payRows]);
+  const aggExpenses = useMemo(() => (aggData ? aggData.expenseRows : expenses), [aggData, expenses]);
   const clerkFiltered = useMemo(() => {
     let r = clerk;
     if (employee !== "all") r = r.filter((x) => x.clerk_name === employee);
@@ -129,14 +152,27 @@ export default function Dashboard() {
   const { revenue, roomsSold, capacity, occupancy, adr, revpar } = currentStats;
   const uniqueDays = new Set(occRows.map((r) => String(r.date).slice(0, 10))).size;
 
+  useEffect(() => {
+    if (revenue > 50000) {
+      confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+    }
+  }, [revenue]);
+
   const threshold = getOccThreshold();
   const lowOccDays = useMemo(() => occRows.filter((r) => Number(r.occupancy || 0) < threshold), [occRows, threshold]);
 
+  // Previous-period stats come from the aggregate when available, else the live
+  // ledger — so the trend alerts don't force a raw-ledger fetch.
+  const alertPrevStats = useMemo(() => {
+    const prevAgg = aggPrevData ? aggPrevData.occRows : alertPrevOcc;
+    if (!prevAgg.length) return null;
+    return CalculationService.calculateOccupancyMetrics(prevAgg, roomCounts);
+  }, [aggPrevData, alertPrevOcc, roomCounts]);
+
   const alerts = useMemo(() => {
-    if (!dateRange.from || !dateRange.to || !occ.length || !alertPrevOcc.length) return [];
+    if (!dateRange.from || !dateRange.to || !occRows.length || !alertPrevStats) return [];
     const thresholds = getAlertThresholds();
 
-    const alertPrevStats = CalculationService.calculateOccupancyMetrics(alertPrevOcc, roomCounts);
     const prevRev = alertPrevStats.revenue;
     const prevOccVal = alertPrevStats.occupancy;
     const prevAdr = alertPrevStats.adr;
@@ -158,7 +194,7 @@ export default function Dashboard() {
         out.push({ metric: "ADR", current: adr, previous: prevAdr, pct: ch, sev: Math.abs(ch) >= 0.2 ? "Critical" : "Warning", fmt: money2 });
     }
     return out;
-  }, [occ, alertPrevOcc, dateRange, revenue, occupancy, adr, roomCounts, threshold]);
+  }, [occRows, alertPrevStats, dateRange, revenue, occupancy, adr, roomCounts, threshold]);
 
   // Anomaly alerts scoped to the currently selected period.
   const anomalyInRange = useMemo(
@@ -189,7 +225,13 @@ export default function Dashboard() {
     setExporting(false);
   };
 
-  if (isLoading) return <p className="text-slate-500">Loading executive data…</p>;
+  // Render as soon as the materialized aggregate settles. When the cache is
+  // populated we show pre-summed metrics instantly and let the raw-ledger hooks
+  // finish in the background (they only feed the secondary trend alerts). When
+  // the cache is empty (nothing imported yet) we fall back to waiting for the
+  // live ledgers — the original behaviour.
+  const initialLoading = (aggData ? false : isLoading) || agg.isLoading;
+  if (initialLoading) return <p className="text-slate-500">Loading executive data…</p>;
 
   return (
     <div className="space-y-6">
@@ -257,7 +299,7 @@ export default function Dashboard() {
         )}
 
         {/* Estimated Money Kept — net profit after all deductions */}
-        <MoneyKept occRows={occRows} srcRows={srcRows} grossRows={grossRows} dateRange={dateRange} property={property} />
+        <MoneyKept occRows={occRows} srcRows={srcRows} grossRows={grossRows} dateRange={dateRange} property={property} aggPayRows={aggPayRows} aggExpenses={aggExpenses} />
 
         {/* Four fixed executive charts — always visible */}
         <ExecutiveCharts rows={occRows} />
@@ -336,7 +378,7 @@ export default function Dashboard() {
         {/* Owner Intelligence Insights */}
         {(() => {
           const insights = OwnerIntelligenceService.generateExecutiveInsights(
-            occRows, payRows, expenses, payroll, srcRows, grossRows, properties, dateRange
+            occRows, aggPayRows, aggExpenses, payroll, srcRows, grossRows, properties, dateRange
           );
           if (insights.length === 0) return null;
           return (

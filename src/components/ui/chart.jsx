@@ -35,6 +35,7 @@
  */
 
 import * as React from "react"
+import DOMPurify from "dompurify"
 import * as RechartsPrimitive from "recharts"
 
 import { cn } from "@/lib/utils"
@@ -100,7 +101,7 @@ function useChart() {
  * for each data series. This prevents multiple charts on one page from
  * overriding each other's colors.
  *
- * @type {React.ForwardRefExoticComponent<ChartContainerProps & React.RefAttributes<HTMLDivElement>>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [id] - Unique identifier for CSS scoping
  * @property {string} [className] - Wrapper CSS classes
  * @property {React.ReactNode} children - Recharts chart elements
@@ -157,23 +158,26 @@ const ChartStyle = ({
     return null
   }
 
-  return (
-    (<style
-      dangerouslySetInnerHTML={{
-        __html: Object.entries(THEMES)
-          .map(([theme, prefix]) => `
+  const rawHtml = Object.entries(THEMES)
+    .map(([theme, prefix]) => `
 ${prefix} [data-chart=${id}] {
 ${colorConfig
   .map(([key, itemConfig]) => {
-    const color =
+    const rawColor =
       itemConfig.theme?.[theme] ||
       itemConfig.color;
-    return color ? `  --color-${key}: ${color};` : null
+    const color = rawColor ? String(rawColor).replace(/[^a-zA-Z0-9#(),. %\-]/g, '') : null;
+    return color ? `  --color-${key}: ${color};` : null;
   })
   .join("\n")}
 }
 `)
-          .join("\n"),
+    .join("\n");
+
+  return (
+    (<style
+      dangerouslySetInnerHTML={{
+        __html: DOMPurify.sanitize(rawHtml, { ALLOWED_TAGS: ['style'], FORCE_BODY: false }),
       }} />)
   );
 }
@@ -210,7 +214,7 @@ const ChartTooltip = RechartsPrimitive.Tooltip
  * the chart's theme configuration. Resolves labels and icons from
  * the ChartConfig passed to ChartContainer.
  *
- * @type {React.ForwardRefExoticComponent<ChartTooltipContentProps & React.RefAttributes<HTMLDivElement>>}
+ * @type {React.ForwardRefExoticComponent<any>}
  */
 const ChartTooltipContent = React.forwardRef((
   {
@@ -369,7 +373,7 @@ const ChartLegend = RechartsPrimitive.Legend
  * the ChartConfig. Clicking a legend item toggles the visibility
  * of the corresponding data series.
  *
- * @type {React.ForwardRefExoticComponent<ChartLegendContentProps & React.RefAttributes<HTMLDivElement>>}
+ * @type {React.ForwardRefExoticComponent<any>}
  */
 const ChartLegendContent = React.forwardRef((
   { className, hideIcon = false, payload, verticalAlign = "bottom", nameKey },

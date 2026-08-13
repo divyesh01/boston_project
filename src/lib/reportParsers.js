@@ -12,6 +12,7 @@ import {
 } from '@/lib/transactionNorm';
 import { toCents, fromCents, sumCents } from '@/lib/decimal';
 import { neutralizeFormula } from '@/lib/securityUtils';
+import { validateImport } from '@/lib/importValidation';
 import { detectAnomalies, detectClerkAnomalies } from '@/lib/anomalyDetector';
 export { neutralizeFormula };
 
@@ -133,6 +134,7 @@ export const REPORT_TYPES = [
   { key: "hotel_statistics", label: "Hotel Statistics (Universal)" },
   { key: "transactions", label: "All Transactions (Ledger)" },
   { key: "adjustments_refunds", label: "Adjustments & Refunds Activity" },
+  { key: "timecard", label: "Timecard (Clock In/Out)" },
   { key: "generic", label: "Any other spreadsheet" },
 ];
 
@@ -211,13 +213,32 @@ const REVENUE_COL = {
   payments: "total",
 };
 
-function mapRow(obj) {
+function mapRow(obj, coercions) {
   const out = {};
   for (const [key, value] of Object.entries(obj)) {
     if (value === null || value === undefined || value === "") continue;
     const fieldName = COLUMN_MAP[key];
     if (fieldName) {
-      out[fieldName] = NUMERIC_FIELDS.has(fieldName) ? parseAmount(value) ?? 0 : value;
+      if (NUMERIC_FIELDS.has(fieldName)) {
+        const raw = String(value).trim();
+        const parsed = parseAmount(raw);
+        if (parsed === null) {
+          // Kept as 0 by design (matches old behaviour), but logged so the
+          // validation layer can warn that the column is being zero-filled.
+          if (coercions) coercions.push({ field: fieldName, raw, kind: "unparseable" });
+          out[fieldName] = 0;
+        } else {
+          // parseAmount uses parseFloat, which silently truncates "12abc" to 12.
+          // Detect leftover non-numeric content so validation can flag it.
+          const cleaned = raw.replace(/[\$,\s()]/g, "").replace(/^-/, "");
+          if (/[^0-9.]/.test(cleaned)) {
+            if (coercions) coercions.push({ field: fieldName, raw, parsed, kind: "truncated" });
+          }
+          out[fieldName] = parsed;
+        }
+      } else {
+        out[fieldName] = value;
+      }
     }
   }
   return out;
@@ -348,6 +369,14 @@ function detectReportType(fileUrl, rawRows, meta) {
     if (has("payment type") && has("actual") && has("net today")) return "clerk";
     if (has("username") && has("start time")) return "clerk";
 
+    // Timecard / clock-in-clock-out export. Requires a clock pin plus a
+    // date-ish column so a generic employee spreadsheet is not misrouted.
+    if ((has("clock in") || has("clock_in") || has("time in") || has("time_in"))) {
+      if (has("clock out") || has("clock_out") || has("time out") || has("time_out")) {
+        return "timecard";
+      }
+    }
+
     // Payments Summary
     if ((has("cash") && (has("check") || has("amex") || has("visa") || has("master")))) {
       return "payments";
@@ -368,6 +397,7 @@ function detectReportType(fileUrl, rawRows, meta) {
   if (/hotel.?stat/i.test(fileName)) return "hotel_statistics";
   if (/all.?transactions?|transaction.?(list|ledger|detail)/i.test(fileName)) return "transactions";
   if (/clerk|shift|cash audit/i.test(fileName)) return "clerk";
+  if (/timecard|timesheet|clock.?in|punch/i.test(fileName)) return "timecard";
   if (/payments? summary/i.test(fileName)) return "payments";
   if (/source summary/i.test(fileName)) return "source";
   if (/gross revenue/i.test(fileName)) return "gross";
@@ -423,8 +453,13 @@ export async function scanReport(type, fileUrl, meta = {}) {
     return scanAdjustmentsRefunds(rawRows, fullMeta);
   }
 
+  if (resolvedType === "timecard") {
+    return scanTimecard(rawRows, fullMeta, objects);
+  }
+
   // Occupancy, Source, Gross, Payments — flat tables
-  const mapped = objects.map((obj) => mapRow(obj)).filter((r) => Object.keys(r).length > 0);
+  const coercions = [];
+  const mapped = objects.map((obj) => mapRow(obj, coercions)).filter((r) => Object.keys(r).length > 0);
 
   // Convert dates and fix occupancy
   const processed = mapped
@@ -457,6 +492,18 @@ export async function scanReport(type, fileUrl, meta = {}) {
       return valid;
     });
 
+  // Validation runs on the raw grid + mapped rows so the scan preview can show
+  // what would be corrupted before anything is imported. Errors block the
+  // import unless force-imported; warnings only display.
+  const validation = validateImport({
+    rawRows,
+    rows: processed,
+    type: resolvedType,
+    knownColumns: new Set(Object.keys(COLUMN_MAP)),
+    coercions,
+    dateFailures: debugInfo.dateParseErrors || 0,
+  });
+
   return {
     type: resolvedType,
     sections: [{ name: REPORT_TYPES.find((r) => r.key === resolvedType)?.label || resolvedType, rows: processed.length, preview: processed.slice(0, 20) }],
@@ -464,6 +511,7 @@ export async function scanReport(type, fileUrl, meta = {}) {
     rowsToImport: processed,
     meta: fullMeta,
     debug: debugInfo,
+    validation,
   };
 }
 
@@ -492,7 +540,7 @@ async function scanHotelStatistics(rawRows, fileUrl, meta) {
   }).join(',')).join('\n');
   
   // Parse using universal parser
-  const importId = meta.importId || `imp_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  const importId = meta.importId || `imp_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
   const parseResult = await parseHotelReport(csvText, {
     propertyId: meta.propertyId || '',
     propertyName: meta.propertyName || '',
@@ -990,8 +1038,104 @@ function scanAdjustmentsRefunds(rawRows, meta) {
   };
 }
 
+// ─── Timecard (Clock In/Out) ───────────────────────────────────────────
+//
+// HotelKey / payroll timecard exports, regardless of the exporter, carry one
+// row per shift: an employee, a date, and a clock-in/clock-out pair. Column
+// names vary wildly ("Clock In", "Time In", "clock_in", "Start Time"), but the
+// values are always readable time-of-day strings. The parser keeps the times
+// verbatim so the reconciler (src/lib/timecardCalc.js) can normalise them and
+// compute hours/OT; only the date is normalised to ISO at scan time.
+
+function scanTimecard(rawRows, meta, objects) {
+  const punches = [];
+  const rejected = [];
+
+  // Column-name normalisation mirrors COLUMN_MAP: map synonyms to canonical keys.
+  const TIME_CANON = {
+    "employee name": "employee_name", "employee": "employee_name", "name": "employee_name",
+    "employee id": "employee_id", "emp id": "employee_id", "id": "employee_id", "employee number": "employee_id",
+    "department": "department", "dept": "department",
+    "date": "shift_date", "shift date": "shift_date", "day": "shift_date", "work date": "shift_date",
+    "clock in": "clock_in", "clock_in": "clock_in", "time in": "clock_in", "time_in": "clock_in",
+    "start time": "clock_in", "start": "clock_in", "in": "clock_in",
+    "clock out": "clock_out", "clock_out": "clock_out", "time out": "clock_out", "time_out": "clock_out",
+    "end time": "clock_out", "end": "clock_out", "out": "clock_out",
+    "break": "break_minutes", "break minutes": "break_minutes", "break time": "break_minutes",
+    "overtime": "overtime_hours", "ot": "overtime_hours", "overtime hours": "overtime_hours",
+  };
+
+  const canonical = (h) => TIME_CANON[String(h || "").trim().toLowerCase()];
+
+  // Prefer AI-extracted objects (Excel path); fall back to header+rows mapping.
+  const rows = Array.isArray(objects) && objects.length
+    ? objects
+    : rowsToObjects(rawRows);
+
+  for (const obj of rows) {
+    const out = {};
+    for (const [srcKey, value] of Object.entries(obj)) {
+      const key = canonical(srcKey);
+      if (key) out[key] = value;
+    }
+    if (!out.employee_name && !out.shift_date) {
+      // Not a punch row (section label, totals line, empty row).
+      if (Object.values(out).some((v) => v !== undefined && v !== null && String(v).trim() !== "")) rejected.push(out);
+      continue;
+    }
+
+    const employee = String(out.employee_name || "").trim();
+    const date = convertDate(out.shift_date);
+    const inTime = String(out.clock_in || "").trim();
+    const outTime = String(out.clock_out || "").trim();
+
+    if (!employee || !date || !inTime || !outTime) {
+      rejected.push({ ...out, _reason: "missing employee, date, or in/out time" });
+      continue;
+    }
+
+    punches.push({
+      employee_name: employee,
+      employee_id: String(out.employee_id || "").trim(),
+      department: String(out.department || "").trim(),
+      shift_date: date,
+      clock_in: inTime,
+      clock_out: outTime,
+      break_minutes: Number(out.break_minutes) > 0 ? Number(out.break_minutes) : undefined,
+      overtime_hours: Number(out.overtime_hours) > 0 ? Number(out.overtime_hours) : undefined,
+    });
+  }
+
+  return {
+    type: "timecard",
+    sections: [
+      { name: "Clock In/Out Shifts", rows: punches.length, preview: punches.slice(0, 20) },
+      { name: "Skipped", rows: rejected.length, preview: rejected.slice(0, 20) },
+    ],
+    totalRows: punches.length + rejected.length,
+    rowsToImport: punches,
+    skipped: rejected,
+    meta,
+  };
+}
+
+// ─── CSV report importer ────────────────────────────────────────────────
 export async function importReport(scanResult, meta = {}) {
   const { forceImport = false, sourceFile = "", propertyId = "", propertyName = "", ...restMeta } = meta;
+
+  // Block corrupting imports unless the user explicitly forces them. The scan
+  // already showed these errors in the preview; without force, a file that
+  // fails validation is rejected before any session or row is created, so no
+  // `in_progress` session is left behind for an import that never happened.
+  const validation = scanResult?.validation;
+  if (validation && !validation.ok && !forceImport) {
+    const layer = validation.firstFailingLayer || "validation";
+    const detail = validation.errors.map((f) => `${f.code}: ${f.message}`).join(" | ");
+    const err = /** @type {Error & { code: string, validation: typeof validation }} */ (new Error(`Import blocked by ${layer} validation (${validation.errors.length} error(s)): ${detail}`));
+    err.code = "IMPORT_VALIDATION_BLOCKED";
+    err.validation = validation;
+    throw err;
+  }
   
   // Create import session for tracking and rollback capability
   const importSession = await createImportSession({
@@ -1012,6 +1156,8 @@ export async function importReport(scanResult, meta = {}) {
       rowCounts["ClerkShiftRecord"] = result.count;
     } else if (scanResult.type === "adjustments_refunds") {
       rowCounts["AdjustmentRefund"] = result.count;
+    } else if (scanResult.type === "timecard") {
+      rowCounts["TimecardPunch"] = result.count;
     } else if (ENTITY[scanResult.type]) {
       rowCounts[ENTITY[scanResult.type]] = result.count;
     }
@@ -1168,6 +1314,95 @@ async function doImport(scanResult, meta, importId) {
       excluded: deduped.length - newRows.length,
       cleaned,
       anomalies: flaggedAnomalies.length,
+      anomalyAudit,
+    };
+  }
+
+  // ─── Timecard (Clock In/Out) ───
+  if (type === "timecard") {
+    const punches = (scanResult.rowsToImport || []).map(addMetaFn);
+
+    const keyFn = (r) => [
+      r.employee_name || "",
+      r.shift_date || "",
+      r.clock_in || "",
+      r.clock_out || "",
+    ].join("|");
+
+    const deduped = dedupByKey(punches, keyFn);
+    const existing = restMeta.propertyId
+      ? await db.entities.TimecardPunch.filter({ property_id: restMeta.propertyId })
+      : [];
+    const seen = new Set(existing.map(keyFn));
+    const newRows = forceImport ? deduped : deduped.filter((r) => !seen.has(keyFn(r)));
+
+    let createdIds = [];
+    if (newRows.length) {
+      for (let i = 0; i < newRows.length; i += 400) {
+        const batch = newRows.slice(i, i + 400);
+        const created = await db.entities.TimecardPunch.bulkCreate(batch);
+        createdIds.push(...created.map((r) => r.id));
+      }
+    }
+    if (createdIds.length) {
+      await recordCreatedIds("TimecardPunch", restMeta.propertyId, importId, createdIds);
+    }
+
+    // Flag impossible/likely-error shifts so payroll review sees them immediately.
+    const { normalisePunch } = await import("@/lib/timecardCalc");
+    const flagged = [];
+    for (const p of newRows) {
+      const n = normalisePunch(p);
+      if (!n || !n.flags?.length) continue;
+      for (const flag of n.flags) {
+        flagged.push({
+          id: `timecard_${flag}`,
+          severity: "high",
+          title: `Timecard flag: ${flag.replace(/_/g, " ")}`,
+          message: `${n.employeeName || "Unknown employee"} shift on ${n.date || p.shift_date || ""} (${p.clock_in || ""} - ${p.clock_out || ""})`,
+          dedupe_key: `timecard_${flag}|${n.employeeName || ""}|${n.date || ""}`,
+          property_id: restMeta.propertyId || "",
+          property_name: restMeta.propertyName || "",
+        });
+      }
+    }
+    let anomalyAudit = null;
+    if (flagged.length) {
+      const alertRows = flagged.map((a) => ({
+        ...a,
+        alert_type: a.id,
+        import_id: importId,
+        source_file: restMeta.sourceFile || "",
+        status: "open",
+      }));
+      const existingAlerts = restMeta.propertyId
+        ? await db.entities.AnomalyAlert.filter({ property_id: restMeta.propertyId })
+        : [];
+      const seenAlerts = new Set(existingAlerts.map((a) => a.dedupe_key));
+      const freshAlerts = alertRows.filter((a) => !seenAlerts.has(a.dedupe_key));
+      let alertIds = [];
+      if (freshAlerts.length) {
+        for (let i = 0; i < freshAlerts.length; i += 400) {
+          const batch = freshAlerts.slice(i, i + 400);
+          const created = await db.entities.AnomalyAlert.bulkCreate(batch);
+          alertIds.push(...created.map((r) => r.id));
+        }
+      }
+      if (alertIds.length) {
+        await recordCreatedIds("AnomalyAlert", restMeta.propertyId, importId, alertIds);
+      }
+      const types = [...new Set(freshAlerts.map((a) => a.alert_type))].sort();
+      anomalyAudit = alertIds.length
+        ? { propertyId: restMeta.propertyId, propertyName: restMeta.propertyName || "", importId, count: alertIds.length, types }
+        : null;
+    }
+
+    const cleaned = await dedupePropertyRows("TimecardPunch", restMeta.propertyId, keyFn);
+    return {
+      count: newRows.length,
+      excluded: deduped.length - newRows.length,
+      cleaned,
+      anomalies: flagged.length,
       anomalyAudit,
     };
   }

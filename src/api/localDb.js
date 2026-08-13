@@ -29,6 +29,8 @@ import Dexie from 'dexie';
  *   RoomType: import('dexie').Table<any, number>;
  *   ChannelMap: import('dexie').Table<any, number>;
  *   AdjustmentRefund: import('dexie').Table<any, number>;
+ *   TimecardPunch: import('dexie').Table<any, number>;
+ *   DailyFinancialAggregate: import('dexie').Table<any, number>;
  * }} */
 // @ts-ignore — augment the non-generic Dexie interface with the app's tables.
 const localDb = new Dexie('RedRoofIntelligence');
@@ -232,6 +234,27 @@ localDb.version(18).stores({
   Reservation: '++id, property_id, channel, confirmation_num, check_in, check_out, room_type_id, status, [property_id+check_in], created_date',
   RoomType: '++id, property_id, name, total_inventory',
   ChannelMap: '++id, property_id, channel_name, local_room_id, remote_room_id',
+});
+
+// v19 — raw clock-in/clock-out punches for the timecard reconciler
+// (src/lib/timecardCalc.js). One row per punch pair; `shift_date` is the day
+// the shift started, `clock_in`/`clock_out` are free-text times (HH:MM or
+// HH:MM AM/PM) parsed by the reconciler. Property-scoped like the other
+// operational tables; enforcement lives in base44Client's PROPERTY_TABLES.
+localDb.version(19).stores({
+  TimecardPunch: '++id, property_id, employee_name, employee_id, department, shift_date, [property_id+shift_date], import_id, created_date',
+});
+
+// v20 — materialized daily financial aggregates.
+//
+// One row per (property_id, business_date) holding the additive daily totals
+// the dashboard derives from the four daily ledgers (occupancy / source /
+// gross / payment) plus per-day expense sums. Rebuilt on every import so the
+// Dashboard can read a few hundred pre-summed rows instead of scanning tens of
+// thousands of raw rows — keeping metric loads instant at scale. The raw rows
+// stay canonical; this cache is recomputed, never hand-edited.
+localDb.version(20).stores({
+  DailyFinancialAggregate: '++id, property_id, business_date, [property_id+business_date], created_date',
 });
 
 // Guard: a table whose name collides with a Dexie instance property is created

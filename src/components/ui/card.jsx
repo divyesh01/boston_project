@@ -42,7 +42,7 @@ import { cn } from "@/lib/utils"
  * Rounded container with border, background, and shadow.
  * Used as the wrapper for all card sections.
  * 
- * @type {React.ComponentPropsWithoutRef<"div">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - CardHeader, CardContent, CardFooter
  */
@@ -61,7 +61,7 @@ Card.displayName = "Card"
  * Top section of the card for title and description.
  * Uses flexbox column layout with consistent spacing.
  * 
- * @type {React.ComponentPropsWithoutRef<"div">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - CardTitle, CardDescription
  */
@@ -80,7 +80,7 @@ CardHeader.displayName = "CardHeader"
  * Bold, tight-tracking heading for the card. Renders as a div
  * (can be changed to h1-h6 via asChild or className).
  * 
- * @type {React.HTMLAttributes<HTMLDivElement>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Title text
  */
@@ -99,7 +99,7 @@ CardTitle.displayName = "CardTitle"
  * Secondary text in muted color below the title.
  * Provides context for the card content.
  * 
- * @type {React.HTMLAttributes<HTMLDivElement>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Description text
  */
@@ -118,7 +118,7 @@ CardDescription.displayName = "CardDescription"
  * Primary content section with padding. Removes top padding
  * when following a CardHeader for seamless spacing.
  * 
- * @type {React.ComponentPropsWithoutRef<"div">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Main content
  */
@@ -134,7 +134,7 @@ CardContent.displayName = "CardContent"
  * Bottom section for actions and metadata.
  * Uses flexbox with centered items and responsive spacing.
  * 
- * @type {React.ComponentPropsWithoutRef<"div">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Action buttons or metadata
  */

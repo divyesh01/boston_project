@@ -46,7 +46,7 @@ import { cn } from "@/lib/utils"
  * Wraps the table element in a scrollable div for horizontal
  * overflow handling. Required for responsive table layouts.
  * 
- * @type {React.ComponentPropsWithoutRef<"table">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - TableHeader, TableBody, TableFooter
  */
@@ -67,7 +67,7 @@ Table.displayName = "Table"
  * Contains column header rows. Bottom border applied to rows
  * for visual separation from body content.
  * 
- * @type {React.ComponentPropsWithoutRef<"thead">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - TableRow elements with TableHead cells
  */
@@ -83,7 +83,7 @@ TableHeader.displayName = "TableHeader"
  * Contains data rows. Removes bottom border from last row
  * for clean visual termination.
  * 
- * @type {React.ComponentPropsWithoutRef<"tbody">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - TableRow elements
  */
@@ -102,7 +102,7 @@ TableBody.displayName = "TableBody"
  * Contains summary rows with muted background. Used for
  * totals, averages, or aggregated data.
  * 
- * @type {React.ComponentPropsWithoutRef<"tfoot">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - TableRow elements
  */
@@ -121,7 +121,7 @@ TableFooter.displayName = "TableFooter"
  * Row with hover effect and selected state. Transitions background
  * color on hover for interactive feedback.
  * 
- * @type {React.ComponentPropsWithoutRef<"tr">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {boolean} [data-state] - Selection state ('selected')
  * @property {React.ReactNode} children - TableCell or TableHead elements
@@ -144,7 +144,7 @@ TableRow.displayName = "TableRow"
  * Column header with muted text and aligned checkbox support.
  * Uses medium font weight for visual hierarchy.
  * 
- * @type {React.ComponentPropsWithoutRef<"th">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {'left' | 'center' | 'right'} [align] - Text alignment
  * @property {React.ReactNode} children - Header content
@@ -167,7 +167,7 @@ TableHead.displayName = "TableHead"
  * Standard cell with vertical alignment and checkbox support.
  * Padding adjusted when containing checkbox inputs.
  * 
- * @type {React.ComponentPropsWithoutRef<"td">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Cell content
  */
@@ -189,7 +189,7 @@ TableCell.displayName = "TableCell"
  * Descriptive text below the table. Uses muted text color
  * and smaller font size.
  * 
- * @type {React.ComponentPropsWithoutRef<"caption">}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Caption text
  */

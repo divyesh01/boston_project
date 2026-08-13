@@ -28,6 +28,8 @@ const badgeVariants = cva(
   }
 )
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const Badge = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<'div'> & {

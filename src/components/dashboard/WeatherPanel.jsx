@@ -7,7 +7,7 @@ import { useWeatherSnapshots } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { db } from "@/api/base44Client";
 import { getWeatherConfig, saveWeatherConfig } from "@/lib/weatherSettings";
-import { loadWeather, forecastRows, buildDemoForecast } from "@/lib/weatherService";
+import { loadWeather, forecastRows, buildDemoForecast, fetchOpenWeatherForecast } from "@/lib/weatherService";
 
 function conditionLabel(cond) {
   const c = String(cond || "");
@@ -31,7 +31,6 @@ export default function WeatherPanel() {
   const { data: snapshots = [] } = useWeatherSnapshots(property);
 
   const [cfgOpen, setCfgOpen] = useState(false);
-  const [draftKey, setDraftKey] = useState(getWeatherConfig().apiKey || "");
   const [draftLat, setDraftLat] = useState(getWeatherConfig().lat);
   const [draftLon, setDraftLon] = useState(getWeatherConfig().lon);
 
@@ -49,6 +48,11 @@ export default function WeatherPanel() {
         propertyId,
         date,
         cacheRows: snapshots,
+        fetchFn: () => fetchOpenWeatherForecast({
+          lat: getWeatherConfig().lat,
+          lon: getWeatherConfig().lon,
+          invoke: (name, params) => db.functions.invoke(name, params),
+        }),
         persistFn: async (rows) => {
           const existing = await db.entities.WeatherSnapshot.filter({ property_id: propertyId }).list("date", 100000);
           const stale = existing.filter((r) => String(r.date).slice(0, 10) === date);
@@ -68,7 +72,6 @@ export default function WeatherPanel() {
 
   const handleSaveCfg = () => {
     saveWeatherConfig({
-      apiKey: String(draftKey || "").trim(),
       lat: Number(draftLat) || 41.89,
       lon: Number(draftLon) || -70.91,
     });
@@ -87,9 +90,8 @@ export default function WeatherPanel() {
     >
       {cfgOpen && (
         <div className="mb-4 rounded-xl border border-white/5 bg-[#0A1628]/50 p-3">
-          <p className="text-xs text-slate-400">OpenWeather API key and property coordinates (kept in local storage only).</p>
-          <div className="mt-2 grid gap-2 sm:grid-cols-3">
-            <input value={draftKey} onChange={(e) => setDraftKey(e.target.value)} placeholder="API key" className="rounded-lg border border-white/10 bg-[#0A1628] px-2 py-2 text-sm text-white" />
+          <p className="text-xs text-slate-400">Property coordinates (the OpenWeather API key is configured on the server and never stored in this browser).</p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
             <input value={draftLat} onChange={(e) => setDraftLat(e.target.value)} placeholder="Latitude" className="rounded-lg border border-white/10 bg-[#0A1628] px-2 py-2 text-sm text-white" />
             <input value={draftLon} onChange={(e) => setDraftLon(e.target.value)} placeholder="Longitude" className="rounded-lg border border-white/10 bg-[#0A1628] px-2 py-2 text-sm text-white" />
           </div>
@@ -127,7 +129,7 @@ export default function WeatherPanel() {
             <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
               <p className="text-[10px] uppercase tracking-widest text-slate-500">Data Source</p>
               <p className="mt-1 font-heading text-2xl font-semibold text-white">{data?.source || "—"}</p>
-              <p className="text-xs text-slate-400">{data?.source === "api" ? "Live OpenWeather" : data?.source === "cache" ? "Cached" : "Demo (no key)"}</p>
+              <p className="text-xs text-slate-400">{data?.source === "api" ? "Live OpenWeather (server)" : data?.source === "cache" ? "Cached" : "Demo (server key unavailable)"}</p>
             </div>
           </div>
 

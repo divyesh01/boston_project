@@ -48,10 +48,21 @@ const getAppParams = () => {
 	}
 	return {
 		appId: getAppParamValue("app_id", { defaultValue: import.meta.env.VITE_BASE44_APP_ID }),
-		token: getAppParamValue("access_token", { removeFromUrl: true }),
+		token: null, // Tokens are now securely handled via HttpOnly cookies
 		fromUrl: getAppParamValue("from_url", { defaultValue: window.location.href }),
 		functionsVersion: getAppParamValue("functions_version", { defaultValue: import.meta.env.VITE_BASE44_FUNCTIONS_VERSION }),
-		appBaseUrl: getAppParamValue("app_base_url", { defaultValue: import.meta.env.VITE_BASE44_APP_BASE_URL }),
+		appBaseUrl: (() => {
+			const url = getAppParamValue("app_base_url", { defaultValue: import.meta.env.VITE_BASE44_APP_BASE_URL });
+			if (!url) return null;
+			try {
+				const parsed = new URL(url);
+				const allowedDomains = ['localhost', 'redroof.com', 'base44.com'];
+				if (allowedDomains.some(d => parsed.hostname === d || parsed.hostname.endsWith('.' + d))) {
+					return url;
+				}
+			} catch (e) {}
+			return import.meta.env.VITE_BASE44_APP_BASE_URL;
+		})(),
 	}
 }
 

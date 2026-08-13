@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Lock, Loader2, AlertTriangle, CheckCircle, Eye, EyeOff, AlertCircle } from "lucide-react";
 import AuthLayout from "@/components/AuthLayout";
-import db from "@/api/base44Client";
+import { db } from "@/api/base44Client";
 import { validatePasswordStrength } from "@/lib/security";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
 import { toast } from "@/components/ui/use-toast";

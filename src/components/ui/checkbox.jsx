@@ -9,6 +9,8 @@ import { Check } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
+/** @type {React.ForwardRefExoticComponent<any>} */
+/** @type {React.ForwardRefExoticComponent<any>} */
 const Checkbox = React.forwardRef(
   (
     /** @type {import('react').ComponentPropsWithoutRef<typeof CheckboxPrimitive.Root>} */

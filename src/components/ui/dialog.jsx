@@ -103,7 +103,7 @@ const DialogClose = DialogPrimitive.Close
  * Clicking the overlay closes the dialog (when modal).
  * Includes fade animations for enter/exit transitions.
  * 
- * @type {React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {boolean} [forceMount] - Force mount for SSR
  */
@@ -126,7 +126,7 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
  * Includes a close button (X) in the top-right corner.
  * Renders inside DialogPortal with DialogOverlay.
  * 
- * @type {React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Dialog header, body, footer
  * @property {boolean} [forceMount] - Force mount for SSR
@@ -162,7 +162,7 @@ DialogContent.displayName = DialogPrimitive.Content.displayName
  * Container for the dialog title and description. Uses flexbox
  * layout with vertical spacing and responsive text alignment.
  * 
- * @type {React.HTMLAttributes<HTMLDivElement>}
+ * @type {React.FC<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - DialogTitle and DialogDescription
  */
@@ -179,7 +179,7 @@ DialogHeader.displayName = "DialogHeader"
  * Container for action buttons. Uses responsive flexbox layout
  * that stacks vertically on mobile and horizontally on desktop.
  * 
- * @type {React.HTMLAttributes<HTMLDivElement>}
+ * @type {React.FC<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Action buttons
  */
@@ -196,7 +196,7 @@ DialogFooter.displayName = "DialogFooter"
  * Renders as an h2 element with bold, tight-tracking styling.
  * Required for accessibility - provides the dialog's accessible name.
  * 
- * @type {React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Title text
  */
@@ -215,7 +215,7 @@ DialogTitle.displayName = DialogPrimitive.Title.displayName
  * Secondary text providing additional context. Renders in muted
  * color below the title. Provides the dialog's accessible description.
  * 
- * @type {React.ComponentPropsWithoutRef<typeof DialogPrimitive.Description>}
+ * @type {React.ForwardRefExoticComponent<any>}
  * @property {string} [className] - Additional CSS classes
  * @property {React.ReactNode} children - Description text
  */

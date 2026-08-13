@@ -16,6 +16,7 @@
 // scripts/probe-pricing.mjs can exercise the real implementation in Node.
 
 import { DEFAULT_PRICING_CONFIG, ROOM_TYPES } from "./pricingSettings.js";
+import { predictDemand } from "./forecasting.js";
 
 export const RATE_SCALE = 10000; // basis points: 10000 == 1.00x
 
@@ -166,6 +167,13 @@ export function suggestedRateForDate({ roomType, date, occupancy, reservations, 
 //
 // Returns an array of day rows, each carrying the per-type recommendations and
 // an aggregate ADR + projected revenue for the day.
+export function predictiveRate({ occupancyHistory, events, baseCents, config }) {
+  const forecasted = predictDemand(occupancyHistory, events);
+  const forecastOcc = Math.min(forecasted, 1);
+  const rec = recommendRate({ baseCents, occupancy: forecastOcc, isWeekend: false, weatherCondition: null, config });
+  return { ...rec, forecastedDemand: forecasted };
+}
+
 export function buildPricingForecast({ rooms, reservations, weatherByDate = {}, config, days = 14, fromDate }) {
   const cfg = { ...DEFAULT_PRICING_CONFIG, ...(config || {}) };
   const start = fromDate || new Date().toISOString().slice(0, 10);

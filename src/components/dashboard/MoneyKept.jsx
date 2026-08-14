@@ -13,6 +13,7 @@ import { getCcFeeRate, getCcFeeOnRefunds } from "@/lib/commissionRates";
 import { getTaxConfig } from "@/lib/taxConfig";
 import { getEffectiveTaxRates, getTaxSettings } from "@/lib/taxSettings";
 import { expenseLabel, STANDARD_CATEGORY_KEYS } from "@/lib/expenseCategories";
+import { buildTaxObject } from "@/lib/taxLiability";
 import { CARD_METHODS, refundOf } from "@/lib/paymentNorm";
 import { filterCommittedPay } from "@/lib/payrollCalc";
 import { useSettingsVersion } from "@/hooks/useSettingsVersion";
@@ -483,6 +484,20 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       })),
     };
 
+    // Tax object consumed by the UI: per-jurisdiction liability amounts, the
+    // matching line-item records, the imported pass-through, and the estimated
+    // tax + combined effective rate used for the "estimated" explanatory note.
+    const tax = buildTaxObject({
+      liabState,
+      liabCity,
+      liabOther,
+      taxRecords,
+      passThrough,
+      taxIsActual,
+      estimatedTaxFromRates,
+      effectiveTaxRate,
+    });
+
     return {
       gross,
       items,
@@ -490,7 +505,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       kept,
       from,
       to,
-      tax: taxTotal,
+      tax,
       refundsTotal,
       passThrough,
       taxRecords,

@@ -4,7 +4,7 @@ export default function KpiCard(
   /** @type {{
    *   label: string;
    *   value: string | number;
-   *   sub?: string;
+   *   sub?: string | import('react').ReactNode;
    *   accent?: string;
    *   icon?: import('react').ComponentType<{ className?: string; style?: import('react').CSSProperties }>;
    * }} */

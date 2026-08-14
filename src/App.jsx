@@ -47,7 +47,7 @@ const Pricing = lazy(() => import('@/pages/Pricing'));
 const DemoYDoc = lazy(() => import('@/pages/DemoYDoc'));
 
 const PageFallback = () => (
-  <div className="mx-auto w-full max-w-6xl animate-pulse space-y-6 p-6">
+  <div className="mx-auto w-full max-w-6xl animate-pulse space-y-6 p-6 motion-reduce:animate-none">
     <div className="h-8 w-48 rounded-lg bg-white/5" />
     <div className="grid gap-4 sm:grid-cols-3">
       {[0, 1, 2].map((i) => (
@@ -68,7 +68,7 @@ const RouteProgress = () => {
     return () => clearTimeout(t);
   }, [location.pathname]);
   return (
-    <div className={`pointer-events-none fixed inset-x-0 top-0 z-[200] h-0.5 transition-opacity duration-300 ${active ? "opacity-100" : "opacity-0"}`}>
+    <div className={`pointer-events-none fixed inset-x-0 top-0 z-[200] h-0.5 transition-opacity duration-300 motion-reduce:transition-none ${active ? "opacity-100" : "opacity-0"}`}>
       <div
         className="h-full bg-gradient-to-r from-[#6C63FF] via-[#00E096] to-[#6C63FF] transition-[width] duration-300 ease-out"
         style={{ width: active ? "85%" : "0%" }}

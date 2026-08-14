@@ -5,8 +5,8 @@ import { sanitizeText as sanitizeInput } from './securityUtils';
  * @param {Object} params
  * @param {number} params.currentBaseRate - Current room base rate ($)
  * @param {number} params.currentOccupancy - Current occupancy percentage (0 - 100)
- * @param {number} params.historicalAvgOccupancy - Historical average occupancy for this day-of-week
- * @param {number} params.daysToArrival - Days remaining until target date
+ * @param {number} [params.historicalAvgOccupancy] - Historical average occupancy for this day-of-week
+ * @param {number} [params.daysToArrival] - Days remaining until target date
  * @param {Object} [params.weatherForecast] - Optional weather conditions { rainProbability, tempHigh }
  * @returns {Object} Pricing recommendation with reasoning and confidence score
  */

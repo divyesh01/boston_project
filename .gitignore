@@ -64,14 +64,19 @@ temp_root.js
 temp_log.txt
 temp*.js
 fix_security.cjs
-fix_rls.js
+fix_*.cjs
+refactor_*.cjs
+old_ai.*
+old_chart.*
+roomboard_transformed.js
 test-app.cjs
-dev/
-
-# Dev Artifacts
-dev.log
-dev.err
-harness-out.txt
-snap-out.txt
-temp_root.js
+test_import.txt
+test-*.cjs
+wipe-users.js
+verify-login.js
+update_*.py
+append_prompts*.py
+line_patch.py
+patch_*.py
+fix_user.py
 

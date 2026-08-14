@@ -60,8 +60,9 @@ export default defineConfig({
           'map-vendor': ['leaflet', 'react-leaflet'],
           'crdt-vendor': ['yjs', 'y-websocket'],
           'query-vendor': ['@tanstack/react-query'],
-          'data-vendor': ['@base44/sdk', 'dexie', 'otplib']
-        }
+          'data-vendor': ['@base44/sdk', 'dexie', 'otplib'],
+          'pdf-vendor': ['jspdf', 'html2canvas'],
+        },
       },
     },
   },

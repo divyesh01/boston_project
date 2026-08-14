@@ -162,7 +162,7 @@ export default function ClerkAuditMatrix({
         const is100B = amtB === 100;
         if (!is100A && is100B) return -1;
         if (is100A && !is100B) return 1;
-        return new Date(b.time || b.date) - new Date(a.time || a.date);
+        return new Date(b.time || b.date).getTime() - new Date(a.time || a.date).getTime();
       });
   }, [refunds, selectedClerk, selectedMethod, hideStandard100]);
 
@@ -210,13 +210,13 @@ export default function ClerkAuditMatrix({
         if (a._tier === 1) {
           // cluster by room, then newest date/time first
           if (a.roomNumber !== b.roomNumber) return String(a.roomNumber) < String(b.roomNumber) ? -1 : 1;
-          const dt = new Date(b.date) - new Date(a.date);
+          const dt = new Date(b.date).getTime() - new Date(a.date).getTime();
           if (dt !== 0) return dt;
           return String(b.time) < String(a.time) ? -1 : 1;
         }
         if (a._tier === 2) return getAmt(a) - getAmt(b);      // largest negative first
         // tier 3: newest first
-        const dt = new Date(b.date) - new Date(a.date);
+        const dt = new Date(b.date).getTime() - new Date(a.date).getTime();
         if (dt !== 0) return dt;
         return String(b.time) < String(a.time) ? -1 : 1;
       });

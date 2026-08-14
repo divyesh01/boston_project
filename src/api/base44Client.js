@@ -8,6 +8,7 @@ import { publishChange } from '@/lib/realtime';
 import { recalculationService } from '@/lib/recalculationService';
 import { isValidEmail } from '@/lib/validator';
 import { createClient } from '@base44/sdk';
+import * as otplib from 'otplib';
 
 const realClient = createClient({
   appId: import.meta.env?.VITE_BASE44_APP_ID || "6a7d6856ee1cc714b1803c0e",
@@ -1303,6 +1304,33 @@ async function handleLocalUserAdmin(params = {}) {
     }
     return { user: publicUserLocal({ ...user, ...updates }) };
   }
+  if (action === 'enable_mfa') {
+    const { id } = params;
+    const secret = otplib.generateSecret();
+    const user = await localDb.User.get(id);
+    const uri = otplib.generateURI({ label: user.email, secret, issuer: 'RedRoofIntelligence' });
+    await localDb.User.update(id, { mfa_secret_pending: secret });
+    return { success: true, secret, uri };
+  }
+  if (action === 'verify_mfa') {
+    const { id, token } = params;
+    const user = await localDb.User.get(id);
+    const secret = user.mfa_secret_pending || user.mfa_secret;
+    const result = otplib.verifySync({ token, secret });
+    if (!result || !result.valid) throw new Error('Invalid MFA token');
+    await localDb.User.update(id, { mfa_secret: secret, mfa_enabled: true, mfa_secret_pending: null });
+    return { success: true };
+  }
+  if (action === 'disable_mfa') {
+    const { id } = params;
+    await localDb.User.update(id, { mfa_secret: null, mfa_enabled: false, mfa_secret_pending: null });
+    return { success: true };
+  }
+  if (action === 'delete') {
+    const { id } = params;
+    await localDb.User.delete(id);
+    return { success: true };
+  }
   throw new Error(`Local fallback does not support action: ${action}`);
 }
 
@@ -1327,7 +1355,7 @@ async function handleLocalAuditLog(params = {}) {
   return { success: true, entry: row };
 }
 
-async function handleLocalAuditList({ filter = {}, limit = 500 } = {}) {
+async function handleLocalAuditList({ filter = /** @type {any} */ ({}), limit = 500 } = {}) {
   let logs = await localDb.AuditLog.toArray();
   if (filter && filter.action) logs = logs.filter((l) => l.action === filter.action);
   if (typeof limit === 'number') logs = logs.slice(-limit);
@@ -1340,7 +1368,7 @@ async function handleLocalAuditClear() {
   return { success: true };
 }
 
-async function handleLocalAuthRegister({ userData }) {
+async function handleLocalAuthRegister({ userData } = /** @type {any} */ ({})) {
   const {
     username, email, password, role = 'read_only', assigned_property_ids = [],
     property_access, full_name = '', must_change_password = true,
@@ -1392,7 +1420,7 @@ async function handleLocalAuthRegister({ userData }) {
   return { success: true, user: publicUserLocal(newUser) };
 }
 
-async function handleLocalAuthLogin({ email, password, mfa_token: _mfa_token, remember = false }) {
+async function handleLocalAuthLogin({ email, password, mfa_token: _mfa_token, remember = false } = /** @type {any} */ ({})) {
   const identifier = email;
   if (!identifier || !password) {
     throw new Error('Email and password are required');
@@ -1417,6 +1445,15 @@ async function handleLocalAuthLogin({ email, password, mfa_token: _mfa_token, re
 
   if (user.failed_login_count > 0) {
     await localDb.User.update(user.id, { failed_login_count: 0 });
+  }
+
+  // MFA Challenge
+  if (user.mfa_enabled) {
+    if (!_mfa_token) {
+      return { require_mfa: true, userId: user.id, username: user.email };
+    }
+    const result = otplib.verifySync({ token: _mfa_token, secret: user.mfa_secret });
+    if (!result || !result.valid) throw new Error('Invalid MFA code');
   }
 
   const expiresAt = remember

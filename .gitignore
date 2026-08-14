@@ -32,6 +32,8 @@ dist-ssr
 base44/.app.jsonc
 
 # Secrets / credentials — never commit
+# Production env (contains sensitive values)
+.env.production
 *.pem
 *.key
 *.secret

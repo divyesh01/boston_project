@@ -16,7 +16,8 @@
     "resolveJsonModule": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "types": ["vite/client", "node", "vitest/globals", "@testing-library/jest-dom/vitest"]
+    "types": ["vite/client", "node", "vitest/globals", "@testing-library/jest-dom/vitest"],
+    "maxNodeModuleJsDepth": 0
   },
   "include": [
     "src/components/**/*.js",

@@ -15,7 +15,7 @@ vi.mock("recharts", async (importActual) => {
     return React.createElement(
       "div",
       { "data-testid": "rc" },
-      arr.map((c, i) => React.cloneElement(c, { width, height, key: i }))
+      arr.map((c, i) => React.isValidElement(c) ? React.cloneElement(c, { width, height, key: i }) : c)
     );
   };
   const Pie = (props) => {
@@ -50,7 +50,7 @@ vi.mock("recharts", async (importActual) => {
   const PieChart = ({ children }) => React.createElement(React.Fragment, null, children);
   const Cell = () => null;
   const Tooltip = () => null;
-  return { ...actual, ResponsiveContainer, Pie, PieChart, Cell, Tooltip };
+  return { ...(typeof actual === 'object' ? actual : {}), ResponsiveContainer, Pie, PieChart, Cell, Tooltip };
 });
 
 const fmt = (v) => money2(v);
@@ -142,7 +142,7 @@ describe("PieDonut — visible-in-box contract", () => {
 
   it("reserves the full height for chart + legend so nothing is clipped (stays in box)", () => {
     const { container } = render(<PieDonut data={[{ name: "A", value: 1 }]} height={320} />);
-    const wrapper = container.firstChild;
+    const wrapper = /** @type {HTMLElement} */ (container.firstChild);
     expect(wrapper.style.height).toBe("320px");
     expect(wrapper.querySelector("ul")).toBeTruthy(); // legend is in-flow, not clipped
   });

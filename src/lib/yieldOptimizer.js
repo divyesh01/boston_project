@@ -1,4 +1,4 @@
-import { sanitizeInput } from './securityUtils';
+import { sanitizeText as sanitizeInput } from './securityUtils';
 
 /**
  * Computes optimized daily rate recommendations based on demand elasticity.

@@ -57,7 +57,10 @@ export default defineConfig({
           'react-vendor': ['react', 'react-dom', 'react-router-dom'],
           'chart-vendor': ['recharts'],
           'ui-vendor': ['lucide-react', 'framer-motion', 'clsx', 'tailwind-merge'],
-          'map-vendor': ['leaflet', 'react-leaflet']
+          'map-vendor': ['leaflet', 'react-leaflet'],
+          'crdt-vendor': ['yjs', 'y-websocket'],
+          'query-vendor': ['@tanstack/react-query'],
+          'data-vendor': ['@base44/sdk', 'dexie', 'otplib']
         }
       },
     },

@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, lazy, Suspense } from "react";
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Building2, MoreHorizontal, X, ArrowLeft, LogOut, KeyRound } from "lucide-react";
-import AIAssistant from "@/components/AIAssistant";
+const AIAssistant = lazy(() => import("@/components/AIAssistant"));
 import { GlobalFiltersProvider, useGlobalFilters } from "@/lib/useGlobalFilters";
 import GlobalControlBar from "@/components/GlobalControlBar";
 import { useAuth } from "@/lib/AuthContext";
@@ -231,7 +231,9 @@ export default function Layout() {
         )}
       </div>
 
-      <AIAssistant />
+      <Suspense fallback={null}>
+        <AIAssistant />
+      </Suspense>
       <CommandMenu />
       </div>
       </GlobalFiltersProvider>

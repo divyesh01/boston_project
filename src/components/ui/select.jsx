@@ -11,7 +11,8 @@ import { Check, ChevronDown, ChevronUp } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
-const Select = ({ modal = false, ...props }) => <SelectPrimitive.Root modal={modal} {...props} />
+/** @param {import('react').ComponentProps<typeof SelectPrimitive.Root>} props */
+const Select = (props) => <SelectPrimitive.Root {...props} />;
 
 const SelectGroup = SelectPrimitive.Group
 

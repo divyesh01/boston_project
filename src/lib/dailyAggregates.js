@@ -133,6 +133,9 @@ export async function rebuildDailyAggregates({ propertyId = 'all', from = '', to
 
 // Read cached aggregates for a date range. Returns [] if the cache is empty
 // (e.g. never built yet) so callers can fall back to live computation.
+/**
+ * @param {{ propertyId?: string | string[]; from?: string; to?: string }} [opts]
+ */
 export async function getDailyAggregates({ propertyId = 'all', from = '', to = '' } = {}) {
   let rows;
   if (propertyId && propertyId !== 'all') {

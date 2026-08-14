@@ -3,8 +3,9 @@ import { db, listImportSessions, rollbackImportSession } from '@/api/base44Clien
 import React, { useState } from "react";
 import { UploadCloud, CheckCircle2, FileSpreadsheet, XCircle, Search, Building2, Loader2, Eye, Trash2, ArrowDownToLine, RefreshCw, RotateCcw, X } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
+import { EmptyState } from "@/components/ui/status";
 
-import { useUploads, useProperties, useHotelMetrics } from "@/lib/useHotelData";
+import { useUploads, useProperties } from "@/lib/useHotelData";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRef } from "react";
 import { num } from "@/lib/hotel";
@@ -1184,9 +1185,11 @@ export default function Import() {
             })}
           </div>
           {!filtered.length && (
-            <p className="text-sm text-slate-500">
-              {uploads.length ? "No results match your search." : "No files imported in this session yet."}
-            </p>
+            <EmptyState
+              icon={UploadCloud}
+              title={uploads.length ? "No matching files" : "No imports yet"}
+              description={uploads.length ? "No results match your search." : "Upload your first report to start tracking performance."}
+            />
           )}
         </div>
       </Card>

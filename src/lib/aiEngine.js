@@ -352,10 +352,7 @@ async function resolveProperty(question, defaultFilter, allowedPropertyIds = nul
 
 async function load(table, prop, from, to, dateField = "date") {
   if (["OccupancyDay", "SourceDay", "PaymentDay", "GrossRevenueDay", "Expense"].includes(table)) {
-    let propArg = "all";
-    if (prop.ids && prop.ids.size > 0 && !prop.isAll) {
-      propArg = Array.from(prop.ids);
-    }
+    const propArg = (prop.ids && prop.ids.size > 0 && !prop.isAll) ? Array.from(prop.ids) : "all";
     const aggs = await getDailyAggregates({ propertyId: propArg, from, to });
     if (aggs && aggs.length > 0) {
       const synthetic = buildSyntheticRows(aggs);

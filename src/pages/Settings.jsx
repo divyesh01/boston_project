@@ -7,7 +7,6 @@ import Card from "@/components/ui-exec/Card";
 import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, getCcFeeOnRefunds, setCcFeeOnRefunds, COMMISSION_TYPES } from "@/lib/commissionRates";
 import { getAlertThresholds, saveAlertThresholds } from "@/lib/alertThresholds";
 import { getRevenueThresholds, saveRevenueThresholds } from "@/lib/revenueThresholds";
-import { isCryptoAvailable, validatePasswordStrength } from "@/lib/security";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { getTaxSettings, saveTaxSettings } from "@/lib/taxSettings";
 import { toast } from "@/components/ui/use-toast";

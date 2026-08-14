@@ -1,5 +1,6 @@
-import { Suspense, lazy, useEffect, Component } from 'react';
+import { Suspense, lazy, useEffect, useState, Component } from 'react';
 import { Toaster } from "@/components/ui/toaster";
+import { ErrorState } from "@/components/ui/status";
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClientInstance } from '@/lib/query-client';
 import { YDocProvider } from '@/crdt';
@@ -46,10 +47,35 @@ const Pricing = lazy(() => import('@/pages/Pricing'));
 const DemoYDoc = lazy(() => import('@/pages/DemoYDoc'));
 
 const PageFallback = () => (
-  <div className="flex min-h-[50vh] items-center justify-center">
-    <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-700 border-t-[#6C63FF]" />
+  <div className="mx-auto w-full max-w-6xl animate-pulse space-y-6 p-6">
+    <div className="h-8 w-48 rounded-lg bg-white/5" />
+    <div className="grid gap-4 sm:grid-cols-3">
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="h-28 rounded-2xl bg-white/5" />
+      ))}
+    </div>
+    <div className="h-72 rounded-2xl bg-white/5" />
   </div>
 );
+
+// Thin top progress bar shown on every route change to improve perceived speed.
+const RouteProgress = () => {
+  const location = useLocation();
+  const [active, setActive] = useState(false);
+  useEffect(() => {
+    setActive(true);
+    const t = setTimeout(() => setActive(false), 350);
+    return () => clearTimeout(t);
+  }, [location.pathname]);
+  return (
+    <div className={`pointer-events-none fixed inset-x-0 top-0 z-[200] h-0.5 transition-opacity duration-300 ${active ? "opacity-100" : "opacity-0"}`}>
+      <div
+        className="h-full bg-gradient-to-r from-[#6C63FF] via-[#00E096] to-[#6C63FF] transition-[width] duration-300 ease-out"
+        style={{ width: active ? "85%" : "0%" }}
+      />
+    </div>
+  );
+};
 
 // Top-level error boundary to catch AuthProvider errors
 class TopLevelErrorBoundary extends Component {
@@ -107,18 +133,12 @@ class LazyErrorBoundary extends Component {
     if (this.state.hasError) {
       return (
         <div className="flex min-h-screen items-center justify-center bg-[#040D1A] p-6">
-          <div className="text-center w-full max-w-2xl rounded-2xl border border-red-500/30 bg-[#0F1F35] p-6">
-            <h2 className="text-xl text-white">Failed to load page</h2>
-            <p className="mt-2 text-sm text-red-400 font-mono text-left bg-black/40 p-3 rounded">
-              {this.state.error?.message || this.state.error?.toString() || 'Unknown error'}
-            </p>
-            <p className="mt-2 text-xs text-slate-400 text-left bg-black/40 p-3 rounded max-h-64 overflow-auto">
-              {this.state.info?.componentStack || 'No stack trace available'}
-            </p>
-            <button onClick={() => window.location.reload()} className="mt-4 rounded bg-[#6C63FF] px-4 py-2 text-white">
-              Reload
-            </button>
-          </div>
+          <ErrorState
+            title="Failed to load page"
+            description="This section hit an unexpected error. You can retry without reloading the app."
+            error={this.state.error}
+            onRetry={this.handleReset}
+          />
         </div>
       );
     }
@@ -283,6 +303,7 @@ function App() {
         <YDocProvider name="app-root">
           <QueryClientProvider client={queryClientInstance}>
             <Router>
+              <RouteProgress />
               <ScrollToTop />
               <AuthenticatedApp />
             </Router>

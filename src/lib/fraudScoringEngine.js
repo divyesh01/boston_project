@@ -1,4 +1,4 @@
-import { sanitizeInput } from './securityUtils';
+import { sanitizeText as sanitizeInput } from './securityUtils';
 
 function calculateStats(values = []) {
   if (values.length === 0) return { mean: 0, stdDev: 0 };

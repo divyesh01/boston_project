@@ -315,6 +315,7 @@ export default function MonthlyCalendar() {
                 <p className="text-slate-500">No data imported for this day.</p>
                 <Link to="/upload" className="mt-2 inline-block text-sm text-[#00D4FF] underline">Import reports →</Link>
               </div>
+            )}
             </div>
           </DialogPrimitive.Content>
         </DialogPrimitive.Portal>

@@ -1252,7 +1252,6 @@ async function getLocalSessionUser() {
   try {
     const { userId, expiresAt } = JSON.parse(raw);
     if (new Date(expiresAt) < new Date()) {
-      await secureRetrieve(LOCAL_SESSION_KEY, true); // Delete key (simulating remove) by clearing or we can use localStorage.removeItem since secureStore doesn't have an explicit delete, wait, actually let's just write null.
       await secureStore(LOCAL_SESSION_KEY, '');
       return null;
     }

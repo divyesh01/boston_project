@@ -3,6 +3,7 @@ import { db, runInTransaction } from '@/api/base44Client';
 import React, { useState } from "react";
 import { Plus, Trash2, DollarSign, CheckCircle2, X, Save, Zap, CalendarClock, Power, UserPlus, Target, TrendingUp, History, Loader2, ArrowLeft, Wallet } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
+import { EmptyState } from "@/components/ui/status";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import StatusBadge from "@/components/ui-exec/StatusBadge";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -1030,7 +1031,6 @@ export default function Payroll() {
                 </button>
               </div>
               </div>
-            </div>
           </DialogPrimitive.Content>
         </DialogPrimitive.Portal>
       </DialogPrimitive.Root>
@@ -1175,7 +1175,6 @@ export default function Payroll() {
                 </button>
               </div>
               </div>
-            </div>
           </DialogPrimitive.Content>
         </DialogPrimitive.Portal>
       </DialogPrimitive.Root>
@@ -1216,10 +1215,11 @@ export default function Payroll() {
             </div>
           ))}
           {!payroll.length && (
-            <div className="py-4 text-center">
-              <p className="text-sm text-slate-500">No payroll runs yet. Add staff above and hit “Run Payroll Now”, or add an entry manually.</p>
-              <p className="mt-1 text-xs text-slate-600">Engine-generated runs are auto-approved on the last day of the month.</p>
-            </div>
+            <EmptyState
+              icon={Wallet}
+              title="No payroll runs yet"
+              description="Add staff above and hit “Run Payroll Now”, or add an entry manually. Engine-generated runs are auto-approved on the last day of the month."
+            />
           )}
         </div>
       </Card>
@@ -1674,6 +1674,8 @@ export default function Payroll() {
                 </button>
                 </div>
               </div>
+            )}
+            </div>
             </DialogPrimitive.Content>
           </DialogPrimitive.Portal>
         </DialogPrimitive.Root>

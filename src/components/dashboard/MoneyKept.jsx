@@ -1,5 +1,4 @@
 import React, { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import {
   ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend,
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -7,7 +6,6 @@ import {
 } from "recharts";
 import { X, Wallet } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
-import { db } from "@/api/base44Client";
 import { usePaymentData } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { money, money2, pct, sum, inRange, C, CHART_COLORS, commissionFor } from "@/lib/hotel";
@@ -485,7 +483,20 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       })),
     };
 
-      },
+    return {
+      gross,
+      items,
+      totalDeductions,
+      kept,
+      from,
+      to,
+      tax: taxTotal,
+      refundsTotal,
+      passThrough,
+      taxRecords,
+      liabState,
+      liabCity,
+      liabOther,
       dayTotals,
     };
   }, [occRows, srcRows, grossRows, payRecords, payroll, from, to, property, ccFee, ccFeeRefunds, settingsVersion, aggPayRows, aggExpenses, recurringExtras]);

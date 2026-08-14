@@ -239,6 +239,22 @@ function safeSessionStorage() {
 }
 
 // ─── CSRF Token ───
+// Added security helpers for file upload
+
+export const MAX_UPLOAD_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+export function validateFileSize(file, maxSize = MAX_UPLOAD_FILE_SIZE) {
+  if (!file || typeof file.size !== 'number') return false;
+  return file.size > 0 && file.size <= maxSize;
+}
+
+export function sanitizeCsvCell(value) {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (/^[=+\-@\t\r]/.test(trimmed)) {
+    return `'${trimmed}`;
+  }
+  return trimmed;
+}
 export function getCsrfToken() {
   const ss = safeSessionStorage();
   let token = ss ? ss.getItem(CSRF_TOKEN_KEY) : null;

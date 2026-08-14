@@ -45,6 +45,8 @@ const Housekeeping = lazy(() => import('@/pages/Housekeeping'));
 const Reviews = lazy(() => import('@/pages/Reviews'));
 const Pricing = lazy(() => import('@/pages/Pricing'));
 const DemoYDoc = lazy(() => import('@/pages/DemoYDoc'));
+const PrivacyPolicy = lazy(() => import('@/pages/PrivacyPolicy'));
+const TermsOfService = lazy(() => import('@/pages/TermsOfService'));
 
 const PageFallback = () => (
   <div className="mx-auto w-full max-w-6xl animate-pulse space-y-6 p-6 motion-reduce:animate-none">
@@ -269,8 +271,10 @@ const AuthenticatedApp = () => {
       <Route path="/login" element={<LoginRedirect />} />
       <Route path="/forgot-password" element={<Suspended><ForgotPassword /></Suspended>} />
       <Route path="/reset-password" element={<Suspended><ResetPassword /></Suspended>} />
-      <Route path="/setup" element={<Suspended><Setup /></Suspended>} />
-      <Route path="/*" element={<ProtectedRoutes />} />
+        <Route path="/setup" element={<Suspended><Setup /></Suspended>} />
+        <Route path="/privacy" element={<Suspended><PrivacyPolicy /></Suspended>} />
+        <Route path="/terms" element={<Suspended><TermsOfService /></Suspended>} />
+        <Route path="/*" element={<ProtectedRoutes />} />
     </Routes>
   );
 };

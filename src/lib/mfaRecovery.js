@@ -1,5 +1,3 @@
-import { sanitizeInput } from './securityUtils';
-
 /**
  * Generates an array of secure, random 8-character single-use recovery codes.
  * @param {number} [count=8] - Number of recovery codes to generate
@@ -62,6 +60,6 @@ export async function verifyAndConsumeRecoveryCode(inputCode, storedHashedCodes 
   return {
     valid: true,
     updatedCodes,
-    matchedIndex
+    matchedIndex: matchIndex
   };
 }

@@ -174,6 +174,86 @@ export function predictiveRate({ occupancyHistory, events, baseCents, config }) 
   return { ...rec, forecastedDemand: forecasted };
 }
 
+// ─── Price Elasticity of Demand (PED) ───────────────────────────────────
+
+export function priceElasticityDemand(priceRatio, elasticity) {
+  // Q(P) = Q0 * (P / P0)^(-ε)
+  const e = clamp(Number(elasticity) || 1.5, 0.5, 3.0);
+  return Math.pow(priceRatio, -e);
+}
+
+export function computeOptimalElasticPrice({ baseCents, targetOccupancy, currentOccupancy, elasticity }) {
+  const priceRatio = currentOccupancy > 0 ? targetOccupancy / currentOccupancy : 1;
+  const multiplier = priceElasticityDemand(priceRatio, elasticity);
+  return Math.round(baseCents * multiplier);
+}
+
+// ─── Pickup Velocity & Booking Pace Forecasting ────────────────────────
+
+export function computeBookingPace(occupancyHistory = [], daysToArrival = 7) {
+  // Simplified velocity: difference between current occupancy trajectory
+  // and historical baseline at same lead time.
+  const pace = (occupancyHistory || []).map((o) => Number(o) || 0);
+  const avgPace = pace.length ? pace.reduce((a, b) => a + b, 0) / pace.length : 0.5;
+  const velocity = (pace[pace.length - 1] || 0) - avgPace;
+  return { velocity, pace, avgPace, acceleration: pace.length > 1 ? pace[pace.length - 1] - pace[pace.length - 2] : 0 };
+}
+
+export function demandMultiplierFromPace(occupancy, historicalPaceOccupancy, daysToArrival) {
+  const paceDifferential = (Number(occupancy) || 0) - (Number(historicalPaceOccupancy) || 0);
+  let multiplier = 1.0;
+  if (paceDifferential > 10) multiplier = 1.0 + (paceDifferential / 100) * 0.75;
+  else if (paceDifferential < -10 && daysToArrival <= 3) multiplier = 1.0 + (paceDifferential / 100) * 0.50;
+  return clamp(multiplier, 0.7, 1.6);
+}
+
+// ─── Net-RevPAR Optimization (Direct vs OTA Commission) ───────────────
+
+export function netRevenuePerBooking(priceCents, commissionRate) {
+  const net = Math.round(priceCents * (1 - (Number(commissionRate) || 0)));
+  return { publishedRateCents: Math.round(priceCents), netYieldCents: net, commissionPercent: Math.round((Number(commissionRate) || 0) * 100) };
+}
+
+export function optimizeChannelRate({ baseCents, currentOccupancy, daysToArrival, historicalPaceOccupancy, weatherRiskFactor = 0, channelCosts }) {
+  const paceMult = demandMultiplierFromPace(currentOccupancy, historicalPaceOccupancy, daysToArrival);
+  const urgency = daysToArrival === 0 ? (currentOccupancy > 90 ? 1.35 : (currentOccupancy < 70 ? 0.88 : 1.0)) : (daysToArrival <= 3 && currentOccupancy > 85 ? 1.20 : 1.0);
+  const shock = 1.0 + (clamp(Number(weatherRiskFactor) || 0, 0, 1) * 0.25);
+  let target = Math.round(baseCents * paceMult * urgency * shock);
+  target = Math.max(Math.round(baseCents * 0.75), Math.min(Math.round(baseCents * 2.0), target));
+
+  const recommendations = (channelCosts || [
+    { channel: 'Direct_Web', commissionRate: 0.02 },
+    { channel: 'OTA_Expedia', commissionRate: 0.18 },
+    { channel: 'OTA_Booking', commissionRate: 0.15 },
+  ]).map((ch) => {
+    const net = Math.round(target * (1 - ch.commissionRate));
+    const throttle = currentOccupancy > 88 && ch.commissionRate >= 0.15;
+    return {
+      channel: ch.channel,
+      publishedRateCents: target,
+      formattedRate: `$${(target / 100).toFixed(2)}`,
+      netYieldCents: net,
+      formattedNetYield: `$${(net / 100).toFixed(2)}`,
+      action: throttle ? 'THROTTLE_ALLOTMENT' : 'OPEN',
+    };
+  });
+
+  return { recommendedRateCents: target, formattedRate: `$${(target / 100).toFixed(2)}`, recommendations };
+}
+
+// ─── Weather & Event Shock Elasticity ───────────────────────────────────
+
+export function weatherShockMultiplier(weatherCondition, eventImpactFactor = 0) {
+  // Event impact factor 0-1 for regional conventions, storms, etc.
+  const shock = clamp(Number(eventImpactFactor) || 0, 0, 1);
+  let baseMult = 1.0;
+  const c = String(weatherCondition || '').toLowerCase();
+  if (c.includes('storm') || c.includes('blizzard') || c.includes('snow')) baseMult = 1.25;
+  else if (c.includes('rain') || c.includes('fog')) baseMult = 0.85;
+  else if (c.includes('sun') || c.includes('clear')) baseMult = 1.1;
+  return baseMult * (1 + shock * 0.2);
+}
+
 export function buildPricingForecast({ rooms, reservations, weatherByDate = {}, config, days = 14, fromDate }) {
   const cfg = { ...DEFAULT_PRICING_CONFIG, ...(config || {}) };
   const start = fromDate || new Date().toISOString().slice(0, 10);

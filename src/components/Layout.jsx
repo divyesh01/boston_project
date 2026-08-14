@@ -110,7 +110,12 @@ export default function Layout() {
               className="flex items-center justify-center gap-2 rounded-xl border border-red-500/30 px-3 py-2 text-xs text-red-300 transition-colors hover:bg-red-500/10"
             >
               <LogOut className="h-3.5 w-3.5" /> Logout
-            </button>
+              </button>
+          </div>
+          <div className="flex items-center justify-center gap-3 border-t border-white/5 pt-3 text-[10px] text-slate-500">
+            <Link to="/privacy" className="transition-colors hover:text-slate-300 hover:underline">Privacy Policy</Link>
+            <span>•</span>
+            <Link to="/terms" className="transition-colors hover:text-slate-300 hover:underline">Terms of Service</Link>
           </div>
         </div>
       </aside>
@@ -225,6 +230,10 @@ export default function Layout() {
                     {short}
                   </Link>
                 ))}
+              </div>
+              <div className="mt-3 flex items-center justify-center gap-4 border-t border-white/10 pt-3 text-xs text-slate-400">
+                <Link to="/privacy" onClick={() => setMoreOpen(false)} className="hover:text-white hover:underline">Privacy</Link>
+                <Link to="/terms" onClick={() => setMoreOpen(false)} className="hover:text-white hover:underline">Terms</Link>
               </div>
             </div>
           </div>

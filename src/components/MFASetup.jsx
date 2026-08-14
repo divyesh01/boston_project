@@ -8,6 +8,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2, CheckCircle, AlertTriangle, Copy, QrCode, Download } from "lucide-react";
 import QRCode from "qrcode";
 import { toast } from "@/components/ui/use-toast";
+import { generateRecoveryCodes } from '@/lib/mfaRecovery';
 
 export default function MFASetup({ 
   secret, 
@@ -41,25 +42,7 @@ export default function MFASetup({
     }
   }, [uri]);
 
-  const generateBackupCodes = () => {
-    const codes = [];
-    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    // Generate enough random bytes for 10 codes * 8 characters = 80 bytes
-    const randomBytes = new Uint8Array(80);
-    window.crypto.getRandomValues(randomBytes);
-    
-    let byteIndex = 0;
-    for (let i = 0; i < 10; i++) {
-      let code = '';
-      for (let j = 0; j < 8; j++) {
-        // Modulo 32 is safe here because 256 is evenly divisible by 32 (no modulo bias)
-        code += alphabet[randomBytes[byteIndex] % 32];
-        byteIndex++;
-      }
-      codes.push(`${code.slice(0,4)}-${code.slice(4)}`);
-    }
-    return codes;
-  };
+  const generateBackupCodes = () => generateRecoveryCodes(10);
 
   const handleVerify = async () => {
     if (!totpToken || totpToken.length !== 6) {

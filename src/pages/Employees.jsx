@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import { motion } from "framer-motion";
 import { Users, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Info } from "lucide-react";
@@ -9,6 +9,8 @@ import { money2, num, C } from "@/lib/hotel";
 import { detectClerkAnomalies } from "@/lib/anomalyDetector";
 import ClerkAuditMatrix from "@/components/dashboard/ClerkAuditMatrix";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
+import { signOffShiftAnomaly } from "@/lib/anomalySignoff";
+import { db } from "@/api/base44Client";
 
 export default function Employees() {
   const { dateRange, property, properties, employee } = useGlobalFilters();
@@ -23,6 +25,36 @@ export default function Employees() {
   // different data source (PMS adjustments/refunds, not ClerkShift payments).
   const [fraudClerk, setFraudClerk] = useState("all");
   const [fraudType, setFraudType] = useState("all");
+
+  // Manager sign-off state for clerk shift anomalies.
+  const [mgr, setMgr] = useState(null);
+  const [signOffNotes, setSignOffNotes] = useState({});
+  const [signedClerks, setSignedClerks] = useState({});
+  const [notice, setNotice] = useState(null);
+  useEffect(() => {
+    db.auth.me().then((u) => setMgr(u)).catch(() => setMgr(null));
+  }, []);
+
+  const handleSignOff = async (clerk) => {
+    const notes = signOffNotes[clerk.clerk] || "";
+    const user = mgr || {};
+    try {
+      for (const rec of clerk.records) {
+        if (!rec.id) continue;
+        await signOffShiftAnomaly({
+          shiftId: rec.id,
+          managerUserId: user.id || "manager",
+          managerName: user.username || user.email || "Manager",
+          resolutionNotes: notes,
+          propertyId: rec.property_id || property || null,
+        });
+      }
+      setSignedClerks((p) => ({ ...p, [clerk.clerk]: true }));
+      setNotice({ type: "ok", text: `Signed off ${clerk.clerk}'s shift records.` });
+    } catch (e) {
+      setNotice({ type: "error", text: `Sign-off failed: ${e.message}` });
+    }
+  };
 
   const adjustments = useMemo(() => adjRef.filter(r => r.record_type === "adjustment"), [adjRef]);
   const refunds = useMemo(() => adjRef.filter(r => r.record_type === "refund"), [adjRef]);
@@ -184,6 +216,12 @@ export default function Employees() {
           {propName} · {periodLabel} · {totalTxns} records · {stats.length} clerks
         </p>
       </header>
+
+      {notice && (
+        <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs ${notice.type === "ok" ? "border-[#00E096]/30 bg-[#00E096]/10 text-[#00E096]" : "border-[#FF6B6B]/30 bg-[#FF6B6B]/10 text-[#FF6B6B]"}`}>
+          {notice.type === "ok" ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />} {notice.text}
+        </div>
+      )}
 
       {stats.length === 0 ? (
         <Card title="No clerk data available">
@@ -363,13 +401,28 @@ export default function Employees() {
                                         <td className="py-1.5 text-right tabular-nums text-slate-500">{r.transaction_count || "—"}</td>
                                       </tr>
                                     ))}
-                                  </tbody>
-                 </table>
-                {filteredStats.length === 0 && (
-                  <p className="px-1 py-4 text-sm text-slate-500">No clerks match the selected filters.</p>
-                )}
-               </div>
-                            </td>
+                                 </tbody>
+                  </table>
+                 {filteredStats.length === 0 && (
+                   <p className="px-1 py-4 text-sm text-slate-500">No clerks match the selected filters.</p>
+                 )}
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/5 pt-3">
+                  <input
+                    value={signOffNotes[s.clerk] || ""}
+                    onChange={(e) => setSignOffNotes((p) => ({ ...p, [s.clerk]: e.target.value }))}
+                    placeholder="Resolution notes (optional)"
+                    className="flex-1 min-w-[200px] rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-xs text-white"
+                  />
+                  <button
+                    onClick={() => handleSignOff(s)}
+                    disabled={signedClerks[s.clerk]}
+                    className="rounded-lg bg-[#00D4FF] px-3 py-2 text-xs font-medium text-[#04231A] hover:bg-[#5fe3ff] disabled:opacity-50"
+                  >
+                    {signedClerks[s.clerk] ? "Signed Off" : "Sign Off Shift"}
+                  </button>
+                </div>
+                             </td>
                           </tr>
                         )}
                       </React.Fragment>

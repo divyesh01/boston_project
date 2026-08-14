@@ -5,12 +5,14 @@ import { useRooms, useHousekeepingTasks } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { db } from "@/api/base44Client";
 import { useRealtimeInvalidation } from "@/lib/realtime";
+import { money } from "@/lib/hotel";
 import {
   TASK_TYPES, TASK_TYPE_LABELS, TASK_STATUS, canTransition,
   defaultChecklist, checklistComplete, checklistProgress,
   housekeepingRollup, roomHkByRoom, roomHkStatus,
 } from "@/lib/housekeepingService";
 import { generateHousekeepingSchedule } from "@/lib/laborOptimization";
+import { getHousekeepingConfig, saveHousekeepingConfig } from "@/lib/housekeepingConfig";
 
 const STATUS_COLOR = {
   pending: { color: "#9CA3AF", label: "Pending" },
@@ -46,7 +48,23 @@ export default function Housekeeping() {
   const isPortfolio = property === "all" || Array.isArray(property);
   const singlePropertyId = !isPortfolio ? property : null;
 
+  // Owner-tunable productivity standards (turnover minutes, wage, target labor %),
+  // persisted per property via housekeepingConfig.
+  const [hkConfig, setHkConfig] = useState(() => getHousekeepingConfig(singlePropertyId || "default"));
+  const [hkEdited, setHkEdited] = useState(hkConfig);
+  useEffect(() => {
+    const c = getHousekeepingConfig(singlePropertyId || "default");
+    setHkConfig(c);
+    setHkEdited(c);
+  }, [singlePropertyId]);
+  const setHk = (field, value) => setHkEdited((p) => ({ ...p, [field]: value }));
+  const saveHk = () => {
+    const saved = saveHousekeepingConfig(singlePropertyId || "default", hkEdited);
+    setHkConfig(saved);
+    setNotice({ type: "ok", text: "Productivity standards saved." });
+  };
   const laborPlan = useMemo(() => generateHousekeepingSchedule(rooms.length, rooms.length), [rooms]);
+  const estLaborCost = (laborPlan.requiredMinutes / 60) * Number(hkEdited.hourlyWage || 0);
 
   const rollup = useMemo(() => housekeepingRollup(tasks), [tasks]);
   const overdue = useMemo(() => tasks.filter((t) => !["completed", "inspected"].includes(t.status) &&
@@ -123,6 +141,43 @@ export default function Housekeeping() {
       <div className="rounded-xl border border-white/5 bg-[#0F1F35]/60 p-3 text-sm text-slate-200">
         <strong>Labor Optimization:</strong> {laborPlan.schedule} · {laborPlan.requiredMinutes} minutes required.
       </div>
+
+      <Card title="Productivity Standards" subtitle="Turnover times, wage, and target labor % — saved per property">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            ["minutesPerCheckout", "Checkout (min)"],
+            ["minutesPerStayover", "Stayover (min)"],
+            ["hourlyWage", "Hourly Wage ($)"],
+            ["targetLaborRevenuePercent", "Target Labor %"],
+          ].map(([field, label]) => (
+            <label key={field} className="flex flex-col gap-1 text-xs text-slate-400">
+              {label}
+              <input
+                type="number"
+                value={hkEdited[field]}
+                min="0"
+                step={field === "hourlyWage" || field === "targetLaborRevenuePercent" ? "0.5" : "1"}
+                onChange={(e) => setHk(field, Number(e.target.value))}
+                className="rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-sm text-white"
+              />
+            </label>
+          ))}
+        </div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-slate-400">
+            Est. daily labor cost: <span className="font-medium text-white">{money(estLaborCost)}</span> · target {hkEdited.targetLaborRevenuePercent}% of revenue
+          </p>
+          <button
+            onClick={saveHk}
+            className="rounded-lg bg-[#00E096] px-4 py-2 text-sm font-medium text-[#04231A] hover:bg-[#00ffa8]"
+          >
+            Save Standards
+          </button>
+        </div>
+        {isPortfolio && (
+          <p className="mt-2 text-[11px] text-slate-500">Editing the portfolio-wide default. Select a single property to set property-specific standards.</p>
+        )}
+      </Card>
 
       {notice && (
         <div

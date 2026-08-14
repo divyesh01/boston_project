@@ -41,6 +41,24 @@ export default async function (req) {
     // IGNORED — we recompute the chain hash over trusted server fields using a
     // server-held secret, so the audit trail cannot be forged client-side
     // (previously the chain secret lived in localStorage / a window global).
+    //
+    // CANONICAL PAYLOAD — DO NOT MUTATE WITHOUT ALSO UPDATING THE VERIFIER.
+    // This exact object shape is the contract shared with the server-side
+    // verifier (base44/functions/audit_verify/entry.js). Any field added,
+    // removed, renamed, or re-ordered here MUST be mirrored there, or the
+    // verifier will misflag every healthy row as tampered.
+    //
+    // Intentionally NOT signed: ip_address and device. Both are written to the
+    // row (below) for forensics, but they come from the client / a spoofable
+    // proxy header and so are not part of the tamper-evident payload. The
+    // client's own local chain (src/lib/securityUtils.js#hashEntry — a
+    // PROTECTED file) DOES sign a broader field set including a fabricated
+    // 'client-side' ip, with a PUBLIC salt; its chain therefore cannot produce
+    // the same hex as the server chain even for the same logical event. This is
+    // by design: the two chains are independent — the client's is a local
+    // IndexedDB corruption guard, the server's (computed here + verified by
+    // audit_verify) is the forensic source of truth against DB-admin tampering.
+    // UI verification should call audit_verify for authoritative results.
     const chainSecret = secrets.get('AUDIT_CHAIN_SECRET') || 'insecure-dev-audit-secret-change-me';
     const lastEntries = await base44.asServiceRole.entities.AuditLog.filter({}, '-created_date', 1, 0);
     const previousHash = (lastEntries && lastEntries[0] && lastEntries[0].hash) || '0'.repeat(64);

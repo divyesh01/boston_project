@@ -8,6 +8,7 @@ import { usePricingForecast } from "@/lib/usePricing";
 import { getPricingConfig, savePricingConfig, DEFAULT_PRICING_CONFIG, ROOM_TYPES } from "@/lib/pricingSettings";
 import { money2 } from "@/lib/hotel";
 import { useRealtimeInvalidation } from "@/lib/realtime";
+import { applyDynamicRateOverride } from "@/lib/pricingOverride";
 
 const toDollars = (cents) => Math.round((Number(cents) || 0) / 100);
 const toCentsFromDollars = (d) => Math.round((Number(d) || 0) * 100);
@@ -79,6 +80,21 @@ export default function Pricing() {
         if (today.types && today.types[type]) rateMap[type] = money2(today.types[type].recommendedCents);
       }
       await db.integrations.ChannelManager.PushInventory(singlePropertyId, rateMap);
+      // Audit each applied rate override (best-effort — never blocks the push).
+      for (const type of ROOM_TYPES) {
+        const rec = today.types?.[type]?.recommendedCents;
+        if (rec) {
+          try {
+            await applyDynamicRateOverride({
+              propertyId: singlePropertyId,
+              newRate: toDollars(rec),
+              roomType: type,
+              justification: `Yield push to ${propName}`,
+              user: null,
+            });
+          } catch { /* audit trail is non-critical */ }
+        }
+      }
       setNotice({ type: "ok", text: `Pushed recommended rates for ${propName} to connected channels.` });
     } catch (e) {
       setNotice({ type: "error", text: `Push failed: ${e.message}` });

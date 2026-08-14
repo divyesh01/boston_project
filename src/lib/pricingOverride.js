@@ -1,4 +1,4 @@
-import { sanitizeInput } from './securityUtils';
+import { sanitizeText as sanitizeInput } from './securityUtils';
 import { db } from '../api/base44Client';
 
 /**

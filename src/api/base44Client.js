@@ -2,7 +2,7 @@ import localDb from '@/api/localDb';
 import { answerQuestion } from '@/lib/aiEngine';
 import { toCents, fromCents } from '@/lib/decimal';
 import { reconcileTimecards } from '@/lib/timecardCalc';
-import { secureStore, secureRetrieve, createAuditEntry, getClientIpHint, getCsrfToken } from '@/lib/securityUtils';
+import { secureStore, secureRetrieve, createAuditEntry, getClientIpHint, getCsrfToken, verifyAuditChain } from '@/lib/securityUtils';
 import { postSessionRevoked } from '@/lib/sessionChannel';
 import { publishChange } from '@/lib/realtime';
 import { recalculationService } from '@/lib/recalculationService';
@@ -933,6 +933,22 @@ const audit = {
     await functions.invoke('audit_clear', {});
     return { success: true };
   },
+
+  // Authoritative audit-chain verification. In production this delegates to
+  // the serverless function base44/functions/audit_verify/entry.js (which
+  // recomputes the chain with the server-held AUDIT_CHAIN_SECRET over rows
+  // persisted via audit_log/entry.js). In local-dev mode it falls back to
+  // the client-side verifyAuditChain() guard built over localDb rows.
+  //
+  // The returned `source` field ('server' | 'local') tells the caller which
+  // check ran — only 'server' is forensic against DB-admin tampering. The
+  // other fields mirror verifyAuditChain()'s shape for UI compatibility:
+  //   { valid: true,  count,                     source }
+  //   { valid: false, tamperedAt, expected, actual, source }   (hash drift)
+  //   { valid: false, brokenAt,   expectedPrevious, actualPrevious, source } (chain break)
+  async verifyChain() {
+    return functions.invoke('audit_verify', {});
+  },
 };
 
 // ─── Auth: real local authentication ───
@@ -1402,6 +1418,25 @@ async function handleLocalAuditClear() {
   return { success: true };
 }
 
+// Local-dev fallback for the server-side audit-chain verifier. In local-dev
+// mode the audit rows live in localDb (written by handleLocalAuditLog via
+// createAuditEntry, which builds its own chain with a public salt), so the
+// authoritative verifier is src/lib/securityUtils.js#verifyAuditChain — the
+// client's integrity guard. In production this function is never reached:
+// `functions.invoke('audit_verify', ...)` delegates to the serverless function
+// at base44/functions/audit_verify/entry.js, which recomputes the chain with
+// the server-held AUDIT_CHAIN_SECRET. `source` lets the UI label which check
+// ran, since only the server check is forensic against DB-admin tampering.
+async function handleLocalAuditVerify() {
+  try {
+    // verifyAuditChain is imported at the top of this file via securityUtils.
+    const res = await verifyAuditChain();
+    return { ...res, source: 'local' };
+  } catch (e) {
+    return { valid: false, error: e?.message || String(e), source: 'local' };
+  }
+}
+
 async function handleLocalAuthRegister({ userData } = /** @type {any} */ ({})) {
   const {
     username, email, password, role = 'read_only', assigned_property_ids = [],
@@ -1740,6 +1775,14 @@ const functions = {
         return await handleLocalAuditClear();
       } catch (e) {
         console.error(`[localAuth] audit_clear failed:`, e);
+        throw e;
+      }
+    }
+    if (functionName === 'audit_verify') {
+      try {
+        return await handleLocalAuditVerify();
+      } catch (e) {
+        console.error(`[localAuth] audit_verify failed:`, e);
         throw e;
       }
     }

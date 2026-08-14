@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from "react";
-import { CreditCard, DollarSign, Receipt, RefreshCw, AlertTriangle, Percent, Settings } from "lucide-react";
+import { CreditCard, DollarSign, Receipt, RefreshCw, AlertTriangle, Percent, Settings, Download } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import UniversalChart from "@/components/charts/UniversalChart";
@@ -11,6 +11,7 @@ import { money, money2, sum, inRange, C } from "@/lib/hotel";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { PAYMENT_METHOD_FIELDS, CARD_METHODS, refundTotalFromTotals } from "@/lib/paymentNorm";
 import { getTaxConfig, calculateTax, formatTaxRate, TAX_SOURCES } from "@/lib/taxConfig";
+import { exportReconciliationToCsv } from "@/lib/reconciliationExport";
 
 export default function Payments() {
   const { dateRange, property, properties, paymentType, months } = useGlobalFilters();
@@ -97,6 +98,59 @@ export default function Payments() {
 
   // Clerk drops (from ClerkShiftRecord, if any exist)
   const drops = useMemo(() => clerk.filter((x) => x.record_type === "drop"), [clerk]);
+
+  // 3-way reconciliation export (expected revenue vs collected), built from the
+  // same per-day aggregates this page already computes.
+  const reconciliationExport = useMemo(() => {
+    const byDate = new Map();
+    occRows.forEach((r) => {
+      const d = String(r.date).slice(0, 10);
+      byDate.set(d, { pmsTotal: Number(r.total_revenue) || 0 });
+    });
+    payRows.forEach((r) => {
+      const d = String(r.date).slice(0, 10);
+      const entry = byDate.get(d) || { pmsTotal: 0 };
+      const card = CARD_METHODS.reduce((a, k) => a + (Number(r[k]) || 0), 0);
+      const cash = Number(r.cash) || 0;
+      entry.pmsCard = (entry.pmsCard || 0) + card;
+      entry.pmsCash = (entry.pmsCash || 0) + cash;
+      entry.merchantSettledNet = (entry.merchantSettledNet || 0) + card;
+      entry.bankDeposited = (entry.bankDeposited || 0) + (card + cash);
+      byDate.set(d, entry);
+    });
+    const days = [...byDate.entries()].map(([date, e]) => {
+      const pmsTotal = e.pmsTotal || 0;
+      const pmsCard = e.pmsCard || 0;
+      const pmsCash = e.pmsCash || 0;
+      const merchantSettledNet = e.merchantSettledNet || 0;
+      const bankDeposited = e.bankDeposited || 0;
+      const cardVariance = pmsCard - merchantSettledNet;
+      const variance = pmsCard + pmsCash - pmsTotal;
+      return { date, pmsTotal, pmsCard, pmsCash, merchantSettledNet, bankDeposited, cardVariance, status: Math.abs(variance) < 1 ? "Balanced" : "Review" };
+    }).sort((a, b) => a.date.localeCompare(b.date));
+    const totalPmsRevenue = days.reduce((a, d) => a + d.pmsTotal, 0);
+    const totalMerchantSettled = days.reduce((a, d) => a + d.merchantSettledNet, 0);
+    const totalBankDeposited = days.reduce((a, d) => a + d.bankDeposited, 0);
+    const netVariance = days.reduce((a, d) => a + (d.pmsCard + d.pmsCash - d.pmsTotal), 0);
+    return {
+      days,
+      periodSummary: {
+        totalPmsRevenue,
+        totalMerchantSettled,
+        totalBankDeposited,
+        netVariance,
+        reconciliationHealth: Math.abs(netVariance) < 1 ? "Healthy" : "Needs Review",
+      },
+    };
+  }, [occRows, payRows]);
+
+  const handleExportReconciliation = () => {
+    try {
+      exportReconciliationToCsv(reconciliationExport, propName);
+    } catch (e) {
+      console.error("Reconciliation export failed:", e.message);
+    }
+  };
 
   // Clerk payment activity (real per-clerk records from ClerkShift.csv)
   const [expandedClerk, setExpandedClerk] = useState(null);
@@ -362,7 +416,18 @@ export default function Payments() {
           </Card>
 
           {/* Reconciliation */}
-          <Card title="Payment Reconciliation" subtitle="Expected revenue vs recorded payments by day">
+          <Card
+            title="Payment Reconciliation"
+            subtitle="Expected revenue vs recorded payments by day"
+            right={
+              <button
+                onClick={handleExportReconciliation}
+                className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#0A1628] px-3 py-1.5 text-xs font-medium text-slate-200 hover:border-[#00E096]/30"
+              >
+                <Download className="h-3.5 w-3.5" /> Export CSV
+              </button>
+            }
+          >
             <div className="space-y-4">
               <div className="grid gap-3 sm:grid-cols-3">
                 <div className="rounded-xl bg-[#0A1628]/60 p-4">

@@ -1,4 +1,5 @@
 import React from "react";
+import { Link } from "react-router-dom";
 
 export default function AuthLayout(
   /** @type {{
@@ -25,6 +26,11 @@ export default function AuthLayout(
         {footer && (
           <p className="mt-6 text-center text-sm text-slate-500">{footer}</p>
         )}
+        <div className="mt-4 text-center text-xs text-slate-500">
+          <Link to="/privacy" className="hover:text-slate-300 hover:underline">Privacy Policy</Link>
+          <span className="mx-2">•</span>
+          <Link to="/terms" className="hover:text-slate-300 hover:underline">Terms of Service</Link>
+        </div>
       </div>
     </div>
   );

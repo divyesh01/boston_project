@@ -9,7 +9,8 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRef } from "react";
 import { RefreshCw, Search, ShieldCheck, ShieldAlert } from "lucide-react";
 import { db } from "@/api/base44Client";
-import { verifyAuditChain } from "@/lib/securityUtils";
+import { verifyAuditChain as verifyAuditChainLocal } from "@/lib/securityUtils";
+import { AUDIT_CATEGORIES, filterAuditLogs } from "@/lib/auditFilter";
 
 const ACTION_BADGE = (action) => {
   const cls = "border ";
@@ -28,11 +29,32 @@ export default function AuditLog() {
 
   const [search, setSearch] = useState("");
   const [result, setResult] = useState("all");
+  const [category, setCategory] = useState("ALL");
   const [chain, setChain] = useState(null);
+  const [verifying, setVerifying] = useState(false);
 
+  // Authoritative chain verification goes through db.audit.verifyChain(), which
+  // delegates to the serverless audit_verify function (signed with the
+  // server-held AUDIT_CHAIN_SECRET) in production and falls back to the
+  // client-side verifyAuditChain() guard over localDb in dev. If the remote
+  // call throws (network / auth failure), we surface the local result so the
+  // page still tells the user SOMETHING rather than silently hanging on a
+  // rejected promise.
   const verify = async () => {
-    const res = await verifyAuditChain();
-    setChain(res);
+    setVerifying(true);
+    try {
+      const res = await db.audit.verifyChain();
+      setChain(res);
+    } catch (e) {
+      try {
+        const local = await verifyAuditChainLocal();
+        setChain({ ...local, source: "local", fallbackReason: e?.message || "remote verify failed" });
+      } catch (e2) {
+        setChain({ valid: false, error: e2?.message || String(e2), source: "local" });
+      }
+    } finally {
+      setVerifying(false);
+    }
   };
 
   const load = async () => {
@@ -50,19 +72,15 @@ export default function AuditLog() {
 
   useEffect(() => { load(); }, []);
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return logs.filter((l) => {
-      if (result !== "all" && l.result !== result) return false;
-      if (!q) return true;
-      return (
-        (l.username || "").toLowerCase().includes(q) ||
-        (l.performed_by || "").toLowerCase().includes(q) ||
-        (l.action || "").toLowerCase().includes(q) ||
-        (l.detail || "").toLowerCase().includes(q)
-      );
-    });
-  }, [logs, search, result]);
+  const baseFiltered = useMemo(
+    () => logs.filter((l) => result === "all" || l.result === result),
+    [logs, result]
+  );
+
+  const filtered = useMemo(
+    () => filterAuditLogs(baseFiltered, { category, searchQuery: search }),
+    [baseFiltered, category, search]
+  );
 
   const parentRef = useRef();
   
@@ -81,9 +99,16 @@ export default function AuditLog() {
             <CardTitle className="text-xl">Audit Log</CardTitle>
             <CardDescription>All security-related events: logins, password changes, user management.</CardDescription>
           </div>
-          <Button variant="outline" size="icon" onClick={load} title="Refresh" aria-label="Refresh">
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="icon" onClick={verify} title="Re-verify chain" aria-label="Re-verify chain" disabled={verifying}>
+              {verifying
+                ? <ShieldCheck className="h-4 w-4 animate-pulse" />
+                : <ShieldCheck className="h-4 w-4" />}
+            </Button>
+            <Button variant="outline" size="icon" onClick={load} title="Refresh" aria-label="Refresh">
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           {chain && (
@@ -91,9 +116,25 @@ export default function AuditLog() {
               {chain.valid ? <ShieldCheck className="h-4 w-4 shrink-0" /> : <ShieldAlert className="h-4 w-4 shrink-0" />}
               <div>
                 {chain.valid ? (
-                  <p className="font-medium">Audit chain verified — {chain.count} log{chain.count === 1 ? "" : "s"} hash-linked and untampered.</p>
+                  <p className="font-medium">
+                    Audit chain verified — {chain.count} log{chain.count === 1 ? "" : "s"} hash-linked and untampered.
+                    {chain.source === "server"
+                      ? " (Server-authoritative: signed with AUDIT_CHAIN_SECRET.)"
+                      : " (Local integrity check over cached rows.)"}
+                  </p>
                 ) : (
-                  <p className="font-medium">Audit chain verification failed ({chain.tamperedAt ? `tampering detected at log #${chain.tamperedAt}` : chain.reason || chain.error}).</p>
+                  <p className="font-medium">
+                    Audit chain verification failed
+                    {chain.tamperedAt ? ` — tampering detected at log #${chain.tamperedAt}${typeof chain.index === "number" ? ` (row ${chain.index})` : ""}`
+                      : chain.brokenAt ? ` — chain break at log #${chain.brokenAt}${typeof chain.index === "number" ? ` (row ${chain.index})` : ""} (a row was inserted, removed, or reordered)`
+                      : chain.reason === "hash_mismatch" ? " — hash mismatch"
+                      : chain.reason === "chain_break" ? " — chain break"
+                      : chain.error ? ` — ${chain.error}`
+                      : chain.reason ? ` — ${chain.reason}`
+                      : "."}
+                    {chain.source === "server" ? " (Server-authoritative recheck.)" : " (Local integrity check.)"}
+                    {chain.fallbackReason ? ` Local fallback engaged after remote verify failed: ${chain.fallbackReason}` : ""}
+                  </p>
                 )}
               </div>
               <button onClick={() => setChain(null)} className="ml-auto text-xs opacity-60 hover:opacity-100" aria-label="Close">×</button>
@@ -113,6 +154,18 @@ export default function AuditLog() {
                   className={`rounded-md px-3 py-1.5 text-xs capitalize ${result === r ? "bg-[#6C63FF]/20 text-white" : "bg-white/5 text-slate-400"}`}
                 >
                   {r}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-muted-foreground">Category:</span>
+              {Object.keys(AUDIT_CATEGORIES).map((cat) => (
+                <button
+                  key={cat}
+                  onClick={() => setCategory(cat)}
+                  className={`rounded-md px-3 py-1.5 text-xs capitalize ${category === cat ? "bg-[#00D4FF]/20 text-white" : "bg-white/5 text-slate-400"}`}
+                >
+                  {cat}
                 </button>
               ))}
             </div>

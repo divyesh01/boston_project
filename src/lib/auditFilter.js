@@ -1,4 +1,4 @@
-import { sanitizeInput } from './securityUtils';
+import { sanitizeText as sanitizeInput } from './securityUtils';
 
 export const AUDIT_CATEGORIES = {
   ALL: 'ALL',

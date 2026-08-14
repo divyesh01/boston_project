@@ -33,11 +33,11 @@ const ROLE_BADGE = {
 };
 
 const STATUS_BADGE = (u) => {
-  if (u.is_locked) return <Badge className="bg-red-500/20 text-red-300 border-red-500/40">Locked</Badge>;
-  if (u.is_active === false) return <Badge className="bg-slate-500/20 text-slate-300 border-slate-500/40">Disabled</Badge>;
-  if (u.must_change_password) return <Badge className="bg-amber-500/20 text-amber-300 border-amber-500/40">Password change required</Badge>;
+  if (u.is_locked) return <Badge className="bg-red-500/20 text-red-300 border-red-500/40 flex items-center gap-1"><Lock className="h-3 w-3" /> Locked</Badge>;
+  if (u.is_active === false) return <Badge className="bg-slate-500/20 text-slate-300 border-slate-500/40 flex items-center gap-1"><UserX className="h-3 w-3" /> Disabled</Badge>;
+  if (u.must_change_password) return <Badge className="bg-amber-500/20 text-amber-300 border-amber-500/40 flex items-center gap-1"><RefreshCw className="h-3 w-3" /> Password change required</Badge>;
   if (u.mfa_enabled) return <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/40 flex items-center gap-1"><Shield className="h-3 w-3" /> MFA Enabled</Badge>;
-  return <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/40">Active</Badge>;
+  return <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/40 flex items-center gap-1"><UserCheck className="h-3 w-3" /> Active</Badge>;
 };
 
 const EMPTY_FORM = {

@@ -184,9 +184,9 @@ export default async function (req) {
     const isPrivileged = role === 'owner' || role === 'admin';
     const finalPropertyAccess =
       property_access !== undefined
-        ? property_access
+        ? (property_access === 'all' ? null : property_access)
         : isPrivileged
-          ? 'all'
+          ? null
           : assigned_property_ids.length > 0
             ? assigned_property_ids
             : [];

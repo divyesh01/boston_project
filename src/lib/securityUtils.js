@@ -247,14 +247,7 @@ export function validateFileSize(file, maxSize = MAX_UPLOAD_FILE_SIZE) {
   return file.size > 0 && file.size <= maxSize;
 }
 
-export function sanitizeCsvCell(value) {
-  if (typeof value !== 'string') return value;
-  const trimmed = value.trim();
-  if (/^[=+\-@\t\r]/.test(trimmed)) {
-    return `'${trimmed}`;
-  }
-  return trimmed;
-}
+
 export function getCsrfToken() {
   const ss = safeSessionStorage();
   let token = ss ? ss.getItem(CSRF_TOKEN_KEY) : null;

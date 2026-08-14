@@ -263,6 +263,11 @@ localDb.version(21).stores({
   LocalSession: '++id, user_id, token_hash, is_revoked, expires_at, created_date',
 });
 
+// v22 — add strict uniqueness constraint to Property code (&code) to prevent duplicates
+localDb.version(22).stores({
+  Property: '++id, &code, name, active, created_date',
+});
+
 // Guard: a table whose name collides with a Dexie instance property is created
 // in IndexedDB but is unreachable through `localDb[name]` — which is how every
 // caller in this app reaches its tables. That failure is silent: writes appear

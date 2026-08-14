@@ -7,6 +7,8 @@ import Card from "@/components/ui-exec/Card";
 import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, getCcFeeOnRefunds, setCcFeeOnRefunds, COMMISSION_TYPES } from "@/lib/commissionRates";
 import { getAlertThresholds, saveAlertThresholds } from "@/lib/alertThresholds";
 import { getRevenueThresholds, saveRevenueThresholds } from "@/lib/revenueThresholds";
+import { isCryptoAvailable, validatePasswordStrength } from "@/lib/security";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { getTaxSettings, saveTaxSettings } from "@/lib/taxSettings";
 import { toast } from "@/components/ui/use-toast";
 
@@ -976,10 +978,17 @@ export default function Settings() {
 
 {/* MFA Setup Dialog */}
       {mfaSetupOpen && mfaSecret && mfaUri && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-          <div className="w-full max-w-md bg-[#0F1F35] rounded-xl border border-white/10 overflow-hidden">
-            <div className="p-6 space-y-6">
-              <div className="text-center">
+        <DialogPrimitive.Root open={mfaSetupOpen} onOpenChange={handleMfaSetupCancel}>
+          <DialogPrimitive.Portal>
+            <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+            <DialogPrimitive.Content 
+              className="fixed inset-0 z-50 flex items-center justify-center p-4 outline-none pointer-events-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+              aria-describedby={undefined}
+            >
+              <div className="w-full max-w-md bg-[#0F1F35] rounded-xl border border-white/10 overflow-hidden pointer-events-auto">
+                <div className="p-6 space-y-6">
+                  <div className="text-center">
+                    <DialogPrimitive.Title className="sr-only">Set Up Authenticator App</DialogPrimitive.Title>
                 {mfaAction === 'enable' && (
                   <>
                     <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10">
@@ -1051,9 +1060,11 @@ export default function Settings() {
                   Cancel
                 </Button>
               </div>
+              </div>
             </div>
-          </div>
-        </div>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
       )}
     </div>
   );

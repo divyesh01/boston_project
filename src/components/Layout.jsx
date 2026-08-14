@@ -205,7 +205,7 @@ export default function Layout() {
             >
               <div className="mb-4 flex items-center justify-between">
                 <span className="font-heading text-sm font-semibold text-white">More</span>
-                <button onClick={() => setMoreOpen(false)} className="text-slate-400 hover:text-white">
+                <button onClick={() => setMoreOpen(false)} aria-label="Close menu" className="text-slate-400 hover:text-white">
                   <X className="h-5 w-5" />
                 </button>
               </div>

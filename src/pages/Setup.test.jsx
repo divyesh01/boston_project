@@ -18,6 +18,7 @@ vi.mock("@/api/base44Client", () => ({
     users: { initialized: vi.fn().mockResolvedValue(false) },
     auth: { registerUser: mockRegister },
   },
+  setupRateLimiter: { check: vi.fn().mockResolvedValue({ allowed: true, retryAfter: 0 }) },
 }));
 vi.mock("@/lib/security", () => ({
   validatePasswordStrength: () => null,

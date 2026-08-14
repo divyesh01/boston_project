@@ -1,17 +1,18 @@
-import React, { useMemo, useState, useRef, useEffect } from "react";
+import React, { useMemo, useState, useRef, useEffect, lazy, Suspense } from "react";
 import confetti from "canvas-confetti";
-import { DollarSign, BedDouble, Percent, Gauge, RefreshCw, FileDown, TrendingDown, Lightbulb, AlertTriangle, TrendingUp } from "lucide-react";
+import { DollarSign, BedDouble, Percent, Gauge, RefreshCw, FileDown, TrendingDown, Lightbulb, AlertTriangle, TrendingUp, Loader2 } from "lucide-react";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import Card from "@/components/ui-exec/Card";
-import OtaMatrix from "@/components/dashboard/OtaMatrix";
 import ClerkAudit from "@/components/dashboard/ClerkAudit";
 import YieldAdvisor from "@/components/dashboard/YieldAdvisor";
 import RevenueTrend from "@/components/dashboard/RevenueTrend";
-import ExecutiveCharts from "@/components/dashboard/ExecutiveCharts";
-import MoneyKept from "@/components/dashboard/MoneyKept";
 import PropertyRanking from "@/components/dashboard/PropertyRanking";
 import LowOccAlert from "@/components/dashboard/LowOccAlert";
 import ModuleCards from "@/components/dashboard/ModuleCards";
+
+const OtaMatrix = lazy(() => import("@/components/dashboard/OtaMatrix"));
+const ExecutiveCharts = lazy(() => import("@/components/dashboard/ExecutiveCharts"));
+const MoneyKept = lazy(() => import("@/components/dashboard/MoneyKept"));
 import { useOccupancy, useSources, useClerkRecords, useGrossRevenue, usePaymentData, useDailyFinancialAggregates, filterByMonths } from "@/lib/useHotelData";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { exportToPdf } from "@/lib/pdfExport";
@@ -299,10 +300,24 @@ export default function Dashboard() {
         )}
 
         {/* Estimated Money Kept — net profit after all deductions */}
-        <MoneyKept occRows={occRows} srcRows={srcRows} grossRows={grossRows} dateRange={dateRange} property={property} aggPayRows={aggPayRows} aggExpenses={aggExpenses} />
+        <Suspense fallback={<div className="h-48 animate-pulse rounded-xl bg-slate-800/50" />}>
+          <MoneyKept 
+            occRows={occRows} 
+            srcRows={srcRows} 
+            grossRows={grossRows} 
+            dateRange={dateRange} 
+            property={property} 
+            aggPayRows={aggPayRows} 
+            aggExpenses={aggExpenses} 
+            expenses={expenses}
+            payroll={payroll}
+          />
+        </Suspense>
 
         {/* Four fixed executive charts — always visible */}
-        <ExecutiveCharts rows={occRows} />
+        <Suspense fallback={<div className="flex h-64 items-center justify-center rounded-xl border border-white/10 bg-[#0A1628]/60"><Loader2 className="h-6 w-6 animate-spin text-slate-500" /></div>}>
+          <ExecutiveCharts rows={occRows} />
+        </Suspense>
 
         {lowOccDays.length > 0 && (
           <LowOccAlert occRows={occRows} sources={srcRows} />
@@ -423,7 +438,9 @@ export default function Dashboard() {
         )}
 
         <RevenueTrend rows={occRows} dateRange={`${dateRange.from || "—"} to ${dateRange.to || "—"}`} />
-        <OtaMatrix rows={srcRows} />
+        <Suspense fallback={<div className="flex h-64 items-center justify-center rounded-xl border border-white/10 bg-[#0A1628]/60"><Loader2 className="h-6 w-6 animate-spin text-slate-500" /></div>}>
+          <OtaMatrix rows={srcRows} />
+        </Suspense>
 
         <WeatherPanel />
         <PricingPanel />

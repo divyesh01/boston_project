@@ -221,8 +221,8 @@ async function createUser(base44, data) {
   const permissions = data.permissions === 'all' || !data.permissions
     ? defaultPermissionsForRole(role)
     : data.permissions;
-  const property_access = data.property_access === 'all'
-    ? 'all'
+  const property_access = data.property_access === 'all' || data.property_access === null
+    ? null
     : Array.isArray(data.property_access)
       ? data.property_access
       : isPrivileged ? 'all' : [];
@@ -392,8 +392,8 @@ export default async function (req) {
             : data.permissions;
         }
         if ('property_access' in data) {
-          patch.property_access = data.property_access === 'all'
-            ? 'all'
+          patch.property_access = data.property_access === 'all' || data.property_access === null
+            ? null
             : Array.isArray(data.property_access) ? data.property_access : [];
         }
         if ('must_change_password' in data) patch.must_change_password = data.must_change_password === true;
@@ -440,7 +440,11 @@ export default async function (req) {
           throw new Error(`Unknown status: ${status}`);
         }
 
-        if (patch.is_locked === true || patch.is_active === false) {
+        const roleChanged = patch.role && patch.role !== user.role;
+        const permissionsChanged = patch.permissions && JSON.stringify(patch.permissions) !== JSON.stringify(user.permissions);
+        const accessChanged = 'property_access' in patch && JSON.stringify(patch.property_access) !== JSON.stringify(user.property_access);
+
+        if (patch.is_locked === true || patch.is_active === false || roleChanged || permissionsChanged || accessChanged) {
           await revokeUserSessions(base44, user.id);
         }
 

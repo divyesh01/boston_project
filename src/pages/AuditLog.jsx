@@ -5,6 +5,8 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useRef } from "react";
 import { RefreshCw, Search, ShieldCheck, ShieldAlert } from "lucide-react";
 import { db } from "@/api/base44Client";
 import { verifyAuditChain } from "@/lib/securityUtils";
@@ -23,6 +25,7 @@ const ACTION_BADGE = (action) => {
 export default function AuditLog() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
+
   const [search, setSearch] = useState("");
   const [result, setResult] = useState("all");
   const [chain, setChain] = useState(null);
@@ -61,6 +64,15 @@ export default function AuditLog() {
     });
   }, [logs, search, result]);
 
+  const parentRef = useRef();
+  
+  const rowVirtualizer = useVirtualizer({
+    count: filtered.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 40,
+    overscan: 10,
+  });
+
   return (
     <div className="space-y-6">
       <Card>
@@ -69,7 +81,7 @@ export default function AuditLog() {
             <CardTitle className="text-xl">Audit Log</CardTitle>
             <CardDescription>All security-related events: logins, password changes, user management.</CardDescription>
           </div>
-          <Button variant="outline" size="icon" onClick={load} title="Refresh">
+          <Button variant="outline" size="icon" onClick={load} title="Refresh" aria-label="Refresh">
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
           </Button>
         </CardHeader>
@@ -84,7 +96,7 @@ export default function AuditLog() {
                   <p className="font-medium">Audit chain verification failed ({chain.tamperedAt ? `tampering detected at log #${chain.tamperedAt}` : chain.reason || chain.error}).</p>
                 )}
               </div>
-              <button onClick={() => setChain(null)} className="ml-auto text-xs opacity-60 hover:opacity-100">×</button>
+              <button onClick={() => setChain(null)} className="ml-auto text-xs opacity-60 hover:opacity-100" aria-label="Close">×</button>
             </div>
           )}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -106,7 +118,7 @@ export default function AuditLog() {
             </div>
           </div>
 
-          <div className="rounded-xl border">
+          <div className="rounded-xl border max-h-[600px] overflow-auto" ref={parentRef}>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -123,20 +135,39 @@ export default function AuditLog() {
                   <TableRow><TableCell colSpan={6} className="py-10 text-center text-muted-foreground">Loading log...</TableCell></TableRow>
                 ) : filtered.length === 0 ? (
                   <TableRow><TableCell colSpan={6} className="py-10 text-center text-muted-foreground">No matching events.</TableCell></TableRow>
-                ) : filtered.map((l) => (
-                  <TableRow key={l.id}>
-                    <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{new Date(l.created_date).toLocaleString()}</TableCell>
-                    <TableCell className="text-sm font-medium">{l.username}</TableCell>
-                    <TableCell>{ACTION_BADGE(l.action)}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{l.performed_by}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{l.device || "—"}</TableCell>
-                    <TableCell>
-                      <Badge className={`border ${l.result === "success" ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40" : "bg-red-500/20 text-red-300 border-red-500/40"}`}>
-                        {l.result}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                ) : (
+                  <>
+                    <tr style={{ height: `${rowVirtualizer.getTotalSize()}px`, display: 'block', width: '100%', position: 'relative' }}>
+                      {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                        const l = filtered[virtualRow.index];
+                        return (
+                          <TableRow 
+                            key={l.id} 
+                            style={{ 
+                              position: 'absolute', 
+                              top: 0, 
+                              left: 0, 
+                              width: '100%', 
+                              height: `${virtualRow.size}px`,
+                              transform: `translateY(${virtualRow.start}px)`
+                            }}
+                          >
+                            <TableCell className="whitespace-nowrap text-xs text-muted-foreground w-1/6">{new Date(l.created_date).toLocaleString()}</TableCell>
+                            <TableCell className="text-sm font-medium w-1/6">{l.username}</TableCell>
+                            <TableCell className="w-1/6">{ACTION_BADGE(l.action)}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground w-1/6">{l.performed_by}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground w-1/6">{l.device || "—"}</TableCell>
+                            <TableCell className="w-1/6">
+                              <Badge className={`border ${l.result === "success" ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40" : "bg-red-500/20 text-red-300 border-red-500/40"}`}>
+                                {l.result}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </tr>
+                  </>
+                )}
               </TableBody>
             </Table>
           </div>

@@ -46,7 +46,7 @@ export class CalculationService {
       if (rowRooms > 0) {
         capacity += rowRooms * 100;
       } else {
-        const rooms = propertyRoomCounts?.[pid] || 100;
+        const rooms = propertyRoomCounts?.[pid] ?? 100;
         capacity += rooms * 100;
       }
     });

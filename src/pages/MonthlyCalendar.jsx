@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import {
   DollarSign, Percent, Gauge, TrendingUp, TrendingDown, X,
 } from "lucide-react";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import Card from "@/components/ui-exec/Card";
 import { useOccupancy, useSources } from "@/lib/useHotelData";
@@ -255,24 +256,28 @@ export default function MonthlyCalendar() {
       )}
 
       {/* Daily Detail Panel */}
-      {selectedDay && (
-        <div className="fixed inset-0 z-50 flex items-end justify-end sm:items-center sm:justify-center" onClick={() => setSelectedDay(null)}>
-          <div className="absolute inset-0 bg-black/60" />
-          <div
-            className="relative w-full max-w-lg rounded-t-3xl border border-white/10 bg-[#0F1F35] p-6 sm:rounded-2xl"
-            onClick={(e) => e.stopPropagation()}
-            style={{ maxHeight: "85vh", overflowY: "auto" }}
+      <DialogPrimitive.Root open={!!selectedDay} onOpenChange={(open) => !open && setSelectedDay(null)}>
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+          <DialogPrimitive.Content 
+            className="fixed inset-0 z-50 flex items-end justify-end sm:items-center sm:justify-center outline-none pointer-events-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+            aria-describedby={undefined}
           >
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="font-heading text-xl font-semibold text-white">
-                {new Date(selectedDay).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
-              </h3>
-              <button onClick={() => setSelectedDay(null)} className="text-slate-400 hover:text-white">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
+            <div
+              className="relative w-full max-w-lg rounded-t-3xl border border-white/10 bg-[#0F1F35] p-6 sm:rounded-2xl pointer-events-auto shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+              style={{ maxHeight: "85vh", overflowY: "auto" }}
+            >
+              <div className="mb-4 flex items-center justify-between">
+                <DialogPrimitive.Title className="font-heading text-xl font-semibold text-white">
+                  {selectedDay && new Date(selectedDay).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+                </DialogPrimitive.Title>
+                <DialogPrimitive.Close className="text-slate-400 hover:text-white" aria-label="Close">
+                  <X className="h-5 w-5" />
+                </DialogPrimitive.Close>
+              </div>
 
-            {selectedData ? (
+              {selectedData ? (
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-3">
                   <Metric label="Total Room Revenue" current={selectedData.total_revenue || 0} previous={prevDayData?.total_revenue || 0} fmt={money} />
@@ -310,10 +315,10 @@ export default function MonthlyCalendar() {
                 <p className="text-slate-500">No data imported for this day.</p>
                 <Link to="/upload" className="mt-2 inline-block text-sm text-[#00D4FF] underline">Import reports →</Link>
               </div>
-            )}
-          </div>
-        </div>
-      )}
+            </div>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
     </div>
   );
 }

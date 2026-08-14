@@ -1,6 +1,7 @@
 import localDb from "@/api/localDb";
 import { formatNumber } from "@/lib/decimal";
 import { refundTotal } from "@/lib/paymentNorm";
+import { getDailyAggregates, buildSyntheticRows } from "@/lib/dailyAggregates";
 
 const MONTH_NAMES = [
   "january", "february", "march", "april", "may", "june",
@@ -350,6 +351,22 @@ async function resolveProperty(question, defaultFilter, allowedPropertyIds = nul
 }
 
 async function load(table, prop, from, to, dateField = "date") {
+  if (["OccupancyDay", "SourceDay", "PaymentDay", "GrossRevenueDay", "Expense"].includes(table)) {
+    let propArg = "all";
+    if (prop.ids && prop.ids.size > 0 && !prop.isAll) {
+      propArg = Array.from(prop.ids);
+    }
+    const aggs = await getDailyAggregates({ propertyId: propArg, from, to });
+    if (aggs && aggs.length > 0) {
+      const synthetic = buildSyntheticRows(aggs);
+      if (table === "OccupancyDay") return synthetic.occRows;
+      if (table === "SourceDay") return synthetic.srcRows;
+      if (table === "PaymentDay") return synthetic.payRows;
+      if (table === "GrossRevenueDay") return synthetic.grossRows;
+      if (table === "Expense") return synthetic.expenseRows;
+    }
+  }
+
   const tbl = localDb[table];
   if (!tbl || typeof tbl.toArray !== "function") return [];
   const all = await tbl.toArray();
@@ -364,12 +381,25 @@ async function load(table, prop, from, to, dateField = "date") {
 }
 
 async function latestDate(allowedPropertyIds = null) {
-  const rows = await localDb.OccupancyDay.toArray();
+  // Use the DailyFinancialAggregate if available, as it's much smaller
+  const rows = await localDb.DailyFinancialAggregate.toArray();
+  if (rows.length === 0) {
+    const rawRows = await localDb.OccupancyDay.toArray();
+    const allowed = Array.isArray(allowedPropertyIds) ? new Set(allowedPropertyIds.map(String)) : null;
+    let max = "";
+    rawRows.forEach((r) => {
+      if (allowed && !allowed.has(String(r.property_id || ""))) return;
+      const d = String(r.date || "").slice(0, 10);
+      if (d > max) max = d;
+    });
+    return max;
+  }
+  
   const allowed = Array.isArray(allowedPropertyIds) ? new Set(allowedPropertyIds.map(String)) : null;
   let max = "";
   rows.forEach((r) => {
     if (allowed && !allowed.has(String(r.property_id || ""))) return;
-    const d = String(r.date || "").slice(0, 10);
+    const d = String(r.business_date || "").slice(0, 10);
     if (d > max) max = d;
   });
   return max;

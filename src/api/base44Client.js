@@ -317,6 +317,10 @@ function singleIndexQuery(table, index, cond) {
 function compoundIndexQuery(table, index, prefix, cond) {
   if (cond === undefined || cond === null) return null;
   if (isEqCond(cond)) return table.where(index).equals([prefix, cond]);
+  if (isInCond(cond)) {
+    const ids = Array.isArray(cond.$in) && cond.$in.length ? cond.$in : [''];
+    return table.where(index).anyOf(ids.map(id => [prefix, id]));
+  }
   if (isRangeCond(cond)) {
     const loIncl = cond.$gte !== undefined;
     const hiIncl = cond.$lte !== undefined;
@@ -403,7 +407,7 @@ function createEntityProxy(tableName) {
       if (!user) return null;
       // Owner/admin have access to all properties
       if (user.role === 'owner' || user.role === 'admin') return 'all';
-      if (!user.property_access || user.property_access === 'all') return 'all';
+      if (!user.property_access || user.property_access === 'all') return null;
       if (Array.isArray(user.property_access) && user.property_access.length > 0) {
         return user.property_access;
       }
@@ -563,6 +567,18 @@ function createEntityProxy(tableName) {
         }
       }
       const deletedRecord = await table.get(numId);
+      
+      // Cascading delete for Property
+      if (tableName === 'Property' && deletedRecord) {
+        const propId = String(deletedRecord.id);
+        for (const related of PROPERTY_TABLES) {
+          if (typeof localDb[related]?.where === 'function') {
+            const keys = await localDb[related].where({ property_id: propId }).primaryKeys();
+            if (keys.length > 0) await localDb[related].bulkDelete(keys);
+          }
+        }
+      }
+
       await table.delete(numId);
       notifyRecalculation(tableName, 'delete', deletedRecord);
       publishChange(tableName, 'delete', deletedRecord);
@@ -616,6 +632,18 @@ function createEntityProxy(tableName) {
       const numIds = (Array.isArray(ids) ? ids : [ids]).map((id) => Number(id) || id);
       // Get records before deletion for notification
       const deletedRecords = await table.where('id').anyOf(numIds).toArray();
+      
+      // Cascading delete for Property
+      if (tableName === 'Property' && deletedRecords.length > 0) {
+        const propIds = deletedRecords.map(r => String(r.id));
+        for (const related of PROPERTY_TABLES) {
+          if (typeof localDb[related]?.where === 'function') {
+            const keys = await localDb[related].where('property_id').anyOf(propIds).primaryKeys();
+            if (keys.length > 0) await localDb[related].bulkDelete(keys);
+          }
+        }
+      }
+
       await table.bulkDelete(numIds);
       notifyRecalculation(tableName, 'bulkDelete', { records: deletedRecords });
       publishChange(tableName, 'bulkDelete', { records: deletedRecords });
@@ -849,6 +877,12 @@ export const serverImportRateLimiter = new ServerRateLimiter('import', {
   windowMs: 60 * 60 * 1000,
   maxRequests: 30,
   blockDurationMs: 60 * 60 * 1000,
+});
+
+export const setupRateLimiter = new ServerRateLimiter('setup', {
+  windowMs: 15 * 60 * 1000,
+  maxRequests: 3,
+  blockDurationMs: 24 * 60 * 60 * 1000,
 });
 
 // ─── Audit logging ───
@@ -1213,19 +1247,20 @@ async function findLocalUser(identifier) {
 }
 
 async function getLocalSessionUser() {
-  const raw = localStorage.getItem(LOCAL_SESSION_KEY);
+  const raw = await secureRetrieve(LOCAL_SESSION_KEY);
   if (!raw) return null;
   try {
     const { userId, expiresAt } = JSON.parse(raw);
     if (new Date(expiresAt) < new Date()) {
-      localStorage.removeItem(LOCAL_SESSION_KEY);
+      await secureRetrieve(LOCAL_SESSION_KEY, true); // Delete key (simulating remove) by clearing or we can use localStorage.removeItem since secureStore doesn't have an explicit delete, wait, actually let's just write null.
+      await secureStore(LOCAL_SESSION_KEY, '');
       return null;
     }
     const user = await localDb.User.get(userId);
     if (!user || !user.is_active || user.is_locked) return null;
     return publicUserLocal(user);
   } catch {
-    localStorage.removeItem(LOCAL_SESSION_KEY);
+    await secureStore(LOCAL_SESSION_KEY, '');
     return null;
   }
 }
@@ -1405,7 +1440,7 @@ async function handleLocalAuthRegister({ userData } = /** @type {any} */ ({})) {
     full_name: full_name || '',
     role,
     permissions: defaultPermissionsForRoleLocal(role),
-    property_access: property_access || 'all',
+    property_access: property_access === 'all' || !property_access ? null : property_access,
     is_active: true,
     is_locked: false,
     must_change_password: !!must_change_password,
@@ -1459,7 +1494,7 @@ async function handleLocalAuthLogin({ email, password, mfa_token: _mfa_token, re
   const expiresAt = remember
     ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
     : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-  localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ userId: user.id, expiresAt }));
+  await secureStore(LOCAL_SESSION_KEY, JSON.stringify({ userId: user.id, expiresAt }));
 
   return { success: true, user: publicUserLocal(user) };
 }
@@ -1470,7 +1505,7 @@ async function handleLocalAuthMe() {
 }
 
 async function handleLocalAuthLogout() {
-  localStorage.removeItem(LOCAL_SESSION_KEY);
+  await secureStore(LOCAL_SESSION_KEY, '');
   return { success: true };
 }
 
@@ -1492,7 +1527,7 @@ async function mirrorRemoteUserIntoLocal(user, plaintextPassword) {
     full_name: user.full_name || existing?.full_name || '',
     role,
     permissions: user.permissions || existing?.permissions || defaultPermissionsForRoleLocal(role),
-    property_access: user.property_access || existing?.property_access || 'all',
+    property_access: user.property_access || existing?.property_access || null,
     is_active: user.is_active !== false,
     is_locked: !!user.is_locked,
     must_change_password: user.must_change_password ?? existing?.must_change_password ?? false,
@@ -1651,7 +1686,7 @@ const functions = {
           if (remote && remote.user) {
             const mirrored = await mirrorRemoteUserIntoLocal(remote.user, params?.password);
             if (mirrored) {
-              localStorage.setItem(
+              await secureStore(
                 LOCAL_SESSION_KEY,
                 JSON.stringify({ userId: mirrored.id, expiresAt: localSessionExpiry(!!params?.remember) }),
               );

@@ -72,34 +72,17 @@ export default async function(req) {
       return f;
     }
 
-    // Gather relevant data (scoped to the resolved propFilter)
-    const occFilter = makeFilter();
-    let occupancy = [];
-    let sources = [];
-    let payments = [];
-    let expenses = [];
-    let payroll = [];
-    let clerkRecords = [];
-    let uploads = [];
-
-    if (Object.keys(occFilter).length > 0) {
-      occupancy = await db.asServiceRole.entities.OccupancyDay.filter(occFilter, "date", 500);
-      sources = await db.asServiceRole.entities.SourceDay.filter(occFilter, "date", 1000);
-      payments = await db.asServiceRole.entities.PaymentDay.filter(occFilter, "date", 500);
-    } else {
-      occupancy = await db.asServiceRole.entities.OccupancyDay.list("date", 500);
-      sources = await db.asServiceRole.entities.SourceDay.list("date", 1000);
-      payments = await db.asServiceRole.entities.PaymentDay.list("date", 500);
-    }
-
-    const expFilter = {};
-    if (propFilter) expFilter.property_id = propFilter;
-    expenses = await db.asServiceRole.entities.Expense.filter(expFilter, "-expense_date", 200);
-    payroll = await db.asServiceRole.entities.PayrollRun.filter(expFilter, "-payroll_date", 200);
-    clerkRecords = await db.asServiceRole.entities.ClerkShiftRecord.filter(expFilter, "-created_date", 500);
-    uploads = Object.keys(expFilter).length > 0
-      ? await db.asServiceRole.entities.UploadedReport.filter(expFilter, "-created_date", 50)
-      : await db.asServiceRole.entities.UploadedReport.list("-created_date", 50);
+    // ─── Use pre-aggregated data from the client instead of scanning raw ledgers ───
+    const synthetic = body.synthetic || {};
+    const occupancy = synthetic.occRows || [];
+    const sources = synthetic.srcRows || [];
+    const payments = synthetic.payRows || [];
+    const expenses = synthetic.expenseRows || [];
+    // For payroll, clerk, and uploads, the client can pass them or we default to empty
+    // since they are not strictly "daily financial aggregates".
+    const payroll = synthetic.payroll || [];
+    const clerkRecords = synthetic.clerkRecords || [];
+    const uploads = synthetic.uploads || [];
 
     // Build summary stats
     const sum = (arr, key) => arr.reduce((a, r) => a + (Number(r[key]) || 0), 0);

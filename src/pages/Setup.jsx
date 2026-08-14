@@ -6,10 +6,10 @@ import { Label } from "@/components/ui/label";
 import { ShieldCheck, Eye, EyeOff, Loader2 } from "lucide-react";
 import AuthLayout from "@/components/AuthLayout";
 import { useAuth } from "@/lib/AuthContext";
-import { db } from "@/api/base44Client";
+import { db, setupRateLimiter } from "@/api/base44Client";
 import { validatePasswordStrength } from "@/lib/security";
 import { isValidEmail } from "@/lib/validator";
-import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeAlphanumeric, sanitizeEmail, sanitizeText, sanitizeCsvCell } from "@/lib/securityUtils";
+import { getCsrfToken, validateCsrfToken, rotateCsrfToken, sanitizeAlphanumeric, sanitizeEmail, sanitizeText, sanitizeCsvCell } from "@/lib/securityUtils";
 
 export default function Setup() {
   const navigate = useNavigate();
@@ -52,8 +52,17 @@ export default function Setup() {
     e.preventDefault();
     setError("");
 
-    // Rate limiting
-    const rateLimit = sensitiveActionRateLimiter.check();
+    // Artificially delay execution to neuter brute-force speeds (exponential backoff)
+    // Even if rate limiters are bypassed, this forces the client to hang.
+    const attemptCount = parseInt(sessionStorage.getItem('setup_attempts') || '0', 10);
+    sessionStorage.setItem('setup_attempts', (attemptCount + 1).toString());
+    const delay = Math.min(attemptCount * 1000, 8000); // Up to 8 seconds delay
+    if (delay > 0) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+
+    // Rate limiting (now async and crypto-backed)
+    const rateLimit = await setupRateLimiter.check('setup_route');
     if (!rateLimit.allowed) {
       setError(`Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
       return;

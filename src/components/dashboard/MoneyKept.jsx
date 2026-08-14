@@ -70,7 +70,7 @@ function propKey(property) {
   return Array.isArray(property) ? property.join(",") : property;
 }
 
-export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, property, aggPayRows, aggExpenses }) {
+export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, property, aggPayRows, aggExpenses, expenses = [], payroll = [] }) {
   const ccFee = getCcFeeRate();
   const ccFeeRefunds = getCcFeeOnRefunds();
   const settingsVersion = useSettingsVersion();
@@ -80,34 +80,66 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
   const propFilter = useMemo(() => buildPropertyFilter(property), [property]);
   const propertyKey = useMemo(() => propKey(property), [property]);
 
-  // Payments come through the shared hook rather than a hand-rolled query.
-  //
-  // This used to be its own useQuery with the key
-  // ["payments", from, to, property, ""] — byte-identical to the key
-  // usePaymentData builds when no months are selected — but with a fetcher that
-  // ignored the date range entirely. Two different fetchers under one key means
-  // whichever component mounted first populated the cache for both, so the
-  // Payments page could be handed every PaymentDay row ever imported instead of
-  // the selected period. Sharing the hook makes the key and the fetcher agree
-  // and costs nothing: Dashboard has already issued this exact query.
   const { months } = useGlobalFilters();
   const { data: payRecords = [] } = usePaymentData(dateRange, property, months);
 
-  const { data: expenses = [] } = useQuery({
-    queryKey: ["expenses", propertyKey],
-    queryFn: () => db.entities.Expense.filter(propFilter, "-expense_date", 100000),
-  });
+  const from = dateRange?.from || "";
+  const to = dateRange?.to || "";
 
-  const { data: payroll = [] } = useQuery({
-    queryKey: ["payroll", propertyKey],
-    queryFn: () => db.entities.PayrollRun.filter(propFilter, "-pay_period_start", 100000),
-  });
+  // 1. Heavy computation: Recurring expense projection
+  const recurringExtras = useMemo(() => {
+    const RECUR_MONTHS = { monthly: 1, quarterly: 3, yearly: 12 };
+    const addPeriod = (iso, freq) => {
+      const [y, m, d] = iso.split("-").map(Number);
+      if (freq === "weekly") return new Date(Date.UTC(y, m - 1, d + 7)).toISOString().slice(0, 10);
+      const months = RECUR_MONTHS[freq];
+      if (!months) return iso;
+      const first = new Date(Date.UTC(y, m - 1 + months, 1));
+      const lastDay = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+      first.setUTCDate(Math.min(d, lastDay));
+      return first.toISOString().slice(0, 10);
+    };
+    const seriesMap = new Map();
+    const extras = [];
+    expenses.forEach((e) => {
+      const base = String(e.expense_date || "").slice(0, 10);
+      const freq = e.frequency || "one_time";
+      if (!base || e.recurring === false || freq === "one_time") return;
+      const key = `${String(e.expense_name || "").trim().toLowerCase()}|${e.category || "other"}|${e.property_id || ""}`;
+      const s = seriesMap.get(key) || { entries: [] };
+      s.entries.push({ date: base, amount: Number(e.amount) || 0, freq, category: e.category || "other", name: e.expense_name || "Recurring Expense" });
+      seriesMap.set(key, s);
+    });
+    seriesMap.forEach((s) => {
+      if (!s.entries.length) return;
+      const sorted = [...s.entries].sort((a, b) => a.date.localeCompare(b.date));
+      const first = sorted[0];
+      if (!RECUR_MONTHS[first.freq] && first.freq !== "weekly") return;
+      const entered = new Set(s.entries.map((x) => x.date));
 
-  const data = useMemo(() => {
-    const from = dateRange?.from || "";
-    const to = dateRange?.to || "";
-    // When the materialized daily aggregate is available, use its pre-summed
-    // payment/expense rows instead of scanning the raw ledgers (instant at scale).
+      const HORIZON_DAYS = 1825;
+      const effectiveFrom = from || first.date;
+      const floorDate = first.date < effectiveFrom ? effectiveFrom : first.date;
+      let projEnd = to;
+      if (effectiveFrom && to) {
+        const horizonEnd = new Date(new Date(effectiveFrom + "T00:00:00").getTime() + HORIZON_DAYS * 86400000)
+          .toISOString().slice(0, 10);
+        if (!projEnd || projEnd > horizonEnd) projEnd = horizonEnd;
+      }
+      let date = floorDate;
+      let guard = 0;
+      while (date <= (projEnd || effectiveFrom) && guard++ < 2000) {
+        if (date >= effectiveFrom && !entered.has(date)) {
+          extras.push({ expense_name: first.name, vendor: "Recurring", category: first.category, expense_date: date, amount: first.amount });
+        }
+        date = addPeriod(date, first.freq);
+      }
+    });
+    return extras;
+  }, [expenses, from, to]);
+
+  // 2. Base calculations: Deductions, taxes, actual expenses
+  const baseData = useMemo(() => {
     const payRows = (aggPayRows && aggPayRows.length) ? aggPayRows : payRecords.filter((r) => inRange(r.date, from, to));
     const expInPeriod = (aggExpenses && aggExpenses.length) ? aggExpenses : expenses.filter((e) => inRange(e.expense_date, from, to));
     // Only approved/paid runs reduce cash. Drafts are proposals, and counting
@@ -273,59 +305,8 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     });
     const expRows = (b) => (expGroups[b] || []);
     const expAmt = (b) => expRows(b).reduce((a, e) => a + (Number(e.amount) || 0), 0);
-    // ---- Recurring expenses: project scheduled occurrences into the selected period ----
-    const RECUR_MONTHS = { monthly: 1, quarterly: 3, yearly: 12 };
-    const addPeriod = (iso, freq) => {
-      const [y, m, d] = iso.split("-").map(Number);
-      if (freq === "weekly") return new Date(Date.UTC(y, m - 1, d + 7)).toISOString().slice(0, 10);
-      const months = RECUR_MONTHS[freq];
-      if (!months) return iso;
-      const first = new Date(Date.UTC(y, m - 1 + months, 1));
-      const lastDay = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
-      first.setUTCDate(Math.min(d, lastDay));
-      return first.toISOString().slice(0, 10);
-    };
-    const seriesMap = new Map();
-    const recurringExtras = [];
-    expenses.forEach((e) => {
-      const base = String(e.expense_date || "").slice(0, 10);
-      const freq = e.frequency || "one_time";
-      if (!base || e.recurring === false || freq === "one_time") return;
-      const key = `${String(e.expense_name || "").trim().toLowerCase()}|${e.category || "other"}|${e.property_id || ""}`;
-      const s = seriesMap.get(key) || { entries: [] };
-      s.entries.push({ date: base, amount: Number(e.amount) || 0, freq, category: e.category || "other", name: e.expense_name || "Recurring Expense" });
-      seriesMap.set(key, s);
-    });
-    seriesMap.forEach((s) => {
-      if (!s.entries.length) return;
-      const sorted = [...s.entries].sort((a, b) => a.date.localeCompare(b.date));
-      const first = sorted[0];
-      if (!RECUR_MONTHS[first.freq] && first.freq !== "weekly") return;
-      const entered = new Set(s.entries.map((x) => x.date));
-
-      // Guard against runaway projection: a date range that extends years into
-      // the future must not spin the recurrence forward indefinitely, and we
-      // must never evaluate occurrences that fall before the selected window.
-      // The series therefore starts at max(firstDate, from) and is capped at a
-      // hard 5-year horizon from `from`.
-      const HORIZON_DAYS = 1825;
-      const effectiveFrom = from || first.date;
-      const floorDate = first.date < effectiveFrom ? effectiveFrom : first.date;
-      let projEnd = to;
-      if (effectiveFrom && to) {
-        const horizonEnd = new Date(new Date(effectiveFrom + "T00:00:00").getTime() + HORIZON_DAYS * 86400000)
-          .toISOString().slice(0, 10);
-        if (!projEnd || projEnd > horizonEnd) projEnd = horizonEnd;
-      }
-      let date = floorDate;
-      let guard = 0;
-      while (date <= (projEnd || effectiveFrom) && guard++ < 2000) {
-        if (date >= effectiveFrom && !entered.has(date)) {
-          recurringExtras.push({ expense_name: first.name, vendor: "Recurring", category: first.category, expense_date: date, amount: first.amount });
-        }
-        date = addPeriod(date, first.freq);
-      }
-    });
+    
+    // Add recurring expenses (memoized above)
     recurringExtras.forEach((e) => {
       const b = bucketOf(e.category);
       (expGroups[b] = expGroups[b] || []).push(e);
@@ -504,6 +485,15 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       })),
     };
 
+      },
+      dayTotals,
+    };
+  }, [occRows, srcRows, grossRows, payRecords, payroll, from, to, property, ccFee, ccFeeRefunds, settingsVersion, aggPayRows, aggExpenses, recurringExtras]);
+
+  // 3. Final data and charts: depends on baseData and trendMode
+  const data = useMemo(() => {
+    const { gross, items, totalDeductions, kept, from: baseFrom, to: baseTo, tax, refundsTotal, passThrough, dayTotals } = baseData;
+    
     // ── Trend: allocate lump expenses/payroll across days by revenue share ──
     const sumDay = (k) => sum(dayTotals, k);
     const lumpTotal = totalDeductions - (sumDay("commission") + sumDay("ccFee") + sumDay("refundFee") + sumDay("deductTax") + sumDay("refunds"));
@@ -539,19 +529,12 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     ];
 
     return {
-      gross, items, totalDeductions, kept, pieData, barData, trendData, from, to,
-      refundsTotal, passThrough,
-      tax: {
-        state: liabState, city: liabCity, other: liabOther,
-        passThrough, estimated: estimatedTaxFromRates, effectiveRate: effectiveTaxRate,
-        stateRecords: [...taxRecords["State Tax"], ...manualState.map(expRecord)],
-        cityRecords: [...taxRecords["City/Local Tax"], ...manualCity.map(expRecord)],
-        otherRecords: taxRecords["Other Taxes"],
-      },
+      gross, items, totalDeductions, kept, pieData, barData, trendData, from: baseFrom, to: baseTo,
+      refundsTotal, passThrough, tax
     };
-  }, [occRows, srcRows, grossRows, payRecords, expenses, payroll, dateRange, property, ccFee, ccFeeRefunds, trendMode, settingsVersion, aggPayRows, aggExpenses]);
+  }, [baseData, trendMode]);
 
-  const { gross, items, totalDeductions, kept, pieData, barData, trendData, from, to, tax, refundsTotal, passThrough } = data;
+  const { gross, items, totalDeductions, kept, pieData, barData, trendData, tax, refundsTotal, passThrough } = data;
   // Keep rate = money kept against the *net-revenue base*, not raw gross.
   // Refunds (returned to guest) and pass-through taxes (collected on behalf of
   // the government, never the owner's to keep) are removed from the denominator

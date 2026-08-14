@@ -8,6 +8,7 @@ import StatusBadge from "@/components/ui-exec/StatusBadge";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { money, num, pct, C, PROPERTY } from "@/lib/hotel";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { nextEmployeeId } from "@/lib/employeeId";
 import { sfx } from "@/lib/sound";
 import {
@@ -189,12 +190,18 @@ export default function Payroll() {
       deductions: form.deductions,
     });
 
+    const propertyId = property !== "all" ? (Array.isArray(property) ? property[0] : property) : "";
+    if (!propertyId) {
+      alert("Please select a specific property from the global filter before adding payroll.");
+      return;
+    }
+
     const p = propFor();
     await db.entities.PayrollRun.create({
       ...form,
       ...payCalc,
       payroll_status: "draft",
-      property_id: property !== "all" ? property : "",
+      property_id: propertyId,
       property_name: p?.name || "",
     });
     setForm(EMPTY_RUN);
@@ -953,13 +960,19 @@ export default function Payroll() {
         }
       >
         {showStaffForm && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-            <div className="w-full max-w-lg rounded-2xl border border-[#00E096]/30 bg-[#151921] p-6 shadow-2xl" style={{ boxShadow: "0 0 30px rgba(0,224,150,0.15)" }}>
+          <DialogPrimitive.Root open={showStaffForm} onOpenChange={setShowStaffForm}>
+            <DialogPrimitive.Portal>
+              <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+              <DialogPrimitive.Content 
+                className="fixed inset-0 z-50 flex items-center justify-center p-4 outline-none pointer-events-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+                aria-describedby={undefined}
+              >
+                <div className="w-full max-w-lg rounded-2xl border border-[#00E096]/30 bg-[#151921] p-6 shadow-2xl pointer-events-auto" style={{ boxShadow: "0 0 30px rgba(0,224,150,0.15)" }}>
               <div className="mb-5 flex items-center justify-between">
-                <h2 className="font-heading text-lg font-semibold text-white">Add Staff Member</h2>
-                <button onClick={() => setShowStaffForm(false)} className="text-slate-400 hover:text-white">
+                <DialogPrimitive.Title className="font-heading text-lg font-semibold text-white">Add Staff Member</DialogPrimitive.Title>
+                <DialogPrimitive.Close className="text-slate-400 hover:text-white" aria-label="Close">
                   <X className="h-5 w-5" />
-                </button>
+                </DialogPrimitive.Close>
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
@@ -1016,8 +1029,11 @@ export default function Payroll() {
                   <Save className="h-4 w-4" /> Save Staff
                 </button>
               </div>
+              </div>
             </div>
-          </div>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
         )}
 
         <div className="space-y-2">
@@ -1081,13 +1097,19 @@ export default function Payroll() {
         }
       >
         {showForm && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-            <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#151921] p-6 shadow-2xl">
+          <DialogPrimitive.Root open={showForm} onOpenChange={setShowForm}>
+            <DialogPrimitive.Portal>
+              <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+              <DialogPrimitive.Content 
+                className="fixed inset-0 z-50 flex items-center justify-center p-4 outline-none pointer-events-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+                aria-describedby={undefined}
+              >
+                <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#151921] p-6 shadow-2xl pointer-events-auto">
               <div className="mb-5 flex items-center justify-between">
-                <h2 className="font-heading text-lg font-semibold text-white">Add Payroll Entry</h2>
-                <button onClick={() => setShowForm(false)} className="text-slate-400 hover:text-white">
+                <DialogPrimitive.Title className="font-heading text-lg font-semibold text-white">Add Payroll Entry</DialogPrimitive.Title>
+                <DialogPrimitive.Close className="text-slate-400 hover:text-white" aria-label="Close">
                   <X className="h-5 w-5" />
-                </button>
+                </DialogPrimitive.Close>
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
@@ -1152,8 +1174,11 @@ export default function Payroll() {
                   <Save className="h-4 w-4" /> Save Entry
                 </button>
               </div>
+              </div>
             </div>
-          </div>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
         )}
 
         <div className="space-y-2">
@@ -1201,14 +1226,20 @@ export default function Payroll() {
 
       {/* ─── Quick Add Payroll Modal ─── */}
       {showQuickAdd && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-[#00E096]/30 bg-[#151921] p-6 shadow-2xl" style={{ boxShadow: "0 0 30px rgba(0,224,150,0.15)" }}>
-            <div className="mb-1 flex items-center justify-between">
-              <h2 className="font-heading text-lg font-semibold text-white">Quick Add Payroll</h2>
-              <button onClick={() => setShowQuickAdd(false)} className="text-slate-400 hover:text-white">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
+        <DialogPrimitive.Root open={showQuickAdd} onOpenChange={setShowQuickAdd}>
+          <DialogPrimitive.Portal>
+            <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+            <DialogPrimitive.Content 
+              className="fixed inset-0 z-50 flex items-center justify-center p-4 outline-none pointer-events-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+              aria-describedby={undefined}
+            >
+              <div className="w-full max-w-md rounded-2xl border border-[#00E096]/30 bg-[#151921] p-6 shadow-2xl pointer-events-auto" style={{ boxShadow: "0 0 30px rgba(0,224,150,0.15)" }}>
+                <div className="mb-1 flex items-center justify-between">
+                  <DialogPrimitive.Title className="font-heading text-lg font-semibold text-white">Quick Add Payroll</DialogPrimitive.Title>
+                  <DialogPrimitive.Close className="text-slate-400 hover:text-white" aria-label="Close">
+                    <X className="h-5 w-5" />
+                  </DialogPrimitive.Close>
+                </div>
             <p className="mb-5 text-xs text-slate-500">
               Record a flat amount you already paid for a whole month. No rates or hours needed.
             </p>
@@ -1333,26 +1364,34 @@ export default function Payroll() {
                   ? <><Loader2 className="h-4 w-4 animate-spin" /> Saving…</>
                   : <><Save className="h-4 w-4" /> Record Payroll</>}
               </button>
+              </div>
             </div>
-          </div>
-        </div>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
       )}
 
       {/* ─── Post Historical Payroll Modal ─── */}
       {showHistoricalForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl border border-[#6C63FF]/30 bg-[#151921] p-6 shadow-2xl">
-            <div className="mb-5 flex items-center justify-between">
-              <div>
-                <h2 className="font-heading text-lg font-semibold text-white">Post Historical Payroll</h2>
-                <p className="mt-0.5 text-xs text-slate-500">
-                  {historicalStep === "configure" ? "Step 1 of 2 · choose the range" : "Step 2 of 2 · review before posting"}
-                </p>
-              </div>
-              <button onClick={closeHistorical} className="text-slate-400 hover:text-white">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
+        <DialogPrimitive.Root open={showHistoricalForm} onOpenChange={closeHistorical}>
+          <DialogPrimitive.Portal>
+            <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+            <DialogPrimitive.Content 
+              className="fixed inset-0 z-50 flex items-center justify-center p-4 outline-none pointer-events-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+              aria-describedby={undefined}
+            >
+              <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl border border-[#6C63FF]/30 bg-[#151921] p-6 shadow-2xl pointer-events-auto">
+                <div className="mb-5 flex items-center justify-between">
+                  <div>
+                    <DialogPrimitive.Title className="font-heading text-lg font-semibold text-white">Post Historical Payroll</DialogPrimitive.Title>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {historicalStep === "configure" ? "Step 1 of 2 · choose the range" : "Step 2 of 2 · review before posting"}
+                    </p>
+                  </div>
+                  <DialogPrimitive.Close className="text-slate-400 hover:text-white" aria-label="Close">
+                    <X className="h-5 w-5" />
+                  </DialogPrimitive.Close>
+                </div>
 
             {historicalStep !== "configure" && historicalPreview && (
               <div className="space-y-5">
@@ -1633,11 +1672,11 @@ export default function Payroll() {
                   <Target className="h-4 w-4" />
                   Review {historicalPlannedRuns > 0 ? `${historicalPlannedRuns} Run(s)` : "Payroll"}
                 </button>
+                </div>
               </div>
-            </div>
-            )}
-          </div>
-        </div>
+            </DialogPrimitive.Content>
+          </DialogPrimitive.Portal>
+        </DialogPrimitive.Root>
       )}
     </div>
   );

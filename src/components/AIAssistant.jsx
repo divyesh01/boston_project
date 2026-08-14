@@ -8,6 +8,7 @@ import ReactMarkdown from "react-markdown";
 
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { useAuth } from "@/lib/AuthContext";
+import { getDailyAggregates, buildSyntheticRows } from "@/lib/dailyAggregates";
 
 const SUGGESTIONS = [
   "Show today's executive summary",
@@ -71,12 +72,29 @@ export default function AIAssistant() {
           : Array.isArray(user.property_access)
           ? user.property_access
           : [];
+          
+      // Pre-aggregate stats locally to avoid lag in the AI Assistant backend
+      let synthetic = {};
+      try {
+        const aggs = await getDailyAggregates({ 
+          propertyId: propertyId === "all" ? (allowedPropertyIds || "all") : propertyId,
+          from: dateRange.from || "",
+          to: dateRange.to || ""
+        });
+        if (aggs && aggs.length > 0) {
+          synthetic = buildSyntheticRows(aggs);
+        }
+      } catch (err) {
+        console.warn("Failed to gather synthetic aggregates:", err);
+      }
+
       const res = await db.functions.invoke("aiAssistant", {
         question: q,
         propertyId,
         dateFrom: dateRange.from || "",
         dateTo: dateRange.to || "",
         allowedPropertyIds,
+        synthetic,
       });
       setMessages((prev) => [...prev, { role: "assistant", text: res.data.answer || "I couldn't process that question.", summary: res.data.summary }]);
     } catch (e) {
@@ -91,6 +109,7 @@ export default function AIAssistant() {
       {!open && (
         <button
           onClick={() => setOpen(true)}
+          aria-label="Open AI Assistant"
           className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-[#6C63FF] to-[#00D4FF] shadow-lg shadow-[#6C63FF]/30 transition-all hover:scale-105 active:scale-95"
           style={{ bottom: "calc(6rem + env(safe-area-inset-bottom))" }}
         >
@@ -123,7 +142,7 @@ export default function AIAssistant() {
                   <p className="text-[10px] text-slate-500">Local database · No internet needed</p>
                 </div>
               </div>
-              <button onClick={() => setOpen(false)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setOpen(false)} aria-label="Close" className="text-slate-400 hover:text-white">
                 <X className="h-5 w-5" />
               </button>
             </div>
@@ -214,8 +233,10 @@ export default function AIAssistant() {
                   disabled={loading}
                 />
                 <button
+                  type="button"
                   onClick={() => handleAsk(input)}
                   disabled={loading || !input.trim()}
+                  aria-label="Send message"
                   className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#6C63FF] text-white transition-colors hover:bg-[#5b52e8] disabled:opacity-50"
                 >
                   <Send className="h-4 w-4" />

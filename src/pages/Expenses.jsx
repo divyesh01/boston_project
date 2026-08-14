@@ -5,6 +5,8 @@ import { Plus, Trash2, TrendingUp, TrendingDown, Wallet, Receipt, Users, DollarS
 import Card from "@/components/ui-exec/Card";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useRef } from "react";
 import { useGlobalFilters, MONTHS_LONG } from "@/lib/useGlobalFilters";
 import { useOccupancy, usePaymentData } from "@/lib/useHotelData";
 import { money, sum, inRange, pct, C } from "@/lib/hotel";
@@ -197,6 +199,22 @@ export default function Expenses() {
   const exemptExpenses = expenses.filter((e) => e.taxable === false);
   const taxableAmount = taxableExpenses.reduce((a, e) => a + (e.amount || 0), 0);
   const exemptAmount = exemptExpenses.reduce((a, e) => a + (e.amount || 0), 0);
+
+  const expParentRef = useRef();
+  const expVirtualizer = useVirtualizer({
+    count: filteredExpenses.length,
+    getScrollElement: () => expParentRef.current,
+    estimateSize: () => 64,
+    overscan: 10,
+  });
+
+  const payrollParentRef = useRef();
+  const payrollVirtualizer = useVirtualizer({
+    count: payroll.length,
+    getScrollElement: () => payrollParentRef.current,
+    estimateSize: () => 64,
+    overscan: 10,
+  });
 
   const handleAddPayroll = async () => {
     // Rate limiting for sensitive actions
@@ -497,37 +515,53 @@ export default function Expenses() {
             </div>
           </div>
 
-          <div className="max-h-80 space-y-2 overflow-auto">
-            {filteredExpenses.map((e) => (
-              <div key={e.id} className="flex items-center justify-between rounded-xl border border-white/5 bg-[#0A1628]/60 px-4 py-3">
-                <div className="flex items-center gap-3">
-                  <div>
-                    <p className="text-sm text-white">{e.expense_name}</p>
-                    <p className="text-xs text-slate-500">{e.vendor || "—"} · {expenseLabel(e.category)} · {frequencyLabel(e.frequency)}</p>
+          <div className="max-h-80 space-y-2 overflow-auto" ref={expParentRef}>
+            <div style={{ height: `${expVirtualizer.getTotalSize()}px`, width: '100%', position: 'relative' }}>
+              {expVirtualizer.getVirtualItems().map((virtualRow) => {
+                const e = filteredExpenses[virtualRow.index];
+                return (
+                  <div 
+                    key={e.id} 
+                    style={{ 
+                      position: 'absolute', 
+                      top: 0, 
+                      left: 0, 
+                      width: '100%', 
+                      height: `${virtualRow.size - 8}px`, // -8 for gap
+                      transform: `translateY(${virtualRow.start}px)`
+                    }}
+                    className="flex items-center justify-between rounded-xl border border-white/5 bg-[#0A1628]/60 px-4 py-3"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div>
+                        <p className="text-sm text-white">{e.expense_name}</p>
+                        <p className="text-xs text-slate-500">{e.vendor || "—"} · {expenseLabel(e.category)} · {frequencyLabel(e.frequency)}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => handleToggleTaxable(e.id, e.taxable)}
+                        className={`rounded-full px-2 py-0.5 text-[10px] ${e.taxable !== false ? "bg-[#00E096]/10 text-[#00E096]" : "bg-[#FFB547]/10 text-[#FFB547]"}`}
+                        title="Toggle taxable status"
+                      >
+                        {e.taxable !== false ? "Taxable" : "Exempt"}
+                      </button>
+                      <span className="text-sm tabular-nums text-slate-300">{money(e.amount || 0)}</span>
+                      <select
+                        value={e.payment_status || "unpaid"}
+                        onChange={(ev) => handleStatusChange(e.id, ev.target.value)}
+                        className={`rounded-lg border border-white/10 bg-[#040D1A] px-2 py-1 text-xs ${statusColor(e.payment_status)}`}
+                      >
+                        {EXPENSE_STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+                      </select>
+                      <button onClick={() => handleDelete(e.id)} className="text-slate-500 hover:text-[#FF6B6B]">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => handleToggleTaxable(e.id, e.taxable)}
-                    className={`rounded-full px-2 py-0.5 text-[10px] ${e.taxable !== false ? "bg-[#00E096]/10 text-[#00E096]" : "bg-[#FFB547]/10 text-[#FFB547]"}`}
-                    title="Toggle taxable status"
-                  >
-                    {e.taxable !== false ? "Taxable" : "Exempt"}
-                  </button>
-                  <span className="text-sm tabular-nums text-slate-300">{money(e.amount || 0)}</span>
-                  <select
-                    value={e.payment_status || "unpaid"}
-                    onChange={(ev) => handleStatusChange(e.id, ev.target.value)}
-                    className={`rounded-lg border border-white/10 bg-[#040D1A] px-2 py-1 text-xs ${statusColor(e.payment_status)}`}
-                  >
-                    {EXPENSE_STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-                  </select>
-                  <button onClick={() => handleDelete(e.id)} className="text-slate-500 hover:text-[#FF6B6B]">
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-            ))}
+                );
+              })}
+            </div>
             {!filteredExpenses.length && <p className="text-sm text-slate-500">No expenses match your filters.</p>}
           </div>
         </Card>
@@ -561,21 +595,37 @@ export default function Expenses() {
             </div>
           )}
 
-          <div className="max-h-80 space-y-2 overflow-auto">
-            {payroll.map((p) => (
-              <div key={p.id} className="flex items-center justify-between rounded-xl border border-white/5 bg-[#0A1628]/60 px-4 py-3">
-                <div>
-                  <p className="text-sm text-white">{p.employee_name}</p>
-                  <p className="text-xs text-slate-500">{p.department} · {p.pay_type} · {p.hours || 0}h</p>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-sm tabular-nums text-slate-300">{money(p.total_pay || 0)}</span>
-                  <button onClick={() => handleDeletePayroll(p.id)} className="text-slate-500 hover:text-[#FF6B6B]">
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-            ))}
+          <div className="max-h-80 space-y-2 overflow-auto" ref={payrollParentRef}>
+            <div style={{ height: `${payrollVirtualizer.getTotalSize()}px`, width: '100%', position: 'relative' }}>
+              {payrollVirtualizer.getVirtualItems().map((virtualRow) => {
+                const p = payroll[virtualRow.index];
+                return (
+                  <div 
+                    key={p.id} 
+                    style={{ 
+                      position: 'absolute', 
+                      top: 0, 
+                      left: 0, 
+                      width: '100%', 
+                      height: `${virtualRow.size - 8}px`,
+                      transform: `translateY(${virtualRow.start}px)`
+                    }}
+                    className="flex items-center justify-between rounded-xl border border-white/5 bg-[#0A1628]/60 px-4 py-3"
+                  >
+                    <div>
+                      <p className="text-sm text-white">{p.employee_name}</p>
+                      <p className="text-xs text-slate-500">{p.department} · {p.pay_type} · {p.hours || 0}h</p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm tabular-nums text-slate-300">{money(p.total_pay || 0)}</span>
+                      <button onClick={() => handleDeletePayroll(p.id)} className="text-slate-500 hover:text-[#FF6B6B]">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
             {!payroll.length && <p className="text-sm text-slate-500">No payroll records yet. Add your first above.</p>}
           </div>
         </Card>

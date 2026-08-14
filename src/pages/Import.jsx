@@ -4,7 +4,9 @@ import React, { useState } from "react";
 import { UploadCloud, CheckCircle2, FileSpreadsheet, XCircle, Search, Building2, Loader2, Eye, Trash2, ArrowDownToLine, RefreshCw, RotateCcw, X } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 
-import { useUploads, useProperties } from "@/lib/useHotelData";
+import { useUploads, useProperties, useHotelMetrics } from "@/lib/useHotelData";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useRef } from "react";
 import { num } from "@/lib/hotel";
 import { REPORT_TYPES, scanReport, importReport } from "@/lib/reportParsers";
 import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
@@ -274,21 +276,57 @@ export default function Import() {
   };
 
   const handleFiles = async (fileList) => {
-    const rawFiles = Array.from(fileList).filter((f) => {
-      const isExtValid = /\.(csv|xlsx|xls)$/i.test(f.name);
-      const isMimeValid = !f.type || f.type.includes('csv') || f.type.includes('excel') || f.type.includes('spreadsheet') || f.type === 'text/plain';
-      return isExtValid && isMimeValid;
-    });
-    if (!rawFiles.length) return;
-    const MAX_SIZE = 10 * 1024 * 1024;
     const files = [];
-    for (const f of rawFiles) {
+    const MAX_SIZE = 10 * 1024 * 1024;
+
+    for (const f of Array.from(fileList)) {
+      const isExtValid = /\.(csv|xlsx|xls)$/i.test(f.name);
+      const isExecutable = /\.(exe|sh|bat|cmd|msi|ps1|js|vbs|jar)$/i.test(f.name);
+
+      if (!isExtValid || isExecutable) {
+        alert(`File ${f.name} has an invalid or unsafe extension.`);
+        continue;
+      }
+
       if (f.size > MAX_SIZE) {
         alert(`File ${f.name} exceeds the 10MB limit and will not be processed.`);
-      } else {
-        files.push(f);
+        continue;
+      }
+
+      // ── Bulletproof Magic Byte Inspection ──
+      try {
+        const headerBlob = f.slice(0, 4);
+        const buffer = await headerBlob.arrayBuffer();
+        const view = new Uint8Array(buffer);
+        let isValidMagic = false;
+
+        if (/\.(xlsx|xls)$/i.test(f.name)) {
+          // Check for ZIP/XLSX magic bytes (50 4B 03 04) or OLE (D0 CF 11 E0)
+          const isZip = view.length >= 4 && view[0] === 0x50 && view[1] === 0x4B && view[2] === 0x03 && view[3] === 0x04;
+          const isOle = view.length >= 4 && view[0] === 0xD0 && view[1] === 0xCF && view[2] === 0x11 && view[3] === 0xE0;
+          if (!isZip && !isOle) {
+            alert(`File ${f.name} failed security inspection (invalid magic bytes). This is not a genuine Excel file.`);
+            continue;
+          }
+          isValidMagic = true;
+        } else if (/\.csv$/i.test(f.name)) {
+          // For CSV, ensure the first few bytes are valid text (no null bytes or obvious binary)
+          if (view.includes(0x00)) {
+            alert(`File ${f.name} failed security inspection. CSV cannot contain binary null bytes.`);
+            continue;
+          }
+          isValidMagic = true;
+        }
+
+        if (isValidMagic) {
+          files.push(f);
+        }
+      } catch (e) {
+        console.warn(`Failed to inspect magic bytes for ${f.name}`, e);
+        alert(`Could not verify the integrity of ${f.name}.`);
       }
     }
+
     if (!files.length) return;
     const stamp = Date.now();
     const newQueue = files.map((file, i) => ({
@@ -410,28 +448,36 @@ export default function Import() {
           return { name: item.name, ok: false, duplicate: true, error: "Duplicate file" };
         }
       }
-      const result = await importReport(item.scan, {
-        propertyId,
-        propertyName: selectedProperty?.name || "",
-        importId: item.importId,
-        sourceFile: item.name,
-        forceImport,
-      });
-      await db.entities.UploadedReport.create({
-        file_name: item.name,
-        report_type: item.scan.type || type,
-        rows_imported: result.count,
-        rows_skipped: result.excluded || 0,
-        rows_parsed: item.scan.totalRows ?? null,
-        file_url: item.file_url,
-        property_id: propertyId,
-        property_name: selectedProperty?.name || "",
-        import_id: result.importId || item.importId,
-        source_file: item.name,
-        content_hash: item.contentHash || null,
-        raw_rows: scanRawRows(item.scan),
-        raw_rows_ttl: rawRowsTtlExpiry(),
-      });
+      let result;
+      try {
+        result = await importReport(item.scan, {
+          propertyId,
+          propertyName: selectedProperty?.name || "",
+          importId: item.importId,
+          sourceFile: item.name,
+          forceImport,
+        });
+        await db.entities.UploadedReport.create({
+          file_name: item.name,
+          report_type: item.scan.type || type,
+          rows_imported: result.count,
+          rows_skipped: result.excluded || 0,
+          rows_parsed: item.scan.totalRows ?? null,
+          file_url: item.file_url,
+          property_id: propertyId,
+          property_name: selectedProperty?.name || "",
+          import_id: result.importId || item.importId,
+          source_file: item.name,
+          content_hash: item.contentHash || null,
+          raw_rows: scanRawRows(item.scan),
+          raw_rows_ttl: rawRowsTtlExpiry(),
+        });
+      } catch (err) {
+        if (item.importId) {
+          await rollbackImportSession(item.importId).catch(console.error);
+        }
+        throw err;
+      }
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "done", count: result.count, excluded: result.excluded || 0 } : q)));
       rotateCsrfToken();
       // Pre-compute the daily financial aggregates so the Dashboard reads a few
@@ -625,6 +671,15 @@ export default function Import() {
       u.report_type?.toLowerCase().includes(s) ||
       String(u.created_date || "").toLowerCase().includes(s)
     );
+  });
+
+  const historyParentRef = useRef();
+  
+  const rowVirtualizer = useVirtualizer({
+    count: filtered.length,
+    getScrollElement: () => historyParentRef.current,
+    estimateSize: () => 74,
+    overscan: 10,
   });
 
   return (
@@ -1090,28 +1145,44 @@ export default function Import() {
             className="w-full rounded-lg border border-white/10 bg-[#0A1628] py-2.5 pl-10 pr-4 text-sm text-slate-200 outline-none focus:border-[#00D4FF]"
           />
         </div>
-        <div className="space-y-2">
-          {filtered.map((u) => (
-            <div key={u.id} className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-[#0A1628]/60 px-4 py-3">
-              <div className="flex min-w-0 items-center gap-3">
-                <FileSpreadsheet className="h-4 w-4 shrink-0 text-[#6C63FF]" />
-                <div className="min-w-0">
-                  <p className="truncate text-sm text-white">{u.file_name}</p>
-                  <p className="text-xs text-slate-500">
-                    {u.property_name || "—"} · {u.report_type} · {String(u.created_date || "").slice(0, 10)}
-                  </p>
+        <div className="space-y-2 max-h-[600px] overflow-auto" ref={historyParentRef}>
+          <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, width: '100%', position: 'relative' }}>
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const u = filtered[virtualRow.index];
+              return (
+                <div 
+                  key={u.id} 
+                  style={{ 
+                    position: 'absolute', 
+                    top: 0, 
+                    left: 0, 
+                    width: '100%', 
+                    height: `${virtualRow.size - 8}px`, // -8 for gap
+                    transform: `translateY(${virtualRow.start}px)`
+                  }}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-[#0A1628]/60 px-4 py-3"
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <FileSpreadsheet className="h-4 w-4 shrink-0 text-[#6C63FF]" />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm text-white">{u.file_name}</p>
+                      <p className="text-xs text-slate-500">
+                        {u.property_name || "—"} · {u.report_type} · {String(u.created_date || "").slice(0, 10)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-3">
+                    <ImportOutcome upload={u} />
+                    <UndoImportButton
+                      upload={u}
+                      disabled={busy || importing || clearing}
+                      onDone={refetch}
+                    />
+                  </div>
                 </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-3">
-                <ImportOutcome upload={u} />
-                <UndoImportButton
-                  upload={u}
-                  disabled={busy || importing || clearing}
-                  onDone={refetch}
-                />
-              </div>
-            </div>
-          ))}
+              );
+            })}
+          </div>
           {!filtered.length && (
             <p className="text-sm text-slate-500">
               {uploads.length ? "No results match your search." : "No files imported in this session yet."}

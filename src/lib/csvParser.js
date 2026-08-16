@@ -187,8 +187,15 @@ export function rowsToObjects(rawRows) {
     .map((row) => {
       const obj = {};
       headers.forEach((h, i) => {
-        obj[h] = row[i] || "";
+        if (obj.hasOwnProperty(h)) {
+          obj[h + "_" + (i + 1)] = row[i] || "";
+        } else {
+          obj[h] = row[i] || "";
+        }
       });
+      for (let i = headers.length; i < row.length; i++) {
+        obj["_extra_" + (i + 1)] = row[i] || "";
+      }
       return obj;
     });
 }

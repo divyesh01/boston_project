@@ -265,7 +265,7 @@ export function validateFileSize(file, maxSize = MAX_UPLOAD_FILE_SIZE) {
 function writeCsrfCookie(token) {
   if (typeof document === "undefined") return token;
   const secure = typeof location !== "undefined" && location.protocol === "https:" ? "; Secure" : "";
-  document.cookie = `csrf_token=${token}; Path=/; SameSite=Lax${secure}`;
+  document.cookie = `__Host-csrf_token=${token}; Path=/; SameSite=Lax${secure}`;
   return token;
 }
 

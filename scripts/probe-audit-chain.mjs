@@ -68,7 +68,7 @@ function setup({ secret = "probe-chain-secret" } = {}) {
 
 const req = (body = {}) => ({
   headers: new Headers({
-    cookie: `base44_session=${TOKEN}; csrf_token=${CSRF}`,
+    cookie: `base44_session=${TOKEN}; __Host-csrf_token=${CSRF}`,
     "x-csrf-token": CSRF,
     "x-forwarded-for": "203.0.113.7",
   }),

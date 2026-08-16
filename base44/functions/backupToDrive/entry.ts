@@ -116,7 +116,7 @@ export default async function(req) {
     if (!user || !user.is_active || user.is_locked) return Response.json({ error: "Unauthorized" }, { status: 401 });
     const _csrfHeader = req.headers.get('x-csrf-token');
     const _cookieHeader = req.headers.get('cookie') || '';
-    const _csrfCookieMatch = _cookieHeader.match(/csrf_token=([^;]+)/);
+    const _csrfCookieMatch = _cookieHeader.match(/__Host-csrf_token=([^;]+)/);
     const _csrfCookie = _csrfCookieMatch ? _csrfCookieMatch[1] : null;
     if (!_csrfHeader || !_csrfCookie || _csrfHeader !== _csrfCookie) {
       return Response.json({ error: "Invalid CSRF token" }, { status: 403 });

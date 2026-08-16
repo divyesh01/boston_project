@@ -192,7 +192,7 @@ const admin = async (body, { token = "tok_admin", csrf = CSRF, header = CSRF } =
   const res = await userAdmin({
     url: "https://probe.local/functions/custom_user_admin",
     headers: new Headers({
-      cookie: `base44_session=${token}; csrf_token=${csrf}`,
+      cookie: `base44_session=${token}; __Host-csrf_token=${csrf}`,
       "x-csrf-token": header,
     }),
     json: async () => body,
@@ -203,7 +203,7 @@ const admin = async (body, { token = "tok_admin", csrf = CSRF, header = CSRF } =
 const doReset = async (body) => {
   const res = await resetPassword({
     url: "https://probe.local/functions/custom_auth_reset_password",
-    headers: new Headers({ cookie: `csrf_token=${CSRF}`, "x-csrf-token": CSRF }),
+    headers: new Headers({ cookie: `__Host-csrf_token=${CSRF}`, "x-csrf-token": CSRF }),
     json: async () => body,
   });
   return { status: res.status ?? 200, body: await res.json() };
@@ -213,7 +213,7 @@ const askReset = async (identifier, host = "hotel.example.com", ip = "203.0.113.
   const res = await resetRequest({
     url: `https://${host}/functions/custom_auth_reset_request`,
     headers: new Headers({
-      cookie: `csrf_token=${CSRF}`, "x-csrf-token": CSRF, host, "x-forwarded-for": ip,
+      cookie: `__Host-csrf_token=${CSRF}`, "x-csrf-token": CSRF, host, "x-forwarded-for": ip,
     }),
     json: async () => ({ identifier }),
   });
@@ -687,7 +687,7 @@ section("14. The browser's CSRF pair cannot drift apart");
     "otherwise the header and the cookie disagree after any rotation");
 
   const utils = read("src/lib/securityUtils.js");
-  T("the CSRF cookie is written in one place", (utils.match(/csrf_token=\$\{/g) || []).length <= 1,
+  T("the CSRF cookie is written in one place", (utils.match(/__Host-csrf_token=\$\{/g) || []).length <= 1,
     "getCsrfToken and rotateCsrfToken both wrote the cookie by hand");
   T("the CSRF cookie carries Secure over https", /Secure/.test(utils),
     "a plaintext downgrade could otherwise read it");

@@ -23,7 +23,7 @@ export default async function (req) {
 
     // CSRF Protection
     const csrfHeader = req.headers.get('x-csrf-token');
-    const csrfCookieMatch = cookieHeader.match(/csrf_token=([^;]+)/);
+    const csrfCookieMatch = cookieHeader.match(/__Host-csrf_token=([^;]+)/);
     const csrfCookie = csrfCookieMatch ? csrfCookieMatch[1] : null;
 
     if (!csrfHeader || !csrfCookie || csrfHeader !== csrfCookie) {

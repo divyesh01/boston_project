@@ -10,7 +10,7 @@ const db = sdk.__installBackend({ users: [], sessions: [] });
 const req = {
   headers: new Headers({
     "x-csrf-token": "test-csrf",
-    "cookie": "csrf_token=test-csrf"
+    "cookie": "__Host-csrf_token=test-csrf"
   }),
   json: async () => ({
     userData: {

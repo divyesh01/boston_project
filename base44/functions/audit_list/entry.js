@@ -27,6 +27,20 @@ export default async function (req) {
 
     const payload = await req.json();
     const filter = payload.filter || {};
+    
+    if (typeof filter !== 'object' || filter === null || Array.isArray(filter)) {
+      return Response.json({ error: "Bad Request: filter must be an object" }, { status: 400 });
+    }
+
+    if (Array.isArray(actor.property_access)) {
+      if (!filter.property_id) {
+        return Response.json({ error: "Bad Request: property_id filter is required" }, { status: 400 });
+      }
+      if (!actor.property_access.includes(filter.property_id)) {
+        return Response.json({ error: "Forbidden: cross-tenant access denied" }, { status: 403 });
+      }
+    }
+
     const limit = payload.limit || 500;
 
     const logs = await base44.asServiceRole.entities.AuditLog.filter(filter, null, limit, 0);

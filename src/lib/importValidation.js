@@ -29,6 +29,13 @@ function finding(layer, severity, code, message, detail = {}) {
   return { layer, severity, code, message, ...detail };
 }
 
+// Public factory for callers that detect a domain-specific problem the generic
+// layers cannot see — the transaction ledger's own trailer checksum, or a
+// statistics metric name the parser did not recognise. Passing these back
+// through `validateImport({ extraFindings })` keeps one place deciding what
+// blocks an import, instead of each parser inventing its own gate.
+export { finding as makeFinding };
+
 // Columns that must be present for a type's rows to mean anything. Absence is
 // structural: the file is probably not the report the user thinks it is.
 //
@@ -65,13 +72,47 @@ const NEGATIVE_OK = new Set([
   "amount", "net_today", "adjusted", "actual", "total",
   "loyalty_discount", "non_revenue",
   "adr", "revpar",
+  // The hotel statistics snapshot stores every metric in one generic `value`
+  // column, and variance-against-last-year metrics are legitimately negative.
+  "value",
 ]);
+
+// Records how a numeric cell survived conversion, for layer 2 to report.
+//
+// Shared rather than duplicated because the two mapping paths (flat reports in
+// reportParsers, the transaction ledger in transactionNorm) must classify a
+// value identically — a coercion that one path calls "truncated" and the other
+// silently accepts is worse than no log at all.
+//
+// `parsed` is the result of parseAmount: null means nothing numeric was found,
+// which the callers then store as 0. A non-null parse can still be lossy,
+// because parseFloat("12abc") returns 12 — a number that looks entirely
+// legitimate downstream, which makes it the more dangerous of the two.
+export function recordCoercion(coercions, field, raw, parsed) {
+  if (!coercions) return;
+  const text = String(raw ?? "").trim();
+  if (!text) return;
+  if (parsed === null || parsed === undefined || Number.isNaN(parsed)) {
+    coercions.push({ field, raw: text, kind: "unparseable" });
+    return;
+  }
+  const cleaned = text.replace(/[$,\s()]/g, "").replace(/^-/, "");
+  if (/[^0-9.]/.test(cleaned)) {
+    coercions.push({ field, raw: text, parsed, kind: "truncated" });
+  }
+}
 
 // ── Layer 1: structural ────────────────────────────────────────────────────
 //
 // Operates on the raw grid, before any column mapping, because mapping is
 // exactly where structural damage becomes invisible.
-export function validateStructure({ rawRows = [], rows = [], type, knownColumns }) {
+//
+// `stackedSections` marks a file that holds several grids of different widths in
+// one document (the hotel statistics snapshot, the clerk report). For those the
+// single-header assumptions below are meaningless — every row of every section
+// but one would be reported as ragged, and every period column as unrecognised —
+// so those two checks are skipped while the emptiness checks still apply.
+export function validateStructure({ rawRows = [], rows = [], type, knownColumns, stackedSections = false }) {
   const out = [];
 
   if (!rawRows.length) {
@@ -83,7 +124,7 @@ export function validateStructure({ rawRows = [], rows = [], type, knownColumns 
   const header = rawRows[0] || [];
   const headerWidth = header.length;
 
-  if (headerWidth === 0) {
+  if (headerWidth === 0 && !stackedSections) {
     out.push(finding("structural", SEVERITY.ERROR, "no_header",
       "The first row is blank, so no column names could be read."));
     return out;
@@ -96,12 +137,14 @@ export function validateStructure({ rawRows = [], rows = [], type, knownColumns 
   // malformed data.
   let short = 0;
   let long = 0;
-  for (let i = 1; i < rawRows.length; i++) {
-    const r = rawRows[i];
-    if (!r || r.length === 0) continue;
-    if (r.every((c) => String(c ?? "").trim() === "")) continue;
-    if (r.length < headerWidth) short++;
-    else if (r.length > headerWidth) long++;
+  if (!stackedSections) {
+    for (let i = 1; i < rawRows.length; i++) {
+      const r = rawRows[i];
+      if (!r || r.length === 0) continue;
+      if (r.every((c) => String(c ?? "").trim() === "")) continue;
+      if (r.length < headerWidth) short++;
+      else if (r.length > headerWidth) long++;
+    }
   }
   // Stacked-section files (the clerk report) legitimately mix widths, so this is
   // a warning everywhere rather than an error that would reject a valid file.
@@ -118,7 +161,7 @@ export function validateStructure({ rawRows = [], rows = [], type, knownColumns 
 
   // Unrecognised column names. A PMS that renames a column ships a file that
   // still imports, minus one field — this is how a metric quietly becomes 0.
-  if (knownColumns) {
+  if (knownColumns && !stackedSections) {
     const unknown = header
       .map((h) => String(h ?? "").trim())
       .filter((h) => h && !knownColumns.has(h));
@@ -353,6 +396,8 @@ export function validateSemantics({ rows = [], type, today = new Date() }) {
  * @property {Array} [coercions]
  * @property {number} [dateFailures]
  * @property {Date} [today]
+ * @property {boolean} [stackedSections]
+ * @property {Array} [extraFindings]
  */
 
 /**
@@ -366,12 +411,18 @@ export function validateImport({
   coercions = [],
   dateFailures = 0,
   today,
+  stackedSections = false,
+  extraFindings = [],
 } = {}) {
   const findings = [
-    ...validateStructure({ rawRows, rows, type, knownColumns }),
+    ...validateStructure({ rawRows, rows, type, knownColumns, stackedSections }),
     ...validateTypes({ coercions, dateFailures, totalRows: rows.length + dateFailures }),
     ...validateConstraints({ rows, type }),
     ...validateSemantics({ rows, type, ...(today ? { today } : {}) }),
+    // Domain findings the generic layers cannot compute, supplied by the parser
+    // that owns the format. They are folded in here so they gate the import the
+    // same way everything else does.
+    ...extraFindings.filter(Boolean),
   ];
 
   const errors = findings.filter((f) => f.severity === SEVERITY.ERROR);

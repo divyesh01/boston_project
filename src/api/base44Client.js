@@ -2,7 +2,8 @@ import localDb from '@/api/localDb';
 import { answerQuestion } from '@/lib/aiEngine';
 import { toCents, fromCents } from '@/lib/decimal';
 import { reconcileTimecards } from '@/lib/timecardCalc';
-import { secureStore, secureRetrieve, createAuditEntry, getClientIpHint, getCsrfToken, verifyAuditChain } from '@/lib/securityUtils';
+import { secureStore, secureRetrieve, createAuditEntry, getClientIpHint, getCsrfToken, pinCsrfCookie, verifyAuditChain } from '@/lib/securityUtils';
+import { hasAllPropertyAccess, allPropertyRequiredError } from '@/lib/launchPolicy';
 import { postSessionRevoked } from '@/lib/sessionChannel';
 import { publishChange } from '@/lib/realtime';
 import { recalculationService } from '@/lib/recalculationService';
@@ -10,11 +11,28 @@ import { isValidEmail } from '@/lib/validator';
 import { createClient } from '@base44/sdk';
 import * as otplib from 'otplib';
 
+// ─── The CSRF pair, and why the header value has to be captured here ───
+// Every server function compares the X-CSRF-Token header against the csrf_token
+// cookie. The SDK copies the headers object ONCE, when the client is constructed
+// (node_modules/@base44/sdk/dist/client.js: `const headers = { ...optionalHeaders,
+// "X-App-Id": String(appId) }`, handed straight to axios defaults) — so this
+// value is frozen for the life of the page and mutating the literal below after
+// the fact has no effect.
+//
+// Meanwhile rotateCsrfToken() legitimately replaces the cookie (a password
+// change, a guarded delete). Once it did, the frozen header no longer matched the
+// cookie and EVERY later function call answered 403 "Invalid CSRF token" until
+// the tab was reloaded — the user watching a save fail over and over with no
+// explanation. Naming the captured value makes it something the code can keep the
+// cookie in step with; pinCsrfCookie() below does that immediately before each
+// call.
+const CSRF_HEADER_TOKEN = getCsrfToken();
+
 const realClient = createClient({
   appId: import.meta.env?.VITE_BASE44_APP_ID || "6a7d6856ee1cc714b1803c0e",
   serverUrl: import.meta.env?.VITE_BASE44_BACKEND_URL || "",
   headers: {
-    "X-CSRF-Token": getCsrfToken()
+    "X-CSRF-Token": CSRF_HEADER_TOKEN
   }
 });
 
@@ -34,13 +52,25 @@ function notifyRecalculation(tableName, changeType, record) {
 // ─── Transaction Support ───
 export async function runInTransaction(operations) {
   const ops = Array.isArray(operations) ? operations : [operations];
-  return await localDb.transaction('rw', localDb.tables, async () => {
-    const results = [];
-    for (const op of ops) {
-      results.push(await op());
-    }
-    return results;
-  });
+  // Resolve the caller's property access BEFORE opening the Dexie zone. Entity
+  // methods called inside the transaction then read a cached snapshot instead of
+  // awaiting custom_auth_me, which would leave the zone and force an early
+  // commit — the import would persist rows and still report failure.
+  // `force` keeps the snapshot fresh at the transaction boundary, so nothing
+  // inside the zone is authorized against stale privileges.
+  await primePropertyAccess({ force: true });
+  dexieZoneDepth += 1;
+  try {
+    return await localDb.transaction('rw', localDb.tables, async () => {
+      const results = [];
+      for (const op of ops) {
+        results.push(await op());
+      }
+      return results;
+    });
+  } finally {
+    dexieZoneDepth -= 1;
+  }
 }
 
 // ─── Referential Integrity Checks ───
@@ -149,6 +179,24 @@ export async function completeImportSession(importId, results) {
   }
 }
 
+// Mark a session as failed. Without this a crashed import stays 'in_progress'
+// forever, which is indistinguishable from an import that is still running and
+// makes the rollback path unable to tell "atomically rolled back" from
+// "committed rows we can no longer identify".
+export async function failImportSession(importId, errorMessage = '') {
+  const sessions = await getImportSessions();
+  const idx = sessions.findIndex(s => s.importId === importId);
+  if (idx >= 0) {
+    sessions[idx] = {
+      ...sessions[idx],
+      status: 'failed',
+      failedAt: new Date().toISOString(),
+      error: String(errorMessage || '').slice(0, 500),
+    };
+    await secureStore(IMPORT_SESSION_KEY, sessions);
+  }
+}
+
 // The one rollback implementation. `rollbackImport` in lib/reportParsers.js is a
 // thin re-export of this; do not add a third.
 //
@@ -164,6 +212,18 @@ export async function rollbackImportSession(importId) {
     // reporting success — the previous version returned {success: true} here
     // and callers had no way to learn that zero rows were removed.
     const session = await getImportSession(importId);
+    // One exception: a session explicitly marked 'failed' has no ledger because
+    // the Dexie transaction rolled the ledger rows back together with the data
+    // rows. Nothing committed, so there is nothing to clean up — reporting a
+    // scary "needs manual cleanup" here would be a false alarm.
+    if (session && session.status === 'failed') {
+      return {
+        success: true,
+        deletedCount: 0,
+        atomicRollback: true,
+        message: 'The failed import committed no rows, so there was nothing to undo.',
+      };
+    }
     return {
       success: false,
       error: session
@@ -375,17 +435,146 @@ function planQuery(table, query) {
   return null;
 }
 
+// ─── Cached authorization snapshot ───
+// Every entity-proxy method needs the caller's property access. Resolving it
+// calls auth.me() -> functions.invoke('custom_auth_me'), which is a real network
+// round trip. That is a macrotask, and awaiting a macrotask inside a Dexie
+// transaction zone makes Dexie commit the transaction early: the next table
+// operation then throws TransactionInactiveError. Because the import runs
+// doImport() inside runInTransaction(), an import could commit some rows and
+// then report failure to the caller.
+//
+// Measured with scripts/probe-import-txn-zone.mjs:
+//   awaiting a macrotask inside a Dexie rw zone            -> zone DIES
+//   awaiting an already-resolved promise / no-await async fn -> zone SURVIVES
+//
+// So the snapshot is resolved BEFORE the zone opens and read without a network
+// call inside it. This also removes one custom_auth_me round trip per entity
+// operation, which on a 16,921-row import was thousands of redundant calls.
+//
+// Staleness is bounded three ways: a short TTL, explicit invalidation on any
+// privilege-mutating backend call (see PRIVILEGE_MUTATING_FUNCTIONS), and a
+// forced re-resolve at the start of every transaction.
+const PROPERTY_ACCESS_TTL_MS = 30_000;
+let propertyAccessSnapshot = { primed: false, value: null, at: 0 };
+let propertyAccessInFlight = null;
+let dexieZoneDepth = 0;
+
+// Deny by default. The value this function returns is the only thing standing
+// between a caller and another property's ledger, so every path out of it that
+// is not a positive grant returns "no properties".
+//
+// It used to return `null` — the sentinel meaning "apply no filter" — for an
+// absent user, an unset property_access field, and any thrown error alike. A
+// signed-out tab, a user record created without property_access, and a transient
+// auth.me() failure therefore all escalated to full-portfolio scope
+// (scripts/probe-property-isolation.mjs §6 measured all three). There is now no
+// input to this function that produces "no filter" except an explicit grant, and
+// `'all'` is the only value applyScope() lets through unfiltered.
+const ALL_PROPERTIES = 'all';
+
+async function resolvePropertyAccessUncached() {
+  try {
+    const user = await auth.me();
+    if (!user) return [];
+    // Owner/admin are entitled to every property by role.
+    if (user.role === 'owner' || user.role === 'admin') return ALL_PROPERTIES;
+    if (user.property_access === ALL_PROPERTIES) return ALL_PROPERTIES;
+    // An empty array is a legitimate (if useless) grant: no properties.
+    if (Array.isArray(user.property_access)) return user.property_access;
+    // Unset, null, or a shape nobody planned for.
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+function propertyAccessSnapshotUsable() {
+  if (!propertyAccessSnapshot.primed) return false;
+  // Inside a Dexie zone the snapshot is always preferred over a network call —
+  // re-resolving there would destroy the transaction. runInTransaction force-
+  // primes on entry, so a snapshot read inside a zone is microseconds old.
+  if (dexieZoneDepth > 0) return true;
+  return Date.now() - propertyAccessSnapshot.at < PROPERTY_ACCESS_TTL_MS;
+}
+
+// Resolve and cache the caller's property access. Concurrent callers share one
+// in-flight request. `force` bypasses the TTL.
+export async function primePropertyAccess({ force = false } = {}) {
+  if (!force && propertyAccessSnapshotUsable()) return propertyAccessSnapshot.value;
+  if (!propertyAccessInFlight) {
+    propertyAccessInFlight = resolvePropertyAccessUncached().then(
+      (value) => {
+        propertyAccessSnapshot = { primed: true, value, at: Date.now() };
+        propertyAccessInFlight = null;
+        return value;
+      },
+      (err) => {
+        propertyAccessInFlight = null;
+        throw err;
+      },
+    );
+  }
+  return propertyAccessInFlight;
+}
+
+// Drop the cached snapshot. Called whenever identity or privileges may have
+// changed, so a demoted user cannot keep a wider grant until the TTL expires.
+export function invalidatePropertyAccess() {
+  propertyAccessSnapshot = { primed: false, value: null, at: 0 };
+  propertyAccessInFlight = null;
+}
+
+// Backend calls that can change who the caller is, or what they may see.
+const PRIVILEGE_MUTATING_FUNCTIONS = new Set([
+  'custom_user_admin',
+  'custom_auth_login',
+  'custom_auth_logout',
+  'custom_auth_register',
+  'custom_auth_reset_password',
+  'deleteAccount',
+]);
+
+// Read the caller's property access. Returns synchronously-resolved values when
+// the snapshot is usable, which is what keeps Dexie transaction zones alive.
+async function getUserPropertyAccess() {
+  if (propertyAccessSnapshotUsable()) return propertyAccessSnapshot.value;
+  return primePropertyAccess();
+}
+
 // ─── Create an entity proxy for a Dexie table with property isolation ───
 function createEntityProxy(tableName) {
   const table = localDb[tableName];
 
-  // Tables that have property_id and should enforce isolation
+  // Tables that carry a property_id and must be scoped to the caller's access.
+  //
+  // Membership is not cosmetic: a table missing from this set is readable and
+  // writable across every property even by code that uses the proxy correctly.
+  // The six at the end were absent until 2026-08-15 and each one leaked
+  // (probe-property-isolation.mjs §4). DailyFinancialAggregate was the worst of
+  // them, because it is the per-day revenue cache the Dashboard prefers over the
+  // raw ledgers — so the headline numbers were the least isolated data in the app.
+  //
+  // Rule for anything added to localDb.js later: if the schema line contains
+  // `property_id`, its name belongs here.
   const PROPERTY_TABLES = new Set([
     'OccupancyDay', 'SourceDay', 'GrossRevenueDay', 'PaymentDay',
     'ClerkShiftRecord', 'UploadedReport', 'Expense', 'PayrollRun', 'Staff', 'HotelMetric',
     'TransactionLine', 'AnomalyAlert', 'Room', 'RoomStay', 'HousekeepingTask',
-    'WeatherSnapshot', 'Review', 'AdjustmentRefund'
+    'WeatherSnapshot', 'Review', 'AdjustmentRefund',
+    'DailyFinancialAggregate', 'ScanResult', 'TimecardPunch', 'Reservation',
+    'RoomType', 'ChannelMap',
   ]);
+
+  // The roster itself. Property rows have no property_id column — they ARE the
+  // property — so they are scoped on their primary key instead. Without this the
+  // whole portfolio (names, codes, room counts) was listed to every account, and
+  // 18 read sites across the pages render that list.
+  //
+  // User is deliberately NOT here: a user row carries property_access, not
+  // property_id, so scoping it by property is meaningless. Who may read the user
+  // list is a permission question (`manage_users`), not a property-scope one.
+  const ROSTER_TABLES = new Set(['Property']);
 
   // Tables that are immutable append-only (audit trail integrity)
   const PROTECTED_IMMUTABLE_TABLES = new Set([
@@ -393,6 +582,10 @@ function createEntityProxy(tableName) {
   ]);
 
   const isProtectedImmutable = PROTECTED_IMMUTABLE_TABLES.has(tableName);
+  const isRoster = ROSTER_TABLES.has(tableName);
+  const isScoped = PROPERTY_TABLES.has(tableName) || isRoster;
+  // The column that says which property a row belongs to.
+  const SCOPE_FIELD = isRoster ? 'id' : 'property_id';
 
   function throwIfProtected() {
     if (isProtectedImmutable) {
@@ -400,43 +593,56 @@ function createEntityProxy(tableName) {
     }
   }
 
-  // Get current user's property access from session
-  async function getUserPropertyAccess() {
-    try {
-      const user = await auth.me();
-      if (!user) return null;
-      // Owner/admin have access to all properties
-      if (user.role === 'owner' || user.role === 'admin') return 'all';
-      if (!user.property_access || user.property_access === 'all') return null;
-      if (Array.isArray(user.property_access) && user.property_access.length > 0) {
-        return user.property_access;
-      }
-      return []; // No property access
-    } catch {
-      return null;
-    }
+  // Property access is resolved by the module-scope getUserPropertyAccess(),
+  // which reads a cached snapshot. It must NOT do a network call here: these
+  // methods run inside Dexie transaction zones during imports.
+
+  /** The property ids this caller may touch. `'all'` is handled by the callers. */
+  const allowedIds = (propertyAccess) => (Array.isArray(propertyAccess) ? propertyAccess : []);
+
+  /** True when the caller may read/write rows belonging to `id`. */
+  function inScope(propertyAccess, id) {
+    if (propertyAccess === ALL_PROPERTIES) return true;
+    return allowedIds(propertyAccess).includes(id);
   }
 
-  function applyPropertyFilter(query, propertyAccess) {
-    if (propertyAccess === 'all' || propertyAccess === null) return query;
-    if (PROPERTY_TABLES.has(tableName)) {
-      if (Array.isArray(propertyAccess) && propertyAccess.length > 0) {
-        // Force intersection — never allow the raw query to broaden access
-        const effective = query.property_id?.$in
-          ? query.property_id.$in.filter(id => propertyAccess.includes(id))
-          : propertyAccess;
-        query.property_id = { $in: effective };
-      } else {
-        query.property_id = { $in: [] };
-      }
+  // Narrow a query to the caller's properties. Never widens: the returned query
+  // can only ever match a subset of what the caller asked for.
+  function applyScope(query, propertyAccess) {
+    if (propertyAccess === ALL_PROPERTIES || !isScoped) return query;
+    const allowed = allowedIds(propertyAccess);
+    const requested = query[SCOPE_FIELD];
+    let effective;
+    if (requested && Array.isArray(requested.$in)) {
+      // Intersect — never let the raw query broaden access.
+      effective = requested.$in.filter((id) => allowed.includes(id));
+    } else if (requested !== undefined && requested !== null && typeof requested !== 'object') {
+      // A single requested property. Previously this branch was overwritten with
+      // the caller's whole allowed list, so asking for a property you may not see
+      // silently returned a DIFFERENT property's rows instead of nothing.
+      effective = allowed.includes(requested) ? [requested] : [];
+    } else {
+      // No property condition, or a range/operator shape nothing currently
+      // produces: fall back to the caller's full allowance. Dropping an exotic
+      // condition can only widen the result set WITHIN that allowance, so it
+      // stays a subset of what the caller is entitled to see.
+      effective = allowed;
     }
+    query[SCOPE_FIELD] = { $in: effective };
     return query;
+  }
+
+  /** Roster rows describe the tenancy boundary, so only all-property accounts may edit them. */
+  function throwIfRosterEditDenied(propertyAccess) {
+    if (isRoster && propertyAccess !== ALL_PROPERTIES) {
+      throw new Error('Access denied: only accounts with access to all properties can change the property roster');
+    }
   }
 
   return {
     async filter(query = {}, sortField, limit) {
       const propertyAccess = await getUserPropertyAccess();
-      const filteredQuery = PROPERTY_TABLES.has(tableName) ? applyPropertyFilter({ ...query }, propertyAccess) : query;
+      const filteredQuery = isScoped ? applyScope({ ...query }, propertyAccess) : query;
       const plan = planQuery(table, filteredQuery);
       let rows = plan ? await plan.collection.toArray() : await table.toArray();
       rows = rows.filter(r => matchesFilter(r, filteredQuery));
@@ -447,7 +653,7 @@ function createEntityProxy(tableName) {
 
     async paginate(query = {}, sortField, limit = 50, cursor = null) {
       const propertyAccess = await getUserPropertyAccess();
-      const filteredQuery = PROPERTY_TABLES.has(tableName) ? applyPropertyFilter({ ...query }, propertyAccess) : query;
+      const filteredQuery = isScoped ? applyScope({ ...query }, propertyAccess) : query;
       const plan = planQuery(table, filteredQuery);
       let rows = plan ? await plan.collection.toArray() : await table.toArray();
       rows = rows.filter(r => matchesFilter(r, filteredQuery));
@@ -473,7 +679,7 @@ function createEntityProxy(tableName) {
 
     async list(sortField, limit) {
       const propertyAccess = await getUserPropertyAccess();
-      const query = PROPERTY_TABLES.has(tableName) ? applyPropertyFilter({}, propertyAccess) : {};
+      const query = isScoped ? applyScope({}, propertyAccess) : {};
       const plan = planQuery(table, query);
       let rows = plan ? await plan.collection.toArray() : await table.toArray();
       rows = rows.filter(r => matchesFilter(r, query));
@@ -485,32 +691,29 @@ function createEntityProxy(tableName) {
     async get(id) {
       const record = await table.get(Number(id) || id);
       if (!record) return null;
-      // Check property access for property-scoped tables
-      if (PROPERTY_TABLES.has(tableName)) {
-        const propertyAccess = await getUserPropertyAccess();
-        if (propertyAccess !== 'all' && propertyAccess !== null) {
-          if (Array.isArray(propertyAccess) && !propertyAccess.includes(record.property_id)) {
-            return null; // Access denied
-          }
-        }
-      }
+      if (!isScoped) return record;
+      const propertyAccess = await getUserPropertyAccess();
+      if (!inScope(propertyAccess, record[SCOPE_FIELD])) return null; // Access denied
       return record;
     },
 
     async create(data) {
       const propertyAccess = await getUserPropertyAccess();
-      if (PROPERTY_TABLES.has(tableName)) {
-        if (propertyAccess !== 'all' && propertyAccess !== null) {
-          if (Array.isArray(propertyAccess)) {
-            // If user has specific property access, ensure they're creating for one of their properties
-            if (data.property_id && !propertyAccess.includes(data.property_id)) {
-              throw new Error('Access denied: Cannot create records for unauthorized property');
-            }
-            // If no property_id specified but user has only one property, use that
-            if (!data.property_id && propertyAccess.length === 1) {
-              data.property_id = propertyAccess[0];
-            }
+      if (isScoped && propertyAccess !== ALL_PROPERTIES) {
+        throwIfRosterEditDenied(propertyAccess);
+        const allowed = allowedIds(propertyAccess);
+        if (data.property_id) {
+          if (!allowed.includes(data.property_id)) {
+            throw new Error('Access denied: Cannot create records for unauthorized property');
           }
+        } else if (allowed.length === 1) {
+          // Unambiguous: a single-property account gets its own property.
+          data.property_id = allowed[0];
+        } else {
+          // Writing an unscoped row into a scoped table used to be allowed. The
+          // row then belonged to no property, which means every scoped read
+          // misses it — data that is silently invisible instead of loudly refused.
+          throw new Error('Access denied: a property must be specified for this record');
         }
       }
       const now = new Date().toISOString();
@@ -525,23 +728,17 @@ function createEntityProxy(tableName) {
     async update(id, data) {
       throwIfProtected();
       const numId = Number(id) || id;
-      // Check access before updating
-      if (PROPERTY_TABLES.has(tableName)) {
+      if (isScoped) {
         const record = await table.get(numId);
         if (!record) throw new Error('Record not found');
         const propertyAccess = await getUserPropertyAccess();
-        if (propertyAccess !== 'all' && propertyAccess !== null) {
-          if (Array.isArray(propertyAccess) && !propertyAccess.includes(record.property_id)) {
-            throw new Error('Access denied: Cannot update records for unauthorized property');
-          }
+        throwIfRosterEditDenied(propertyAccess);
+        if (!inScope(propertyAccess, record[SCOPE_FIELD])) {
+          throw new Error('Access denied: Cannot update records for unauthorized property');
         }
-        // Prevent changing property_id to unauthorized property
-        if (data.property_id) {
-          if (propertyAccess !== 'all' && propertyAccess !== null) {
-            if (Array.isArray(propertyAccess) && !propertyAccess.includes(data.property_id)) {
-              throw new Error('Access denied: Cannot move record to unauthorized property');
-            }
-          }
+        // Prevent moving a row to a property the caller may not touch.
+        if (data.property_id && !inScope(propertyAccess, data.property_id)) {
+          throw new Error('Access denied: Cannot move record to unauthorized property');
         }
       }
       const now = new Date().toISOString();
@@ -555,15 +752,13 @@ function createEntityProxy(tableName) {
     async delete(id) {
       throwIfProtected();
       const numId = Number(id) || id;
-      // Check access before deleting
-      if (PROPERTY_TABLES.has(tableName)) {
+      if (isScoped) {
         const record = await table.get(numId);
         if (!record) throw new Error('Record not found');
         const propertyAccess = await getUserPropertyAccess();
-        if (propertyAccess !== 'all' && propertyAccess !== null) {
-          if (Array.isArray(propertyAccess) && !propertyAccess.includes(record.property_id)) {
-            throw new Error('Access denied: Cannot delete records for unauthorized property');
-          }
+        throwIfRosterEditDenied(propertyAccess);
+        if (!inScope(propertyAccess, record[SCOPE_FIELD])) {
+          throw new Error('Access denied: Cannot delete records for unauthorized property');
         }
       }
       const deletedRecord = await table.get(numId);
@@ -588,17 +783,18 @@ function createEntityProxy(tableName) {
     async bulkCreate(dataArray) {
       throwIfProtected();
       const propertyAccess = await getUserPropertyAccess();
-      if (PROPERTY_TABLES.has(tableName)) {
-        if (propertyAccess !== 'all' && propertyAccess !== null) {
-          if (Array.isArray(propertyAccess)) {
-            for (const data of dataArray) {
-              if (data.property_id && !propertyAccess.includes(data.property_id)) {
-                throw new Error('Access denied: Cannot create records for unauthorized property');
-              }
-              if (!data.property_id && propertyAccess.length === 1) {
-                data.property_id = propertyAccess[0];
-              }
+      if (isScoped && propertyAccess !== ALL_PROPERTIES) {
+        throwIfRosterEditDenied(propertyAccess);
+        const allowed = allowedIds(propertyAccess);
+        for (const data of dataArray) {
+          if (data.property_id) {
+            if (!allowed.includes(data.property_id)) {
+              throw new Error('Access denied: Cannot create records for unauthorized property');
             }
+          } else if (allowed.length === 1) {
+            data.property_id = allowed[0];
+          } else {
+            throw new Error('Access denied: a property must be specified for this record');
           }
         }
       }
@@ -617,15 +813,12 @@ function createEntityProxy(tableName) {
     async bulkDelete(ids) {
       throwIfProtected();
       const propertyAccess = await getUserPropertyAccess();
-      if (PROPERTY_TABLES.has(tableName)) {
-        if (propertyAccess !== 'all' && propertyAccess !== null) {
-          if (Array.isArray(propertyAccess)) {
-            for (const id of ids) {
-              const record = await table.get(Number(id) || id);
-              if (record && !propertyAccess.includes(record.property_id)) {
-                throw new Error('Access denied: Cannot delete records for unauthorized property');
-              }
-            }
+      if (isScoped && propertyAccess !== ALL_PROPERTIES) {
+        throwIfRosterEditDenied(propertyAccess);
+        for (const id of ids) {
+          const record = await table.get(Number(id) || id);
+          if (record && !inScope(propertyAccess, record[SCOPE_FIELD])) {
+            throw new Error('Access denied: Cannot delete records for unauthorized property');
           }
         }
       }
@@ -654,7 +847,7 @@ function createEntityProxy(tableName) {
       throwIfProtected();
       // Only allow clear for users with full access (owner/admin)
       const propertyAccess = await getUserPropertyAccess();
-      if (propertyAccess !== 'all') {
+      if (propertyAccess !== ALL_PROPERTIES) {
         throw new Error('Access denied: Only owner/admin can clear all data');
       }
       await table.clear();
@@ -663,7 +856,7 @@ function createEntityProxy(tableName) {
 
     async count(query = {}) {
       const propertyAccess = await getUserPropertyAccess();
-      const filteredQuery = PROPERTY_TABLES.has(tableName) ? applyPropertyFilter({ ...query }, propertyAccess) : query;
+      const filteredQuery = isScoped ? applyScope({ ...query }, propertyAccess) : query;
       const plan = planQuery(table, filteredQuery);
       let rows = plan ? await plan.collection.toArray() : await table.toArray();
       return rows.filter(r => matchesFilter(r, filteredQuery)).length;
@@ -929,10 +1122,10 @@ const audit = {
     return res.logs || [];
   },
 
-  async clear() {
-    await functions.invoke('audit_clear', {});
-    return { success: true };
-  },
+  // NOTE: there is deliberately no clear()/purge() here. The audit log is
+  // append-only — see base44/functions/audit_clear/entry.js, which now refuses
+  // every caller. Bounding retention has to be an archive-then-trim job that
+  // records the trim in the chain, not a button that empties the table.
 
   // Authoritative audit-chain verification. In production this delegates to
   // the serverless function base44/functions/audit_verify/entry.js (which
@@ -1003,18 +1196,13 @@ const auth = {
   },
   async getCurrentSession() {
     if (USE_LOCAL_AUTH) {
-      try {
-        const raw = localStorage.getItem(LOCAL_SESSION_KEY);
-        if (!raw) return null;
-        const { userId, expiresAt } = JSON.parse(raw);
-        if (new Date(expiresAt) < new Date()) {
-          localStorage.removeItem(LOCAL_SESSION_KEY);
-          return null;
-        }
-        return { userId, token: 'local' };
-      } catch {
-        return null;
-      }
+      // Reads through readLocalSessionRecord(), the single reader that matches
+      // the writer. This used to do its own localStorage.getItem(LOCAL_SESSION_KEY)
+      // and JSON.parse — but the session is written with secureStore(), which
+      // AES-GCM encrypts the value AND prefixes the key. So the plain read looked
+      // in a slot nothing ever writes and returned null for every signed-in user.
+      const session = await readLocalSessionRecord();
+      return session ? { userId: session.userId, token: 'local' } : null;
     }
     return { token: 'http-only' };
   },
@@ -1043,12 +1231,25 @@ const integrations = {
   },
   Email: {
     async SendEmail({ to, subject, body }) {
-      // Mock for local dev
-      console.log('\n================ EMAIL DISPATCH ================');
-      console.log(`To: ${to}`);
-      console.log(`Subject: ${subject}`);
-      console.log(`Body:\n${body}`);
-      console.log('================================================\n');
+      // This is a stub: there is no client-side mail transport, and there cannot
+      // be one — sending mail needs a credential, which must never reach the
+      // browser. Real mail is sent server-side by the base44 functions
+      // (custom_auth_register, custom_auth_reset_request) through
+      // asServiceRole.integrations.Core.SendEmail, so password resets and
+      // registrations are unaffected by this stub.
+      //
+      // console.warn, not console.log, for two reasons. The production build
+      // strips console.log (vite.config.js `esbuild.pure`), and this line is not
+      // a debug trace — it is the only signal that a notification did not go
+      // out. It logs the body's length rather than the body: the one caller
+      // (reportParsers.js:1262) passes anomaly detail including property names,
+      // and a shared front-desk browser console is not a place to leave that.
+      // The detection itself is durably recorded in the audit log by the caller
+      // immediately above that line, so nothing is lost but the email.
+      console.warn(
+        `[Email] Not sent — no client-side mail transport. ` +
+          `to="${to}" subject="${subject}" body=${body ? `${body.length} chars` : 'empty'}`
+      );
       return { status: 'success' };
     },
   },
@@ -1262,16 +1463,33 @@ async function findLocalUser(identifier) {
   );
 }
 
-async function getLocalSessionUser() {
+// The persisted local session record, or null if there is none or it expired.
+// Deliberately the ONLY reader of LOCAL_SESSION_KEY: both writers go through
+// secureStore(), so anything that reads the slot has to go through
+// secureRetrieve() to see it. auth.getCurrentSession() kept a second, plain-
+// localStorage copy of this logic, which silently returned null forever.
+async function readLocalSessionRecord() {
   const raw = await secureRetrieve(LOCAL_SESSION_KEY);
   if (!raw) return null;
   try {
-    const { userId, expiresAt } = JSON.parse(raw);
-    if (new Date(expiresAt) < new Date()) {
+    const record = JSON.parse(raw);
+    if (!record?.userId) return null;
+    if (new Date(record.expiresAt) < new Date()) {
       await secureStore(LOCAL_SESSION_KEY, '');
       return null;
     }
-    const user = await localDb.User.get(userId);
+    return record;
+  } catch {
+    await secureStore(LOCAL_SESSION_KEY, '');
+    return null;
+  }
+}
+
+async function getLocalSessionUser() {
+  const session = await readLocalSessionRecord();
+  if (!session) return null;
+  try {
+    const user = await localDb.User.get(session.userId);
     if (!user || !user.is_active || user.is_locked) return null;
     return publicUserLocal(user);
   } catch {
@@ -1354,6 +1572,14 @@ async function handleLocalUserAdmin(params = {}) {
     }
     return { user: publicUserLocal({ ...user, ...updates }) };
   }
+  // NOTE ON DIVERGENCE: the branches below do not implement the step-up password,
+  // the TOTP replay guard, the verification throttle or the session revocation
+  // that custom_user_admin/entry.js enforces. They are reachable only when
+  // VITE_USE_LOCAL_AUTH=true (.env.development), which is off in every deployed
+  // build — production always takes the `!USE_LOCAL_AUTH` early return above and
+  // talks to the real function. A `currentPassword` sent by the UI is accepted and
+  // ignored here rather than checked, so MFA flows stay usable offline; do not
+  // read these as the security model.
   if (action === 'enable_mfa') {
     const { id } = params;
     const secret = otplib.generateSecret();
@@ -1413,9 +1639,11 @@ async function handleLocalAuditList({ filter = /** @type {any} */ ({}), limit = 
 }
 
 async function handleLocalAuditClear() {
-  await localDb.AuditLog.clear();
-  publishChange('AuditLog', 'clear', {});
-  return { success: true };
+  // Append-only, in dev too. A local "clear" that works while production
+  // refuses would train the operator to expect a capability that does not
+  // exist, and would hide chain breakage during development — the exact place
+  // it is cheapest to notice. Mirrors base44/functions/audit_clear/entry.js.
+  throw new Error('The audit log is append-only. Clearing it is not permitted.');
 }
 
 // Local-dev fallback for the server-side audit-chain verifier. In local-dev
@@ -1525,6 +1753,19 @@ async function handleLocalAuthLogin({ email, password, mfa_token: _mfa_token, re
     if (!result || !result.valid) throw new Error('Invalid MFA code');
   }
 
+  // Launch policy: only accounts entitled to every property may sign in
+  // (see src/lib/launchPolicy.js for why, and base44/functions/custom_auth_login
+  // for the authoritative server-side copy of this rule).
+  //
+  // Checked HERE — after the password and MFA — on purpose. Refusing earlier
+  // would answer "does this account exist, and is it restricted?" to anyone who
+  // can reach the login form, which is an account-enumeration oracle. Past this
+  // point the caller has already proven they hold the credentials, so naming the
+  // reason tells them nothing they did not already know.
+  if (!hasAllPropertyAccess(user)) {
+    throw allPropertyRequiredError();
+  }
+
   const expiresAt = remember
     ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
     : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -1612,19 +1853,25 @@ const USE_LOCAL_AUTH =
 // fallback inside the local-first dev path.
 async function invokeBackend(functionName, params) {
   try {
+    // Put the csrf_token cookie back in step with the X-CSRF-Token header the SDK
+    // froze at construction (see CSRF_HEADER_TOKEN). Any rotation since then left
+    // the pair mismatched, and the server compares them on every mutating call.
+    pinCsrfCookie();
     const res = await realClient.functions.invoke(functionName, params);
     if (functionName === 'deleteAccount') {
       await Promise.all(localDb.tables.map((t) => t.clear()));
       localStorage.clear();
-    } else if (functionName === 'audit_clear') {
-      await localDb.AuditLog.clear();
-      publishChange('AuditLog', 'clear', {});
     }
     return res;
   } catch (e) {
     console.error(`[realClient] failed to invoke ${functionName}:`, e);
     if (e.response && e.response.data && e.response.data.error) {
-      throw new Error(e.response.data.error);
+      const err = /** @type {Error & { code?: string }} */ (new Error(e.response.data.error));
+      // Carry the server's machine-readable code across the rewrap. Callers that
+      // must distinguish one refusal from another (see Login.jsx and
+      // src/lib/launchPolicy.js) cannot do it on the message text alone.
+      if (e.response.data.code) err.code = e.response.data.code;
+      throw err;
     }
     throw e;
   }
@@ -1632,15 +1879,27 @@ async function invokeBackend(functionName, params) {
 
 const functions = {
   async invoke(functionName, params = {}) {
+    // Drop the cached authorization snapshot before any call that can change
+    // identity or privileges. Invalidating up front (rather than on success)
+    // means a partially-applied change can never leave a wider grant cached.
+    if (PRIVILEGE_MUTATING_FUNCTIONS.has(functionName)) invalidatePropertyAccess();
     if (functionName === 'aiAssistant' || functionName === 'query_database') {
       const start = Date.now();
       try {
+        // Resolve the AI's property scope from the SESSION, not from the caller.
+        // AIAssistant.jsx used to compute `allowedPropertyIds` itself from the
+        // user object and send it along — an authorization decision made by the
+        // thing being authorized, and one that resolved to "unrestricted" when
+        // there was no user at all. The assistant summarises revenue across
+        // whatever it is given, so that hint was a portfolio-wide read for
+        // anyone who could edit a request.
+        const access = await getUserPropertyAccess();
         const data = await answerQuestion({
           question: params.question || '',
           propertyId: params.propertyId,
           from: params.dateFrom || (params.from || ""),
           to: params.dateTo || (params.to || ""),
-          allowedPropertyIds: params.allowedPropertyIds,
+          allowedPropertyIds: access,
         });
         return { data };
       } catch (e) {
@@ -1856,12 +2115,19 @@ const users = {
     return functions.invoke('custom_user_admin', { action: 'change_own_password', id: user && user.id, currentPassword, newPassword });
   },
 
-  async enableMfa(actor, id) {
-    return functions.invoke('custom_user_admin', { action: 'enable_mfa', id });
+  // currentPassword is the CALLER's own password, and the server demands it
+  // whenever this call would replace a second factor that is already in use (see
+  // custom_user_admin#enable_mfa). A first-time enrolment does not need it, so the
+  // argument is optional here and the UI only prompts when it has to.
+  async enableMfa(actor, id, currentPassword) {
+    return functions.invoke('custom_user_admin', { action: 'enable_mfa', id, currentPassword });
   },
 
-  async disableMfa(actor, id) {
-    return functions.invoke('custom_user_admin', { action: 'disable_mfa', id });
+  // currentPassword is the CALLER's own password. Always required: removing a
+  // second factor with nothing but a session cookie would turn a stolen cookie
+  // into permanent password-only access to the account.
+  async disableMfa(actor, id, currentPassword) {
+    return functions.invoke('custom_user_admin', { action: 'disable_mfa', id, currentPassword });
   },
 
   async verifyMfa(actor, id, token) {

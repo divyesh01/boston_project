@@ -10,13 +10,17 @@ import { detectClerkAnomalies } from "@/lib/anomalyDetector";
 import ClerkAuditMatrix from "@/components/dashboard/ClerkAuditMatrix";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { signOffShiftAnomaly } from "@/lib/anomalySignoff";
+import { ErrorState } from "@/components/ui/status";
 import { db } from "@/api/base44Client";
 
 export default function Employees() {
   const { dateRange, property, properties, employee } = useGlobalFilters();
-  const { data: records = [], isLoading } = useClerkRecords(dateRange, property);
-  const { data: adjRef = [], isLoading: isLoadingAdj } = useAdjustmentsRefunds(dateRange, property);
-  const { data: allAnomalies = [] } = useClerkAnomalies(dateRange, property);
+  const recordsQ = useClerkRecords(dateRange, property);
+  const adjRefQ = useAdjustmentsRefunds(dateRange, property);
+  const anomaliesQ = useClerkAnomalies(dateRange, property);
+  const { data: records = [], isLoading } = recordsQ;
+  const { data: adjRef = [], isLoading: isLoadingAdj } = adjRefQ;
+  const { data: allAnomalies = [] } = anomaliesQ;
   const [selected, setSelected] = useState(null);
   const [clerkFilter, setClerkFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
@@ -28,23 +32,36 @@ export default function Employees() {
 
   // Manager sign-off state for clerk shift anomalies.
   const [mgr, setMgr] = useState(null);
+  const [mgrError, setMgrError] = useState(null);
   const [signOffNotes, setSignOffNotes] = useState({});
   const [signedClerks, setSignedClerks] = useState({});
   const [notice, setNotice] = useState(null);
   useEffect(() => {
-    db.auth.me().then((u) => setMgr(u)).catch(() => setMgr(null));
+    db.auth.me().then((u) => { setMgr(u); setMgrError(null); }).catch((e) => { setMgr(null); setMgrError(e?.message || String(e)); });
   }, []);
 
   const handleSignOff = async (clerk) => {
     const notes = signOffNotes[clerk.clerk] || "";
-    const user = mgr || {};
+    // A sign-off is an attribution: it writes reviewed_by_id / reviewed_by_name
+    // onto the shift record and an ANOMALY_SIGN_OFF audit row. This used to fall
+    // back to id "manager" and name "Manager" whenever db.auth.me() had failed,
+    // which produced a permanent audit entry naming nobody — worse than no
+    // sign-off at all, because it reads as a completed review. Refuse instead.
+    if (!mgr?.id) {
+      setNotice({
+        type: "error",
+        text: `Nothing was signed off. Your account could not be identified${mgrError ? ` (${mgrError})` : ""}, and a sign-off has to name the manager who approved it. Refresh the page or sign in again, then try once more.`,
+      });
+      return;
+    }
+    const user = mgr;
     try {
       for (const rec of clerk.records) {
         if (!rec.id) continue;
         await signOffShiftAnomaly({
           shiftId: rec.id,
-          managerUserId: user.id || "manager",
-          managerName: user.username || user.email || "Manager",
+          managerUserId: user.id,
+          managerName: user.username || user.email || user.full_name || user.id,
           resolutionNotes: notes,
           propertyId: rec.property_id || property || null,
         });
@@ -206,6 +223,26 @@ export default function Employees() {
   const periodLabel = `${dateRange.from || "—"} → ${dateRange.to || "—"}`;
 
   if (isLoading) return <p className="text-slate-500">Loading clerk data…</p>;
+
+  // Checked before the "No clerk data available" card below, which is what a
+  // failed read used to print: 0 clerks, 0 records, $0.00 net payments, and an
+  // instruction to import a report the operator has already imported.
+  if (recordsQ.isError || adjRefQ.isError || anomaliesQ.isError) {
+    return (
+      <div className="space-y-6">
+        <header>
+          <p className="text-[11px] uppercase tracking-[0.3em] text-[#00D4FF]">Module 6</p>
+          <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Clerk Audit</h1>
+        </header>
+        <ErrorState
+          title="Could not load the clerk audit"
+          description="An empty roster is not the same as no staff — this read failed. Nobody listed here has been cleared, no shift has been shown to balance, and no cash shortage or refund anomaly can be ruled out from this screen."
+          error={recordsQ.error || adjRefQ.error || anomaliesQ.error}
+          onRetry={() => { recordsQ.refetch(); adjRefQ.refetch(); anomaliesQ.refetch(); }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

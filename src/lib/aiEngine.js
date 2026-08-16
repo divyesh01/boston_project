@@ -1,6 +1,7 @@
 import localDb from "@/api/localDb";
-import { formatNumber } from "@/lib/decimal";
+import { formatNumber, sumCents, fromCents } from "@/lib/decimal";
 import { refundTotal } from "@/lib/paymentNorm";
+import { filterCommittedPay } from "@/lib/payrollCalc";
 import { getDailyAggregates, buildSyntheticRows } from "@/lib/dailyAggregates";
 
 const MONTH_NAMES = [
@@ -14,6 +15,43 @@ const STOPWORDS = new Set(["the", "and", "for", "inn", "hotel", "suites", "prope
 
 const pad = (n) => String(n).padStart(2, "0");
 const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+// ─── Property scope ─────────────────────────────────────────────────────────
+// `allowedPropertyIds` is resolved from the session by base44Client's
+// functions.invoke and passed down through every intent handler. Exactly three
+// values are meaningful:
+//
+//   'all'      -> unrestricted (owner/admin, or property_access 'all')
+//   [ids...]   -> exactly those properties
+//   anything   -> NOTHING. Deny.
+//
+// That last line is the whole point. Every one of these call sites used to read
+// `Array.isArray(allowed) ? filter : allProps`, so null/undefined/'' — a caller
+// that forgot the argument, or a session that failed to resolve — meant "no
+// filter" and the assistant happily summarised the entire portfolio. The AI is
+// the easiest place in the app to ask a broad question, which made it the worst
+// place to fail open.
+const ALL_PROPERTIES = "all";
+
+/** Narrow a list of Property rows to the caller's scope. */
+function scopeProperties(allProps, allowedPropertyIds) {
+  if (allowedPropertyIds === ALL_PROPERTIES) return allProps;
+  if (Array.isArray(allowedPropertyIds)) {
+    const allowed = new Set(allowedPropertyIds.map(String));
+    return allProps.filter((p) => allowed.has(String(p.id)));
+  }
+  return [];
+}
+
+/**
+ * A Set of permitted property_id strings, or null when unrestricted.
+ * Callers must treat null as "keep everything" and an empty Set as "keep none".
+ */
+function allowedIdSet(allowedPropertyIds) {
+  if (allowedPropertyIds === ALL_PROPERTIES) return null;
+  if (Array.isArray(allowedPropertyIds)) return new Set(allowedPropertyIds.map(String));
+  return new Set();
+}
 
 function money(v, digits = 0) {
   const n = Number(v) || 0;
@@ -276,10 +314,8 @@ function propertyTokens(p) {
 
 async function resolveProperty(question, defaultFilter, allowedPropertyIds = null) {
   const allProps = await localDb.Property.toArray();
-  const restricted = Array.isArray(allowedPropertyIds);
-  const props = restricted
-    ? allProps.filter((p) => allowedPropertyIds.includes(String(p.id)))
-    : allProps;
+  const restricted = allowedPropertyIds !== ALL_PROPERTIES;
+  const props = scopeProperties(allProps, allowedPropertyIds);
   const q = String(question).toLowerCase();
 
   const scopeAll = () => ({
@@ -382,7 +418,7 @@ async function latestDate(allowedPropertyIds = null) {
   const rows = await localDb.DailyFinancialAggregate.toArray();
   if (rows.length === 0) {
     const rawRows = await localDb.OccupancyDay.toArray();
-    const allowed = Array.isArray(allowedPropertyIds) ? new Set(allowedPropertyIds.map(String)) : null;
+    const allowed = allowedIdSet(allowedPropertyIds);
     let max = "";
     rawRows.forEach((r) => {
       if (allowed && !allowed.has(String(r.property_id || ""))) return;
@@ -392,7 +428,7 @@ async function latestDate(allowedPropertyIds = null) {
     return max;
   }
   
-  const allowed = Array.isArray(allowedPropertyIds) ? new Set(allowedPropertyIds.map(String)) : null;
+  const allowed = allowedIdSet(allowedPropertyIds);
   let max = "";
   rows.forEach((r) => {
     if (allowed && !allowed.has(String(r.property_id || ""))) return;
@@ -455,10 +491,28 @@ function channelTotals(rows) {
   return [...map.values()].filter((c) => c.gross > 0 || c.stays > 0).sort((a, b) => b.gross - a.gross);
 }
 
+// Cost side of every profit answer the assistant gives. Callers date-scope the
+// rows before they get here (load(..., range.from, range.to, "pay_period_start")).
+//
+// Only approved/paid runs are committed money — see COMMITTED_PAYROLL_STATUSES in
+// src/lib/payrollCalc.js. This used to sum every run, so a draft entry made the
+// assistant quote a payroll figure and a net profit that no other page agreed
+// with. `payrollCount` is returned so the "(N records)" caption cannot describe a
+// different set of rows than the total beside it.
+//
+// Integer cents: these figures are rendered with money().
 function costTotals(expenses, payroll) {
-  const payrollTotal = sum(payroll || [], "total_pay");
-  const operating = (expenses || []).filter((e) => e.category !== "payroll").reduce((a, e) => a + (Number(e.amount) || 0), 0);
-  return { payrollTotal, operating, total: payrollTotal + operating };
+  const committed = filterCommittedPay(payroll || []);
+  const payrollCents = sumCents(committed.map((p) => p.total_pay));
+  const operatingCents = sumCents(
+    (expenses || []).filter((e) => e.category !== "payroll").map((e) => e.amount),
+  );
+  return {
+    payrollTotal: fromCents(payrollCents),
+    operating: fromCents(operatingCents),
+    total: fromCents(payrollCents + operatingCents),
+    payrollCount: committed.length,
+  };
 }
 
 function clerkVariance(records = []) {
@@ -590,7 +644,7 @@ async function intentExpenses({ prop, range }) {
   const lines = [
     `**Expenses — ${prop.label} · ${fmtRange(range)}**`,
     `- Total expenses: **${money(costs.total)}**`,
-    `- Payroll: ${money(costs.payrollTotal)} (${payroll.length} records)`,
+    `- Payroll: ${money(costs.payrollTotal)} (${costs.payrollCount} committed of ${payroll.length} records)`,
     `- Operating expenses: ${money(costs.operating)} (${expenses.length} entries)`,
   ];
   if (sorted.length) lines.push(`- Top categories: ${sorted.map(([k, v]) => `${k} ${money(v)}`).join(", ")}`);
@@ -688,9 +742,7 @@ async function intentBestDay({ prop, range, question }) {
 
 async function intentCompareProps({ q, range, allowedPropertyIds = null }) {
   const allProps = await localDb.Property.toArray();
-  const props = Array.isArray(allowedPropertyIds)
-    ? allProps.filter((p) => allowedPropertyIds.includes(String(p.id)))
-    : allProps;
+  const props = scopeProperties(allProps, allowedPropertyIds);
   const seen = new Map();
   const ql = String(q).toLowerCase();
   const add = (p, score) => {

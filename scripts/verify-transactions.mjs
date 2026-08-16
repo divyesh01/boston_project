@@ -67,6 +67,10 @@ const {
 const { filterByMonths } = await import("@/lib/useHotelData");
 const { LEDGER_SIDE_CHARGE, LEDGER_SIDE_PAYMENT } = await import("@/lib/transactionNorm");
 const { verifyAuditChain } = await import("@/lib/securityUtils");
+// db.entities fails closed for an unauthenticated caller (blocker B3), so the
+// suite has to sign in before it reads or writes a single row.
+const { signInAsAllPropertyOwner } = await import("./_harness-auth.mjs");
+await signInAsAllPropertyOwner();
 
 const PROPERTY_ID = "prop-test-1";
 

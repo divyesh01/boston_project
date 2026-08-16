@@ -5,6 +5,7 @@ import { ResponsiveContainer, LineChart, Line, Tooltip } from "recharts";
 import Card from "@/components/ui-exec/Card";
 import { usePricingForecast } from "@/lib/usePricing";
 import { useRealtimeInvalidation } from "@/lib/realtime";
+import { ErrorState } from "@/components/ui/status";
 import { money2 } from "@/lib/hotel";
 
 // Compact dynamic-pricing widget for the Executive Dashboard.
@@ -14,7 +15,7 @@ import { money2 } from "@/lib/hotel";
 // channel push live on the /pricing page.
 export default function PricingPanel() {
   useRealtimeInvalidation(["rooms", "reservations", "weather"]);
-  const { forecast, config, enabled } = usePricingForecast(14);
+  const { forecast, config, enabled, isError, error, refetch } = usePricingForecast(14);
 
   const today = forecast[0] || null;
   const baseAdr = today
@@ -56,6 +57,17 @@ export default function PricingPanel() {
           </Link>{" "}
           to auto-adjust rates from demand.
         </p>
+      ) : isError ? (
+        // Checked before `today`, because a failed read still yields a forecast:
+        // buildPricingForecast() answers empty inputs with base rates and the
+        // default occupancy assumption, so this panel used to print a confident
+        // "Today's Rate" and a 7-day revenue uplift computed from no reservations.
+        <ErrorState
+          title="Could not load the demand signals"
+          description="Rates, occupancy and the projected uplift are all computed from the room register, the reservation book and cached weather, and at least one of those reads failed. The numbers this panel would show are the engine's defaults, not your demand."
+          error={error}
+          onRetry={refetch}
+        />
       ) : today ? (
         <div>
           <div className="grid gap-3 sm:grid-cols-4">

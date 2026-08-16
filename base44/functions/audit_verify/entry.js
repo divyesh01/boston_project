@@ -13,13 +13,18 @@ import { secrets } from "base44:runtime";
 // exactly the threat model the client-side `verifyAuditChain()` cannot catch
 // (it reads from local IndexedDB, which may still hold the pre-tamper copy).
 //
-// CANONICAL PAYLOAD — must stay FIELD-FOR-FIELD identical to the writer
-// (base44/functions/audit_log/entry.js). If the writer adds/removes/renames a
-// signed field, update the canonical object below in lockstep, or this
-// verifier will misflag every healthy row as tampered.
+// CANONICAL PAYLOAD — must stay FIELD-FOR-FIELD identical to BOTH writers
+// (base44/functions/audit_log/entry.js for client-originated events, and
+// base44/functions/custom_user_admin/entry.js#writeAudit for privileged
+// server-side events). If a writer adds/removes/renames a signed field, update
+// the canonical object below in lockstep, or this verifier will misflag every
+// healthy row as tampered. The base44 host offers no way to share a module
+// between functions, so scripts/probe-audit-chain.mjs enforces the lockstep.
 //
 // Returns:
 //   { valid: true,  count,  source: "server" }              when intact
+//   { valid: false, reason: "chain_secret_missing", error,
+//     source: "server" }                                     when unconfigured
 //   { valid: false, tamperedAt, rowId, index, expected, actual,
 //     reason: "hash_mismatch",   source: "server" }          when a row's own hash was changed
 //   { valid: false, brokenAt,   rowId, index,
@@ -58,14 +63,34 @@ export default async function (req) {
       return Response.json({ error: "Forbidden: Only owners and admins can verify the audit chain" }, { status: 403 });
     }
 
+    // ─── The secret is required to verify anything ───
+    // FAIL CLOSED, and check BEFORE the empty-chain shortcut below. This used to
+    // fall back to a hard-coded default that is published in this repository, so
+    // an unconfigured deployment answered "chain verified" over rows whose
+    // hashes anyone holding this source could recompute. "Cannot verify" is a
+    // legitimate verdict and is returned as one — status 200 with valid:false,
+    // exactly like the tamper verdicts below, so the client renders the reason
+    // instead of treating it as a transport error and silently downgrading to
+    // the weaker client-side check.
+    const chainSecret = secrets.get("AUDIT_CHAIN_SECRET");
+    if (!chainSecret) {
+      console.error("[audit_verify] AUDIT_CHAIN_SECRET is not configured — cannot verify the audit chain");
+      return Response.json({
+        valid: false,
+        reason: "chain_secret_missing",
+        error: "Audit chain secret is not configured, so the audit trail cannot be verified. Set AUDIT_CHAIN_SECRET on this deployment.",
+        source: "server",
+      });
+    }
+
     // ─── Load the full chain in ascending created_date order ───
     // Use a large page size so we verify the entire chain, not just the most
-    // recent rows. created_date is the index audit_log/entry.js chains on.
+    // recent rows. created_date is the index audit_log/entry.js chains on, and
+    // both writers keep it strictly increasing so this ordering matches the
+    // order the rows were linked in.
     const PAGE = 100000;
     const rows = await base44.asServiceRole.entities.AuditLog.filter({}, "created_date", PAGE, 0);
 
-    // ─── Verify ───
-    const chainSecret = secrets.get("AUDIT_CHAIN_SECRET") || "insecure-dev-audit-secret-change-me";
     if (rows.length === 0) {
       return Response.json({ valid: true, count: 0, source: "server" });
     }
@@ -74,12 +99,14 @@ export default async function (req) {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
 
-      // Rebuild the EXACT canonical payload that audit_log/entry.js hashed.
-      // Any drift here would make every healthy row look tampered — so this
-      // object MUST stay field-for-field identical to the writer. The writer
-      // does NOT include property_name/username/ip_address/device in the
-      // canonical payload (they're written to the row but not signed), so we
-      // don't include them here either.
+      // Rebuild the EXACT canonical payload the writers hashed. Any drift here
+      // would make every healthy row look tampered — so this object MUST stay
+      // field-for-field identical to BOTH writers (audit_log/entry.js and
+      // custom_user_admin/entry.js#writeAudit). The writers do NOT include
+      // property_name/username/ip_address/device in the canonical payload
+      // (they're written to the row but not signed), so we don't include them
+      // here either. scripts/probe-audit-chain.mjs asserts the copies match.
+      // AUDIT_CANONICAL_V1 = user_id,action,performed_by_id,performed_by,property_id,result,detail,created_date,previous_hash
       const canonical = JSON.stringify({
         user_id: row.user_id,
         action: row.action,

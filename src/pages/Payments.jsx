@@ -5,6 +5,7 @@ import KpiCard from "@/components/ui-exec/KpiCard";
 import UniversalChart from "@/components/charts/UniversalChart";
 import ChartToolbar from "@/components/charts/ChartToolbar";
 import TaxConfigModal from "@/components/TaxConfigModal";
+import { ErrorState } from "@/components/ui/status";
 import { usePaymentData, useOccupancy, useClerkRecords, useSources } from "@/lib/useHotelData";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { money, money2, sum, inRange, C } from "@/lib/hotel";
@@ -15,7 +16,7 @@ import { exportReconciliationToCsv } from "@/lib/reconciliationExport";
 
 export default function Payments() {
   const { dateRange, property, properties, paymentType, months } = useGlobalFilters();
-  const { data: payRecords = [], isLoading, refetch } = usePaymentData(dateRange, property, months);
+  const { data: payRecords = [], isLoading, isError, error, refetch } = usePaymentData(dateRange, property, months);
   const { data: occ = [] } = useOccupancy(dateRange, property, months);
   const { data: clerk = [] } = useClerkRecords(dateRange, property);
   const { data: sourceRows = [] } = useSources(dateRange, property, months);
@@ -236,6 +237,20 @@ export default function Payments() {
   const totalTaxCollected = taxCalculations.reduce((a, c) => a + c.tax, 0);
 
   if (isLoading) return <p className="text-slate-500">Loading payment data…</p>;
+
+  // A failed read used to fall through to the dashboard below, which sums an empty
+  // array and prints $0.00 collected and $0.00 tax. Those are real-looking figures for
+  // a day that simply could not be read, so the page must stop here instead.
+  if (isError) {
+    return (
+      <ErrorState
+        title="Could not load payment data"
+        description="Payment totals and tax figures are not shown because the read failed — they are not zero."
+        error={error}
+        onRetry={refetch}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">

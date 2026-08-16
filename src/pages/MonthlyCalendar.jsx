@@ -10,13 +10,16 @@ import { useGlobalFilters, MONTHS_LONG } from "@/lib/useGlobalFilters";
 import { Link } from "react-router-dom";
 import { money, money2, pct, num, inRange, C, occupancyStats, commissionFor } from "@/lib/hotel";
 import { getRevenueThresholds, getRevenueColor, getRevenueGroup, getRevenueGroupLabel } from "@/lib/revenueThresholds";
+import { ErrorState } from "@/components/ui/status";
 
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function MonthlyCalendar() {
   const { dateRange, property, properties, month, year, months, period } = useGlobalFilters();
-  const { data: occ = [] } = useOccupancy(dateRange, property, months);
-  const { data: sources = [] } = useSources(dateRange, property, months);
+  const occQ = useOccupancy(dateRange, property, months);
+  const sourcesQ = useSources(dateRange, property, months);
+  const { data: occ = [] } = occQ;
+  const { data: sources = [] } = sourcesQ;
   const [selectedDay, setSelectedDay] = useState(null);
   // Read the configured thresholds so the legend cannot drift from the colours.
   const revThresholds = getRevenueThresholds();
@@ -161,6 +164,18 @@ export default function MonthlyCalendar() {
           Visualize daily performance patterns, channel dominance, and yield rhythms for {periodLabel}.
         </p>
       </header>
+
+      {/* Without this, a failed read painted every night "No Data", showed $0.00 KPIs,
+          and the amber notice below told the operator to go and import reports they
+          had already imported. */}
+      {(occQ.isError || sourcesQ.isError) && (
+        <ErrorState
+          title="Could not load the month"
+          description="The KPIs and calendar below would show $0.00 and mark every night 'No Data' — not because nothing was imported, but because this read failed. Re-importing will not fix it."
+          error={occQ.error || sourcesQ.error}
+          onRetry={() => { occQ.refetch(); sourcesQ.refetch(); }}
+        />
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <KpiCard label={isMultiMonth ? "Total Period Revenue" : "Total Monthly Revenue"} value={money(kpis.revenue)} sub={`${kpis.days} days with data`} accent={C.purple} icon={DollarSign} />

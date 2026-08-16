@@ -7,7 +7,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
-import { useAuth } from "@/lib/AuthContext";
 import { getDailyAggregates, buildSyntheticRows } from "@/lib/dailyAggregates";
 
 const SUGGESTIONS = [
@@ -25,7 +24,6 @@ const SUGGESTIONS = [
 
 export default function AIAssistant() {
   const { property, dateRange } = useGlobalFilters();
-  const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -63,21 +61,18 @@ export default function AIAssistant() {
     setLoading(true);
     try {
       const propertyId = Array.isArray(property) ? property : (property === "all" ? "all" : property);
-      // Scope AI to the properties this user is permitted to access.
-      // owner/admin or property_access 'all' => unrestricted (null); otherwise only their property_access ids.
-      const isRoot = user && (user.role === "owner" || user.role === "admin");
-      const allowedPropertyIds =
-        !user || isRoot || user.property_access === "all"
-          ? null
-          : Array.isArray(user.property_access)
-          ? user.property_access
-          : [];
-          
+      // No `allowedPropertyIds` computed here any more. This component used to
+      // derive the AI's property scope from the `user` object and send it with
+      // the request — the thing being authorized deciding its own authorization,
+      // and it resolved to "unrestricted" whenever `user` was null. The scope is
+      // now resolved from the session inside base44Client.functions.invoke, and
+      // getDailyAggregates clamps itself through db.entities.
+
       // Pre-aggregate stats locally to avoid lag in the AI Assistant backend
       let synthetic = {};
       try {
-        const aggs = await getDailyAggregates({ 
-          propertyId: propertyId === "all" ? (allowedPropertyIds || "all") : propertyId,
+        const aggs = await getDailyAggregates({
+          propertyId,
           from: dateRange.from || "",
           to: dateRange.to || ""
         });
@@ -93,7 +88,6 @@ export default function AIAssistant() {
         propertyId,
         dateFrom: dateRange.from || "",
         dateTo: dateRange.to || "",
-        allowedPropertyIds,
         synthetic,
       });
       setMessages((prev) => [...prev, { role: "assistant", text: res.data.answer || "I couldn't process that question.", summary: res.data.summary }]);

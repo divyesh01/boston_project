@@ -8,6 +8,7 @@ import {
 import { useOccupancy } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { money, money2, num, pct, sum, inRange, C, occupancyStats } from "@/lib/hotel";
+import { ErrorState } from "@/components/ui/status";
 
 const METRICS = [
   { key: "total_revenue", label: "Total Revenue", fmt: money, color: C.green, icon: DollarSign },
@@ -37,8 +38,10 @@ function MiniStat({ label, value, pctCh }) {
 export default function MtdGrowth() {
   const { dateRange, compareDateRange, compareOn, property, properties, period, months, compareMonths } = useGlobalFilters();
 
-  const { data: occ = [] } = useOccupancy(dateRange, property, months);
-  const { data: prevOcc = [] } = useOccupancy(compareOn ? compareDateRange : { from: "", to: "" }, property, compareOn ? compareMonths : [], compareOn);
+  const occQ = useOccupancy(dateRange, property, months);
+  const prevOccQ = useOccupancy(compareOn ? compareDateRange : { from: "", to: "" }, property, compareOn ? compareMonths : [], compareOn);
+  const { data: occ = [] } = occQ;
+  const { data: prevOcc = [] } = prevOccQ;
 
   const curRows = useMemo(
     () => occ.filter((r) => inRange(r.date, dateRange.from, dateRange.to)),
@@ -179,6 +182,15 @@ export default function MtdGrowth() {
           {compareOn && <> · vs Previous: {compareDateRange.from || "—"} → {compareDateRange.to || "—"} · {prevElapsed.length} days</>}
         </p>
       </header>
+
+      {(occQ.isError || prevOccQ.isError) && (
+        <ErrorState
+          title="Could not load the comparison"
+          description="Growth is the difference between two reads, and at least one failed. A 0.0% delta below would be indistinguishable from a genuinely flat period."
+          error={occQ.error || prevOccQ.error}
+          onRetry={() => { occQ.refetch(); prevOccQ.refetch(); }}
+        />
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {comparisons.map((m) => {

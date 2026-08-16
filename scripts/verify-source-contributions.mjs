@@ -29,6 +29,10 @@ globalThis.fetch = async (url, ...rest) => {
 
 const mod = await import("@/lib/reportParsers.js");
 const localDb = (await import("@/api/localDb")).default;
+// db.entities fails closed for an unauthenticated caller (blocker B3), so the
+// suite has to sign in before it reads or writes a single row.
+const { signInAsAllPropertyOwner } = await import("./_harness-auth.mjs");
+await signInAsAllPropertyOwner();
 
 let pass=0, fail=0;
 const ok = (c,m)=>{ c?pass++:fail++; console.log(`  ${c?'ok  ':'FAIL'} ${m}`); };

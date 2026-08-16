@@ -5,6 +5,38 @@ const MONTH_MAP = {
   jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
 };
 
+// A date can be perfectly well-formed and still be a date that does not exist.
+//
+// convertDate used to assemble whatever digits it found: "13/45/2026" became
+// "2026-13-45", and because every guard in the codebase is only the shape test
+// /^\d{4}-\d{2}-\d{2}/, that string passed as a valid date. The row imported and its
+// revenue was filed under a month no report will ever total. Same for "2026-02-31",
+// "29-Feb-26" (2026 is not a leap year) and "31/01/2026" — a D/M/Y export read as
+// M/D/Y, which yields month 31.
+//
+// The Date.UTC round-trip does the work: JS normalises Feb 31 to Mar 3, so if the
+// fields come back changed, the date was not real. No month-length table needed.
+function isRealCalendarDate(year, month, day) {
+  const y = Number(year), m = Number(month), d = Number(day);
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return false;
+  // A hotel's books do not reach outside this range; anything that does is a parse
+  // artefact, not a record.
+  if (y < 1900 || y > 2200) return false;
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+// "" means "this cell holds no usable date". Callers already treat that as a skip with
+// a reason (reportParsers.js:489 counts it, :1173 rejects the punch, manualEntryImport
+// raises a named warning), so refusing here surfaces loudly instead of silently.
+function isoOrEmpty(year, month, day) {
+  const y = String(year);
+  const m = String(month).padStart(2, "0");
+  const d = String(day).padStart(2, "0");
+  return isRealCalendarDate(y, m, d) ? `${y}-${m}-${d}` : "";
+}
+
 export function convertDate(s) {
   if (!s) return "";
   s = String(s).trim();
@@ -15,50 +47,77 @@ export function convertDate(s) {
     const mon = MONTH_MAP[m1[2].toLowerCase()];
     let year = m1[3];
     if (year.length === 2) year = "20" + year;
-    if (mon) return `${year}-${mon}-${day}`;
+    if (mon) return isoOrEmpty(year, mon, day);
   }
   // ISO "2026-01-01"
   const m2 = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (m2) return `${m2[1]}-${m2[2]}-${m2[3]}`;
+  if (m2) return isoOrEmpty(m2[1], m2[2], m2[3]);
   // US "1/1/2026"
   const m3 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
   if (m3) {
     let year = m3[3];
     if (year.length === 2) year = "20" + year;
-    return `${year}-${m3[1].padStart(2, "0")}-${m3[2].padStart(2, "0")}`;
+    return isoOrEmpty(year, m3[1], m3[2]);
   }
   // "Apr 01, 2026" / "Apr 1, 2026" / "Jul 01, 2026"
   const m4 = s.match(/^([A-Za-z]{3})\s+(\d{1,2}),\s+(\d{4})$/);
   if (m4) {
     const mon = MONTH_MAP[m4[1].toLowerCase()];
-    if (mon) return `${m4[3]}-${mon}-${m4[2].padStart(2, "0")}`;
+    if (mon) return isoOrEmpty(m4[3], mon, m4[2]);
   }
   // "Apr 01, 2026" with day of week prefix like "Wed, Apr 01, 2026"
   const m5 = s.match(/^[A-Za-z]{3},\s*([A-Za-z]{3})\s+(\d{1,2}),\s+(\d{4})$/);
   if (m5) {
     const mon = MONTH_MAP[m5[1].toLowerCase()];
-    if (mon) return `${m5[3]}-${mon}-${m5[2].padStart(2, "0")}`;
+    if (mon) return isoOrEmpty(m5[3], mon, m5[2]);
   }
   // "2026-03-07 03:21 PM" - datetime format
-  const m6 = s.match(/^(\d{4}-\d{2}-\d{2})/);
-  if (m6) return m6[1];
+  const m6 = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m6) return isoOrEmpty(m6[1], m6[2], m6[3]);
   return s;
 }
 
+// Guards a value that is already in ISO shape. This is the last line of defence for
+// rows written before the calendar check existed, and for the call sites that test
+// r.date without re-converting it (reportParsers.js:509, :747).
 export function isIsoDate(s) {
-  return /^\d{4}-\d{2}-\d{2}/.test(String(s || ""));
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || ""));
+  if (!m) return false;
+  return isRealCalendarDate(m[1], m[2], m[3]);
 }
 
+// Money cell -> Number, sign preserved. null means "nothing numeric here", which
+// importValidation.js:87 relies on to tell an empty cell from a real 0.
+//
+// The sign is read AFTER the currency symbol and separators are stripped. Reading
+// it off the raw string let a leading "$" hide the sign that followed it, so
+// "$-50.00" and "$(50.00)" both parsed as +50 — an imported refund became a charge
+// of the same size, and reportParsers.js:230 feeds this straight into
+// TransactionLine.amount.
 export function parseAmount(s) {
   if (s == null) return null;
-  s = String(s).trim();
-  if (!s) return null;
-  const isNegative = (s.startsWith("(") && s.endsWith(")")) || s.startsWith("-");
-  let cleaned = s.replace(/[\$,\s()]/g, "");
-  if (cleaned.startsWith("-")) cleaned = cleaned.slice(1);
-  const n = parseFloat(cleaned);
+  const raw = String(s).trim();
+  if (!raw) return null;
+
+  let body = raw.replace(/[$,\s]/g, "");
+
+  // Three negative conventions turn up in real PMS and ledger exports: accounting
+  // parentheses, a leading minus, and a trailing minus.
+  let negative = false;
+  if (body.startsWith("(") && body.endsWith(")")) {
+    negative = true;
+    body = body.slice(1, -1);
+  }
+  if (body.startsWith("-")) { negative = true; body = body.slice(1); }
+  else if (body.endsWith("-")) { negative = true; body = body.slice(0, -1); }
+
+  // Unbalanced parens are ambiguous; drop them and let parseFloat decide, which is
+  // what this function did before and keeps a malformed cell importable.
+  body = body.replace(/[()]/g, "");
+
+  const n = parseFloat(body);
   if (isNaN(n)) return null;
-  return isNegative ? -n : n;
+  return negative ? -n : n;
 }
 
 // Character-level scanner over the whole text.

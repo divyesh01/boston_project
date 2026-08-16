@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Loader2 } from "lucide-react";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeText, sanitizeAlphanumeric, sanitizeCsvCell } from "@/lib/securityUtils";
+import PasswordConfirmDialog from "@/components/PasswordConfirmDialog";
 
 export default function Settings() {
   const { user: me, logout, hasPermission } = useAuth();
@@ -55,6 +56,10 @@ export default function Settings() {
   const [mfaBackupCodes, setMfaBackupCodes] = useState([]);
   const [mfaVerifying, setMfaVerifying] = useState(false);
   const [mfaAction, setMfaAction] = useState(null); // 'enable' | 'disable'
+  // Step-up prompt for MFA changes: { kind: 'enable' | 'disable', busy, error }.
+  // The typed password lives inside PasswordConfirmDialog and is handed to the
+  // run* function directly — it is never lifted into this page's state.
+  const [pwPrompt, setPwPrompt] = useState(null);
 
   // Auto-save commission rates & CC fee to localStorage on change
   useEffect(() => {
@@ -134,7 +139,15 @@ export default function Settings() {
         detail: `${Object.keys(rates).length} source rate(s) · CC fee ${(ccFee * 100).toFixed(2)}% · fee on refunds ${ccRefunds ? "on" : "off"}`,
       });
     } catch (e) {
-      console.error("[audit] commission rates:", e);
+      // The rates are already applied at this point, so this is not a failed
+      // save — it is an unlogged one. Commission and CC-fee rates change every
+      // net-revenue figure in the app, so an operator has to know the change
+      // exists but has no audit trail behind it.
+      toast({
+        variant: "destructive",
+        title: "Saved, but not logged",
+        description: `The new commission rates are in effect, but the audit log entry could not be written (${e?.message || e}). Note the change manually — Audit Log will not show it.`,
+      });
     }
     queryClientInstance.invalidateQueries({ queryKey: ["sources"] });
     queryClientInstance.invalidateQueries({ queryKey: ["payments"] });
@@ -196,7 +209,15 @@ export default function Settings() {
           .join("; ")}`,
       });
     } catch (e) {
-      console.error("[audit] tax settings:", e);
+      // Same shape as the commission-rate save above: the tax periods are
+      // already persisted, so the defect is the missing audit row. Tax rates
+      // change every tax figure the property reports, so an unlogged change here
+      // is the one an accountant would most want to trace.
+      toast({
+        variant: "destructive",
+        title: "Saved, but not logged",
+        description: `The new tax settings are in effect, but the audit log entry could not be written (${e?.message || e}). Note the change manually — Audit Log will not show it.`,
+      });
     }
     queryClientInstance.invalidateQueries({ queryKey: ["payments"] });
     queryClientInstance.invalidateQueries({ queryKey: ["sources"] });
@@ -352,48 +373,88 @@ export default function Settings() {
   };
 
   // MFA self-service handlers
-  const handleMfaEnable = async () => {
+  //
+  // Both actions are step-up operations on the server (custom_user_admin
+  // enable_mfa/disable_mfa call assertActorPassword), so the flow is: local
+  // rate-limit + CSRF pre-checks -> collect the actor's own password -> invoke.
+  // The pre-checks run BEFORE the prompt so a rate-limited operator is told so
+  // instead of typing a password that was never going to be sent.
+  const mfaPreflight = () => {
     const rateLimit = sensitiveActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
-      return;
+      return false;
     }
     const csrfToken = getCsrfToken();
     if (!validateCsrfToken(csrfToken)) {
       toast({ variant: "destructive", title: "Security Error", description: "Invalid security token. Please refresh the page and try again." });
       rotateCsrfToken();
-      return;
+      return false;
     }
+    return true;
+  };
+
+  const runMfaEnable = async (currentPassword) => {
+    setPwPrompt((p) => (p ? { ...p, busy: true, error: null } : p));
     try {
-      const result = await db.users.enableMfa(me, me.id);
+      const result = await db.users.enableMfa(me, me.id, currentPassword);
+      setPwPrompt(null);
       setMfaSecret(result.secret);
       setMfaUri(result.uri);
       setMfaBackupCodes([]);
       setMfaAction('enable');
       setMfaSetupOpen(true);
     } catch (e) {
-      toast({ variant: "destructive", title: "Error", description: e.message });
+      // A refused password has to stay in the dialog so it can be retyped; any
+      // other failure is not something the dialog can help with, so it closes
+      // and reports through the normal toast channel.
+      const message = e?.message || "Two-factor authentication could not be enabled.";
+      if (currentPassword !== undefined && /password/i.test(message)) {
+        setPwPrompt((p) => (p ? { ...p, busy: false, error: message } : p));
+        return;
+      }
+      setPwPrompt(null);
+      toast({ variant: "destructive", title: "Error", description: message });
     }
   };
 
-  const handleMfaDisable = async () => {
-    const rateLimit = sensitiveActionRateLimiter.check();
-    if (!rateLimit.allowed) {
-      toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
+  const handleMfaEnable = () => {
+    if (!mfaPreflight()) return;
+    // Enrolling for the first time needs no password; ROTATING a live factor
+    // does, because that action replaces a secret the account is currently
+    // protected by. The server decides either way — this only avoids asking for
+    // a password that would be ignored.
+    if (me.mfa_enabled) {
+      setPwPrompt({ kind: 'enable', busy: false, error: null });
       return;
     }
-    const csrfToken = getCsrfToken();
-    if (!validateCsrfToken(csrfToken)) {
-      toast({ variant: "destructive", title: "Security Error", description: "Invalid security token. Please refresh the page and try again." });
-      rotateCsrfToken();
-      return;
-    }
+    runMfaEnable(undefined);
+  };
+
+  const runMfaDisable = async (currentPassword) => {
+    setPwPrompt((p) => (p ? { ...p, busy: true, error: null } : p));
     try {
-      await db.users.disableMfa(me, me.id);
-      toast({ title: "MFA Disabled", description: "Two-factor authentication has been disabled for your account." });
+      await db.users.disableMfa(me, me.id, currentPassword);
+      setPwPrompt(null);
+      // The server revokes EVERY session for the account here, this tab's
+      // included. Staying on the page would leave a signed-in-looking UI whose
+      // next request 401s, so end the session locally too and say why.
+      toast({ title: "MFA Disabled", description: "Two-factor authentication is off and every session was signed out. Please log in again." });
+      await logout(true);
     } catch (e) {
-      toast({ variant: "destructive", title: "Error", description: e.message });
+      const message = e?.message || "Two-factor authentication could not be disabled.";
+      if (/password/i.test(message)) {
+        setPwPrompt((p) => (p ? { ...p, busy: false, error: message } : p));
+        return;
+      }
+      setPwPrompt(null);
+      toast({ variant: "destructive", title: "Error", description: message });
     }
+  };
+
+  const handleMfaDisable = () => {
+    if (!mfaPreflight()) return;
+    setPwPrompt({ kind: 'disable', busy: false, error: null });
   };
 
   const handleMfaSetupComplete = async (token, done) => {
@@ -432,15 +493,21 @@ export default function Settings() {
 
   // Render QR code when MFA dialog opens
   const qrCanvasRef = useRef(/** @type {HTMLCanvasElement | null} */ (null));
+  const [qrError, setQrError] = useState(null);
   useEffect(() => {
     if (mfaSetupOpen && mfaUri && qrCanvasRef.current) {
+      setQrError(null);
+      // Both failure paths used to end in console.error or nothing at all: the
+      // dialog kept saying "Scan the QR code" over a blank canvas, and the
+      // operator had no way to know the code was never drawn. The manual secret
+      // below still works, so say to use it.
       import("qrcode").then(QRCode => {
         QRCode.default.toCanvas(qrCanvasRef.current, mfaUri, {
           width: 200,
           margin: 2,
           color: { dark: '#000000', light: '#ffffff' }
-        }).catch(console.error);
-      });
+        }).catch((e) => setQrError(e?.message || String(e)));
+      }).catch((e) => setQrError(e?.message || String(e)));
     }
   }, [mfaSetupOpen, mfaUri]);
 
@@ -917,6 +984,21 @@ export default function Settings() {
               </div>
             </div>
 
+            <PasswordConfirmDialog
+              isOpen={!!pwPrompt}
+              busy={!!pwPrompt?.busy}
+              error={pwPrompt?.error || null}
+              title={pwPrompt?.kind === 'disable' ? 'Disable two-factor authentication' : 'Replace your second factor'}
+              description={
+                pwPrompt?.kind === 'disable'
+                  ? 'Enter your password to turn two-factor authentication off. Every session on this account will be signed out, including this one.'
+                  : 'Enter your password to issue a new authenticator secret. Your existing authenticator entry will stop working and other sessions will be signed out.'
+              }
+              confirmLabel={pwPrompt?.kind === 'disable' ? 'Disable MFA' : 'Replace factor'}
+              onCancel={() => setPwPrompt(null)}
+              onConfirm={(password) => (pwPrompt?.kind === 'disable' ? runMfaDisable(password) : runMfaEnable(password))}
+            />
+
             <div className="flex flex-wrap gap-2">
               <Link
                 to="/change-password"
@@ -1005,6 +1087,12 @@ export default function Settings() {
                     <canvas ref={qrCanvasRef} className="mx-auto" />
                   </div>
                 </div>
+
+                {qrError && (
+                  <p className="text-center text-xs text-[#FF6B6B]">
+                    The QR code could not be drawn ({qrError}). Enter the secret key below into your authenticator app instead — it enrols the same account.
+                  </p>
+                )}
 
                 <div className="text-center text-sm">
                   <p className="text-muted-foreground">Or enter this secret key manually:</p>

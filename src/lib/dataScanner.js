@@ -1,5 +1,4 @@
 import { db, runInTransaction } from '@/api/base44Client';
-import localDb from '@/api/localDb';
 import { parseCsvText, rowsToObjects, convertDate, isIsoDate, parseAmount } from '@/lib/csvParser';
 
 const ENTITY_TABLES = [
@@ -16,7 +15,9 @@ export class DataScanner {
 
   async loadAllFiles() {
     const allFiles = [];
-    const allRows = await localDb.UploadedReport.toArray();
+    // Scoped read. This walks every uploaded report and hands back its parsed
+    // preview rows, so a raw table read exposed other properties' report contents.
+    const allRows = await db.entities.UploadedReport.list();
     return allRows.map((r) => ({
       id: r.id,
       name: r.file_name,
@@ -737,10 +738,14 @@ export class DataScanner {
     return matrix[len1][len2];
   }
 
-  async saveScanResult(fileId, scanResult) {
+  // `propertyId` is required, not optional. ScanResult is a property-scoped table,
+  // so a row written without one belongs to no property and every scoped read
+  // misses it — the row would be silently invisible rather than loudly refused.
+  async saveScanResult(fileId, scanResult, propertyId) {
     try {
-      await localDb.ScanResult.put({
+      await db.entities.ScanResult.create({
         file_id: fileId,
+        property_id: propertyId,
         ...scanResult,
         scanned_at: new Date().toISOString(),
       });
@@ -751,7 +756,7 @@ export class DataScanner {
 
   async getScanHistory() {
     try {
-      return await localDb.ScanResult.toArray();
+      return await db.entities.ScanResult.list();
     } catch {
       return [];
     }

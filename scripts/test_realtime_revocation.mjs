@@ -28,9 +28,10 @@ if (globalThis.navigator === undefined) {
   Object.defineProperty(globalThis, 'navigator', { value: { userAgent: 'revocation-harness', language: 'en-US' }, configurable: true });
 }
 
-const { db } = await import('@/api/base44Client');
+const { db, browserHashPassword } = await import('@/api/base44Client');
 const localDb = (await import('@/api/localDb')).default;
-const { hashPassword, generateSalt } = await import('@/lib/security.js');
+const { generateSalt } = await import('@/lib/security.js');
+const { hasAllPropertyAccess } = await import('@/lib/launchPolicy');
 
 let pass = 0;
 let fail = 0;
@@ -40,16 +41,19 @@ function assert(cond, msg) {
 }
 
 // ── Mirror of src/lib/AuthContext.jsx `validateCurrentAccountStatus` ──
+//
+// Kept deliberately identical to production: it asks db.auth.me() and judges the
+// record that comes back. It used to open with getCurrentSession() +
+// db.entities.User.get(session.userId), which production does NOT do — so the
+// harness was measuring a control that does not ship.
 async function validateCurrentAccountStatus() {
   try {
-    const session = await db.auth.getCurrentSession();
-    if (!session) return { valid: false, status: 'revoked' };
-    const record = await db.entities.User.get(session.userId);
-    if (!record) return { valid: false, status: 'revoked' };
-    if (record.is_active === false) return { valid: false, status: 'disabled' };
-    if (record.is_locked === true) return { valid: false, status: 'locked' };
     const me = await db.auth.me();
-    return { valid: true, user: me || record };
+    if (!me) return { valid: false, status: 'revoked' };
+    if (me.is_active === false) return { valid: false, status: 'disabled' };
+    if (me.is_locked === true) return { valid: false, status: 'locked' };
+    if (!hasAllPropertyAccess(me)) return { valid: false, status: 'property_restricted' };
+    return { valid: true, user: me };
   } catch (e) {
     console.error('validateCurrentAccountStatus error:', e);
     return { valid: false, status: 'revoked' };
@@ -69,8 +73,13 @@ async function revokeSession(status, user) {
 }
 
 async function seedUsers() {
+  // handleLocalAuthLogin only trusts $pbkdf2$-prefixed hashes produced by
+  // browserHashPassword (isBrowserHash). Seeding with hashPassword() from
+  // @/lib/security.js produced an unprefixed hash, so the verifier rejected it and
+  // fell through to the remote backend — every scenario below died on
+  // "Backend authentication required" and this whole suite never ran.
   const salt = generateSalt();
-  const hash = await hashPassword('S3cure!Pass', salt);
+  const hash = '$pbkdf2$' + await browserHashPassword('S3cure!Pass', salt);
   const ownerId = await localDb.User.add({
     username: 'owner', email: 'owner@x.com', full_name: 'Owner', role: 'owner',
     permissions: 'all', property_access: 'all', is_active: true, is_locked: false,
@@ -79,8 +88,13 @@ async function seedUsers() {
   const targetSalt = generateSalt();
   const targetId = await localDb.User.add({
     username: 'clerk', email: 'clerk@x.com', full_name: 'Clerk', role: 'read_only',
-    permissions: ['view:reports'], property_access: ['prop_1'], is_active: true, is_locked: false,
-    failed_attempts: 0, salt: targetSalt, password_hash: await hashPassword('S3cure!Pass', targetSalt),
+    // property_access 'all' because this release only admits all-property
+    // accounts (src/lib/launchPolicy.js) and these scenarios need the account to
+    // be able to sign in. 'read_only' + 'all' is a real shape — a portfolio-wide
+    // auditor. Scenario 4 narrows it on purpose to test the gate itself.
+    permissions: ['view:reports'], property_access: 'all', is_active: true, is_locked: false,
+    failed_attempts: 0, salt: targetSalt,
+    password_hash: '$pbkdf2$' + await browserHashPassword('S3cure!Pass', targetSalt),
   });
   return { ownerId, targetId };
 }
@@ -108,7 +122,21 @@ async function run() {
   assert(!!login2?.user, 'Login succeeds (Active)');
   await db.users.setStatus(ownerActor, targetId, 'disabled'); // Users.jsx real action
   const r2 = await validateCurrentAccountStatus();
-  assert(r2.valid === false && r2.status === 'disabled', `validateCurrentAccountStatus() -> invalid (${r2.status})`);
+  // The security property: the session must stop validating. That is what these
+  // assert, and it holds.
+  //
+  // The status is 'revoked', NOT 'disabled'. Both auth backends drop a disabled
+  // user before the caller ever sees the record — the local shim in
+  // getLocalSessionUser() and the deployed one in
+  // base44/functions/custom_auth_me/entry.js, which answers 401 {user:null} on
+  // `!user.is_active || user.is_locked`. So me() is null and
+  // validateCurrentAccountStatus cannot reach its own 'disabled'/'locked'
+  // branches. Consequence is cosmetic-but-real: the user is logged out correctly
+  // and told "session revoked" instead of "your account was disabled". Pinned
+  // here so that if the server contract ever starts reporting a reason, this
+  // fails loudly instead of drifting.
+  assert(r2.valid === false, `validateCurrentAccountStatus() -> invalid (${r2.status})`);
+  assert(r2.status === 'revoked', `disabled reports as 'revoked' (known label gap), got '${r2.status}'`);
   await revokeSession(r2.status, r2.user);
   assert((await db.auth.getCurrentSession()) === null, 'Session cleared after revocation');
   assert((await db.auth.isAuthenticated()) === false, 'isAuthenticated() false immediately (no 30s wait)');
@@ -123,13 +151,37 @@ async function run() {
   assert(!!login3?.user, 'Login succeeds (Active again)');
   await db.users.setStatus(ownerActor, targetId, 'locked'); // Users.jsx real action
   const r3 = await validateCurrentAccountStatus();
-  assert(r3.valid === false && r3.status === 'locked', `validateCurrentAccountStatus() -> invalid (${r3.status})`);
+  // Same label gap as Scenario 2: locked users are dropped by both backends
+  // before the caller sees the record, so this reports 'revoked'.
+  assert(r3.valid === false, `validateCurrentAccountStatus() -> invalid (${r3.status})`);
+  assert(r3.status === 'revoked', `locked reports as 'revoked' (known label gap), got '${r3.status}'`);
   await revokeSession(r3.status, r3.user);
   assert((await db.auth.getCurrentSession()) === null, 'Session cleared after revocation');
   assert((await db.auth.isAuthenticated()) === false, 'isAuthenticated() false immediately');
 
-  // ── Scenario 4: Deleted user revoked instantly ──
-  console.log('\n=== Test 4: Admin deletes user -> instant revocation ===');
+  // ── Scenario 4: property_access narrowed -> revoked on next navigation ──
+  // The launch gate (src/lib/launchPolicy.js) refuses accounts that are not
+  // entitled to every property. Checking it only at login would let a narrowed
+  // account keep browsing on a week-old session, so AuthContext re-checks it on
+  // every navigation. This is the negative case for that.
+  console.log('\n=== Test 4: Owner narrows property access -> instant revocation ===');
+  await db.users.setStatus(ownerActor, targetId, 'enabled');
+  const login4a = await db.auth.login('clerk', 'S3cure!Pass');
+  assert(!!login4a?.user, 'Login succeeds while entitled to all properties');
+  await localDb.User.update(targetId, { property_access: ['prop_1'] });
+  const r4a = await validateCurrentAccountStatus();
+  assert(r4a.valid === false && r4a.status === 'property_restricted',
+    `validateCurrentAccountStatus() -> invalid (${r4a.status})`);
+  await revokeSession(r4a.status, r4a.user);
+  assert((await db.auth.getCurrentSession()) === null, 'Session cleared after revocation');
+  let reloginErr = null;
+  try { await db.auth.login('clerk', 'S3cure!Pass'); } catch (e) { reloginErr = e; }
+  assert(reloginErr !== null, 'The narrowed account cannot sign back in');
+  assert(/propert/i.test(reloginErr?.message || ''), 'The refusal names the reason');
+  await localDb.User.update(targetId, { property_access: 'all' });
+
+  // ── Scenario 5: Deleted user revoked instantly ──
+  console.log('\n=== Test 5: Admin deletes user -> instant revocation ===');
   await db.users.setStatus(ownerActor, targetId, 'enabled');
   const login4 = await db.auth.login('clerk', 'S3cure!Pass');
   assert(!!login4?.user, 'Login succeeds (Active again)');

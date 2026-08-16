@@ -12,10 +12,10 @@ import KpiCard from '@/components/ui-exec/KpiCard';
 import { DataScanner as DataScannerClass } from '@/lib/dataScanner';
 import AIInsightsEngine from '@/lib/aiInsights';
 import { db } from '@/api/base44Client';
-import localDb from '@/api/localDb';
 import { useQuery } from '@tanstack/react-query';
 import { useGlobalFilters } from '@/lib/useGlobalFilters';
 import { formatNumber } from '@/lib/decimal';
+import { ErrorState } from '@/components/ui/status';
 import { toast } from 'sonner';
 
 const SEVERITY_COLORS = {
@@ -38,7 +38,13 @@ function useFiles() {
   return useQuery({
     queryKey: ['data-files'],
     queryFn: async () => {
-      const files = await localDb.UploadedReport.toArray();
+      // Through db.entities, not localDb: `localDb.UploadedReport.toArray()` is a
+      // raw table read with no property scope, so the file browser and the preview
+      // pane listed uploads belonging to properties this user cannot access.
+      // db.entities.UploadedReport.list() applies applyScope() — and it is what
+      // every other reader of this table already uses (useHotelData, dataScanner,
+      // uploadRetention, Import).
+      const files = await db.entities.UploadedReport.list();
       return files.map((f) => ({
         id: f.id,
         name: f.file_name,
@@ -74,8 +80,10 @@ function useAllEntities() {
 
 export default function DataIntelligence() {
   const { property, properties } = useGlobalFilters();
-  const { data: files = [], refetch } = useFiles();
-  const { data: existingData = {} } = useAllEntities();
+  const filesQ = useFiles();
+  const entitiesQ = useAllEntities();
+  const { data: files = [], refetch } = filesQ;
+  const { data: existingData = {} } = entitiesQ;
 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [scanning, setScanning] = useState(false);
@@ -277,6 +285,20 @@ export default function DataIntelligence() {
     };
   }, [scanResults]);
 
+  // Both reads used to fail into a blank that reads as "nothing here yet": the
+  // file list printed "No files uploaded yet" (so the operator re-uploads a
+  // report already imported), and the existing-data read fed the overlap and
+  // duplicate checks, so a file compared against nothing scored as clean.
+  const readErrorBanner = (filesQ.isError || entitiesQ.isError) ? (
+    <ErrorState
+      className="mt-6"
+      title="Could not read your existing data"
+      description="The uploaded-file list and the already-imported rows could not be read, so this page cannot tell you what is already in the system. A file scanned now would be compared against nothing and come back clean, and an empty file list is not proof a report has not been imported — re-uploading it would duplicate the rows."
+      error={filesQ.error || entitiesQ.error}
+      onRetry={() => { filesQ.refetch(); entitiesQ.refetch(); }}
+    />
+  ) : null;
+
   if (activeTab === 'dashboard') {
     return (
       <>
@@ -287,6 +309,8 @@ export default function DataIntelligence() {
             Upload CSV/Excel files to scan, detect issues, clean data, and get AI-powered insights.
           </p>
         </header>
+
+        {readErrorBanner}
 
         <div
           className={'rounded-2xl border border-dashed px-6 py-12 text-center transition-colors ' + (
@@ -430,6 +454,8 @@ export default function DataIntelligence() {
           <h1 className="mt-2 font-heading text-3xl font-semibold text-white">File Manager</h1>
           <p className="mt-1 text-sm text-slate-400">Manage your data sources and scan history</p>
         </header>
+
+        {readErrorBanner}
 
         <div className="flex items-center gap-3 mb-4">
           <div className="relative flex-1">
@@ -638,14 +664,16 @@ function ScanResultCard({ result, onAutoFix, onExport }) {
 function AIInsightsPanel({ scanResults, existingData, aiEngine }) {
   const [loading, setLoading] = useState(false);
   const [insights, setInsights] = useState(null);
+  const [insightsError, setInsightsError] = useState(null);
 
   const generateInsights = async () => {
     setLoading(true);
+    setInsightsError(null);
     try {
       const result = await aiEngine.generateComprehensiveInsights(scanResults, existingData, null);
       setInsights(result);
     } catch (e) {
-      console.error(e);
+      setInsightsError(e);
     }
     setLoading(false);
   };
@@ -661,6 +689,18 @@ function AIInsightsPanel({ scanResults, existingData, aiEngine }) {
           >
             {loading ? 'Analyzing...' : scanResults.length ? 'Generate AI Insights' : 'Upload files to generate insights'}
           </button>
+        )}
+
+        {/* This failure used to be swallowed into console.error: the button
+            simply reset to "Generate AI Insights" and the panel stayed empty, as
+            if the analysis had found nothing worth reporting. */}
+        {insightsError && (
+          <ErrorState
+            title="Could not generate insights"
+            description="The analysis compares these files against the data already in the system and it failed part way through. No insights, recommendations or alerts are listed — that silence is the failure, not a clean bill of health for the files you just scanned."
+            error={insightsError}
+            onRetry={generateInsights}
+          />
         )}
 
         {insights && (

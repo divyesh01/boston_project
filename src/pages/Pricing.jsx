@@ -9,6 +9,7 @@ import { getPricingConfig, savePricingConfig, DEFAULT_PRICING_CONFIG, ROOM_TYPES
 import { money2 } from "@/lib/hotel";
 import { useRealtimeInvalidation } from "@/lib/realtime";
 import { applyDynamicRateOverride } from "@/lib/pricingOverride";
+import { ErrorState } from "@/components/ui/status";
 
 const toDollars = (cents) => Math.round((Number(cents) || 0) / 100);
 const toCentsFromDollars = (d) => Math.round((Number(d) || 0) * 100);
@@ -21,7 +22,8 @@ const PRESETS = {
 
 export default function Pricing() {
   const { property, properties } = useGlobalFilters();
-  const { data: rooms = [] } = useRooms(property);
+  const roomsQ = useRooms(property);
+  const { data: rooms = [] } = roomsQ;
   useRealtimeInvalidation(["rooms", "reservations", "weather"]);
 
   const isPortfolio = property === "all" || Array.isArray(property);
@@ -36,7 +38,7 @@ export default function Pricing() {
   const [pushing, setPushing] = useState(false);
   const [horizon, setHorizon] = useState(14);
 
-  const { forecast, enabled } = usePricingForecast(horizon);
+  const { forecast, enabled, isError: forecastError, error: forecastErr, refetch: refetchForecast } = usePricingForecast(horizon);
 
   const update = (patch) => { const next = { ...cfg, ...patch }; setCfg(next); savePricingConfig(next); };
   const applyPreset = (name) => { update(PRESETS[name]); setNotice({ type: "ok", text: `Applied ${name} pricing profile.` }); };
@@ -117,6 +119,20 @@ export default function Pricing() {
         <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Dynamic Pricing</h1>
         <p className="mt-1 text-sm text-slate-400">Auto-adjust nightly rates from demand, seasonality, weather, and the competitive set · {propName}</p>
       </header>
+
+      {/* Without this, a failed room read still printed a full rate card — the page said
+          "No room register yet to size demand", which reads as an empty hotel rather
+          than a failed read. The forecast hook is checked as well: it reads the
+          reservation book and the weather snapshots too, and either of those failing
+          also produces a complete-looking rate card built on nothing. */}
+      {(roomsQ.isError || forecastError) && (
+        <ErrorState
+          title="Could not load the demand signals"
+          description="The engine sizes demand from your room register, your reservation book and cached weather, and at least one of those reads failed. Any recommended rate, occupancy forecast, or revenue opportunity shown below was computed without that data — do not push these rates to your channels."
+          error={roomsQ.error || forecastErr}
+          onRetry={() => { roomsQ.refetch(); refetchForecast(); }}
+        />
+      )}
 
       {notice && (
         <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs ${notice.type === "ok" ? "border-[#00E096]/30 bg-[#00E096]/10 text-[#00E096]" : "border-[#FF6B6B]/30 bg-[#FF6B6B]/10 text-[#FF6B6B]"}`}>

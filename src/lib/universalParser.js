@@ -436,7 +436,12 @@ if (isEmpty) {
   const unknownMetrics = [];
   
   for (const section of sections) {
-    const periodHeaders = section.periodHeaders.length > 0 ? section.periodHeaders : globalPeriodHeaders;
+    // globalPeriodHeaders stays null until a header row is seen, so a file whose
+    // sections carry no period columns at all reached `.length` on null and threw
+    // a raw TypeError at the operator instead of reporting an unreadable file.
+    const periodHeaders = section.periodHeaders.length > 0
+      ? section.periodHeaders
+      : (globalPeriodHeaders || []);
     
     for (const { rowIdx, cells } of section.rows) {
       const metricName = normalizeMetricName(cells[0] || '');

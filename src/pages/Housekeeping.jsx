@@ -5,6 +5,7 @@ import { useRooms, useHousekeepingTasks } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { db } from "@/api/base44Client";
 import { useRealtimeInvalidation } from "@/lib/realtime";
+import { ErrorState } from "@/components/ui/status";
 import { money } from "@/lib/hotel";
 import {
   TASK_TYPES, TASK_TYPE_LABELS, TASK_STATUS, canTransition,
@@ -29,8 +30,10 @@ export default function Housekeeping() {
   const queryClient = useQueryClient();
   useRealtimeInvalidation(["rooms", "housekeeping"]);
 
-  const { data: rooms = [], isLoading: roomsLoading } = useRooms(property);
-  const { data: tasks = [], isLoading: tasksLoading } = useHousekeepingTasks(dateRange, property);
+  const roomsQ = useRooms(property);
+  const tasksQ = useHousekeepingTasks(dateRange, property);
+  const { data: rooms = [], isLoading: roomsLoading } = roomsQ;
+  const { data: tasks = [], isLoading: tasksLoading } = tasksQ;
 
   const [assignee, setAssignee] = useState("");
   const [taskRoom, setTaskRoom] = useState("");
@@ -128,6 +131,26 @@ export default function Housekeeping() {
   };
 
   if (roomsLoading || tasksLoading) return <p className="text-slate-500">Loading housekeeping board…</p>;
+
+  // A failed read used to render this page as a finished shift: every counter at
+  // 0 (Dirty, Assigned, In Progress, Overdue), an empty task queue, and either a
+  // room grid with no rooms or the "No rooms to manage" card.
+  if (roomsQ.isError || tasksQ.isError) {
+    return (
+      <div className="space-y-6">
+        <header>
+          <p className="text-[11px] uppercase tracking-[0.3em] text-[#00E096]">Operations</p>
+          <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Housekeeping</h1>
+        </header>
+        <ErrorState
+          title="Could not load the housekeeping board"
+          description="This read failed, so zeros and an empty task queue would not mean the work is done. Do not release rooms as clean or send a housekeeper home on the strength of this screen — dirty rooms and overdue tasks may still be outstanding."
+          error={roomsQ.error || tasksQ.error}
+          onRetry={() => { roomsQ.refetch(); tasksQ.refetch(); }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

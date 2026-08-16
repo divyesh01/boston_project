@@ -1,4 +1,5 @@
 import { createClientFromRequest } from "npm:@base44/sdk@^0.8.41";
+import { secrets } from "base44:runtime";
 import crypto from "node:crypto";
 
 const PBKDF2_ITERATIONS = 300000;
@@ -71,18 +72,59 @@ function totp(secretBytes, timestampMs = Date.now()) {
   return hotp(secretBytes, counter);
 }
 
-function verifyTotpToken(secretBase32, token, window = 1) {
+/**
+ * The 30-second counter the code matched, or -1 for no match.
+ *
+ * Returns the counter rather than a boolean because a TOTP code is valid across
+ * the whole ±1 window — about 90 seconds — and nothing here used to record which
+ * counter had already been spent, so an accepted code could be presented again
+ * inside that window and accepted again. Whoever reads a code over a shoulder,
+ * or off a phishing page, gets a minute and a half to use it. The caller stores
+ * the returned counter on the user and passes it back as `notBefore`, which
+ * makes each code single-use.
+ */
+function verifyTotpToken(secretBase32, token, { window = 1, notBefore = -Infinity } = {}) {
   const secretBytes = base32Decode(secretBase32);
   const provided = String(token).replace(/\s/g, "");
-  if (!/^\d{6}$/.test(provided)) return false;
+  if (!/^\d{6}$/.test(provided)) return -1;
   const counter = Math.floor(Date.now() / 30000);
   for (let w = -window; w <= window; w++) {
-    const expected = String(totp(secretBytes, (counter + w) * 30000)).padStart(6, "0");
+    const candidate = counter + w;
+    if (candidate <= notBefore) continue;
+    const expected = String(totp(secretBytes, candidate * 30000)).padStart(6, "0");
+    // Both operands are always six ASCII digits, so this cannot hit the length
+    // mismatch that hashesEqual() below exists for.
     if (crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected))) {
-      return true;
+      return candidate;
     }
   }
-  return false;
+  return -1;
+}
+
+/** The counter a stored value represents, or -Infinity if none is recorded. */
+const lastUsedCounter = (user) =>
+  Number.isFinite(user && user.mfa_last_counter) ? Number(user.mfa_last_counter) : -Infinity;
+
+/**
+ * Constant-time comparison that tolerates a length mismatch.
+ *
+ * crypto.timingSafeEqual THROWS RangeError ("Input buffers must have the same
+ * byte length") when the two buffers differ, and that is reachable from
+ * unauthenticated input: a stored hash without the '$scrypt$' prefix takes the
+ * legacy branch, which yields exactly 64 hex characters, so any stored value of
+ * another length threw out of the handler and into the catch that answers 500.
+ * A wrong password on such an account became a server error instead of a
+ * refusal — and the difference between 500 and 401 is itself an oracle telling
+ * an anonymous caller which accounts are in an unusual state.
+ *
+ * Comparing lengths first leaks only the length of a derived hash, which is
+ * fixed by the algorithm and is not a secret.
+ */
+function hashesEqual(actual, expected) {
+  const a = Buffer.from(String(actual ?? ''), 'utf8');
+  const b = Buffer.from(String(expected ?? ''), 'utf8');
+  if (a.length !== b.length || a.length === 0) return false;
+  return crypto.timingSafeEqual(a, b);
 }
 
 function generateBase32Secret(length = 32) {
@@ -100,6 +142,108 @@ export function publicUser(user) {
   return safe;
 }
 
+// ─── Pre-auth security events ───────────────────────────────────────────────
+// A rejected login used to be the one security event this system could not
+// record. base44/functions/audit_log requires a valid session cookie and refuses
+// a payload whose user_id isn't the session's, so the browser's attempt to log a
+// failed login 403s and src/lib/auditLogger.js swallows it into console.error.
+// Brute force, credential stuffing and account lockouts left nothing behind but
+// a line in the attacker's own browser console — and nothing recorded successful
+// logins either, so even a visible attack could not be answered with the only
+// question that matters afterwards: did they get in?
+//
+// It has to happen here, server-side. The obvious alternative — an
+// unauthenticated audit endpoint the browser can post to — would hand anyone on
+// the internet a way to write attacker-authored rows into the trail meant to
+// convict them, and to flood out the real ones.
+//
+// Volume is bounded by the IP rate limiter above: at most ~6 rows per IP per
+// 15-minute window, which is the shape you want for brute-force forensics.
+//
+// The base44 host offers no way to share a module between functions (every
+// specifier is npm:, node: or base44:runtime), so the signed payload is spelled
+// out here as it is in audit_log, custom_user_admin and audit_verify.
+// scripts/probe-audit-chain.mjs asserts the four copies stay identical.
+
+/** The submitted identifier is attacker-controlled and unbounded. */
+const AUDIT_IDENTIFIER_MAX = 120;
+
+async function writeSecurityAudit(base44, { action, user, identifier, result, detail, ip, device }) {
+  try {
+    // Deliberately the OPPOSITE call to custom_user_admin, which refuses a
+    // privileged change it cannot record. Refusing every login when this is
+    // unset would lock the staff — and the operator who has to fix it — out of a
+    // running hotel mid-shift, and an unconfigured deployment is already loud
+    // after B9: audit_log answers 503 and the audit page reports that it cannot
+    // verify. An unrecorded login is the lesser harm, and writing an unhashed
+    // row instead would be worse than writing none, because it would read as a
+    // permanent chain break.
+    const chainSecret = secrets.get('AUDIT_CHAIN_SECRET');
+    if (!chainSecret) {
+      console.error('[auth] AUDIT_CHAIN_SECRET is not configured — security event NOT recorded:', action);
+      return;
+    }
+
+    const submitted = String(identifier ?? '').slice(0, AUDIT_IDENTIFIER_MAX);
+    const subject = (user && (user.username || user.email)) || submitted || 'unknown';
+
+    const lastEntries = await base44.asServiceRole.entities.AuditLog.filter({}, '-created_date', 1, 0);
+    const lastRow = (lastEntries && lastEntries[0]) || null;
+    const previousHash = (lastRow && lastRow.hash) || '0'.repeat(64);
+    const nowIso = monotonicIso(lastRow && lastRow.created_date);
+
+    // performed_by_id stays null for anything that FAILED. The request was
+    // unauthenticated, so naming the account holder as the actor would assert
+    // that they did this — a brute-force row must not accuse its own victim.
+    // Only a completed login proves who was at the keyboard.
+    const performedById = result === 'success' && user ? user.id : null;
+
+    // AUDIT_CANONICAL_V1 = user_id,action,performed_by_id,performed_by,property_id,result,detail,created_date,previous_hash
+    const canonical = JSON.stringify({
+      user_id: (user && user.id) || null,
+      action,
+      performed_by_id: performedById,
+      performed_by: submitted || subject,
+      property_id: null,
+      result,
+      detail: detail || '',
+      created_date: nowIso,
+      previous_hash: previousHash,
+    });
+    const hash = crypto.createHash('sha256').update(`${chainSecret}:${canonical}`).digest('hex');
+
+    await base44.asServiceRole.entities.AuditLog.create({
+      user_id: (user && user.id) || null,
+      username: subject,
+      action,
+      performed_by_id: performedById,
+      performed_by: submitted || subject,
+      ip_address: ip || 'unknown',
+      device: String(device || '').slice(0, 200),
+      property_id: null,
+      result,
+      detail: detail || '',
+      created_date: nowIso,
+      hash,
+      previous_hash: previousHash,
+    });
+  } catch (err) {
+    // An audit failure must never change the outcome of the login. This is the
+    // one place where losing the record is preferable to losing the service.
+    console.error('[auth] security audit write failed:', err);
+  }
+}
+
+// Next ISO timestamp strictly greater than the previous row's — created_date is
+// what audit_verify orders the chain by, so a same-millisecond tie could be
+// walked in the opposite order to the one the rows were linked in and reported as
+// a chain break that never happened. Mirrors audit_log/entry.js#monotonicIso.
+function monotonicIso(lastIso) {
+  const now = Date.now();
+  const last = lastIso ? Date.parse(lastIso) : NaN;
+  return new Date(Number.isFinite(last) && last >= now ? last + 1 : now).toISOString();
+}
+
 export default async function (req) {
   try {
     const base44 = createClientFromRequest(req);
@@ -112,6 +256,8 @@ export default async function (req) {
     }
 
     const ip = req.headers.get("x-forwarded-for") || req.headers.get("remote-addr") || "unknown";
+    const device = req.headers.get("user-agent") || "";
+    const audit = (fields) => writeSecurityAudit(base44, { identifier, ip, device, ...fields });
     const now = Date.now();
     const rlRecords = await base44.asServiceRole.entities.RateLimit.filter({ ip, action: 'login' }, null, 1, 0);
     let rl = rlRecords[0];
@@ -126,6 +272,18 @@ export default async function (req) {
         }
         rl.count += 1;
         await base44.asServiceRole.entities.RateLimit.update(rl.id, { count: rl.count });
+        // Record the throttle ONCE, on the attempt that fills the window, rather
+        // than on each refusal after it — every later attempt in this window
+        // returns 429 above without touching the counter, so logging there would
+        // let one IP append audit rows for free until the window expires. The
+        // trail has to stay readable during an attack, not just complete.
+        if (rl.count >= 5) {
+          await audit({
+            action: 'Login Rate Limit Reached',
+            result: 'failed',
+            detail: `5 login attempts from ${ip} within 15 minutes; further attempts in this window are refused`,
+          });
+        }
       }
     } else {
       await base44.asServiceRole.entities.RateLimit.create({ ip, action: 'login', count: 1, reset_at: new Date(now + 15 * 60 * 1000).toISOString() });
@@ -150,20 +308,104 @@ export default async function (req) {
     }
 
     if (!user) {
+      // Recorded even though no account matched: a burst of these IS the
+      // credential-stuffing signal, and the submitted identifier is the only
+      // evidence of what the attacker was guessing at. The RESPONSE stays
+      // generic so it still gives nothing away about which accounts exist.
+      await audit({
+        action: 'Failed Login',
+        result: 'failed',
+        detail: 'no account matches the submitted identifier',
+      });
       // Return generic message to prevent user enumeration
       return Response.json({ error: "Invalid email or password" }, { status: 401 });
     }
 
     if (user.is_locked) {
+      await audit({
+        action: 'Failed Login',
+        user,
+        result: 'failed',
+        detail: 'account is locked',
+      });
       return Response.json({ error: "Account is locked" }, { status: 403 });
     }
 
     if (!user.is_active) {
+      await audit({
+        action: 'Failed Login',
+        user,
+        result: 'failed',
+        detail: 'account is inactive',
+      });
       return Response.json({ error: "Account is inactive" }, { status: 403 });
     }
 
+    /**
+     * Count one failed authentication attempt against the account, lock at ten,
+     * and put both events on the record.
+     *
+     * Shared by the wrong-password branch and both MFA branches. Before this
+     * existed only a wrong PASSWORD counted, so an attacker who had already
+     * obtained the password — the exact situation the second factor is there to
+     * survive — could submit six-digit codes forever without ever tripping the
+     * lockout. A million guesses at 000000..999999 costs nothing if nobody is
+     * counting. The per-IP limiter above does not close this: it is keyed on the
+     * source address, so a distributed attempt slips past it while the account
+     * itself has no ceiling.
+     */
+    const recordFailure = async ({ action, detail, status, body }) => {
+      const failed = (user.failed_login_count || 0) + 1;
+      const updates = { failed_login_count: failed };
+      if (failed >= 10) {
+        updates.is_locked = true;
+      }
+      await base44.asServiceRole.entities.User.update(user.id, updates);
+      await audit({
+        action,
+        user,
+        result: 'failed',
+        detail: `${detail} (${failed} consecutive ${failed === 1 ? 'failure' : 'failures'})`,
+      });
+      // The lockout is its own row, not a footnote in the one above: it is the
+      // event a supervisor is asked about ("why can't I sign in?") and the one
+      // that has to be greppable on its own.
+      if (updates.is_locked) {
+        await audit({
+          action: 'Account Locked',
+          user,
+          result: 'failed',
+          detail: `locked automatically after ${failed} consecutive failed authentication attempts`,
+        });
+      }
+      return Response.json(body, { status });
+    };
+
+    const credentialsRefused = (detail) =>
+      recordFailure({
+        action: 'Failed Login',
+        detail,
+        status: 401,
+        body: { error: "Invalid email or password" },
+      });
+
     // Verify password
     const expectedHash = user.password_hash;
+
+    // A stored record with no hash or no salt cannot authenticate anyone, and
+    // reaching the comparison with one used to throw — either dereferencing
+    // undefined here, or RangeError out of timingSafeEqual on a length mismatch
+    // — which the catch turned into a 500. That made "this account is broken"
+    // distinguishable from "wrong password" to anyone who can reach the form.
+    // Treated as a credential failure instead: refused identically, counted
+    // toward the lockout, and named precisely in the trail so an operator can
+    // find and repair the record.
+    if (!expectedHash || !user.salt) {
+      return credentialsRefused(
+        `account has no usable stored credential (${!expectedHash ? 'password_hash' : 'salt'} is missing)`
+      );
+    }
+
     const isLegacy = !expectedHash.startsWith('$scrypt$');
 
     let actualHash;
@@ -173,16 +415,9 @@ export default async function (req) {
       actualHash = '$scrypt$' + await hashPasswordScrypt(password, user.salt);
     }
 
-    // Constant time compare
-    if (!crypto.timingSafeEqual(Buffer.from(actualHash), Buffer.from(expectedHash))) {
-      // Increment failed logins
-      const failed = (user.failed_login_count || 0) + 1;
-      const updates = { failed_login_count: failed };
-      if (failed >= 10) {
-        updates.is_locked = true;
-      }
-      await base44.asServiceRole.entities.User.update(user.id, updates);
-      return Response.json({ error: "Invalid email or password" }, { status: 401 });
+    // Constant time compare, length-tolerant (see hashesEqual).
+    if (!hashesEqual(actualHash, expectedHash)) {
+      return credentialsRefused('incorrect password');
     }
 
     // Upgrade hash to scrypt if legacy
@@ -200,9 +435,24 @@ export default async function (req) {
       if (!mfa_token) {
         return Response.json({ require_mfa: true }, { status: 200 });
       }
-      if (!user.mfa_secret || !verifyTotpToken(user.mfa_secret, mfa_token)) {
-        return Response.json({ error: "Invalid authentication code" }, { status: 401 });
+      const counter = user.mfa_secret
+        ? verifyTotpToken(user.mfa_secret, mfa_token, { notBefore: lastUsedCounter(user) })
+        : -1;
+      if (counter < 0) {
+        // A wrong code AFTER a correct password is a different event from a wrong
+        // password: it means someone holds working credentials but not the second
+        // factor. Recording it as a plain "Failed Login" would bury the most
+        // urgent signal the trail can carry.
+        return recordFailure({
+          action: 'Failed MFA',
+          detail: 'correct password, invalid authentication code',
+          status: 401,
+          body: { error: "Invalid authentication code" },
+        });
       }
+      // Burn the counter before the session is issued, so the code that just
+      // worked cannot work a second time inside its ±1 window.
+      await base44.asServiceRole.entities.User.update(user.id, { mfa_last_counter: counter });
     } else if (user.role === 'owner' || user.role === 'admin') {
       let secretBase32 = user.mfa_secret_pending;
       if (!secretBase32) {
@@ -211,16 +461,27 @@ export default async function (req) {
       }
       const appName = "RRI Executive";
       const uri = `otpauth://totp/${encodeURIComponent(appName)}:${encodeURIComponent(user.email || user.username)}?secret=${secretBase32}&issuer=${encodeURIComponent(appName)}`;
-      
+
       if (mfa_token) {
-        if (verifyTotpToken(secretBase32, mfa_token)) {
+        // notBefore is not carried over from any previous secret: this is a fresh
+        // enrolment, and a counter recorded against an older secret would refuse
+        // a legitimate first code. The counter this code consumes is stored in
+        // the same update that turns MFA on, so the enrolment code is spent too.
+        const counter = verifyTotpToken(secretBase32, mfa_token);
+        if (counter >= 0) {
           await base44.asServiceRole.entities.User.update(user.id, {
             mfa_enabled: true,
             mfa_secret: secretBase32,
-            mfa_secret_pending: null
+            mfa_secret_pending: null,
+            mfa_last_counter: counter
           });
         } else {
-          return Response.json({ error: "Invalid authentication code" }, { status: 401 });
+          return recordFailure({
+            action: 'Failed MFA',
+            detail: 'correct password, invalid authentication code during MFA enrolment',
+            status: 401,
+            body: { error: "Invalid authentication code" },
+          });
         }
       } else {
         return Response.json({ require_mfa_setup: true, secret: secretBase32, uri }, { status: 200 });
@@ -230,6 +491,46 @@ export default async function (req) {
     // Reset failed logins
     if (user.failed_login_count > 0) {
       await base44.asServiceRole.entities.User.update(user.id, { failed_login_count: 0 });
+    }
+
+    // ─── Launch policy: all-property accounts only ───
+    // Every entity read in this app is Dexie/IndexedDB in the user's own
+    // browser, so per-property scoping is enforced client-side and cannot hold
+    // against someone with devtools. Until entity reads move behind server-side
+    // authorization, only accounts already entitled to every property may sign
+    // in — for them there is no confidentiality boundary left to breach.
+    //
+    // LAUNCH_POLICY_V1 = owner | admin | property_access === 'all'
+    // This is the authoritative copy. src/lib/launchPolicy.js mirrors it for the
+    // offline dev shim and for revoking a session that outlived a downgrade;
+    // keep the two in step.
+    //
+    // Checked AFTER password and MFA on purpose: refusing earlier would tell an
+    // unauthenticated caller which accounts exist and which are restricted.
+    const isAllProperties =
+      user.role === 'owner' ||
+      user.role === 'admin' ||
+      user.property_access === 'all';
+    if (!isAllProperties) {
+      // No session is created, so this is a refusal, not a login. Recorded
+      // because "valid credentials presented for an account that may not sign
+      // in" is exactly the kind of event that has to be visible afterwards —
+      // it is either a misconfigured account or someone using staff
+      // credentials they should not hold.
+      await audit({
+        action: 'Failed Login',
+        user,
+        result: 'failed',
+        detail: 'correct password, account is not authorised for all properties (launch policy)',
+      });
+      return Response.json({
+        error: 'This account is limited to specific properties. This release supports accounts with access to all properties only — ask an owner to widen this account.',
+        // Login.jsx flattens every other login error to "Invalid email or
+        // password" so it cannot enumerate accounts. This code is how it knows
+        // to show the message above verbatim instead. Must stay in step with
+        // ALL_PROPERTY_REQUIRED_CODE in src/lib/launchPolicy.js.
+        code: 'ALL_PROPERTY_ACCESS_REQUIRED',
+      }, { status: 403 });
     }
 
     // Create session
@@ -251,6 +552,17 @@ export default async function (req) {
     // Create secure HTTP-only cookie
     const isProd = process.env.NODE_ENV === 'production' || req.url.startsWith('https');
     const cookie = `base44_session=${token}; HttpOnly; Path=/; SameSite=Lax${isProd ? '; Secure' : ''}; Max-Age=${7 * 24 * 60 * 60}`;
+
+    // Successes matter as much as failures. A trail of failed attempts with no
+    // successes in it cannot answer whether an attack eventually worked, which is
+    // the first thing anyone asks. Logged after the session exists so the row
+    // records a login that actually completed.
+    await audit({
+      action: 'Login',
+      user,
+      result: 'success',
+      detail: user.mfa_enabled ? 'password and authentication code accepted' : 'password accepted',
+    });
 
     return Response.json({ success: true, user: publicUser(user) }, {
       headers: {

@@ -9,15 +9,19 @@ import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { exportToPdf } from "@/lib/pdfExport";
 import { C, money, money2, pct, num, inRange, commissionFor } from "@/lib/hotel";
 import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, COMMISSION_TYPES } from "@/lib/commissionRates";
+import { ErrorState } from "@/components/ui/status";
 
 export default function OtaChannels() {
   const { dateRange, property, months } = useGlobalFilters();
-  const { data: sources = [], refetch } = useSources(dateRange, property, months);
-  const { data: payRows = [], refetch: refPay } = usePaymentData(dateRange, property, months);
+  const sourcesQ = useSources(dateRange, property, months);
+  const payQ = usePaymentData(dateRange, property, months);
+  const { data: sources = [], refetch } = sourcesQ;
+  const { data: payRows = [], refetch: refPay } = payQ;
   const [rates, setRates] = useState(getCommissionRates());
   const [ccFee, setCcFee] = useState(getCcFeeRate());
   const [newSource, setNewSource] = useState("");
   const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState(null);
   const contentRef = useRef(null);
 
   const handleRefresh = async () => { await Promise.all([refetch(), refPay()]); };
@@ -92,7 +96,15 @@ export default function OtaChannels() {
   const handleExport = async () => {
     if (exporting || !contentRef.current) return;
     setExporting(true);
-    try { await exportToPdf(contentRef.current, `RRI_OTA_Channels_${dateRange.from}_${dateRange.to}.pdf`); } catch (e) {}
+    setExportError(null);
+    // `catch (e) {}` was here: a failed render or a blocked download reset the
+    // button to "Export PDF" with no message, which is indistinguishable from a
+    // PDF that saved silently to the downloads folder.
+    try {
+      await exportToPdf(contentRef.current, `RRI_OTA_Channels_${dateRange.from}_${dateRange.to}.pdf`);
+    } catch (e) {
+      setExportError(e?.message || String(e));
+    }
     setExporting(false);
   };
 
@@ -108,6 +120,24 @@ export default function OtaChannels() {
           <FileDown className="h-4 w-4" /><span className="hidden sm:inline">{exporting ? "Generating…" : "Export PDF"}</span>
         </button>
       </header>
+
+      {exportError && (
+        <div className="flex items-center gap-2 rounded-lg border border-[#FF6B6B]/30 bg-[#FF6B6B]/10 px-3 py-2 text-xs text-[#FF6B6B]">
+          <TrendingDown className="h-4 w-4 shrink-0" /> The PDF was not created: {exportError}. Nothing was saved to your downloads.
+        </div>
+      )}
+
+      {/* A failed read used to leave this page reading like a month with no
+          bookings: "0 channels" in the header, $0 gross / $0 commission / $0 net
+          in the three KPI cards, and an empty performance matrix. */}
+      {(sourcesQ.isError || payQ.isError) && (
+        <ErrorState
+          title="Could not load channel revenue"
+          description="The channel and payment reads failed, so the zeros below are this page's own placeholder, not what your OTAs sent. Do not renegotiate a commission, drop a channel, or sign off a payout from these numbers."
+          error={sourcesQ.error || payQ.error}
+          onRetry={() => { sourcesQ.refetch(); payQ.refetch(); }}
+        />
+      )}
 
       <div ref={contentRef} className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-3">

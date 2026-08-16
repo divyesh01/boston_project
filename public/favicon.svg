@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Red Roof Intelligence">
+  <rect width="64" height="64" rx="12" fill="#040D1A"/>
+  <rect x="16" y="29" width="32" height="24" rx="2" fill="#0F1E33"/>
+  <path d="M32 9 L57 30 H7 Z" fill="#FF6B6B"/>
+  <rect x="21" y="44" width="5" height="7" rx="1" fill="#00D4FF"/>
+  <rect x="29.5" y="39" width="5" height="12" rx="1" fill="#00D4FF"/>
+  <rect x="38" y="34" width="5" height="17" rx="1" fill="#6C63FF"/>
+</svg>

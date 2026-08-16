@@ -13,6 +13,7 @@ import {
   indexSnapshot, metricValue, firstValue, PERIODS, PERIOD_LABEL, HEADLINE,
 } from "@/lib/statisticsAnalytics";
 import MetricExplorer from "@/components/statistics/MetricExplorer";
+import { ErrorState } from "@/components/ui/status";
 
 const tip = { background: "#0A1628", border: "1px solid #ffffff14", borderRadius: 12, color: "#e2e8f0" };
 const axis = { fill: "#64748b", fontSize: 10 };
@@ -66,7 +67,7 @@ export default function Statistics() {
   const [period, setPeriod] = useState("actual_today");
   const [trendKey, setTrendKey] = useState("occupancy");
 
-  const { data: rows = [], isLoading } = useHotelMetrics(dateRange, property);
+  const { data: rows = [], isLoading, isError, error, refetch } = useHotelMetrics(dateRange, property);
   const { data: allDates = [] } = useMetricDates(property);
 
   const dates = useMemo(() => snapshotDates(rows), [rows]);
@@ -81,6 +82,26 @@ export default function Statistics() {
   const q = useMemo(() => quality(rows), [rows]);
 
   if (isLoading) return <p className="text-slate-500">Loading hotel statistics…</p>;
+
+  // A third state, for the same reason the two below were separated: a failed read is
+  // not an empty date range, and telling the operator to move the date range or
+  // re-upload would both be wrong advice.
+  if (isError) {
+    return (
+      <div className="space-y-6">
+        <header>
+          <p className="text-[11px] uppercase tracking-[0.3em] text-[#00D4FF]">Property Performance</p>
+          <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Statistics</h1>
+        </header>
+        <ErrorState
+          title="Could not load hotel statistics"
+          description="Your snapshots are still there — this read failed. Occupancy, ADR and RevPAR are hidden rather than shown as zero."
+          error={error}
+          onRetry={refetch}
+        />
+      </div>
+    );
+  }
 
   // Two different empty states. "Nothing imported ever" and "nothing in this date
   // range" need different fixes, and conflating them sends the operator to the

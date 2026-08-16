@@ -12,6 +12,7 @@ import { useRealtimeInvalidation } from "@/lib/realtime";
 import {
   SOURCE_LABELS, scoreSentiment, isInconsistent, aggregateRating, needsResponse,
 } from "@/lib/reputationService";
+import { ErrorState } from "@/components/ui/status";
 
 const SENTIMENT_COLOR = { positive: "#00E096", neutral: "#FFB547", negative: "#FF6B6B" };
 const CHART_COLORS = ["#6C63FF", "#00D4FF", "#00E096", "#FFB547", "#FF6B6B"];
@@ -21,7 +22,8 @@ export default function Reviews() {
   const queryClient = useQueryClient();
   useRealtimeInvalidation(["reviews"]);
 
-  const { data: reviews = [], isLoading } = useReviews(dateRange, property);
+  const reviewsQ = useReviews(dateRange, property);
+  const { data: reviews = [], isLoading } = reviewsQ;
 
   const [replyId, setReplyId] = useState(null);
   const [draft, setDraft] = useState("");
@@ -94,6 +96,18 @@ export default function Reviews() {
           Seed demo reviews
         </button>
       </header>
+
+      {/* Without this, a failed read showed a 0.0 star average, 0 unresolved, and an
+          inbox that invited the operator to seed demo reviews — as if no guest had
+          ever written in. */}
+      {reviewsQ.isError && (
+        <ErrorState
+          title="Could not load reviews"
+          description="The 0.0 star average and empty inbox below are not your reputation — this read failed. Unanswered guest reviews may be live on Google and the OTAs right now while this page reports nothing to answer."
+          error={reviewsQ.error}
+          onRetry={() => { reviewsQ.refetch(); }}
+        />
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {[

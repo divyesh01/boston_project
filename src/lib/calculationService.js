@@ -8,6 +8,7 @@ import { getTaxConfig, TAX_SOURCES } from '@/lib/taxConfig';
 import { getEffectiveTaxRates, getTaxSettings } from '@/lib/taxSettings';
 import { getCcFeeRate, getCcFeeOnRefunds } from '@/lib/commissionRates';
 import { CARD_METHODS, refundTotal, refundTotalFromTotals } from '@/lib/paymentNorm';
+import { filterCommittedPay } from '@/lib/payrollCalc';
 
 function inRange(dateStr, from, to) {
   if (!dateStr) return false;
@@ -206,7 +207,9 @@ export class CalculationService {
     if (ccFeeRefunds) refundFees = refunds * ccFee;
 
     const expInPeriod = expenses.filter(e => inRange(e.expense_date, dateRange.from, dateRange.to));
-    const payInPeriod = payroll.filter(p => inRange(p.pay_period_start, dateRange.from, dateRange.to));
+    // Approved/paid only (COMMITTED_PAYROLL_STATUSES in src/lib/payrollCalc.js) —
+    // a draft run must not reduce the owner's "money kept".
+    const payInPeriod = filterCommittedPay(payroll).filter(p => inRange(p.pay_period_start, dateRange.from, dateRange.to));
     const totalPayroll = sum(payInPeriod, 'total_pay');
     const operatingExpenses = expInPeriod.filter(e => !(String(e.category || '').toLowerCase() === 'payroll')).reduce((a, e) => a + (e.amount || 0), 0);
 
@@ -215,6 +218,12 @@ export class CalculationService {
 
     const totalDeductions = otaCommissions + ccFees + refundFees + refunds + totalPayroll + operatingExpenses + estimatedTaxes;
     const kept = gross - totalDeductions;
+
+    // The rate is "kept out of what was keepable", so the denominator is revenue
+    // less the money that was never the hotel's to keep. It has to be guarded on
+    // its own: `gross > 0` did not stop a full-refund or all-tax period from
+    // dividing by zero and reporting Infinity as a percentage.
+    const keepableBase = gross - refunds - estimatedTaxes;
 
     return {
       gross,
@@ -227,7 +236,7 @@ export class CalculationService {
       estimatedTaxes,
       totalDeductions,
       kept,
-      keepRate: gross > 0 ? kept / (gross - refunds - estimatedTaxes) : 0,
+      keepRate: keepableBase > 0 ? kept / keepableBase : 0,
     };
   }
 
@@ -237,7 +246,8 @@ export class CalculationService {
     const netRevenue = grossRevenue - refundsAndAdjustments;
 
     const expensesInPeriod = expenses.filter(e => inRange(e.expense_date, dateRange.from, dateRange.to));
-    const payrollInPeriod = payroll.filter(p => inRange(p.pay_period_start, dateRange.from, dateRange.to));
+    // Approved/paid only, same rule as calculateMoneyKept above.
+    const payrollInPeriod = filterCommittedPay(payroll).filter(p => inRange(p.pay_period_start, dateRange.from, dateRange.to));
     const totalPayroll = sum(payrollInPeriod, 'total_pay');
     const operatingExpenses = expensesInPeriod.filter(e => !(String(e.category || '').toLowerCase() === 'payroll')).reduce((a, e) => a + (e.amount || 0), 0);
     const totalCosts = totalPayroll + operatingExpenses;

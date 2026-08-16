@@ -12,6 +12,7 @@ import { useOccupancy, useSources, usePaymentData } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { getOccThreshold, money, money2, pct } from "@/lib/hotel";
 import { buildActionCenter } from "@/lib/actionCenter";
+import { ErrorState } from "@/components/ui/status";
 
 // Pick up productivity ticks describing each bucket's tone
 const TONE = {
@@ -92,21 +93,34 @@ function ActionCard({ action }) {
 
 export default function ActionCenter() {
   const { dateRange, property, properties, months, channel } = useGlobalFilters();
-  const { data: occ = [] } = useOccupancy(dateRange, property, months);
-  const { data: sources = [] } = useSources(dateRange, property, months);
-  const { data: payRows = [] } = usePaymentData(dateRange, property, months);
+  const occQ = useOccupancy(dateRange, property, months);
+  const sourcesQ = useSources(dateRange, property, months);
+  const payQ = usePaymentData(dateRange, property, months);
+  const { data: occ = [] } = occQ;
+  const { data: sources = [] } = sourcesQ;
+  const { data: payRows = [] } = payQ;
 
   const propertyKey = Array.isArray(property) ? property.join(",") : property;
   const propFilter = useMemo(() => buildPropertyFilter(property), [property]);
 
-  const { data: expenses = [] } = useQuery({
+  const expensesQ = useQuery({
     queryKey: ["expenses", propertyKey],
     queryFn: () => db.entities.Expense.filter(propFilter, "-expense_date", 100000),
   });
-  const { data: payroll = [] } = useQuery({
+  const payrollQ = useQuery({
     queryKey: ["payroll", propertyKey],
     queryFn: () => db.entities.PayrollRun.filter(propFilter, "-pay_period_start", 100000),
   });
+  const { data: expenses = [] } = expensesQ;
+  const { data: payroll = [] } = payrollQ;
+
+  // Every lane on this page is a judgement about whether something needs attention, and
+  // an empty lane renders as "Nothing here — good." If any of the five reads failed,
+  // that sentence is a false all-clear — the most dangerous thing this page can say. So
+  // one failed read blocks the whole page rather than a lane.
+  const reads = [occQ, sourcesQ, payQ, expensesQ, payrollQ];
+  const failed = reads.find((q) => q.isError);
+  const retryAll = () => reads.forEach((q) => q.refetch());
 
   // Previous equal-length window for period-over-period deltas
   const prevRange = useMemo(() => {
@@ -169,6 +183,15 @@ export default function ActionCenter() {
         </p>
       </header>
 
+      {failed ? (
+        <ErrorState
+          title="Could not build the action list"
+          description="At least one of the reads behind this page failed, so no recommendations are shown. An empty list here would read as “nothing needs attention”, which cannot be confirmed."
+          error={failed.error}
+          onRetry={retryAll}
+        />
+      ) : (
+        <>
       {/* ── Premise: snapshot of the money ── */}
       <Card title="Where you stand" subtitle="Computed from imported data for this period">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -219,6 +242,8 @@ export default function ActionCenter() {
       <p className="text-xs text-slate-600">
         Estimates are computed locally from imported occupancy, source, payment, expense and payroll data — they are not financial advice and may not reflect every billing nuance.
       </p>
+        </>
+      )}
     </div>
   );
 }

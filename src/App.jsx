@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useState, Component } from 'react';
 import { Toaster } from "@/components/ui/toaster";
+import { Toaster as SonnerToaster } from "sonner";
 import { ErrorState } from "@/components/ui/status";
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClientInstance } from '@/lib/query-client';
@@ -312,6 +313,20 @@ function App() {
               <AuthenticatedApp />
             </Router>
             <Toaster />
+            {/*
+              Two toast systems are mounted deliberately. The app has both:
+              `useToast` (radix, used by Users and Settings) and sonner's
+              `toast` (used by Expenses and DataIntelligence — 22 calls). Only
+              the radix one was ever mounted, and `src/components/ui/sonner.jsx`
+              is imported by nothing, so every sonner call dispatched into a
+              store with no subscriber and rendered nothing at all: a failed
+              expense delete, a rate-limit refusal and an invalid-CSRF refusal
+              were all completely silent. Mounting sonner here is two lines
+              against rewriting 22 call sites. Top-right because the radix
+              viewport sits bottom-right on sm and up.
+            */}
+            <SonnerToaster theme="dark" position="top-right" richColors closeButton />
+
           </QueryClientProvider>
         </YDocProvider>
       </AuthProvider>

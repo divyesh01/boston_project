@@ -156,23 +156,33 @@ export function GlobalFiltersProvider({ children }) {
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
 
-  const { data: properties = [] } = useProperties();
+  const { data: rosterProperties = [] } = useProperties();
   const { canAccessProperty } = useAuth();
 
-  // Property-level access: non-owner/admin users only see their assigned properties
+  // Property-level access: non-owner/admin users only see their assigned properties.
+  // This is the SECOND clamp — useProperties() reads through db.entities.Property,
+  // which scopes the roster on its primary key. Kept anyway because this list is
+  // what the property picker renders, and a UI that offers a property the data layer
+  // will refuse produces empty screens with no explanation.
   const accessibleProperties = useMemo(
-    () => properties.filter((p) => canAccessProperty(p.id)),
-    [properties, canAccessProperty]
+    () => rosterProperties.filter((p) => canAccessProperty(p.id)),
+    [rosterProperties, canAccessProperty]
   );
 
-  // Constrain selections to accessible properties
-  const effectiveProperties = useMemo(() => {
-    const sel = selectedPropertyIds.filter((id) => accessibleProperties.some((p) => p.id === id));
-    // Owner/admin with no selection = all; restricted users with no selection = all accessible
-    return sel;
-  }, [selectedPropertyIds, accessibleProperties]);
+  // Constrain selections to accessible properties. A selected id that is not
+  // accessible is dropped rather than honoured, so a stale selection surviving a
+  // permission change cannot widen what the next query asks for.
+  const effectiveProperties = useMemo(
+    () => selectedPropertyIds.filter((id) => accessibleProperties.some((p) => p.id === id)),
+    [selectedPropertyIds, accessibleProperties]
+  );
 
-  // Backward-compat: property as string or array for hooks
+  // Backward-compat: property as string or array for hooks.
+  //
+  // No selection resolves to the sentinel "all", which every consumer forwards to
+  // db.entities.*.filter as "no property condition". That is not a hole: applyScope
+  // turns an absent condition into the caller's own allowance, so "all" means "all
+  // of mine", not "all that exist". The data layer is what enforces it, not this.
   const property = effectiveProperties.length === 0
     ? "all"
     : effectiveProperties.length === 1
@@ -285,7 +295,12 @@ export function GlobalFiltersProvider({ children }) {
     setPropertyMulti,
     // Backward compat
     property, setProperty,
-    properties,
+    // `properties` is the ACCESS-SCOPED roster, not the raw one. It used to be the
+    // unfiltered useProperties() result, and ~18 call sites render it (pickers,
+    // comparison tables, export headers) — so every one of them listed the whole
+    // portfolio. The two names are now the same list; `accessibleProperties` is kept
+    // because existing call sites use both spellings.
+    properties: accessibleProperties,
     accessibleProperties,
     // Period
     period, setPeriod,

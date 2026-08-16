@@ -91,8 +91,13 @@ function expenseRow({ date, amount, category = "housekeeping", name = "Linen" })
   return { expense_date: date, expense_name: name, vendor: "CO", category, amount };
 }
 
-function payrollRun({ date, totalPay }) {
-  return { pay_period_start: date, employee_name: "Jane", department: "Front Desk", pay_type: "hourly", total_pay: totalPay };
+// Payroll run. `status` is explicit because only approved/paid runs are committed
+// money (src/lib/payrollCalc.js COMMITTED_PAYROLL_STATUSES) — a run with no status
+// is treated as a draft and must not move any profit figure. This fixture used to
+// omit the field entirely, which made "payroll above guideline -> investigate"
+// seed a draft run and then assert that a draft moves the number.
+function payrollRun({ date, totalPay, status = "paid" }) {
+  return { pay_period_start: date, employee_name: "Jane", department: "Front Desk", pay_type: "hourly", total_pay: totalPay, payroll_status: status };
 }
 
 console.log("— smoke: empty/null input must not throw —");
@@ -142,6 +147,22 @@ console.log("\n— payroll above guideline -> investigate —");
   const m = buildActionCenter({ occRows: occM, payroll, roomCounts: ROOMS, dateRange: RANGE });
   const card = m.buckets.investigate.find((a) => a.key === "payroll");
   check("payroll investigate fires", !!card, `keys=${m.buckets.investigate.map((a) => a.key)}`);
+
+  // The negative case for the same guideline: an identical run still in draft is
+  // not committed money, so it must not raise a card. Without this, a half-typed
+  // payroll entry would put an amber alarm on the owner's home screen.
+  const draft = [payrollRun({ date: "2025-02-01", totalPay: 224000 * 0.24, status: "draft" })];
+  const mDraft = buildActionCenter({ occRows: occM, payroll: draft, roomCounts: ROOMS, dateRange: RANGE });
+  check("a DRAFT run above the guideline does not fire",
+    !mDraft.buckets.investigate.some((a) => a.key === "payroll"),
+    `keys=${mDraft.buckets.investigate.map((a) => a.key)}`);
+
+  // And payroll from a different month must not be charged against this month.
+  const stale = [payrollRun({ date: "2024-11-01", totalPay: 224000 * 0.9 })];
+  const mStale = buildActionCenter({ occRows: occM, payroll: stale, roomCounts: ROOMS, dateRange: RANGE });
+  check("payroll outside the window does not fire",
+    !mStale.buckets.investigate.some((a) => a.key === "payroll"),
+    `keys=${mStale.buckets.investigate.map((a) => a.key)}`);
 }
 
 console.log("\n— revenue down vs FULL prior window -> red fix —");

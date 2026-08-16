@@ -12,6 +12,7 @@ import { useAuth } from "@/lib/AuthContext";
 import { db } from "@/api/base44Client";
 import { getCsrfToken, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
 import { isValidEmail } from "@/lib/validator";
+import { ALL_PROPERTY_REQUIRED_CODE } from "@/lib/launchPolicy";
 import MFASetup from "@/components/MFASetup";
 
 export default function Login() {
@@ -113,10 +114,19 @@ export default function Login() {
       const isNetworkError =
         (typeof navigator !== "undefined" && navigator.onLine === false) ||
         /network|server|offline|failed to fetch|timeout|econn/i.test(err?.message || "");
+      // One exception, by code and never by message text: the launch policy
+      // refuses accounts that are not entitled to every property. It is raised
+      // only AFTER the password (and MFA) verified, so it reveals nothing to
+      // someone guessing — while "Invalid email or password" would send a member
+      // of staff with perfectly good credentials chasing a password reset that
+      // cannot help them. See src/lib/launchPolicy.js.
+      const isPropertyRestricted = err?.code === ALL_PROPERTY_REQUIRED_CODE;
       setError(
-        isNetworkError
-          ? "Unable to reach authentication server. Please check your connection."
-          : "Invalid email or password"
+        isPropertyRestricted
+          ? err.message
+          : isNetworkError
+            ? "Unable to reach authentication server. Please check your connection."
+            : "Invalid email or password"
       );
       // Retain the entered identifier, but always clear the password field.
       setPassword("");

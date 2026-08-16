@@ -10,22 +10,43 @@ import { useRef } from "react";
 import { RefreshCw, Search, ShieldCheck, ShieldAlert } from "lucide-react";
 import { db } from "@/api/base44Client";
 import { verifyAuditChain as verifyAuditChainLocal } from "@/lib/securityUtils";
-import { AUDIT_CATEGORIES, filterAuditLogs } from "@/lib/auditFilter";
+import { AUDIT_CATEGORIES, filterAuditLogs, auditActionSeverity } from "@/lib/auditFilter";
+
+// Colour comes from auditActionSeverity, not from an ordered chain of substring tests
+// in this file. The old chain asked `includes("Login")` before `includes("Failed")`, so
+// 'Failed Login' matched the friendlier word first and a brute-force attempt was painted
+// the same blue as a normal sign-in. A lookup table cannot have that ordering bug.
+const SEVERITY_BADGE = {
+  danger: "bg-red-500/20 text-red-300 border-red-500/40",
+  warn: "bg-amber-500/20 text-amber-300 border-amber-500/40",
+  success: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40",
+  info: "bg-blue-500/20 text-blue-300 border-blue-500/40",
+  neutral: "bg-slate-500/20 text-slate-300 border-slate-500/40",
+};
+
+// Result is written as 'success', 'failed' or 'pending'.
+const RESULT_BADGE = {
+  success: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40",
+  failed: "bg-red-500/20 text-red-300 border-red-500/40",
+  pending: "bg-amber-500/20 text-amber-300 border-amber-500/40",
+  unknown: "bg-slate-500/20 text-slate-300 border-slate-500/40",
+};
 
 const ACTION_BADGE = (action) => {
-  const cls = "border ";
-  if (action.includes("Login") || action.includes("Logout")) return <Badge className={`${cls} bg-blue-500/20 text-blue-300 border-blue-500/40`}>{action}</Badge>;
-  if (action.includes("Failed")) return <Badge className={`${cls} bg-red-500/20 text-red-300 border-red-500/40`}>{action}</Badge>;
-  if (action.includes("Deleted") || action.includes("Disabled") || action.includes("Locked")) return <Badge className={`${cls} bg-red-500/20 text-red-300 border-red-500/40`}>{action}</Badge>;
-  if (action.includes("Created")) return <Badge className={`${cls} bg-emerald-500/20 text-emerald-300 border-emerald-500/40`}>{action}</Badge>;
-  if (action.includes("Password")) return <Badge className={`${cls} bg-amber-500/20 text-amber-300 border-amber-500/40`}>{action}</Badge>;
-  if (action.includes("Enabled") || action.includes("Unlocked")) return <Badge className={`${cls} bg-emerald-500/20 text-emerald-300 border-emerald-500/40`}>{action}</Badge>;
-  return <Badge className={`${cls} bg-slate-500/20 text-slate-300 border-slate-500/40`}>{action}</Badge>;
+  // A row written without an action still has to render; it must not blank the table.
+  const label = action ? String(action) : "Unknown Action";
+  const severity = auditActionSeverity(action);
+  return (
+    <Badge className={`border ${SEVERITY_BADGE[severity] || SEVERITY_BADGE.neutral}`}>
+      {label}
+    </Badge>
+  );
 };
 
 export default function AuditLog() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
 
   const [search, setSearch] = useState("");
   const [result, setResult] = useState("all");
@@ -59,11 +80,18 @@ export default function AuditLog() {
 
   const load = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const list = await db.audit.list({}, 100000);
       setLogs(list);
       await verify();
     } catch (e) {
+      // A toast disappears after a few seconds. Without a persistent error state the
+      // table falls back to "No matching events", which tells the operator there are no
+      // security events when in fact we could not read them — the one thing an audit
+      // view must never claim falsely.
+      setLoadError(e?.message || String(e));
+      setLogs([]);
       toast({ variant: "destructive", title: "Error", description: e.message });
     } finally {
       setLoading(false);
@@ -186,8 +214,24 @@ export default function AuditLog() {
               <TableBody>
                 {loading ? (
                   <TableRow><TableCell colSpan={6} className="py-10 text-center text-muted-foreground">Loading log...</TableCell></TableRow>
+                ) : loadError ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="py-10 text-center">
+                      <p className="font-medium text-[#FF5C5C]">Could not load the audit log.</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        This is a read failure, not an empty log — events may exist that are not shown. {loadError}
+                      </p>
+                      <Button variant="outline" size="sm" className="mt-3" onClick={load}>Try again</Button>
+                    </TableCell>
+                  </TableRow>
                 ) : filtered.length === 0 ? (
-                  <TableRow><TableCell colSpan={6} className="py-10 text-center text-muted-foreground">No matching events.</TableCell></TableRow>
+                  <TableRow>
+                    <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
+                      {logs.length === 0
+                        ? "No events have been recorded yet."
+                        : "No events match these filters."}
+                    </TableCell>
+                  </TableRow>
                 ) : (
                   <>
                     <tr style={{ height: `${rowVirtualizer.getTotalSize()}px`, display: 'block', width: '100%', position: 'relative' }}>
@@ -211,8 +255,11 @@ export default function AuditLog() {
                             <TableCell className="text-xs text-muted-foreground w-1/6">{l.performed_by}</TableCell>
                             <TableCell className="text-xs text-muted-foreground w-1/6">{l.device || "—"}</TableCell>
                             <TableCell className="w-1/6">
-                              <Badge className={`border ${l.result === "success" ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40" : "bg-red-500/20 text-red-300 border-red-500/40"}`}>
-                                {l.result}
+                              {/* Three states are written, not two: 'success', 'failed'
+                                  and 'pending'. A ternary on === "success" painted
+                                  pending rows in failure red. */}
+                              <Badge className={`border ${RESULT_BADGE[l.result] || RESULT_BADGE.unknown}`}>
+                                {l.result || "unknown"}
                               </Badge>
                             </TableCell>
                           </TableRow>

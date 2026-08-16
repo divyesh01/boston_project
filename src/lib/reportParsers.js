@@ -1,4 +1,4 @@
-import { db, runInTransaction, createImportSession, completeImportSession, addImportRecordIds } from '@/api/base44Client';
+import { db, runInTransaction, createImportSession, completeImportSession, failImportSession, addImportRecordIds } from '@/api/base44Client';
 import localDb from '@/api/localDb';
 
 import {
@@ -8,12 +8,18 @@ import {
 import { parseHotelReport, makeFileDedupKey, generateFileHash } from '@/lib/universalParser';
 
 import {
-  TXN_SIGNATURE, mapTransactionRow, isTrailerRow, assignDedupeKeys,
+  TXN_SIGNATURE, TXN_COLUMN_MAP, mapTransactionRow, isTrailerRow, assignDedupeKeys,
 } from '@/lib/transactionNorm';
 import { toCents, fromCents, sumCents } from '@/lib/decimal';
 import { neutralizeFormula } from '@/lib/securityUtils';
-import { validateImport } from '@/lib/importValidation';
+import { validateImport, makeFinding, recordCoercion, SEVERITY } from '@/lib/importValidation';
 import { detectAnomalies, detectClerkAnomalies } from '@/lib/anomalyDetector';
+// Statically imported on purpose. This used to be `await import()` at the point of
+// use, inside the timecard import — which runs in a Dexie transaction zone. A
+// dynamic import is a macrotask, so awaiting one leaves the zone and Dexie commits
+// early: PrematureCommitError, mid-import, with rows already written (blocker B6).
+// timecardCalc only pulls in @/lib/decimal, so there is no cycle to avoid here.
+import { normalisePunch } from '@/lib/timecardCalc';
 export { neutralizeFormula };
 
 // Serialize report imports to prevent double-click/parallel duplicate writes.
@@ -222,20 +228,12 @@ function mapRow(obj, coercions) {
       if (NUMERIC_FIELDS.has(fieldName)) {
         const raw = String(value).trim();
         const parsed = parseAmount(raw);
-        if (parsed === null) {
-          // Kept as 0 by design (matches old behaviour), but logged so the
-          // validation layer can warn that the column is being zero-filled.
-          if (coercions) coercions.push({ field: fieldName, raw, kind: "unparseable" });
-          out[fieldName] = 0;
-        } else {
-          // parseAmount uses parseFloat, which silently truncates "12abc" to 12.
-          // Detect leftover non-numeric content so validation can flag it.
-          const cleaned = raw.replace(/[\$,\s()]/g, "").replace(/^-/, "");
-          if (/[^0-9.]/.test(cleaned)) {
-            if (coercions) coercions.push({ field: fieldName, raw, parsed, kind: "truncated" });
-          }
-          out[fieldName] = parsed;
-        }
+        // Logged through the shared classifier so this path and the transaction
+        // ledger's mapper describe an identical value identically. Unparseable
+        // values are still kept as 0 (matching the old behaviour) — the log is
+        // what stops that 0 from looking like a real zero.
+        recordCoercion(coercions, fieldName, raw, parsed);
+        out[fieldName] = parsed === null ? 0 : parsed;
       } else {
         out[fieldName] = value;
       }
@@ -602,6 +600,32 @@ async function scanHotelStatistics(rawRows, fileUrl, meta) {
     };
   });
 
+  // The snapshot's own integrity signals — metric names the parser did not
+  // recognise, and anything parseHotelReport itself reported — used to be
+  // returned and never read. Routed through validateImport they gate the import
+  // like every other type: a file that yields no metrics is not imported, and a
+  // renamed metric is named on screen instead of quietly arriving as `unknown`.
+  //
+  // `stackedSections` because this export is a column of section titles, each
+  // with its own period headers and widths: the single-header raggedness and
+  // unknown-column checks would report the file's normal shape as damage.
+  const unknownNames = [...new Set((parseResult.unknownMetrics || []).map((u) => u.metricName))];
+  const validation = validateImport({
+    rawRows,
+    rows: parseResult.metrics,
+    type: "hotel_statistics",
+    stackedSections: true,
+    extraFindings: [
+      unknownNames.length
+        ? makeFinding("structural", SEVERITY.WARNING, "unknown_metrics",
+          `${unknownNames.length} metric name(s) were not recognised and will import as uncategorised: ${unknownNames.slice(0, 8).join(", ")}${unknownNames.length > 8 ? "…" : ""}.`,
+          { count: unknownNames.length, metrics: unknownNames })
+        : null,
+      ...(parseResult.errors || []).map((message) =>
+        makeFinding("structural", SEVERITY.ERROR, "parser_error", String(message))),
+    ],
+  });
+
   return {
     type: "hotel_statistics",
     sections,
@@ -610,6 +634,7 @@ async function scanHotelStatistics(rawRows, fileUrl, meta) {
     metrics: parseResult.metrics,
     unknownMetrics: parseResult.unknownMetrics,
     errors: parseResult.errors,
+    validation,
     fileHash: parseResult.fileHash,
     businessDate: parseResult.businessDate,
     businessDateSource: parseResult.businessDateSource,
@@ -703,29 +728,32 @@ async function scanTransactions(rawRows, meta) {
       totalRows: 0,
       rowsToImport: [],
       errors: ["No transaction rows found. The file has headers but no data rows."],
+      // Every other exit from this function carries a validation object, so the
+      // caller never has to ask which shape it got. An empty ledger blocks.
+      validation: validateImport({ rawRows: [], rows: [], type: "transactions" }),
       meta,
     };
   }
 
   const rows = [];
   const trailers = [];
+  const coercions = [];
   let skipped = 0;
 
   for (const cells of best.rows) {
-    const mapped = mapTransactionRow(best.headers, cells);
+    const mapped = mapTransactionRow(best.headers, cells, coercions);
     // Trailer: total but no date. Keep it for the checksum, never as data.
     if (isTrailerRow(mapped)) { trailers.push(mapped); continue; }
     if (!mapped.date || !isIsoDate(mapped.date)) { skipped++; continue; }
     rows.push(mapped);
   }
 
-  // Checksum. A mismatch does not block the import — the parsed rows are still
-  // the best available truth — but it is surfaced in the scan so a bad file is
-  // never imported unnoticed.
+  // Checksum against the file's own declared total.
   const parsedCents = sumCents(rows.map((r) => r.amount));
   const trailerCents = trailers.length ? toCents(trailers[trailers.length - 1].amount) : null;
   const errors = [];
-  if (trailerCents !== null && trailerCents !== parsedCents) {
+  const mismatch = trailerCents !== null && trailerCents !== parsedCents;
+  if (mismatch) {
     errors.push(
       `Amount total does not match the file's own total: parsed ${fromCents(parsedCents).toFixed(2)}, file says ${fromCents(trailerCents).toFixed(2)}.`
     );
@@ -733,6 +761,35 @@ async function scanTransactions(rawRows, meta) {
   if (skipped) {
     errors.push(`${skipped} row(s) skipped: no readable date.`);
   }
+
+  // These two signals used to end here, in a `scan.errors` array nothing read.
+  // Running them through validateImport gives them the same gate as every other
+  // report type: a ledger that disagrees with its own total is not imported
+  // unless the operator explicitly forces it.
+  //
+  // The grid handed to the validator is the section actually being imported, not
+  // the whole file — the other four sections have different widths and are
+  // discarded, so validating against them would report raggedness that has no
+  // bearing on what gets written.
+  const validation = validateImport({
+    rawRows: [best.headers, ...best.rows],
+    rows,
+    type: "transactions",
+    knownColumns: new Set(Object.keys(TXN_COLUMN_MAP)),
+    coercions,
+    dateFailures: skipped,
+    extraFindings: [
+      mismatch
+        ? makeFinding("semantic", SEVERITY.ERROR, "checksum_mismatch",
+          `The amounts in this file do not add up to the total the file itself declares: parsed ${fromCents(parsedCents).toFixed(2)}, file says ${fromCents(trailerCents).toFixed(2)} (difference ${fromCents(parsedCents - trailerCents).toFixed(2)}). The download is incomplete or a column was misread.`,
+          { parsed: fromCents(parsedCents), declared: fromCents(trailerCents) })
+        : null,
+      trailerCents === null
+        ? makeFinding("structural", SEVERITY.WARNING, "no_checksum_row",
+          "This file has no total row, so the parsed amounts could not be checked against the file's own total.")
+        : null,
+    ],
+  });
 
   return {
     type: "transactions",
@@ -746,6 +803,7 @@ async function scanTransactions(rawRows, meta) {
       matches: trailerCents === null ? null : trailerCents === parsedCents,
     },
     errors,
+    validation,
     meta,
     debug: {
       rawRowCount: rawRows?.length || 0,
@@ -1214,7 +1272,24 @@ export async function importReport(scanResult, meta = {}) {
     // has no ledger and be told it cannot be undone.
     return { ...result, importId: importSession.importId };
   } catch (e) {
-    // Import failed - session remains as 'in_progress' for debugging
+    // Attach the SESSION id to the error. Callers mint their own `meta.importId`
+    // for their queue bookkeeping, but the rollback ledger is keyed by the id
+    // that createImportSession minted here — a caller rolling back with its own
+    // id looks up an import that has no ledger and is told, wrongly, that the
+    // undo is impossible. Surfacing the real id is the only way the caller can
+    // clean up. Non-enumerable so the id never leaks into a serialised error.
+    if (importSession?.importId) {
+      Object.defineProperty(e, 'importId', {
+        value: importSession.importId,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+      // Mark the session failed so it is not left indistinguishable from an
+      // import that is still running, and so rollback can tell an atomic
+      // no-rows-committed failure from rows it can no longer identify.
+      await failImportSession(importSession.importId, e?.message).catch(() => {});
+    }
     throw e;
   }
 }
@@ -1372,7 +1447,6 @@ async function doImport(scanResult, meta, importId) {
     }
 
     // Flag impossible/likely-error shifts so payroll review sees them immediately.
-    const { normalisePunch } = await import("@/lib/timecardCalc");
     const flagged = [];
     for (const p of newRows) {
       const n = normalisePunch(p);

@@ -8,6 +8,7 @@ import { useOccupancy } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { money, money2, sum, inRange, C } from "@/lib/hotel";
 import { filterCommittedPay } from "@/lib/payrollCalc";
+import { ErrorState } from "@/components/ui/status";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts";
 
 const HORIZONS = [
@@ -31,16 +32,19 @@ function buildPropertyFilter(property) {
 
 export default function Forecasting() {
   const { property, properties, accessibleProperties, dateRange, months, year } = useGlobalFilters();
-  const { data: occ = [] } = useOccupancy(dateRange, property, months);
+  const occQ = useOccupancy(dateRange, property, months);
+  const { data: occ = [] } = occQ;
   const propertyKey = Array.isArray(property) ? property.join(",") : property;
-  const { data: expenses = [] } = useQuery({
+  const expensesQ = useQuery({
     queryKey: ["expenses", propertyKey],
     queryFn: () => db.entities.Expense.filter(buildPropertyFilter(property), "-expense_date", 100000),
   });
-  const { data: payroll = [] } = useQuery({
+  const payrollQ = useQuery({
     queryKey: ["payroll", propertyKey],
     queryFn: () => db.entities.PayrollRun.filter(buildPropertyFilter(property), "-pay_period_start", 100000),
   });
+  const { data: expenses = [] } = expensesQ;
+  const { data: payroll = [] } = payrollQ;
 
   const occRows = useMemo(() => occ.filter((r) => {
     if (!r.date) return false;
@@ -150,6 +154,18 @@ export default function Forecasting() {
             : "no expense data yet — expenses assumed at 65% of revenue"}
         </p>
       </header>
+
+      {/* Without this, a failed read produced a full forecast off a zero baseline: $0
+          projected revenue, and the header line claimed "no expense data yet" when the
+          expense read had in fact failed. */}
+      {(occQ.isError || expensesQ.isError || payrollQ.isError) && (
+        <ErrorState
+          title="Could not load the historical baseline"
+          description="A forecast is only your own history projected forward, and at least one of those reads failed. Every projection below is extrapolated from missing history — do not budget or set rates from these numbers."
+          error={occQ.error || expensesQ.error || payrollQ.error}
+          onRetry={() => { occQ.refetch(); expensesQ.refetch(); payrollQ.refetch(); }}
+        />
+      )}
 
       {/* Historical baseline */}
       <Card title="Historical Baseline" subtitle={`From ${dateRange.from || "—"} to ${dateRange.to || "—"}`}>

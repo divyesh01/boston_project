@@ -15,6 +15,8 @@ import { refundTotal } from "@/lib/paymentNorm";
 import { toast } from "sonner";
 import { EXPENSE_CATEGORIES, EXPENSE_FREQUENCIES, EXPENSE_STATUSES, expenseLabel, frequencyLabel, isStandardCategory, slugifyCategory } from "@/lib/expenseCategories";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeCsvCell } from "@/lib/securityUtils";
+import { guardDestructiveAction } from "@/lib/deleteGuard";
+import { ErrorState } from "@/components/ui/status";
 
 function useExpenses(propertyId) {
   return useQuery({
@@ -55,8 +57,14 @@ export default function Expenses() {
   const { data: occ = [] } = useOccupancy(dateRange, property, months);
   const { data: payRecords = [] } = usePaymentData(dateRange, property, months);
   const qc = useQueryClient();
-  const { data: expenses = [] } = useExpenses(property);
-  const { data: payroll = [] } = usePayroll(property);
+  const expensesQ = useExpenses(property);
+  const payrollQ = usePayroll(property);
+  const { data: expenses = [] } = expensesQ;
+  const { data: payroll = [] } = payrollQ;
+  // A failed read renders as "No expenses match your filters" — zero cost, which
+  // inflates every net-profit figure derived from this page.
+  const readFailed = expensesQ.isError ? expensesQ : payrollQ.isError ? payrollQ : null;
+  const retryReads = () => { expensesQ.refetch(); payrollQ.refetch(); };
   const [showForm, setShowForm] = useState(false);
   const [showPayrollForm, setShowPayrollForm] = useState(false);
   const [targetMargin, setTargetMargin] = useState(15);
@@ -255,50 +263,61 @@ export default function Expenses() {
     rotateCsrfToken();
   };
 
-  const handleDelete = async (id) => {
-    // Rate limiting for sensitive actions
-    const rateLimit = sensitiveActionRateLimiter.check();
-    if (!rateLimit.allowed) {
-      toast.error(`Rate limited. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
-      return;
-    }
-    // CSRF validation
-    const csrfToken = getCsrfToken();
-    if (!validateCsrfToken(csrfToken)) {
-      toast.error("Invalid security token. Please refresh the page and try again.");
-      rotateCsrfToken();
+  // Both deletes below already had CSRF and rate limiting but no confirmation:
+  // one click on a small trash icon in a virtualised list destroyed a financial
+  // record. The shared guard adds the dialog and keeps the two security checks
+  // in the same order everywhere in the app.
+  const handleDelete = async (x) => {
+    const gate = guardDestructiveAction({
+      title: `Delete the expense "${x?.expense_name || "untitled"}"?`,
+      lines: [
+        `${money(x?.amount || 0)} · ${x?.vendor || "no vendor"} · ${expenseLabel(x?.category)} · ${frequencyLabel(x?.frequency)}`,
+        "Net profit and break-even on this page are computed from expenses, so both will change.",
+      ],
+    });
+    if (!gate.ok) {
+      if (gate.message) toast.error(gate.message);
       return;
     }
 
     try {
-      await db.entities.Expense.delete(id);
-      toast.success("Expense deleted.");
-    } catch {
-      toast.error("Could not delete the expense.");
+      await db.entities.Expense.delete(x.id);
+      toast.success(`Expense "${x?.expense_name || "untitled"}" deleted.`);
+    } catch (err) {
+      toast.error(`Could not delete the expense: ${err?.message || err}. Nothing was removed.`);
       return;
     }
     qc.invalidateQueries({ queryKey: ["expenses"] });
-    rotateCsrfToken();
+    gate.complete();
   };
 
-  const handleDeletePayroll = async (id) => {
-    // Rate limiting for sensitive actions
-    const rateLimit = sensitiveActionRateLimiter.check();
-    if (!rateLimit.allowed) {
-      toast.error(`Rate limited. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
-      return;
-    }
-    // CSRF validation
-    const csrfToken = getCsrfToken();
-    if (!validateCsrfToken(csrfToken)) {
-      toast.error("Invalid security token. Please refresh the page and try again.");
-      rotateCsrfToken();
+  const handleDeletePayroll = async (p) => {
+    const committed = p?.payroll_status === "approved" || p?.payroll_status === "paid";
+    const gate = guardDestructiveAction({
+      title: `Delete the payroll run for ${p?.employee_name || "this employee"}?`,
+      lines: [
+        `${money(p?.total_pay || 0)} · ${p?.department || "no department"} · ${p?.hours || 0}h · marked ${p?.payroll_status || "draft"}`,
+        committed
+          ? `This run is ${p.payroll_status}, so deleting it removes the record of pay already committed and will increase reported Money Kept by ${money(p?.total_pay || 0)}.`
+          : "This run is not approved or paid, so Money Kept does not change.",
+      ],
+    });
+    if (!gate.ok) {
+      if (gate.message) toast.error(gate.message);
       return;
     }
 
-    await db.entities.PayrollRun.delete(id);
+    try {
+      await db.entities.PayrollRun.delete(p.id);
+      toast.success(`Payroll run for ${p?.employee_name || "employee"} deleted.`);
+    } catch (err) {
+      // This delete used to have no error handling at all: a rejection left the
+      // row on screen with no message, which reads as "the click didn't register".
+      toast.error(`Could not delete the payroll run: ${err?.message || err}. Nothing was removed.`);
+      return;
+    }
     qc.invalidateQueries({ queryKey: ["payroll"] });
-    rotateCsrfToken();
+    gate.complete();
   };
 
   const handleStatusChange = async (id, status) => {
@@ -318,6 +337,15 @@ export default function Expenses() {
         <p className="mt-1 text-sm text-slate-400">Manage payroll, track operating expenses, and calculate break-even targets.</p>
         <p className="mt-2 text-xs text-slate-500">{propName} · {periodLabel} · {year}</p>
       </header>
+
+      {readFailed && (
+        <ErrorState
+          title="Could not load costs"
+          description="Expense and payroll figures below are incomplete because a read failed. Treat every net-profit and break-even number on this page as unreliable until it loads."
+          error={readFailed.error}
+          onRetry={retryReads}
+        />
+      )}
 
       {/* SECTION 1: Revenue */}
       <Card title="Revenue" subtitle="Gross revenue from imported reports, refunds & adjustments, and net revenue">
@@ -554,7 +582,7 @@ export default function Expenses() {
                       >
                         {EXPENSE_STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
                       </select>
-                      <button onClick={() => handleDelete(e.id)} className="text-slate-500 hover:text-[#FF6B6B]">
+                      <button onClick={() => handleDelete(e)} className="text-slate-500 hover:text-[#FF6B6B]">
                         <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
@@ -618,7 +646,7 @@ export default function Expenses() {
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="text-sm tabular-nums text-slate-300">{money(p.total_pay || 0)}</span>
-                      <button onClick={() => handleDeletePayroll(p.id)} className="text-slate-500 hover:text-[#FF6B6B]">
+                      <button onClick={() => handleDeletePayroll(p)} className="text-slate-500 hover:text-[#FF6B6B]">
                         <Trash2 className="h-4 w-4" />
                       </button>
                     </div>

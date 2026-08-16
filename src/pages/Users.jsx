@@ -22,6 +22,7 @@ import { ROLES, PERMISSIONS, PERMISSION_KEYS, defaultPermissionsForRole } from "
 import { isCryptoAvailable, validatePasswordStrength, generateTemporaryPassword } from "@/lib/security";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeEmail, sanitizeAlphanumeric, sanitizeText, sanitizeCsvCell } from "@/lib/securityUtils";
 import { isValidEmail, isValidUsername } from "@/lib/validator";
+import PasswordConfirmDialog from "@/components/PasswordConfirmDialog";
 
 const ROLE_BADGE = {
   owner: "bg-purple-500/20 text-purple-300 border-purple-500/40",
@@ -50,6 +51,7 @@ export default function Users() {
   const { data: properties = [] } = useProperties();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [search, setSearch] = useState("");
   const [actionBusy, setActionBusy] = useState(false);
 
@@ -72,13 +74,24 @@ export default function Users() {
 
   // Confirm dialogs
   const [confirmAction, setConfirmAction] = useState(null); // { type, user }
+  // Step-up prompt for MFA changes: { pending: { type, user }, busy, error }.
+  // The typed password is handed straight to performConfirm and is never held in
+  // this page's state.
+  const [pwPrompt, setPwPrompt] = useState(null);
+  // The one-time enrolment secret returned by enable_mfa: { user, secret, uri }.
+  const [mfaHandoff, setMfaHandoff] = useState(null);
 
   const load = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const list = await db.users.list();
       setUsers(list);
     } catch (e) {
+      // "No users found." on a failed read implies the roster is empty, which for an
+      // account-management screen invites the admin to create a duplicate of someone
+      // who already exists.
+      setLoadError(e?.message || String(e));
       toast({ variant: "destructive", title: "Error", description: e.message });
     } finally {
       setLoading(false);
@@ -274,19 +287,15 @@ export default function Users() {
     }
   };
 
-  const runConfirm = async () => {
-    const rateLimit = sensitiveActionRateLimiter.check();
-    if (!rateLimit.allowed) {
-      toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
-      return;
-    }
-    const csrfToken = getCsrfToken();
-    if (!validateCsrfToken(csrfToken)) {
-      toast({ variant: "destructive", title: "Security Error", description: "Invalid security token. Please refresh the page and try again." });
-      rotateCsrfToken();
-      return;
-    }
-    const { type, user: u } = confirmAction;
+  // Turning a second factor OFF, or replacing one that is already live, is a
+  // step-up operation server-side (custom_user_admin#assertActorPassword) and it
+  // asks for the ADMIN's OWN password, not the target user's. An admin who never
+  // enrolled MFA has no code of their own to give, and no admin can produce
+  // another user's code — a password is the only factor the actor always holds.
+  const needsStepUp = (type, u) =>
+    type === "disable_mfa" || (type === "enable_mfa" && !!u?.mfa_enabled);
+
+  const performConfirm = async ({ type, user: u }, currentPassword) => {
     setActionBusy(true);
     try {
       if (type === "delete") {
@@ -305,25 +314,58 @@ export default function Users() {
         await db.users.setStatus(me, u.id, "unlocked");
         toast({ title: "User unlocked", description: `${u.username} can log in again.` });
       } else if (type === "enable_mfa") {
-        const result = await db.users.enableMfa(me, u.id);
-        toast({ 
-          title: "MFA Enabled", 
-          description: `MFA has been enabled for ${u.username}. Share the setup details securely with the user.`,
-        });
-        // In a real app, you'd show the secret/QR code here for the admin to share
-
+        const result = await db.users.enableMfa(me, u.id, currentPassword);
+        // The secret is returned exactly once and is the only way the user can
+        // finish enrolment. Saying "enabled" while dropping it on the floor left
+        // the admin with a locked-out user and nothing to hand them, so show it.
+        setMfaHandoff({ user: u, secret: result?.secret || null, uri: result?.uri || null });
       } else if (type === "disable_mfa") {
-        await db.users.disableMfa(me, u.id);
-        toast({ title: "MFA Disabled", description: `MFA has been disabled for ${u.username}.` });
+        await db.users.disableMfa(me, u.id, currentPassword);
+        toast({
+          title: "MFA Disabled",
+          description: `MFA is off for ${u.username} and their sessions were signed out.`,
+        });
       }
       setConfirmAction(null);
+      setPwPrompt(null);
       rotateCsrfToken();
       await load();
     } catch (e) {
-      toast({ variant: "destructive", title: "Error", description: e.message });
+      const message = e?.message || "The action could not be completed.";
+      // A refused step-up password stays in its dialog to be retyped; anything
+      // else closes it, because retyping a correct password will not help.
+      if (currentPassword !== undefined && /password/i.test(message)) {
+        setPwPrompt((p) => (p ? { ...p, busy: false, error: message } : p));
+        return;
+      }
+      setPwPrompt(null);
+      toast({ variant: "destructive", title: "Error", description: message });
     } finally {
       setActionBusy(false);
     }
+  };
+
+  const runConfirm = async () => {
+    const rateLimit = sensitiveActionRateLimiter.check();
+    if (!rateLimit.allowed) {
+      toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
+      return;
+    }
+    const csrfToken = getCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      toast({ variant: "destructive", title: "Security Error", description: "Invalid security token. Please refresh the page and try again." });
+      rotateCsrfToken();
+      return;
+    }
+    const action = confirmAction;
+    if (needsStepUp(action.type, action.user)) {
+      // Hand off to the password dialog and take this one down, so exactly one
+      // dialog is ever on screen. The action is carried in pwPrompt.pending.
+      setConfirmAction(null);
+      setPwPrompt({ pending: action, busy: false, error: null });
+      return;
+    }
+    await performConfirm(action, undefined);
   };
 
   const isSelf = (u) => me && String(me.id) === String(u.id);
@@ -374,8 +416,18 @@ export default function Users() {
               <TableBody>
                 {loading ? (
                   <TableRow><TableCell colSpan={7} className="py-10 text-center text-muted-foreground">Loading users...</TableCell></TableRow>
+                ) : loadError ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="py-10 text-center">
+                      <p className="font-medium text-[#FF5C5C]">Could not load the user list.</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Accounts may exist that are not shown here — do not treat this as an empty roster. {loadError}
+                      </p>
+                      <Button variant="outline" size="sm" className="mt-3" onClick={load}>Try again</Button>
+                    </TableCell>
+                  </TableRow>
                 ) : filtered.length === 0 ? (
-                  <TableRow><TableCell colSpan={7} className="py-10 text-center text-muted-foreground">No users found.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={7} className="py-10 text-center text-muted-foreground">{users.length === 0 ? "No users found." : "No users match your search."}</TableCell></TableRow>
                 ) : filtered.map((u) => (
                   <TableRow key={u.id}>
                     <TableCell>
@@ -702,6 +754,73 @@ export default function Users() {
               >
                 {actionBusy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Confirm
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* ── Step-up: the admin's own password, for MFA changes ── */}
+      <PasswordConfirmDialog
+        isOpen={!!pwPrompt}
+        busy={!!pwPrompt?.busy}
+        error={pwPrompt?.error || null}
+        title={pwPrompt?.pending?.type === "disable_mfa" ? "Disable MFA for this user" : "Replace this user's second factor"}
+        description={
+          pwPrompt?.pending?.type === "disable_mfa"
+            ? `Enter YOUR password to turn two-factor authentication off for ${pwPrompt?.pending?.user?.username}. Their sessions will be signed out.`
+            : `Enter YOUR password to issue a new authenticator secret for ${pwPrompt?.pending?.user?.username}. Their current authenticator entry will stop working.`
+        }
+        confirmLabel={pwPrompt?.pending?.type === "disable_mfa" ? "Disable MFA" : "Replace factor"}
+        onCancel={() => setPwPrompt(null)}
+        onConfirm={(pw) => performConfirm(pwPrompt.pending, pw)}
+      />
+
+      {/* ── One-time MFA enrolment hand-off ── */}
+      {/* enable_mfa returns the new secret exactly once and revokes the target's
+          other sessions. Discarding the secret here (the old behaviour) left the
+          user signed out of an account now demanding a code that nobody on the
+          property could produce. It has to be displayed so the admin can hand it
+          over in person. */}
+      {mfaHandoff && (
+        <Dialog open onOpenChange={() => setMfaHandoff(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Give {mfaHandoff.user.username} their setup key</DialogTitle>
+              <DialogDescription>
+                Shown once and never again. {mfaHandoff.user.username} must enter this key into an
+                authenticator app before their next login, or they will not be able to sign in.
+                Hand it over in person — not by email or chat.
+              </DialogDescription>
+            </DialogHeader>
+            {mfaHandoff.secret ? (
+              <div className="space-y-3">
+                <div>
+                  <Label>Setup key</Label>
+                  <div className="mt-1 select-all break-all rounded-md border border-white/10 bg-black/30 p-3 font-mono text-sm tracking-wider text-emerald-300">
+                    {mfaHandoff.secret}
+                  </div>
+                </div>
+                {mfaHandoff.uri && (
+                  <div>
+                    <Label>Or paste this into the app</Label>
+                    <div className="mt-1 select-all break-all rounded-md border border-white/10 bg-black/30 p-2 font-mono text-[11px] text-slate-400">
+                      {mfaHandoff.uri}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              // Server said yes but returned nothing usable. Saying "enabled" here
+              // would be a lie the admin cannot act on.
+              <p className="text-sm text-red-400">
+                MFA was enabled but no setup key came back, so there is nothing to hand over.
+                Disable MFA for this user and try again.
+              </p>
+            )}
+            <DialogFooter>
+              <Button onClick={() => setMfaHandoff(null)}>
+                {mfaHandoff.secret ? "I have shared this key" : "Close"}
               </Button>
             </DialogFooter>
           </DialogContent>

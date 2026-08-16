@@ -29,6 +29,7 @@
 // amounts with the sign the PMS emitted, so a future reader cannot re-derive
 // this incorrectly.
 import { convertDate, parseAmount } from "@/lib/csvParser";
+import { recordCoercion } from "@/lib/importValidation";
 
 // Ledger sides — the two roles a row can play, expressed in P&L terms.
 export const LEDGER_SIDE_CHARGE = "charge";       // revenue (raises folio balance)
@@ -191,14 +192,19 @@ export function isTrailerRow(mapped) {
   return !mapped.date && mapped.amount != null;
 }
 
-export function mapTransactionRow(headers, cells) {
+export function mapTransactionRow(headers, cells, coercions) {
   const out = {};
   headers.forEach((h, i) => {
     const field = TXN_COLUMN_MAP[String(h || "").trim()];
     if (!field) return;                       // unmapped column: ignored, not fatal
     const raw = cells[i] == null ? "" : String(cells[i]).trim();
     if (NUMERIC_FIELDS.has(field)) {
-      out[field] = parseAmount(raw);
+      const parsed = parseAmount(raw);
+      // An unreadable amount becomes 0 two lines below, which is indistinguishable
+      // from a real $0.00 posting once written. Logging the coercion is the only
+      // way the scan can say so before the row is imported.
+      recordCoercion(coercions, field, raw, parsed);
+      out[field] = parsed;
     } else if (field === "date") {
       out[field] = raw ? convertDate(raw) : "";
     } else {

@@ -23,6 +23,10 @@ if (globalThis.navigator === undefined) {
 // Now we can safely import our app modules
 const { db } = await import("../src/api/base44Client.js");
 const localDb = (await import("../src/api/localDb.js")).default;
+// db.entities fails closed for an unauthenticated caller (blocker B3), so the
+// probe has to sign in before it reads or writes a single row.
+const { signInAsAllPropertyOwner } = await import("./_harness-auth.mjs");
+await signInAsAllPropertyOwner();
 
 const TEST_PROP = "prop-test-ota";
 

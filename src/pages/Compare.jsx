@@ -6,12 +6,16 @@ import ChannelRevenue from "@/components/compare/ChannelRevenue";
 import { useOccupancy, useSources } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { money, money2, num, pct, inRange, occupancyStats } from "@/lib/hotel";
+import { ErrorState } from "@/components/ui/status";
 
 export default function Compare() {
   const { dateRange, compareDateRange, channel, property, properties, months, compareMonths } = useGlobalFilters();
-  const { data: occ = [], isLoading } = useOccupancy(dateRange, property, months);
-  const { data: prevOcc = [] } = useOccupancy(compareDateRange, property, compareMonths);
-  const { data: sources = [] } = useSources(dateRange, property, months);
+  const occQ = useOccupancy(dateRange, property, months);
+  const prevOccQ = useOccupancy(compareDateRange, property, compareMonths);
+  const sourcesQ = useSources(dateRange, property, months);
+  const { data: occ = [], isLoading } = occQ;
+  const { data: prevOcc = [] } = prevOccQ;
+  const { data: sources = [] } = sourcesQ;
 
   // Shared engine — capacity is summed per property, so portfolio mode no longer
   // collapses to a flat 100 rooms and this page cannot disagree with Dashboard.
@@ -37,6 +41,17 @@ export default function Compare() {
           Period A: {dateRange.from || "—"} → {dateRange.to || "—"} · Period B: {compareDateRange.from || "—"} → {compareDateRange.to || "—"}
         </p>
       </header>
+
+      {/* Without this, a failed read on either side rendered Period B as $0.00 and a
+          -100% swing, which reads as a catastrophic real collapse. */}
+      {(occQ.isError || prevOccQ.isError || sourcesQ.isError) && (
+        <ErrorState
+          title="Could not load both periods"
+          description="A comparison needs both sides, and at least one read failed. The cards below would show the missing period as $0.00 and report a swing that never happened."
+          error={occQ.error || prevOccQ.error || sourcesQ.error}
+          onRetry={() => { occQ.refetch(); prevOccQ.refetch(); sourcesQ.refetch(); }}
+        />
+      )}
 
       <Tabs defaultValue="period">
         <TabsList className="bg-[#0A1628]">

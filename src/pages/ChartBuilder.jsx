@@ -9,6 +9,7 @@ import { useOccupancy, useSources, useGrossRevenue, useUploads } from "@/lib/use
 import { aggregate, downloadCsv, downloadExcel, num, inRange } from "@/lib/hotel";
 import { formatNumber } from "@/lib/decimal";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
+import { ErrorState } from "@/components/ui/status";
 
 const CHARTS = [
   ["bar", "📊 Bar"],
@@ -26,10 +27,14 @@ const Select = ({ value, onChange, options }) => (
 
 export default function ChartBuilder() {
   const { dateRange, property, months } = useGlobalFilters();
-  const { data: occ = [] } = useOccupancy(dateRange, property, months);
-  const { data: src = [] } = useSources(dateRange, property, months);
-  const { data: gross = [] } = useGrossRevenue(dateRange, property, months);
-  const { data: uploads = [] } = useUploads();
+  const occQ = useOccupancy(dateRange, property, months);
+  const srcQ = useSources(dateRange, property, months);
+  const grossQ = useGrossRevenue(dateRange, property, months);
+  const uploadsQ = useUploads();
+  const { data: occ = [] } = occQ;
+  const { data: src = [] } = srcQ;
+  const { data: gross = [] } = grossQ;
+  const { data: uploads = [] } = uploadsQ;
 
   const datasets = useMemo(() => {
     const base = [
@@ -78,6 +83,18 @@ export default function ChartBuilder() {
         <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Universal Chart Builder</h1>
         <p className="mt-1 text-sm text-slate-400">Pick any column for grouping and any column for values.</p>
       </header>
+
+      {/* Without this, a failed read still populated the dataset dropdown but drew an
+          empty chart and a "0 groups" summary table — identical to a dataset that
+          genuinely has no rows. */}
+      {(occQ.isError || srcQ.isError || grossQ.isError || uploadsQ.isError) && (
+        <ErrorState
+          title="Could not load the chart datasets"
+          description="Every bar, slice, and table row below is built from these reads, and at least one failed. An empty chart here means the data did not arrive, not that the dataset is empty."
+          error={occQ.error || srcQ.error || grossQ.error || uploadsQ.error}
+          onRetry={() => { occQ.refetch(); srcQ.refetch(); grossQ.refetch(); uploadsQ.refetch(); }}
+        />
+      )}
 
       <div className="grid gap-4 rounded-2xl border border-white/5 bg-[#0F1F35]/60 p-5 sm:grid-cols-2 xl:grid-cols-5">
         <div>

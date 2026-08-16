@@ -15,6 +15,7 @@ import LedgerStrip from "@/components/transactions/LedgerStrip";
 import EmployeeCompare from "@/components/transactions/EmployeeCompare";
 import CommissionsPanel from "@/components/transactions/CommissionsPanel";
 import LedgerTable from "@/components/transactions/LedgerTable";
+import { ErrorState } from "@/components/ui/status";
 
 const tip = { background: "#0A1628", border: "1px solid #ffffff14", borderRadius: 12, color: "#e2e8f0" };
 const axis = { fill: "#64748b", fontSize: 10 };
@@ -51,7 +52,7 @@ export default function Transactions() {
   const [grain, setGrain] = useState("daily");
   const [includeSystem, setIncludeSystem] = useState(false);
 
-  const { data: rows = [], isLoading } = useTransactions(dateRange, property, months);
+  const { data: rows = [], isLoading, isError, error, refetch } = useTransactions(dateRange, property, months);
   const { data: sources = [] } = useSources(dateRange, property, months);
 
   // Belt and braces: the query may be served from a cache built for a wider
@@ -76,6 +77,26 @@ export default function Transactions() {
   const automatedRevenue = stats.revenue - humanRevenue;
 
   if (isLoading) return <p className="text-slate-500">Loading transaction ledger…</p>;
+
+  // Checked before the empty state below, which tells the operator to go and import a
+  // file. On a read failure that advice is wrong and would send them to re-import data
+  // they already have.
+  if (isError) {
+    return (
+      <div className="space-y-6">
+        <header>
+          <p className="text-[11px] uppercase tracking-[0.3em] text-[#00D4FF]">Ledger Intelligence</p>
+          <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Transactions</h1>
+        </header>
+        <ErrorState
+          title="Could not load the transaction ledger"
+          description="Nothing is missing from your data — this read failed. No totals are shown because they would be wrong."
+          error={error}
+          onRetry={refetch}
+        />
+      </div>
+    );
+  }
 
   if (!scoped.length) {
     return (

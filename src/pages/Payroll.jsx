@@ -3,7 +3,7 @@ import { db, runInTransaction } from '@/api/base44Client';
 import React, { useState } from "react";
 import { Plus, Trash2, DollarSign, CheckCircle2, X, Save, Zap, CalendarClock, Power, UserPlus, Target, TrendingUp, History, Loader2, ArrowLeft, Wallet } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
-import { EmptyState } from "@/components/ui/status";
+import { EmptyState, ErrorState } from "@/components/ui/status";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import StatusBadge from "@/components/ui-exec/StatusBadge";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,6 +11,8 @@ import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { money, num, pct, C, PROPERTY } from "@/lib/hotel";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { nextEmployeeId } from "@/lib/employeeId";
+import { guardDestructiveAction } from "@/lib/deleteGuard";
+import { toast } from "sonner";
 import { sfx } from "@/lib/sound";
 import {
   calculatePay,
@@ -89,8 +91,14 @@ function useOccupancyRange(from, to, propertyId) {
 export default function Payroll() {
   const { property, properties } = useGlobalFilters();
   const qc = useQueryClient();
-  const { data: payroll = [] } = usePayroll(property);
-  const { data: staff = [] } = useStaff();
+  const payrollQ = usePayroll(property);
+  const staffQ = useStaff();
+  const { data: payroll = [] } = payrollQ;
+  const { data: staff = [] } = staffQ;
+  // "No payroll runs yet" on a failed read looks like a month nobody has been paid
+  // for, which is exactly the state that prompts someone to run payroll twice.
+  const readFailed = payrollQ.isError ? payrollQ : staffQ.isError ? staffQ : null;
+  const retryReads = () => { payrollQ.refetch(); staffQ.refetch(); };
 
   const [showForm, setShowForm] = useState(false);
   const [showStaffForm, setShowStaffForm] = useState(false);
@@ -355,10 +363,30 @@ export default function Payroll() {
     qc.invalidateQueries({ queryKey: ["staff"] });
   };
 
-  const handleDeleteStaff = async (id) => {
-    await db.entities.Staff.delete(id);
+  const handleDeleteStaff = async (s) => {
+    const gate = guardDestructiveAction({
+      title: `Remove ${s?.employee_name || "this staff member"} from the directory?`,
+      lines: [
+        `${s?.employee_id || "no employee id"} · ${s?.department || "no department"} · ${money(s?.base_rate || 0)}${s?.pay_type === "salary" ? "/mo" : "/hr"}`,
+        "Payroll runs already recorded for this person are kept — runs store the employee name, not a link to this record.",
+        "They will no longer appear in future payroll runs or projections.",
+      ],
+    });
+    if (!gate.ok) {
+      if (gate.message) toast.error(gate.message);
+      return;
+    }
+    try {
+      await db.entities.Staff.delete(s.id);
+    } catch (e) {
+      sfx.error();
+      toast.error(`Could not remove ${s?.employee_name || "the staff member"}: ${e?.message || e}`);
+      return;
+    }
+    gate.complete();
     sfx.pop();
     qc.invalidateQueries({ queryKey: ["staff"] });
+    toast.success(`${s?.employee_name || "Staff member"} removed from the directory.`);
   };
 
   // ─── Post Historical Payroll (bulk create for past months) ───
@@ -605,10 +633,36 @@ export default function Payroll() {
     invalidateMoney();
   };
 
-  const handleDelete = async (id) => {
-    await db.entities.PayrollRun.delete(id);
+  const handleDelete = async (p) => {
+    // A committed run is money that left the business. Deleting one does not
+    // just remove a row — it raises reported Money Kept by the same amount,
+    // because only approved and paid runs are subtracted from it. The operator
+    // is told that explicitly rather than being asked "are you sure?".
+    const committed = p?.payroll_status === "approved" || p?.payroll_status === "paid";
+    const gate = guardDestructiveAction({
+      title: `Delete the payroll run for ${p?.employee_name || "this employee"}?`,
+      lines: [
+        `${money(p?.total_pay || 0)} · ${p?.pay_period_start || "—"} to ${p?.pay_period_end || "—"} · marked ${p?.payroll_status || "draft"}`,
+        committed
+          ? `This run is ${p.payroll_status}, so deleting it removes the record of pay already committed and will increase reported Money Kept by ${money(p?.total_pay || 0)}.`
+          : "This run is not approved or paid, so Money Kept does not change.",
+      ],
+    });
+    if (!gate.ok) {
+      if (gate.message) toast.error(gate.message);
+      return;
+    }
+    try {
+      await db.entities.PayrollRun.delete(p.id);
+    } catch (e) {
+      sfx.error();
+      toast.error(`Could not delete the payroll run: ${e?.message || e}. Nothing was removed.`);
+      return;
+    }
+    gate.complete();
     sfx.pop();
     invalidateMoney();
+    toast.success(`Payroll run for ${p?.employee_name || "employee"} deleted.`);
   };
 
   // ─── Projection & break-even engine ───
@@ -638,6 +692,13 @@ export default function Payroll() {
 
   // Monthly payroll row source: prefer the real (logged) runs when the month is
   // already in the books; otherwise model every active staff member's pay.
+  //
+  // Deliberately NOT filtered through filterCommittedPay, unlike every consumer
+  // that reports money kept or profit for a real period. This is a forward
+  // break-even projection against hypothetical revenue, so a draft run is the best
+  // available estimate of what that month will cost — excluding it would understate
+  // the projection. Do not "correct" this to match the dashboard: the two are
+  // answering different questions.
   function payrollForMonth(periodEnd) {
     const actual = payroll.filter((p) => p.pay_period_end === periodEnd);
     if (actual.length) {
@@ -1062,7 +1123,7 @@ export default function Payroll() {
                   >
                     <Power className="h-3 w-3" /> {isActive ? "Active" : "Inactive"}
                   </button>
-                  <button onClick={() => handleDeleteStaff(s.id)} className="text-slate-500 hover:text-[#FF6B6B]">
+                  <button onClick={() => handleDeleteStaff(s)} className="text-slate-500 hover:text-[#FF6B6B]">
                     <Trash2 className="h-4 w-4" />
                   </button>
                 </div>
@@ -1208,18 +1269,27 @@ export default function Payroll() {
                   <option value="approved">Approved</option>
                   <option value="paid">Paid</option>
                 </select>
-                <button onClick={() => handleDelete(p.id)} className="text-slate-500 hover:text-[#FF6B6B]">
+                <button onClick={() => handleDelete(p)} className="text-slate-500 hover:text-[#FF6B6B]">
                   <Trash2 className="h-4 w-4" />
                 </button>
               </div>
             </div>
           ))}
           {!payroll.length && (
-            <EmptyState
-              icon={Wallet}
-              title="No payroll runs yet"
-              description="Add staff above and hit “Run Payroll Now”, or add an entry manually. Engine-generated runs are auto-approved on the last day of the month."
-            />
+            readFailed ? (
+              <ErrorState
+                title="Could not load payroll runs"
+                description="Runs may exist that are not shown. Do not run payroll again until this loads — that would pay the same period twice."
+                error={readFailed.error}
+                onRetry={retryReads}
+              />
+            ) : (
+              <EmptyState
+                icon={Wallet}
+                title="No payroll runs yet"
+                description="Add staff above and hit “Run Payroll Now”, or add an entry manually. Engine-generated runs are auto-approved on the last day of the month."
+              />
+            )
           )}
         </div>
       </Card>

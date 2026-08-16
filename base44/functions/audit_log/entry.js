@@ -59,10 +59,33 @@ export default async function (req) {
     // IndexedDB corruption guard, the server's (computed here + verified by
     // audit_verify) is the forensic source of truth against DB-admin tampering.
     // UI verification should call audit_verify for authoritative results.
-    const chainSecret = secrets.get('AUDIT_CHAIN_SECRET') || 'insecure-dev-audit-secret-change-me';
+    // FAIL CLOSED on a missing secret. This used to fall back to a hard-coded
+    // default, which is published in this repository: an unconfigured
+    // deployment produced hashes that anyone holding this source could
+    // recompute, while audit_verify still reported a green chain. A trail that
+    // reports "verified" but can be forged is worse than no trail, because it
+    // is believed. Refuse the write instead — the operator sees it immediately,
+    // because no rows accumulate and the audit page's verification says the
+    // secret is missing.
+    const chainSecret = secrets.get('AUDIT_CHAIN_SECRET');
+    if (!chainSecret) {
+      console.error('[audit_log] AUDIT_CHAIN_SECRET is not configured — refusing to write an unverifiable audit row');
+      return Response.json({
+        error: 'Audit chain secret is not configured. Set AUDIT_CHAIN_SECRET on this deployment before using it.',
+        code: 'chain_secret_missing',
+      }, { status: 503 });
+    }
     const lastEntries = await base44.asServiceRole.entities.AuditLog.filter({}, '-created_date', 1, 0);
-    const previousHash = (lastEntries && lastEntries[0] && lastEntries[0].hash) || '0'.repeat(64);
-    const nowIso = new Date().toISOString();
+    const lastRow = (lastEntries && lastEntries[0]) || null;
+    const previousHash = (lastRow && lastRow.hash) || '0'.repeat(64);
+    // created_date is the column audit_verify orders the chain by, so it must be
+    // STRICTLY increasing. Two rows written inside the same millisecond would
+    // tie, and the verifier could then walk them in the opposite order to the
+    // one they were linked in and report a chain break that never happened.
+    // Nudging forward by 1ms costs nothing and removes that class of false
+    // alarm — and a false alarm is indistinguishable from a real one.
+    const nowIso = monotonicIso(lastRow && lastRow.created_date);
+    // AUDIT_CANONICAL_V1 = user_id,action,performed_by_id,performed_by,property_id,result,detail,created_date,previous_hash
     const canonical = JSON.stringify({
       user_id: payload.user_id,
       action: payload.action,
@@ -100,4 +123,14 @@ export default async function (req) {
     console.error("Audit log error:", err);
     return Response.json({ error: "Internal server error" }, { status: 500 });
   }
+}
+
+// Next ISO timestamp that is strictly greater than the previous row's. Shared in
+// spirit (not in code — the base44 host has no module sharing between functions)
+// with base44/functions/custom_user_admin/entry.js, the other writer on this
+// chain. See the note at the call site for why strict monotonicity matters.
+function monotonicIso(lastIso) {
+  const now = Date.now();
+  const last = lastIso ? Date.parse(lastIso) : NaN;
+  return new Date(Number.isFinite(last) && last >= now ? last + 1 : now).toISOString();
 }

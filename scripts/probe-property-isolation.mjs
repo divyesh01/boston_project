@@ -1,0 +1,300 @@
+// Probe for "property isolation fails open and skips half the data layer"
+// (B1, B2, B3, B4).
+//
+// Three separate defects compose into a live cross-property leak that needs no
+// adversarial behaviour at all:
+//
+//   B3 src/api/base44Client.js:445-459 — resolvePropertyAccessUncached() returns
+//      `null` on THREE failure paths (no user, property_access unset, any thrown
+//      error), and `null` is the value applyPropertyFilter treats as "apply no
+//      filter". Unauthenticated, misconfigured and broken all silently escalate
+//      to full-portfolio scope. Failing open is the wrong direction for a
+//      control whose whole job is to say no.
+//
+//   B2 PROPERTY_TABLES omits `Property`, so Property.list() hands the entire
+//      roster (names, codes, room counts) to every account.
+//
+//   B4 PROPERTY_TABLES also omits DailyFinancialAggregate, ScanResult,
+//      TimecardPunch, Reservation, RoomType and ChannelMap — tables that all
+//      carry property_id. Rows in them are readable and writable across
+//      properties even when the proxy is used correctly.
+//
+//   B1 getDailyAggregates() (src/lib/dailyAggregates.js) reads the raw Dexie
+//      table, so `propertyId: 'all'` means every property on earth rather than
+//      every property the caller may see — and the Dashboard PREFERS that
+//      source over the proxy-clamped ledgers.
+//
+// Scope of the fix (the user's decision): launch is restricted to accounts
+// authorised for all properties, AND these client-side controls are repaired as
+// defence-in-depth. B5 — that Dexie in the user's own browser is the only entity
+// store, so none of this is a server-side boundary — stays open by decision.
+// That is exactly why the checks below still matter: they are what stands
+// between a restricted account and the whole portfolio if the launch gate is
+// ever loosened, and they must not be quietly reintroduced.
+//
+// Run: node --import ./scripts/_loader-boot.mjs scripts/probe-property-isolation.mjs
+
+await import("fake-indexeddb/auto");
+globalThis.crypto ??= (await import("node:crypto")).webcrypto;
+
+const __store = new Map();
+const __storage = {
+  getItem: (k) => (__store.has(k) ? __store.get(k) : null),
+  setItem: (k, v) => __store.set(k, String(v)),
+  removeItem: (k) => __store.delete(k),
+  clear: () => __store.clear(),
+};
+globalThis.localStorage = __storage;
+globalThis.sessionStorage = __storage;
+globalThis.window = globalThis;
+if (globalThis.navigator === undefined) {
+  Object.defineProperty(globalThis, "navigator", {
+    value: { userAgent: "harness", language: "en-US" },
+    configurable: true,
+  });
+}
+
+let pass = 0;
+let fail = 0;
+const T = (name, cond, detail = "") => {
+  if (cond) { pass++; console.log(`  PASS  ${name}`); }
+  else { fail++; console.log(`  FAIL  ${name}${detail ? `\n          ${detail}` : ""}`); }
+};
+
+const localDb = (await import("@/api/localDb")).default;
+const { db, invalidatePropertyAccess, browserHashPassword } = await import("@/api/base44Client");
+const { getDailyAggregates } = await import("@/lib/dailyAggregates");
+const { secureStore } = await import("@/lib/securityUtils");
+
+const A = "prop_a";
+const B = "prop_b";
+const PASSWORD = "Probe-Password-9!";
+const SALT = "0123456789abcdef0123456789abcdef";
+
+// The client stores its offline session under this key via secureStore (AES-GCM
+// into localStorage). It is module-private in base44Client.js, so the literal is
+// repeated here; §1 asserts the impersonation actually took effect, which is what
+// catches it if the key ever changes. See sessionAs() for why direct
+// impersonation is necessary rather than calling db.auth.login().
+const LOCAL_SESSION_KEY = "rr_local_session";
+
+const USERS = [
+  { id: "u_owner", username: "owner1", email: "owner@probe.local", role: "owner", property_access: "all" },
+  // A one-property clerk: the account the leak was found with.
+  { id: "u_clerk_a", username: "clerk_a", email: "clerk_a@probe.local", role: "manager", property_access: [A] },
+  // property_access never set. Created by any code path that forgets the field —
+  // and today the most dangerous account in the system, because "unset" reads as
+  // "unrestricted".
+  { id: "u_unset", username: "unset1", email: "unset@probe.local", role: "manager" },
+  // property_access holding NUMBERS while property_id columns hold strings.
+  // Dexie's ++id generates numbers and Users.jsx stores p.id raw, so this shape
+  // is reachable in production. A type mismatch must fail closed.
+  { id: "u_numeric", username: "numeric1", email: "numeric@probe.local", role: "manager", property_access: [1, 2] },
+];
+
+async function seed() {
+  for (const t of localDb.tables) await t.clear();
+
+  await localDb.Property.bulkAdd([
+    { id: A, code: "AAA", name: "Alpha Inn", rooms: 40, active: true },
+    { id: B, code: "BBB", name: "Bravo Lodge", rooms: 60, active: true },
+  ]);
+
+  const hash = "$pbkdf2$" + (await browserHashPassword(PASSWORD, SALT));
+  await localDb.User.bulkAdd(
+    USERS.map((u) => ({
+      ...u,
+      full_name: u.username,
+      is_active: true,
+      is_locked: false,
+      mfa_enabled: false,
+      failed_login_count: 0,
+      salt: SALT,
+      password_hash: hash,
+      created_date: new Date().toISOString(),
+    })),
+  );
+
+  for (const pid of [A, B]) {
+    await localDb.TransactionLine.bulkAdd([
+      { property_id: pid, date: "2026-01-05", username: "clerk", transaction_code: "RM", transaction_type: "CHARGE", amount: 100, folio_number: `${pid}-1` },
+      { property_id: pid, date: "2026-01-06", username: "clerk", transaction_code: "RM", transaction_type: "CHARGE", amount: 200, folio_number: `${pid}-2` },
+    ]);
+    await localDb.OccupancyDay.add({ property_id: pid, date: "2026-01-05", rooms_sold: 10, total_rooms: 40, total_revenue: 1000 });
+    await localDb.HotelMetric.add({ property_id: pid, business_date: "2026-01-05", section: "Revenue", metric_name: "YTD Revenue", period: "ytd", value: 5000 });
+    await localDb.UploadedReport.add({ property_id: pid, file_name: `${pid}.csv`, uploaded_at: "2026-01-05T00:00:00.000Z" });
+    // Tables that carry property_id but are absent from PROPERTY_TABLES today.
+    await localDb.DailyFinancialAggregate.add({ property_id: pid, business_date: "2026-01-05", occ_revenue: 1000, payment_total: 900 });
+    await localDb.ScanResult.add({ property_id: pid, file_id: `${pid}-f1`, scanned_at: "2026-01-05T00:00:00.000Z", health_score: 90 });
+    await localDb.TimecardPunch.add({ property_id: pid, employee_name: "Someone", shift_date: "2026-01-05" });
+    await localDb.Reservation.add({ property_id: pid, channel: "Direct", confirmation_num: `${pid}-C1`, check_in: "2026-01-05", check_out: "2026-01-06", status: "booked" });
+    await localDb.RoomType.add({ property_id: pid, name: "King", total_inventory: 10 });
+    await localDb.ChannelMap.add({ property_id: pid, channel_name: "Expedia", local_room_id: "K", remote_room_id: "EXP-K" });
+  }
+}
+
+/**
+ * Establish an offline session for a user id WITHOUT going through
+ * db.auth.login().
+ *
+ * Deliberate: the launch gate added for B5 refuses exactly these restricted
+ * accounts at login (§7 asserts that). The isolation checks are defence in depth
+ * for the state the gate is meant to prevent, so they have to be able to reach
+ * that state. Writing the session record the same way handleLocalAuthLogin does
+ * is the smallest way to do it without weakening the gate to test around it.
+ *
+ * If this ever silently stops working, every isolation check below would go
+ * green for the wrong reason — an unauthenticated caller sees zero rows once the
+ * fail-closed change lands, which looks identical to perfect isolation. That is
+ * why each call is followed by a hard assertion that the session is live.
+ */
+async function sessionAs(userId, label) {
+  await secureStore(
+    LOCAL_SESSION_KEY,
+    JSON.stringify({ userId, expiresAt: new Date(Date.now() + 3600e3).toISOString() }),
+  );
+  invalidatePropertyAccess();
+  const me = await db.auth.me();
+  T(`session is live as ${label} (guards against a vacuous pass below)`,
+    !!me && me.id === userId, `auth.me() => ${JSON.stringify(me && { id: me.id, role: me.role })}`);
+  return me;
+}
+
+async function signOut() {
+  await db.auth.logout();
+  invalidatePropertyAccess();
+}
+
+const ids = (rows) => rows.map((r) => r.property_id ?? r.id).sort().join(",");
+const threw = async (fn) => {
+  try { await fn(); return null; } catch (e) { return e.message || String(e); }
+};
+
+await seed();
+
+// ── 1. Owner baseline ───────────────────────────────────────────────────────
+// Every verify suite in scripts/ reads through this proxy, so an over-tight fix
+// would show up here first. An all-property account must keep seeing everything.
+console.log("\n=== 1. An all-property account still sees every property ===");
+await sessionAs("u_owner", "owner");
+let rows = await db.entities.TransactionLine.filter({});
+T("owner sees both properties' transactions", ids(rows) === `${A},${A},${B},${B}`, ids(rows));
+rows = await db.entities.Property.list();
+T("owner sees the whole property roster", ids(rows) === `${A},${B}`, ids(rows));
+rows = await getDailyAggregates({ propertyId: "all" });
+T("owner sees every daily aggregate", ids(rows) === `${A},${B}`, ids(rows));
+rows = await db.entities.DailyFinancialAggregate.filter({});
+T("owner reads aggregates through the proxy too", ids(rows) === `${A},${B}`, ids(rows));
+
+// ── 2. The proxy-covered tables (the part that already worked) ───────────────
+console.log("\n=== 2. A one-property clerk, on tables the proxy knows about ===");
+await sessionAs("u_clerk_a", "clerk_a");
+rows = await db.entities.TransactionLine.filter({});
+T("transactions are scoped to the clerk's property", ids(rows) === `${A},${A}`, ids(rows));
+rows = await db.entities.HotelMetric.list();
+T("statistics are scoped", ids(rows) === A, ids(rows));
+T("a cross-property write is refused",
+  (await threw(() => db.entities.TransactionLine.create({ property_id: B, date: "2026-02-01", amount: 1 }))) !== null);
+
+// ── 3. B2: the property roster ──────────────────────────────────────────────
+console.log("\n=== 3. The property roster (B2) ===");
+rows = await db.entities.Property.list();
+T("the clerk sees only their own property in the roster", ids(rows) === A,
+  `${ids(rows)}  — names leaked: ${rows.map((r) => r.name).join(", ")}`);
+rows = await db.entities.Property.filter({});
+T("filter() scopes the roster as well as list()", ids(rows) === A, ids(rows));
+T("get() on another property's record is denied", (await db.entities.Property.get(B)) === null,
+  JSON.stringify(await db.entities.Property.get(B)));
+T("the clerk's own property is still readable", (await db.entities.Property.get(A))?.id === A);
+T("a restricted account cannot add a property to the roster",
+  (await threw(() => db.entities.Property.create({ code: "CCC", name: "Charlie" }))) !== null);
+T("a restricted account cannot rename another property",
+  (await threw(() => db.entities.Property.update(B, { name: "seized" }))) !== null);
+T("a restricted account cannot delete another property",
+  (await threw(() => db.entities.Property.delete(B))) !== null);
+
+// ── 4. B4: tables that carry property_id but were never enrolled ─────────────
+// Re-seed first. The three mutation checks above are destructive when they fail:
+// Property.delete() cascades into every enrolled table, so prop_b's ledger rows
+// disappear and every later section would compare against a fixture that no
+// longer has a second property in it — reporting isolation that is really just
+// an empty database.
+console.log("\n=== 4. Tables missing from PROPERTY_TABLES (B4) ===");
+await seed();
+await sessionAs("u_clerk_a", "clerk_a");
+for (const name of ["DailyFinancialAggregate", "ScanResult", "TimecardPunch", "Reservation", "RoomType", "ChannelMap"]) {
+  rows = await db.entities[name].filter({});
+  T(`${name} is scoped to the clerk's property`, ids(rows) === A, ids(rows));
+}
+T("a cross-property aggregate write is refused",
+  (await threw(() => db.entities.DailyFinancialAggregate.create({ property_id: B, business_date: "2026-02-01" }))) !== null);
+T("a cross-property scan result write is refused",
+  (await threw(() => db.entities.ScanResult.create({ property_id: B, file_id: "x" }))) !== null);
+
+// ── 5. B1: the Dashboard's preferred read path ──────────────────────────────
+// This is the one that renders in production: rebuildDailyAggregates runs on
+// every import, and Dashboard.jsx prefers the aggregate cache over the ledgers.
+console.log("\n=== 5. getDailyAggregates with propertyId 'all' (B1) ===");
+await seed();
+await sessionAs("u_clerk_a", "clerk_a");
+rows = await getDailyAggregates({ propertyId: "all" });
+T("'all' means all ACCESSIBLE, not all existing", ids(rows) === A, ids(rows));
+rows = await getDailyAggregates({});
+T("the default scope is also clamped", ids(rows) === A, ids(rows));
+rows = await getDailyAggregates({ propertyId: B });
+T("asking for another property by name returns nothing", rows.length === 0, ids(rows));
+rows = await getDailyAggregates({ propertyId: [A, B] });
+T("an explicit list is intersected, not trusted", ids(rows) === A, ids(rows));
+
+// ── 6. B3: the three fail-open paths ────────────────────────────────────────
+console.log("\n=== 6. Failure must deny, not escalate (B3) ===");
+await seed();
+await sessionAs("u_unset", "a user whose property_access was never set");
+rows = await db.entities.TransactionLine.filter({});
+T("an unset property_access grants nothing, not everything", rows.length === 0, ids(rows));
+rows = await db.entities.Property.list();
+T("...and no roster either", rows.length === 0, ids(rows));
+rows = await getDailyAggregates({ propertyId: "all" });
+T("...and no aggregates", rows.length === 0, ids(rows));
+
+await sessionAs("u_numeric", "a user whose property_access holds numbers");
+rows = await db.entities.TransactionLine.filter({});
+T("a number/string type mismatch fails closed", rows.length === 0, ids(rows));
+
+await signOut();
+const me = await db.auth.me();
+T("the session really is gone", !me, JSON.stringify(me));
+rows = await db.entities.TransactionLine.filter({});
+T("a signed-out caller reads no transactions", rows.length === 0, ids(rows));
+rows = await db.entities.Property.list();
+T("a signed-out caller reads no properties", rows.length === 0, ids(rows));
+rows = await getDailyAggregates({ propertyId: "all" });
+T("a signed-out caller reads no aggregates", rows.length === 0, ids(rows));
+
+// ── 7. The launch gate ──────────────────────────────────────────────────────
+// B5 is accepted rather than fixed: every control above runs in the user's own
+// browser, so a determined staff member with devtools can still reach any row.
+// The gate is what makes that acceptable — only accounts already entitled to all
+// properties can sign in, so there is no confidentiality boundary left to break.
+// (base44/functions/custom_auth_login enforces the same rule server-side;
+// scripts/probe-auth-audit.mjs covers that copy.)
+console.log("\n=== 7. Only all-property accounts can sign in ===");
+await seed();
+await signOut();
+let err = await threw(() => db.auth.login("clerk_a@probe.local", PASSWORD));
+T("a one-property account is refused at login", err !== null, `login returned without throwing`);
+T("the refusal explains itself", err !== null && /propert/i.test(err), err || "");
+T("no session was created for the refused account", !(await db.auth.me()));
+
+err = await threw(() => db.auth.login("unset@probe.local", PASSWORD));
+T("an account with no property_access is refused", err !== null, "login returned without throwing");
+
+err = await threw(() => db.auth.login("owner@probe.local", PASSWORD));
+T("an all-property owner can still sign in", err === null, err || "");
+invalidatePropertyAccess();
+T("...and the session works", (await db.auth.me())?.id === "u_owner");
+rows = await db.entities.TransactionLine.filter({});
+T("...and sees the whole portfolio", ids(rows) === `${A},${A},${B},${B}`, ids(rows));
+
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
+process.exit(fail === 0 ? 0 : 1);

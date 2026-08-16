@@ -9,6 +9,20 @@ import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { downloadCsv, downloadExcel } from "@/lib/hotel";
 import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
+import { parseManualEntryCsv, parseManualEntryPaste } from "@/lib/manualEntryImport";
+
+// An uploaded file is hostile input. 10MB matches the cap fetchCsvRows enforces on
+// the report-import path, so both importers refuse the same oversized file.
+const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
+
+// Colour by severity. Written as a lookup rather than a ternary chain so a new tone
+// cannot silently fall through to green, which is how the original single-colour
+// message came to render save failures as successes.
+const MSG_TONE_CLASS = {
+  success: "text-[#00E096]",
+  warn: "text-[#FFB547]",
+  error: "text-[#FF5C5C]",
+};
 
 const REPORT_CONFIGS = {
   occupancy: {
@@ -113,6 +127,13 @@ export default function ManualEntry() {
   const [hasDraft, setHasDraft] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
+  // Severity for the message beside the Save button. It used to render
+  // unconditionally in success green (#00E096), so "Not saved — ..." and
+  // "You do not have access to the selected property" looked like confirmations.
+  const [msgTone, setMsgTone] = useState("success");
+  // Per-column and per-cell problems from the last import. Shown in full rather
+  // than summarised: a silently blank column is the failure mode being fixed here.
+  const [importWarnings, setImportWarnings] = useState([]);
   const fileInputRef = useRef(null);
   
   const [draftKey, setDraftKey] = useState("");
@@ -253,46 +274,69 @@ export default function ManualEntry() {
     }
   };
 
-  const handlePaste = (e) => {
-    e.preventDefault();
-    const text = e.clipboardData.getData("text");
-    const lines = text.split("\n").filter((l) => l.trim());
-    const pastedRows = lines.map((line) => {
-      const cells = line.split("\t");
-      const row = {};
-      config.fields.forEach((f, i) => {
-        row[f.key] = cells[i] || (f.type === "number" ? 0 : "");
-      });
-      row._isNew = true;
-      return row;
-    });
-    const newRows = [...rows, ...pastedRows];
+  // Both import paths funnel through src/lib/manualEntryImport.js, which is covered
+  // by scripts/probe-manual-entry-import.mjs. Nothing is defaulted silently: a column
+  // that could not be matched or a cell that could not be read arrives as a warning
+  // and is left blank, so a missing figure is visible instead of reading as a real 0.
+  const applyParsed = ({ rows: parsedRows, warnings, error }, whatFailed) => {
+    if (error) {
+      setSaveMsg(`${whatFailed} — ${error}`);
+      setMsgTone("error");
+      setImportWarnings(warnings);
+      return;
+    }
+    const newRows = [...rows, ...parsedRows];
     setRows(newRows);
     pushHistory(newRows);
     setHasDraft(true);
+    setImportWarnings(warnings);
+    const added = `${parsedRows.length} row${parsedRows.length === 1 ? "" : "s"} added`;
+    if (warnings.length) {
+      setSaveMsg(`${added}, but ${warnings.length} issue${warnings.length === 1 ? "" : "s"} need checking before you save.`);
+      setMsgTone("warn");
+    } else {
+      setSaveMsg(`${added}. Review, then Save.`);
+      setMsgTone("success");
+    }
+  };
+
+  const handlePaste = (e) => {
+    e.preventDefault();
+    const text = e.clipboardData.getData("text");
+    applyParsed(parseManualEntryPaste(text, config.fields), "Nothing pasted");
   };
 
   const handleImportFile = async (e) => {
     const file = e.target.files?.[0];
+    // Clearing the input means picking the same file twice still fires onChange,
+    // so a retry after a failed import is not silently ignored.
+    e.target.value = "";
     if (!file) return;
-    const text = await file.text();
-    const lines = text.split("\n").filter((l) => l.trim());
-    if (!lines.length) return;
-    const headers = lines[0].split(",").map((h) => h.trim().replace(/"/g, ""));
-    const importedRows = lines.slice(1).map((line) => {
-      const cells = line.split(",").map((c) => c.trim().replace(/"/g, ""));
-      const row = {};
-      config.fields.forEach((f) => {
-        const idx = headers.indexOf(f.key);
-        row[f.key] = idx >= 0 ? cells[idx] : (f.type === "number" ? 0 : "");
-      });
-      row._isNew = true;
-      return row;
-    });
-    const newRows = [...rows, ...importedRows];
-    setRows(newRows);
-    pushHistory(newRows);
-    setHasDraft(true);
+    if (file.size > MAX_IMPORT_BYTES) {
+      setSaveMsg(`Not imported — that file is ${(file.size / 1024 / 1024).toFixed(1)}MB, over the 10MB limit.`);
+      setMsgTone("error");
+      setImportWarnings([]);
+      return;
+    }
+    let text;
+    try {
+      text = await file.text();
+    } catch (err) {
+      setSaveMsg(`Not imported — that file could not be read (${err?.message || "unknown error"}).`);
+      setMsgTone("error");
+      setImportWarnings([]);
+      return;
+    }
+    // accept=".csv" is a filename filter the user can defeat in the file dialog.
+    // A NUL byte means binary (xlsx, pdf), which would otherwise land in the grid
+    // as mojibake rows and then be offered for saving.
+    if (text.includes("\0")) {
+      setSaveMsg("Not imported — that looks like a binary file, not CSV. Export as CSV first.");
+      setMsgTone("error");
+      setImportWarnings([]);
+      return;
+    }
+    applyParsed(parseManualEntryCsv(text, config.fields), "Nothing imported");
   };
 
   const handleExport = (type = 'csv') => {
@@ -313,6 +357,7 @@ export default function ManualEntry() {
     const rateLimit = sensitiveActionRateLimiter.check();
     if (!rateLimit.allowed) {
       setSaveMsg(`Rate limited. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
+      setMsgTone("error");
       setSaving(false);
       return;
     }
@@ -320,6 +365,7 @@ export default function ManualEntry() {
     const csrfToken = getCsrfToken();
     if (!validateCsrfToken(csrfToken)) {
       setSaveMsg("Invalid security token. Please refresh the page and try again.");
+      setMsgTone("error");
       rotateCsrfToken();
       setSaving(false);
       return;
@@ -327,9 +373,11 @@ export default function ManualEntry() {
 
     setSaving(true);
     setSaveMsg("");
+    setImportWarnings([]);
     const prop = selectedProperty || properties[0];
     if (!prop) {
       setSaveMsg("Select a property first.");
+      setMsgTone("error");
       setSaving(false);
       return;
     }
@@ -337,6 +385,7 @@ export default function ManualEntry() {
     const allowedIds = accessibleProperties.length ? new Set(accessibleProperties.map((p) => String(p.id))) : null;
     if (allowedIds && !allowedIds.has(String(prop.id))) {
       setSaveMsg("You do not have access to the selected property.");
+      setMsgTone("error");
       setSaving(false);
       return;
     }
@@ -360,8 +409,20 @@ export default function ManualEntry() {
     // Validate rows before writing anything.
     const errors = [];
     const prepared = [];
+    // A row with no date cannot be keyed or deduped, so it cannot be saved. It used
+    // to be skipped silently and left out of the "N records saved" count, which read
+    // as a successful save of data that was never written.
+    let undated = 0;
     for (const row of rows) {
-      if (!row.date && !row.shift_date) continue;
+      if (!row.date && !row.shift_date) {
+        // An entirely blank row is just an unused grid line, not lost data.
+        const hasAnyValue = config.fields.some((f) => {
+          const v = row[f.key];
+          return v !== undefined && v !== null && String(v).trim() !== "";
+        });
+        if (hasAnyValue) undated++;
+        continue;
+      }
       const rawDate = String(row.date || row.shift_date || "").trim();
       if (rawDate && !/^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
         errors.push(`"${rawDate}" is not a valid date (use YYYY-MM-DD)`);
@@ -394,8 +455,15 @@ export default function ManualEntry() {
       Object.assign(record, meta);
       prepared.push({ row, record });
     }
+    if (undated) {
+      errors.push(`${undated} row${undated === 1 ? " has" : "s have"} data but no date — every row needs a date to be saved.`);
+    }
     if (errors.length) {
       setSaveMsg(`Not saved — ${errors[0]}${errors.length > 1 ? ` (+${errors.length - 1} more)` : ""}`);
+      setMsgTone("error");
+      // Every failure, not just the first: the summary above names one, and the user
+      // has to fix all of them before the save will go through.
+      setImportWarnings(errors);
       setSaving(false);
       rotateCsrfToken();
       return;
@@ -423,6 +491,8 @@ export default function ManualEntry() {
     qc.invalidateQueries({ queryKey: ["sources"] });
     const extra = skipped ? ` · ${skipped} duplicate${skipped === 1 ? "" : "s"} skipped` : "";
     setSaveMsg(`${saved} records saved. All dashboards updated.${extra}`);
+    setMsgTone("success");
+    setImportWarnings([]);
     setHasDraft(false);
     if (draftKey) localStorage.removeItem(draftKey);
     setSaving(false);
@@ -490,6 +560,48 @@ export default function ManualEntry() {
         </div>
       </Card>
 
+      {/* One file input for the whole page. It used to live inside the grid card's
+          toolbar, which is only rendered when rows.length > 0 — so the Import button
+          in the empty state below had nothing to click. */}
+      <input ref={fileInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={handleImportFile} />
+
+      {/* Import and validation problems. Outside the `rows.length > 0` block on
+          purpose: a refused import leaves the grid empty, and that is exactly when
+          the user most needs to be told why nothing appeared. The message itself is
+          repeated here only when the grid is empty, because the copy beside the Save
+          button below is not rendered in that state — without this, refusing a file
+          that produces an error but no per-cell warnings said nothing at all. */}
+      {(importWarnings.length > 0 || (saveMsg && rows.length === 0)) && (
+        <Card>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p
+                role={msgTone === "error" ? "alert" : "status"}
+                className={`text-xs font-medium ${MSG_TONE_CLASS[msgTone] || MSG_TONE_CLASS.warn}`}
+              >
+                {rows.length === 0 && saveMsg
+                  ? saveMsg
+                  : `${importWarnings.length} issue${importWarnings.length === 1 ? "" : "s"} to check`}
+              </p>
+              <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto pr-2">
+                {importWarnings.slice(0, 100).map((w, i) => (
+                  <li key={i} className="text-xs text-slate-300">• {w}</li>
+                ))}
+              </ul>
+              {importWarnings.length > 100 && (
+                <p className="mt-1 text-xs text-slate-500">…and {importWarnings.length - 100} more.</p>
+              )}
+            </div>
+            <button
+              onClick={() => { setImportWarnings([]); setSaveMsg(""); }}
+              className="shrink-0 rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-400 hover:border-[#00D4FF]/30"
+            >
+              Dismiss
+            </button>
+          </div>
+        </Card>
+      )}
+
       {rows.length > 0 && (
         <>
           <Card
@@ -512,7 +624,6 @@ export default function ManualEntry() {
                 <button onClick={() => handleExport('excel')} className="rounded-lg border border-white/10 p-2 text-[#107C41] hover:border-[#107C41]/30" title="Export Excel">
                   <Download className="h-4 w-4" />
                 </button>
-                <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleImportFile} />
               </div>
             }
           >
@@ -572,7 +683,14 @@ export default function ManualEntry() {
               </button>
               <div className="flex items-center gap-3">
                 {hasDraft && <span className="text-xs text-[#FFB547]">● Unsaved draft</span>}
-                {saveMsg && <span className="text-xs text-[#00E096]">{saveMsg}</span>}
+                {saveMsg && (
+                  <span
+                    role={msgTone === "error" ? "alert" : "status"}
+                    className={`text-xs ${MSG_TONE_CLASS[msgTone] || MSG_TONE_CLASS.success}`}
+                  >
+                    {saveMsg}
+                  </span>
+                )}
                 <button
                   onClick={handleSave}
                   disabled={saving || !hasDraft}
@@ -600,6 +718,9 @@ export default function ManualEntry() {
                   <Table2 className="h-4 w-4" /> Load {existing.length} Existing Records
                 </button>
               )}
+              <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-200 hover:border-[#00D4FF]/30">
+                <Upload className="h-4 w-4" /> Import CSV
+              </button>
             </div>
             <p className="mt-4 text-xs text-slate-500">Tip: You can paste data directly from Excel (Ctrl+V) into the grid.</p>
           </div>

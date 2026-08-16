@@ -15,7 +15,7 @@ import { useAuth } from "@/lib/AuthContext";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sha256File } from "@/lib/securityUtils";
 import { rebuildDailyAggregates } from "@/lib/dailyAggregates";
 import { queryClientInstance } from "@/lib/query-client";
-import localDb from "@/api/localDb";
+import { toCents, formatCents } from "@/lib/decimal";
 
 // Per-import undo. Deletes exactly the rows one import created, via the
 // rollback ledger — unlike "Clear all imported data", which wipes every table.
@@ -474,8 +474,28 @@ export default function Import() {
           raw_rows_ttl: rawRowsTtlExpiry(),
         });
       } catch (err) {
-        if (item.importId) {
-          await rollbackImportSession(item.importId).catch(console.error);
+        // Roll back with the SESSION id, never our queue-local item.importId:
+        // the ledger is keyed by the id createImportSession minted, so rolling
+        // back with ours always found no ledger and silently did nothing.
+        // Two sources, because rows can be committed by either failure:
+        //   err.importId  - importReport itself threw (it attaches its id)
+        //   result.importId - the import succeeded but writing the UploadedReport
+        //                     history row failed, which would otherwise leave
+        //                     committed rows with no history entry and so no
+        //                     Undo button — invisible, unremovable data.
+        // Neither present means the import was rejected before a session existed
+        // (e.g. blocked validation), so there is nothing to undo.
+        const sessionId = err?.importId || result?.importId;
+        if (sessionId) {
+          const res = await rollbackImportSession(sessionId).catch((e) => ({
+            success: false,
+            error: e?.message || "Rollback threw",
+          }));
+          // Never discard the result: a failed rollback means rows may still be
+          // in the database, and the operator has to know that.
+          if (!res?.success) {
+            err.message = `${err.message || "Import failed"} — automatic cleanup ALSO failed: ${res?.error || "unknown error"}. Rows may remain in the database; do not re-import until this is resolved.`;
+          }
         }
         throw err;
       }
@@ -568,8 +588,10 @@ export default function Import() {
       }
       // The materialized daily aggregate is derived from the ledgers above, so it
       // must be wiped too or the Dashboard would keep showing stale pre-summed
-      // numbers after a clear-all.
-      await localDb.DailyFinancialAggregate.clear();
+      // numbers after a clear-all. Through db.entities like the others: the proxy's
+      // clear() refuses callers who are not entitled to every property, and a raw
+      // localDb.clear() here bypassed that on the one table the Dashboard trusts most.
+      await db.entities.DailyFinancialAggregate.clear();
       queryClientInstance.invalidateQueries({ queryKey: ["daily-aggregates"] });
       setQueue([]);
       setResults([]);
@@ -629,11 +651,12 @@ export default function Import() {
       const fileInfo = driveFiles.find((f) => f.id === fileId);
       const fileName = fileInfo?.name || fileId;
       setCurrentFile(fileName);
+      let result;
       try {
         const res = await db.functions.invoke("importDriveFile", { fileId, fileName });
         const fileUrl = res.data.file_url;
         const scan = await scanReport(type, fileUrl, { ...meta, sourceFile: fileName });
-        const result = await importReport(scan, { ...meta, sourceFile: fileName });
+        result = await importReport(scan, { ...meta, sourceFile: fileName });
         await db.entities.UploadedReport.create({
           file_name: fileName,
           report_type: scan.type || type,
@@ -652,7 +675,21 @@ export default function Import() {
         refreshAggregates(propertyId);
         setResults((prev) => [...prev, { name: fileName, ok: true, count: result.count, excluded: result.excluded || 0 }]);
       } catch (e) {
-        setResults((prev) => [...prev, { name: fileName, ok: false, error: e.response?.data?.error || e.message || "Import failed" }]);
+        // Same cleanup contract as the file-upload path above: this branch used
+        // to have no rollback at all, so a Drive import that committed rows and
+        // then failed left them in the ledger with no history row and no Undo.
+        let message = e.response?.data?.error || e.message || "Import failed";
+        const sessionId = e?.importId || result?.importId;
+        if (sessionId) {
+          const rb = await rollbackImportSession(sessionId).catch((err) => ({
+            success: false,
+            error: err?.message || "Rollback threw",
+          }));
+          if (!rb?.success) {
+            message = `${message} — automatic cleanup ALSO failed: ${rb?.error || "unknown error"}. Rows may remain in the database; do not re-import until this is resolved.`;
+          }
+        }
+        setResults((prev) => [...prev, { name: fileName, ok: false, error: message }]);
       }
     }
     setDriveImporting(false);
@@ -956,6 +993,42 @@ export default function Import() {
       <pre className="max-h-40 overflow-auto rounded-lg border border-white/10 bg-[#040D1A]/60 p-3 text-xs text-slate-300">
         {JSON.stringify(q.scan.sections.find((s) => s.rows > 0)?.preview?.slice(0, 3) || [], null, 2)}
       </pre>
+    )}
+    {q.scan.checksum && (
+      // The ledger's agreement with its own declared total is the one number an
+      // operator should see before importing money. It was computed on every
+      // scan and never shown.
+      <div className={`flex items-center justify-between rounded-lg border px-3 py-2 text-xs ${
+        q.scan.checksum.matches === false
+          ? "border-[#FF6B6B]/30 bg-[#FF6B6B]/[0.06] text-[#FF6B6B]"
+          : q.scan.checksum.matches === null
+            ? "border-[#FFB547]/30 bg-[#FFB547]/[0.06] text-[#FFB547]"
+            : "border-[#00E096]/30 bg-[#00E096]/[0.06] text-[#00E096]"
+      }`}>
+        <span>
+          {q.scan.checksum.matches === false
+            ? "Amounts do not match the file's own total"
+            : q.scan.checksum.matches === null
+              ? "This file declares no total to check against"
+              : "Amounts match the file's own total"}
+        </span>
+        <span className="font-mono">
+          {formatCents(toCents(q.scan.checksum.parsed))}
+          {q.scan.checksum.declared !== null && q.scan.checksum.matches === false && (
+            <span className="text-slate-400"> vs {formatCents(toCents(q.scan.checksum.declared))}</span>
+          )}
+        </span>
+      </div>
+    )}
+    {!q.scan.validation && q.scan.errors?.length > 0 && (
+      // Fallback for a scan that reported problems without a validation object.
+      // Nothing read `scan.errors` before, so a parser's own error list was
+      // discarded in silence; this guarantees it reaches the operator.
+      <ul className="space-y-1 rounded-lg border border-[#FF6B6B]/30 bg-[#FF6B6B]/[0.06] p-3">
+        {q.scan.errors.map((e, i) => (
+          <li key={i} className="text-xs text-[#FF6B6B]">{String(e)}</li>
+        ))}
+      </ul>
     )}
     {q.scan.validation && (q.scan.validation.errors?.length > 0 || q.scan.validation.warnings?.length > 0) && (
       <div className="rounded-lg border border-white/10 bg-[#040D1A]/60 p-3">

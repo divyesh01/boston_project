@@ -248,6 +248,37 @@ export function validateFileSize(file, maxSize = MAX_UPLOAD_FILE_SIZE) {
 }
 
 
+/**
+ * Write the CSRF cookie the server functions compare the request header against.
+ *
+ * Single writer on purpose. getCsrfToken and rotateCsrfToken each built this
+ * string by hand, so the two copies could drift — and one of them adding `Secure`
+ * or changing SameSite without the other would produce a pair that never matches,
+ * which every server function reports as "Invalid CSRF token" with no clue why.
+ *
+ * `Secure` only over https: adding it unconditionally would stop the cookie being
+ * stored at all on http://localhost, breaking every mutating call in development.
+ * The cookie is readable by script by design — it is the double-submit half that
+ * the page has to be able to echo into a header, and it carries no authority on
+ * its own.
+ */
+function writeCsrfCookie(token) {
+  if (typeof document === "undefined") return token;
+  const secure = typeof location !== "undefined" && location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `csrf_token=${token}; Path=/; SameSite=Lax${secure}`;
+  return token;
+}
+
+/**
+ * The exact token the SDK froze into its X-CSRF-Token header.
+ *
+ * Captured on the first getCsrfToken() call, which is the call that builds the
+ * base44 client (src/api/base44Client.js). It is deliberately NOT updated by
+ * rotateCsrfToken: the header cannot be changed after the client is constructed,
+ * so this is the only value a server-side double-submit check can ever match.
+ */
+let csrfHeaderToken = null;
+
 export function getCsrfToken() {
   const ss = safeSessionStorage();
   let token = ss ? ss.getItem(CSRF_TOKEN_KEY) : null;
@@ -257,8 +288,27 @@ export function getCsrfToken() {
       try { ss.setItem(CSRF_TOKEN_KEY, token); } catch {}
     }
   }
-  document.cookie = `csrf_token=${token}; Path=/; SameSite=Lax`;
-  return token;
+  if (csrfHeaderToken === null) csrfHeaderToken = token;
+  return writeCsrfCookie(token);
+}
+
+/**
+ * Restore the cookie to the value the SDK's frozen header carries.
+ *
+ * The pages rotate the stored token after almost every save (see the
+ * getCsrfToken / validateCsrfToken / rotateCsrfToken sequence in Users.jsx,
+ * Settings.jsx, Import.jsx and the rest), which rewrites the cookie while the
+ * header keeps the value it was constructed with. From the first rotation onward
+ * the two disagreed and every server function refused the call with 403 "Invalid
+ * CSRF token" — a user watching saves fail with no way to recover but a reload.
+ *
+ * Called immediately before each backend invoke. Rotation still does its job for
+ * the in-page checks that read sessionStorage; this only keeps the pair the SERVER
+ * compares in step.
+ */
+export function pinCsrfCookie() {
+  if (csrfHeaderToken === null) return getCsrfToken();
+  return writeCsrfCookie(csrfHeaderToken);
 }
 
 export function rotateCsrfToken() {
@@ -269,8 +319,7 @@ export function rotateCsrfToken() {
       ss.setItem(CSRF_TOKEN_KEY, token);
     } catch {}
   }
-  document.cookie = `csrf_token=${token}; Path=/; SameSite=Lax`;
-  return token;
+  return writeCsrfCookie(token);
 }
 
 export function validateCsrfToken(token) {
@@ -482,6 +531,14 @@ export async function createAuditEntry(action, options = {}) {
   };
 
   // Get the last hash for chaining
+  //
+  // Deliberately raw localDb, not db.entities. The chain is one sequence over the
+  // WHOLE table: linking to "the newest row this caller can see" would fork it
+  // into a chain per property, and any reader with wider access would then see a
+  // break at every fork. Second reason: this runs inside import transaction zones,
+  // and the proxy's access lookup can await a macrotask and kill the zone (B6).
+  // AuditLog is append-only for every caller (PROTECTED_IMMUTABLE_TABLES), and the
+  // rows are never rendered from here, so reading the tip leaks nothing.
   let previousHash = '0'.repeat(64);
   try {
     const logs = await localDb.AuditLog.orderBy('created_date').reverse().first();
@@ -498,6 +555,9 @@ export async function createAuditEntry(action, options = {}) {
 
 export async function verifyAuditChain() {
   try {
+    // Raw localDb for the same reason as createAuditEntry: the integrity claim is
+    // over every row in order. Verifying a filtered subset would report tampering
+    // wherever a row was merely hidden, which is the opposite of useful.
     const logs = await localDb.AuditLog.orderBy('created_date').toArray();
     let previousHash = '0'.repeat(64);
     for (const log of logs) {

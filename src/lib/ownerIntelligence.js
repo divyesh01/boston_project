@@ -2,7 +2,8 @@ import { CalculationService } from '@/lib/calculationService';
 import { getAlertThresholds } from '@/lib/alertThresholds';
 import { sumCents, toCents, fromCents } from '@/lib/decimal';
 import { refundOf } from '@/lib/paymentNorm';
-import { money } from '@/lib/hotel';
+import { filterCommittedPay } from '@/lib/payrollCalc';
+import { money, inRange } from '@/lib/hotel';
 
 export class OwnerIntelligenceService {
   // Detect demand trends - holiday/weekend performance
@@ -186,7 +187,15 @@ export class OwnerIntelligenceService {
   }
   
   // Profit leakage detection
-  static detectProfitLeakage(occRows = [], payRows = [], expenses = [], payroll = [], srcRows = [], properties = []) {
+  //
+  // `dateRange` scopes the cost side of the ratio below. Without it, payroll and
+  // expenses were summed over ALL TIME while grossRevenue came from the
+  // period-scoped occRows — and Dashboard.jsx fetches PayrollRun with no date
+  // filter and a limit of 100000, so a narrow filter over a year of payroll on
+  // file reported a ratio and a dollar figure that described no real period.
+  // When no range is supplied the arrays are taken as already scoped by the
+  // caller, since there is nothing to scope them by.
+  static detectProfitLeakage(occRows = [], payRows = [], expenses = [], payroll = [], srcRows = [], properties = [], dateRange = { from: '', to: '' }) {
     const leaks = [];
     
     // 1. High OTA commission leakage
@@ -220,16 +229,32 @@ export class OwnerIntelligenceService {
     }
     
     // 3. Expense ratio too high
-    const expenseTotal = expenses.reduce((a, e) => a + Number(e.amount || 0), 0);
-    const payrollTotal = payroll.reduce((a, p) => a + Number(p.total_pay || 0), 0);
-    const totalCosts = expenseTotal + payrollTotal;
-    const grossRevenue = occRows.reduce((a, r) => a + Number(r.total_revenue || 0), 0);
-    const expenseRatio = grossRevenue > 0 ? totalCosts / grossRevenue : 0;
-    
+    const scoped = Boolean(dateRange?.from && dateRange?.to);
+    const expensesInPeriod = scoped
+      ? expenses.filter((e) => inRange(e.expense_date, dateRange.from, dateRange.to))
+      : expenses;
+    // Approved/paid only. payrollCalc.js states the contract: every consumer that
+    // deducts payroll from revenue MUST filter through filterCommittedPay, or a
+    // half-typed draft run silently moves this owner-facing profit figure. This is
+    // the same rule Money Kept, Expenses, Forecasting and the Action Center apply,
+    // so all five now describe the same month the same way.
+    const committedPay = filterCommittedPay(payroll);
+    const payrollInPeriod = scoped
+      ? committedPay.filter((p) => inRange(p.pay_period_start, dateRange.from, dateRange.to))
+      : committedPay;
+
+    // Integer cents: `amount` is rendered to the owner as money (Dashboard.jsx
+    // "Profit Leakage"), so the addition must not drift.
+    const totalCostCents = sumCents(expensesInPeriod.map((e) => e.amount))
+      + sumCents(payrollInPeriod.map((p) => p.total_pay));
+    const grossCents = sumCents(occRows.map((r) => r.total_revenue));
+    const expenseRatio = grossCents > 0 ? totalCostCents / grossCents : 0;
+
     if (expenseRatio > 0.65) {
+      const targetCents = Math.round(grossCents * 0.65);
       leaks.push({
         type: 'High Expense Ratio',
-        amount: totalCosts - (grossRevenue * 0.65),
+        amount: fromCents(totalCostCents - targetCents),
         severity: 'medium',
         description: `Total costs are ${(expenseRatio * 100).toFixed(1)}% of revenue (target: <65%)`,
         recommendation: 'Review operating expenses and payroll efficiency',
@@ -304,7 +329,7 @@ export class OwnerIntelligenceService {
     }
     
     // Profit leakage
-    const leaks = this.detectProfitLeakage(occRows, payRows, expenses, payroll, srcRows, properties);
+    const leaks = this.detectProfitLeakage(occRows, payRows, expenses, payroll, srcRows, properties, dateRange);
     if (leaks.length) {
       const totalLeakage = leaks.reduce((a, l) => a + l.amount, 0);
       insights.push({

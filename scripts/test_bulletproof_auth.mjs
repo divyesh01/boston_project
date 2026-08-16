@@ -104,7 +104,11 @@ async function seedUsers() {
   const victimSalt = generateSalt();
   const victimId = await localDb.User.add({
     username: 'staff', email: 'staff@x.com', role: 'read_only',
-    permissions: defaultPermissionsForRole('read_only'), property_access: ['prop_1'],
+    // property_access 'all' because this release only admits all-property
+    // accounts (src/lib/launchPolicy.js) and the victim has to be able to sign
+    // in for a session to revoke. What this suite tests — cross-tab revocation,
+    // lockout, session invalidation — is unaffected by the property grant.
+    permissions: defaultPermissionsForRole('read_only'), property_access: 'all',
     is_active: true, is_locked: false, failed_attempts: 0,
     salt: victimSalt, password_hash: '$pbkdf2$' + await browserHashPassword('S3cure!Pass', victimSalt),
   });

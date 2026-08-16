@@ -26,6 +26,7 @@ import { db } from "@/api/base44Client";
 import WeatherPanel from "@/components/dashboard/WeatherPanel";
 import PricingPanel from "@/components/dashboard/PricingPanel";
 import { useRealtimeInvalidation } from "@/lib/realtime";
+import { ErrorState } from "@/components/ui/status";
 
 export default function Dashboard() {
   const { dateRange, property, properties, compareOn, compareDateRange, compareMonths, employee, paymentType, channel, months } = useGlobalFilters();
@@ -42,11 +43,11 @@ export default function Dashboard() {
   // The raw-ledger hooks still run (they feed the explicit Compare view and act
   // as the aggregate's fallback), but the Dashboard no longer blocks render on
   // them — the materialized aggregate drives the initial paint.
-  const { data: occ = [], isLoading, refetch: refOcc } = useOccupancy(dateRange, property, months);
+  const { data: occ = [], isLoading, isError: occError, error: occErrorObj, refetch: refOcc } = useOccupancy(dateRange, property, months);
   const { data: prevOcc = [] } = useOccupancy(compareOn ? compareDateRange : { from: "", to: "" }, property, compareOn ? compareMonths : [], compareOn);
   const { data: sources = [], refetch: refSrc } = useSources(dateRange, property, months);
   const { data: clerk = [], refetch: refClerk } = useClerkRecords(dateRange, property);
-  const { data: gross = [], refetch: refGross } = useGrossRevenue(dateRange, property, months);
+  const { data: gross = [], isError: grossError, error: grossErrorObj, refetch: refGross } = useGrossRevenue(dateRange, property, months);
   const { data: payRows = [] } = usePaymentData(dateRange, property, months);
 
   // Materialized daily aggregates (rebuilt on every import). When present, the
@@ -233,6 +234,21 @@ export default function Dashboard() {
   // live ledgers — the original behaviour.
   const initialLoading = (aggData ? false : isLoading) || agg.isLoading;
   if (initialLoading) return <p className="text-slate-500">Loading executive data…</p>;
+
+  // Every KPI card on this page sums an array. An empty array sums to 0, so a failed
+  // read renders a complete, confident dashboard reading $0 revenue and 0% occupancy —
+  // figures an owner could act on. Stop instead.
+  const dashboardError = agg.isError ? agg.error : occError ? occErrorObj : grossError ? grossErrorObj : null;
+  if (dashboardError) {
+    return (
+      <ErrorState
+        title="Could not load executive data"
+        description="No KPIs are shown because the underlying read failed. Zeros here would be indistinguishable from a genuinely flat day."
+        error={dashboardError}
+        onRetry={handleRefresh}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">

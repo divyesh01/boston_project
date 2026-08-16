@@ -9,6 +9,7 @@ import { buildRoomBoard, roomBoardStats, generateRoomRegister, toRateCents } fro
 import { suggestedRateForDate, forecastOccupancy } from "@/lib/pricingEngine";
 import { isPricingEnabled, getPricingConfig, ROOM_TYPES } from "@/lib/pricingSettings";
 import { useRealtimeInvalidation } from "@/lib/realtime";
+import { ErrorState } from "@/components/ui/status";
 import { motion, AnimatePresence } from "framer-motion";
 const KIND_STYLE = {
   occupied: { color: C.purple, label: "Occupied" },
@@ -23,10 +24,14 @@ export default function RoomBoard() {
   const queryClient = useQueryClient();
   useRealtimeInvalidation(["rooms", "room-stays", "housekeeping"]);
 
-  const { data: occ = [], isLoading } = useOccupancy(dateRange, property, months);
-  const { data: rooms = [], isLoading: roomsLoading } = useRooms(property);
-  const { data: stays = [], isLoading: staysLoading } = useRoomStays(dateRange, property, months);
-  const { data: tasks = [], isLoading: tasksLoading } = useHousekeepingTasks(dateRange, property);
+  const occQ = useOccupancy(dateRange, property, months);
+  const roomsQ = useRooms(property);
+  const staysQ = useRoomStays(dateRange, property, months);
+  const tasksQ = useHousekeepingTasks(dateRange, property);
+  const { data: occ = [], isLoading } = occQ;
+  const { data: rooms = [], isLoading: roomsLoading } = roomsQ;
+  const { data: stays = [], isLoading: staysLoading } = staysQ;
+  const { data: tasks = [], isLoading: tasksLoading } = tasksQ;
   const { data: reservations = [], isLoading: reservationsLoading } = useReservations(dateRange, property);
   const { data: weatherSnapshots = [] } = useWeatherSnapshots(property);
 
@@ -126,7 +131,20 @@ export default function RoomBoard() {
     const prop = properties.find((p) => p.id === singlePropertyId);
     const count = Number(prop?.rooms) || inventory;
     const rows = generateRoomRegister(singlePropertyId, count);
-    await db.entities.Room.bulkCreate(rows);
+    // bulkCreate is not wrapped in a transaction, so a rejection can still
+    // leave rows behind. Saying so is the difference between the operator
+    // checking the board and blindly pressing the button again, which would
+    // duplicate every room that did get written.
+    try {
+      await db.entities.Room.bulkCreate(rows);
+    } catch (err) {
+      invalidateBoard();
+      setNotice({
+        type: "error",
+        text: `Could not create the room register: ${err?.message || err}. Some rooms may already have been written — check the board below before pressing this again, or you will create duplicates.`,
+      });
+      return;
+    }
     invalidateBoard();
     setNotice({ type: "ok", text: `Created a ${count}-room register for ${prop?.name || "this property"}.` });
   };
@@ -143,33 +161,102 @@ export default function RoomBoard() {
     }
     const prop = properties.find((p) => p.id === singlePropertyId);
     const room = rooms.find((r) => String(r.room_number) === String(newRoom));
-    await db.entities.RoomStay.create({
-      property_id: singlePropertyId,
-      property_name: prop?.name || "",
-      date: newIn || boardDate,
-      room_number: String(newRoom),
-      guest_name: newGuest,
-      room_type: room?.room_type || "Standard",
-      check_in: newIn || boardDate,
-      check_out: newOut || boardDate,
-      rate_cents: toRateCents(newRate),
-      folio_number: newFolio || "",
-      status: "occupied",
-    });
-    await db.entities.Room.update(room.id, { status: "occupied" }).catch((e) => {
-          console.warn("Room update failed:", e);
-        });
+
+    // A check-in is two writes with two independent failure modes, and the
+    // operator has to be told which one happened. Before, the stay write could
+    // reject unhandled (the form just sat there), and the room-status write
+    // swallowed its error into console.warn before falling through
+    // unconditionally to "Checked in …". A front desk told "Checked in" while
+    // the board still paints the room available will sell that room twice.
+    try {
+      await db.entities.RoomStay.create({
+        property_id: singlePropertyId,
+        property_name: prop?.name || "",
+        date: newIn || boardDate,
+        room_number: String(newRoom),
+        guest_name: newGuest,
+        room_type: room?.room_type || "Standard",
+        check_in: newIn || boardDate,
+        check_out: newOut || boardDate,
+        rate_cents: toRateCents(newRate),
+        folio_number: newFolio || "",
+        status: "occupied",
+      });
+    } catch (err) {
+      invalidateBoard();
+      // The form is deliberately left filled so the check-in can be retried.
+      setNotice({
+        type: "error",
+        text: `Could not check in ${newGuest} to room ${newRoom}: ${err?.message || err}. Nothing was saved — the guest is not on the board.`,
+      });
+      return;
+    }
+
+    // `rooms` is the Room table for this property and it is what the board
+    // paints from, so a hand-typed room number may match no row at all — in
+    // which case `room.id` used to throw a TypeError after the stay was
+    // already written.
+    let statusWarning = null;
+    if (!room?.id) {
+      statusWarning = `room ${newRoom} has no entry in the room list, so its status could not be set to occupied`;
+    } else {
+      try {
+        await db.entities.Room.update(room.id, { status: "occupied" });
+      } catch (err) {
+        statusWarning = `room ${newRoom} could not be marked occupied (${err?.message || err})`;
+      }
+    }
+
     invalidateBoard();
     setNewGuest(""); setNewRate(""); setNewFolio(""); setNewOut("");
-    setNotice({ type: "ok", text: `Checked in ${newGuest} to room ${newRoom}.` });
+    setNotice(
+      statusWarning
+        ? {
+            type: "warn",
+            text: `Stay saved for ${newGuest}, but ${statusWarning}. The board may still show the room as available — set its status manually before selling it again.`,
+          }
+        : { type: "ok", text: `Checked in ${newGuest} to room ${newRoom}.` }
+    );
   };
 
   const handleRoomState = async (roomId, status) => {
-    await db.entities.Room.update(roomId, { status });
+    // Housekeeping and maintenance taps write straight to the Room row. An
+    // unreported rejection here left the row unchanged with no message at all,
+    // which a user reads as "already saved".
+    try {
+      await db.entities.Room.update(roomId, { status });
+      setNotice(null);
+    } catch (err) {
+      setNotice({
+        type: "error",
+        text: `Could not set that room to "${status}": ${err?.message || err}. The room status is unchanged.`,
+      });
+    }
     invalidateBoard();
   };
 
   if (isLoading || roomsLoading) return <p className="text-slate-500">Loading property board…</p>;
+
+  // On a failed read of the room register, stays, housekeeping tasks or
+  // occupancy, this page used to draw the whole board anyway: every tile in the
+  // "Clean" colour, 0 Occupied / 0 Dirty in the counters, and the aggregate
+  // summary replaced by the "No occupancy data" import prompt.
+  if (roomsQ.isError || staysQ.isError || tasksQ.isError || occQ.isError) {
+    return (
+      <div className="space-y-6">
+        <header>
+          <p className="text-[11px] uppercase tracking-[0.3em] text-[#00D4FF]">Module 4</p>
+          <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Room Board</h1>
+        </header>
+        <ErrorState
+          title="Could not load the room board"
+          description="Do not sell rooms off this screen. The read failed, and the board it used to draw showed every room clean and empty with nobody checked in — a front desk reading that would sell rooms that already have a guest in them."
+          error={roomsQ.error || staysQ.error || tasksQ.error || occQ.error}
+          onRetry={() => { roomsQ.refetch(); staysQ.refetch(); tasksQ.refetch(); occQ.refetch(); }}
+        />
+      </div>
+    );
+  }
 
   const mix = [
     ["Occupied", stats.avgOccupied, C.purple],
@@ -214,7 +301,9 @@ export default function RoomBoard() {
             className={`mb-4 rounded-lg border px-3 py-2 text-xs ${
               notice.type === "ok"
                 ? "border-[#00E096]/30 bg-[#00E096]/10 text-[#00E096]"
-                : "border-[#FF6B6B]/30 bg-[#FF6B6B]/10 text-[#FF6B6B]"
+                : notice.type === "warn"
+                  ? "border-[#FFB547]/30 bg-[#FFB547]/10 text-[#FFB547]"
+                  : "border-[#FF6B6B]/30 bg-[#FF6B6B]/10 text-[#FF6B6B]"
             }`}
           >
             {notice.text}

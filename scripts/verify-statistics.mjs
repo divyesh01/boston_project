@@ -61,6 +61,9 @@ globalThis.fetch = async (url, ...rest) => {
     const buf = fs.readFileSync(p);
     return {
       ok: true,
+      // fetchCsvRows reads res.headers.get('content-length') for its 10MB guard.
+      // A stub without headers throws before any assertion runs.
+      headers: new Headers({ "content-length": String(buf.byteLength) }),
       text: async () => buf.toString("utf8"),
       arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
     };
@@ -89,6 +92,10 @@ const parsers = await import("@/lib/reportParsers");
 const { db } = await import("@/api/base44Client");
 const S = await import("@/lib/statisticsAnalytics");
 const { deriveBusinessDate, dateFromFileName } = await import("@/lib/universalParser");
+// db.entities fails closed for an unauthenticated caller (blocker B3), so the
+// suite has to sign in before it reads or writes a single row.
+const { signInAsAllPropertyOwner } = await import("./_harness-auth.mjs");
+await signInAsAllPropertyOwner();
 
 const PROPERTY = "prop-verify";
 const fileUrl = "file:///" + FILE.replace(/\\/g, "/");
@@ -325,3 +332,7 @@ if (fail) {
   for (const f of failures) console.log(`  - ${f}`);
   process.exit(1);
 }
+// Exit explicitly on success too. Pending Base44 SDK retry sockets keep the
+// event loop alive, so without this the process hangs after the summary and a
+// fully green run gets reported as a timeout (exit 124).
+process.exit(0);

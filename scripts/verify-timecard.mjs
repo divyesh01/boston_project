@@ -49,6 +49,10 @@ const { db } = await import("@/api/base44Client");
 const {
   normalisePunch, shiftDurationMinutes, reconcileTimecards, applyBreaks,
 } = await import("@/lib/timecardCalc");
+// db.entities fails closed for an unauthenticated caller (blocker B3), so the
+// suite has to sign in before it reads or writes a single row.
+const { signInAsAllPropertyOwner } = await import("./_harness-auth.mjs");
+await signInAsAllPropertyOwner();
 
 const PROPERTY_ID = "prop-timecard-1";
 const PROPERTY_NAME = "Timecard Test Property";

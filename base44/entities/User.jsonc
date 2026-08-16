@@ -69,6 +69,10 @@
       "type": "string",
       "description": "Temporary TOTP secret during setup before verification."
     },
+    "mfa_last_counter": {
+      "type": "integer",
+      "description": "The last 30-second TOTP counter accepted for this account. A code stays valid across a +/-1 window (about 90 seconds), so without recording which counter was spent an accepted code could be presented again and accepted again. Compared as a strict lower bound by every TOTP verifier."
+    },
     "reset_token_hash": {
       "type": "string",
       "description": "Hashed single-use password-reset token."

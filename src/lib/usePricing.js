@@ -28,9 +28,12 @@ function weatherByDate(snapshots) {
 //   days — how many days ahead (default 14)
 export function usePricingForecast(days = 14) {
   const { property, latestDate } = useGlobalFilters();
-  const { data: rooms = [] } = useRooms(property);
-  const { data: reservations = [] } = useReservations(null, property);
-  const { data: snapshots = [] } = useWeatherSnapshots(property);
+  const roomsQ = useRooms(property);
+  const reservationsQ = useReservations(null, property);
+  const snapshotsQ = useWeatherSnapshots(property);
+  const { data: rooms = [] } = roomsQ;
+  const { data: reservations = [] } = reservationsQ;
+  const { data: snapshots = [] } = snapshotsQ;
 
   const config = getPricingConfig();
   const wByDate = useMemo(() => weatherByDate(snapshots), [snapshots]);
@@ -48,5 +51,20 @@ export function usePricingForecast(days = 14) {
     [rooms, reservations, wByDate, config, days, latestDate]
   );
 
-  return { forecast, config, enabled: Boolean(config.enabled), days };
+  // The three reads have to be reported to the caller, not just consumed. Each of
+  // them fails into an empty array, and buildPricingForecast() answers an empty
+  // array the same way it answers a genuinely quiet week: with base rates, a
+  // default occupancy assumption and a full 14-day rate card. A recommended rate
+  // computed from a reservation book that failed to load is a guess wearing the
+  // costume of a recommendation, so Pricing and PricingPanel need to be able to
+  // say so.
+  const isError = roomsQ.isError || reservationsQ.isError || snapshotsQ.isError;
+  const error = roomsQ.error || reservationsQ.error || snapshotsQ.error;
+  const refetch = () => {
+    roomsQ.refetch();
+    reservationsQ.refetch();
+    snapshotsQ.refetch();
+  };
+
+  return { forecast, config, enabled: Boolean(config.enabled), days, isError, error, refetch };
 }

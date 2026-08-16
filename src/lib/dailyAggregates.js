@@ -137,20 +137,24 @@ export async function rebuildDailyAggregates({ propertyId = 'all', from = '', to
  * @param {{ propertyId?: string | string[]; from?: string; to?: string }} [opts]
  */
 export async function getDailyAggregates({ propertyId = 'all', from = '', to = '' } = {}) {
-  let rows;
+  // Read through db.entities, NOT the raw Dexie table. The proxy is what turns
+  // `propertyId: 'all'` into "every property this account may see" rather than
+  // "every property in the database", and what intersects an explicit list with
+  // the caller's allowance instead of trusting it.
+  //
+  // This matters more than it looks: rebuildDailyAggregates() runs on every
+  // import and the Dashboard PREFERS this cache over the live ledgers, falling
+  // back only when it is empty. Reading raw here meant the numbers most people
+  // look at first were the only ones with no property scoping at all.
+  //
+  // (rebuildDailyAggregates' writes above stay on raw localDb on purpose — they
+  // run inside a localDb.transaction zone, and a proxy write there would await
+  // the authorization lookup and kill the zone. See B6.)
+  const query = {};
   if (propertyId && propertyId !== 'all') {
-    if (Array.isArray(propertyId)) {
-      rows = [];
-      for (const pid of propertyId) {
-        const part = await localDb.DailyFinancialAggregate.where('property_id').equals(pid).toArray();
-        rows.push(...part);
-      }
-    } else {
-      rows = await localDb.DailyFinancialAggregate.where('property_id').equals(propertyId).toArray();
-    }
-  } else {
-    rows = await localDb.DailyFinancialAggregate.toArray();
+    query.property_id = Array.isArray(propertyId) ? { $in: propertyId } : propertyId;
   }
+  const rows = await db.entities.DailyFinancialAggregate.filter(query);
   return rows.filter((r) => inRange(r.business_date, from, to));
 }
 

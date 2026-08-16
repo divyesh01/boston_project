@@ -45,6 +45,11 @@ const {
 
 await localDb.open();
 
+// db.entities fails closed for an unauthenticated caller (blocker B3), so the
+// suite has to sign in before it reads or writes a single row.
+const { signInAsAllPropertyOwner } = await import("./_harness-auth.mjs");
+await signInAsAllPropertyOwner();
+
 let pass = 0;
 const failures = [];
 function check(name, cond, detail = "") {

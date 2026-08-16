@@ -61,7 +61,9 @@ export default function ProtectedRoute({
         user_id: user?.id,
         username: user?.username,
         result: 'failed',
-        detail: `Account status changed to "${result.status}". Session revoked in real-time.`,
+        detail: result.status === 'property_restricted'
+          ? 'Account is not authorised for all properties (launch policy). Session revoked in real-time.'
+          : `Account status changed to "${result.status}". Session revoked in real-time.`,
       });
       await logout(false);
     })();
@@ -85,18 +87,29 @@ export default function ProtectedRoute({
   const effectiveRestriction = restrictedStatus || accountRestricted;
   if (effectiveRestriction) {
     const isLocked = effectiveRestriction === 'locked';
+    // A per-property account is not in trouble — this release simply cannot
+    // serve it (see src/lib/launchPolicy.js). Saying "no longer active" would
+    // send the user to an administrator to fix an account that is fine.
+    const isPropertyRestricted = effectiveRestriction === 'property_restricted';
+    const isWarning = isLocked || isPropertyRestricted;
     const Icon = isLocked ? Lock : UserX;
-    const title = isLocked ? 'Account Locked' : effectiveRestriction === 'revoked' ? 'Account Restricted' : 'Account Disabled';
+    const title = isLocked
+      ? 'Account Locked'
+      : isPropertyRestricted
+        ? 'Single-Property Access Not Available'
+        : effectiveRestriction === 'revoked' ? 'Account Restricted' : 'Account Disabled';
     const message = isLocked
       ? 'Your account has been locked. Please contact an administrator to unlock your account.'
-      : 'Your account is no longer active. Please contact an administrator to regain access.';
+      : isPropertyRestricted
+        ? 'This account is limited to specific properties. This release supports accounts with access to all properties only — ask an owner to widen this account.'
+        : 'Your account is no longer active. Please contact an administrator to regain access.';
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#040D1A] p-6">
-        <div className={`w-full max-w-md rounded-2xl border p-6 text-center ${isLocked ? 'border-amber-500/30 bg-[#0F1F35]' : 'border-red-500/30 bg-[#0F1F35]'}`}>
-          <div className={`mx-auto w-16 h-16 rounded-full flex items-center justify-center mb-4 ${isLocked ? 'bg-amber-500/20' : 'bg-red-500/20'}`}>
-            <Icon className={`h-8 w-8 ${isLocked ? 'text-amber-400' : 'text-red-400'}`} />
+        <div className={`w-full max-w-md rounded-2xl border p-6 text-center ${isWarning ? 'border-amber-500/30 bg-[#0F1F35]' : 'border-red-500/30 bg-[#0F1F35]'}`}>
+          <div className={`mx-auto w-16 h-16 rounded-full flex items-center justify-center mb-4 ${isWarning ? 'bg-amber-500/20' : 'bg-red-500/20'}`}>
+            <Icon className={`h-8 w-8 ${isWarning ? 'text-amber-400' : 'text-red-400'}`} />
           </div>
-          <h1 className={`text-xl font-semibold ${isLocked ? 'text-amber-300' : 'text-red-300'}`}>{title}</h1>
+          <h1 className={`text-xl font-semibold ${isWarning ? 'text-amber-300' : 'text-red-300'}`}>{title}</h1>
           <p className="mt-2 text-sm text-slate-400">{message}</p>
         </div>
       </div>

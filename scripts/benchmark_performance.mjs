@@ -35,6 +35,10 @@ if (globalThis.navigator === undefined) {
 
 const localDb = (await import("../src/api/localDb.js")).default;
 const { db } = await import("../src/api/base44Client.js");
+// db.entities fails closed for an unauthenticated caller (blocker B3), so the
+// benchmark has to sign in or it would be timing queries over zero rows.
+const { signInAsAllPropertyOwner } = await import("./_harness-auth.mjs");
+await signInAsAllPropertyOwner();
 
 let pass = 0;
 let fail = 0;

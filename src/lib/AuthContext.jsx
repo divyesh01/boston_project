@@ -91,6 +91,8 @@ export const AuthProvider = ({ children }) => {
 
     checkUserAuth();
     const interval = setInterval(async () => {
+      // Calls a read-only endpoint (custom_auth_check) that DOES NOT slide the session expiry.
+      // This ensures unattended open tabs eventually log out, while still catching revocations.
       const ok = await db.auth.isAuthenticated();
       if (!ok && authenticatedRef.current) {
         authenticatedRef.current = false;

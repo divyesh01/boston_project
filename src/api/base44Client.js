@@ -1145,10 +1145,13 @@ const audit = {
 };
 
 // ─── Auth: real local authentication ───
+let lastTouchTime = 0;
+const THROTTLE_MS = 5 * 60 * 1000;
+
 const auth = {
   async isAuthenticated() {
     try {
-      const res = await functions.invoke('custom_auth_me');
+      const res = await functions.invoke('custom_auth_check');
       return !!res.user;
     } catch { return false; }
   },
@@ -1173,11 +1176,15 @@ const auth = {
     }
   },
   async touchSession() {
-    // Handled automatically by auth_me slide expiry
+    const now = Date.now();
+    if (now - lastTouchTime < THROTTLE_MS) return;
+    lastTouchTime = now;
+    try {
+      await functions.invoke('custom_auth_me');
+    } catch {}
   },
   async rotateSession() {
-    // Session is handled via cookies
-    return { token: 'http-only' };
+    return this.touchSession();
   },
   async logout(redirect) {
     try {

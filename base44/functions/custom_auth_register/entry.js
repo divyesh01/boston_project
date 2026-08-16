@@ -181,6 +181,10 @@ export default async function (req) {
     const salt = crypto.randomBytes(16).toString('hex');
     const password_hash = '$scrypt$' + await hashPasswordScrypt(password, salt);
 
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+    const resetTokenExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(); // 7 days
+
     const isPrivileged = role === 'owner' || role === 'admin';
     const finalPropertyAccess =
       property_access !== undefined
@@ -203,14 +207,16 @@ export default async function (req) {
       must_change_password: !!must_change_password,
       failed_login_count: 0,
       salt,
-      password_hash
+      password_hash,
+      reset_token_hash: resetTokenHash,
+      reset_token_expires_at: resetTokenExpiresAt
     });
 
     try {
       await base44.asServiceRole.integrations.Core.SendEmail({
         to: newUser.email,
         subject: "Welcome to Red Roof Intelligence",
-        body: `Your account has been created. Your temporary password is: ${password}`
+        body: `Your account has been created. Set your password: https://your-app.com/reset-password?token=${resetToken}`
       });
     } catch (emailErr) {
       console.error("Failed to send welcome email:", emailErr);

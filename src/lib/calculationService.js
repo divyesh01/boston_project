@@ -216,8 +216,8 @@ export class CalculationService {
     const taxLiability = this.calculateTaxLiability(srcRows, grossRows, propertyId, dateRange);
     const estimatedTaxes = taxLiability.total;
 
-    const totalDeductions = otaCommissions + ccFees + refundFees + refunds + totalPayroll + operatingExpenses + estimatedTaxes;
-    const kept = gross - totalDeductions;
+    const totalDeductions = fromCents(sumCents([otaCommissions, ccFees, refundFees, refunds, totalPayroll, operatingExpenses, estimatedTaxes]));
+    const kept = fromCents(subtract(gross, totalDeductions));
 
     // The rate is "kept out of what was keepable", so the denominator is revenue
     // less the money that was never the hotel's to keep. It has to be guarded on
@@ -250,9 +250,9 @@ export class CalculationService {
     const payrollInPeriod = filterCommittedPay(payroll).filter(p => inRange(p.pay_period_start, dateRange.from, dateRange.to));
     const totalPayroll = sum(payrollInPeriod, 'total_pay');
     const operatingExpenses = expensesInPeriod.filter(e => !(String(e.category || '').toLowerCase() === 'payroll')).reduce((a, e) => a + (e.amount || 0), 0);
-    const totalCosts = totalPayroll + operatingExpenses;
+    const totalCosts = fromCents(add(totalPayroll, operatingExpenses));
 
-    const operatingProfit = netRevenue - totalCosts;
+    const operatingProfit = fromCents(subtract(netRevenue, totalCosts));
     const profitMargin = netRevenue > 0 ? operatingProfit / netRevenue : 0;
 
     return { grossRevenue, netRevenue, totalPayroll, operatingExpenses, totalCosts, operatingProfit, profitMargin };

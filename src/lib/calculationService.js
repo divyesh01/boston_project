@@ -36,7 +36,7 @@ function classifySource(r) {
 
 export class CalculationService {
   static calculateOccupancyMetrics(occRows = [], propertyRoomCounts = {}) {
-    const revenue = sumCents(occRows.map(r => r.total_revenue));
+    const revenue = sumCents(occRows.map(r => r.room_revenue));
     const roomsSold = sumCents(occRows.map(r => r.rooms_sold));
 
     // Sum per-row total_rooms (actual inventory per date), fallback to Property.rooms
@@ -78,7 +78,7 @@ export class CalculationService {
     byProp.forEach((rows, pid) => {
       const prop = properties.find((p) => p.id === pid);
       const fallbackRooms = prop?.rooms || 100;
-      const revenue = sumCents(rows.map(r => r.total_revenue));
+      const revenue = sumCents(rows.map(r => r.room_revenue));
       const roomsSold = sumCents(rows.map(r => r.rooms_sold));
       // Sum per-row total_rooms, fallback to Property.rooms
       let capacity = 0;
@@ -193,7 +193,7 @@ export class CalculationService {
   }
 
   static calculateMoneyKept(occRows = [], srcRows = [], grossRows = [], payRows = [], expenses = [], payroll = [], dateRange = { from: '', to: '' }, propertyId = null) {
-    const gross = sum(occRows, 'total_revenue');
+    const gross = sum(occRows, 'room_revenue');
     const ccFee = getCcFeeRate();
     const ccFeeRefunds = getCcFeeOnRefunds();
 
@@ -241,7 +241,7 @@ export class CalculationService {
   }
 
   static calculateProfitMetrics(occRows, payRows, expenses, payroll, dateRange) {
-    const grossRevenue = sum(occRows, 'total_revenue');
+    const grossRevenue = sum(occRows, 'room_revenue');
     const refundsAndAdjustments = refundTotal(payRows);
     const netRevenue = grossRevenue - refundsAndAdjustments;
 

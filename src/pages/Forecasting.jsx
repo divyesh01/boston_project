@@ -55,7 +55,7 @@ export default function Forecasting() {
   const propName = property === "all" ? "All Properties" : (Array.isArray(property) ? `${property.length} Properties` : (properties.find((p) => p.id === property)?.name || "Property"));
 
   const histStats = useMemo(() => {
-    const revenue = sum(occRows, "total_revenue");
+    const revenue = sum(occRows, "room_revenue");
     const roomsSold = sum(occRows, "rooms_sold");
     const totalRooms = sum(occRows, "total_rooms") || (occRows.length > 0 ? (occRows[0].total_rooms || 100) : 100) * occRows.length;
     const occupancy = totalRooms > 0 ? roomsSold / totalRooms : 0;

@@ -367,7 +367,7 @@ export function validateSemantics({ rows = [], type, today = new Date() }) {
 
   // Revenue without occupancy, and vice versa. Either alone is usually a column
   // that failed to map rather than a genuine zero.
-  const revenueField = { occupancy: "total_revenue", gross: "room_rent", payments: "total" }[type];
+  const revenueField = { occupancy: "room_revenue", gross: "room_rent", payments: "total" }[type];
   if (revenueField) {
     const soldNoRevenue = rows.filter((r) =>
       Number(r.rooms_sold) > 0 && Number(r[revenueField] || 0) === 0);

@@ -123,13 +123,13 @@ export default function ExecutiveCharts({ rows }) {
       if (!date) continue;
       const cur = byDate.get(date);
       if (cur) {
-        cur.revenue += Number(r.total_revenue) || 0;
+        cur.revenue += Number(r.room_revenue) || 0;
         cur.roomsSold += Number(r.rooms_sold) || 0;
         cur.totalRooms += Number(r.total_rooms) || 0;
       } else {
         byDate.set(date, {
           date,
-          revenue: Number(r.total_revenue) || 0,
+          revenue: Number(r.room_revenue) || 0,
           roomsSold: Number(r.rooms_sold) || 0,
           totalRooms: Number(r.total_rooms) || 0,
         });

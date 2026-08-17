@@ -89,7 +89,7 @@ export default function Expenses() {
   const payRows = useMemo(() => payRecords.filter((r) => inRange(r.date, dateRange.from, dateRange.to)), [payRecords, dateRange]);
 
   // Revenue calculations
-  const grossRevenue = sum(occRows, "total_revenue");
+  const grossRevenue = sum(occRows, "room_revenue");
   const refundsAndAdjustments = refundTotal(payRows);
   const netRevenue = grossRevenue - refundsAndAdjustments;
 

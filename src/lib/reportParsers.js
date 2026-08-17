@@ -157,7 +157,7 @@ const COLUMN_MAP = {
   revpar_contribution: "revpar_contribution",
   "Room Revenue": "room_revenue", room_revenue: "room_revenue",
   "Other Room Revenue": "other_room_revenue", other_room_revenue: "other_room_revenue",
-  "Total Revenue": "total_revenue", total_revenue: "total_revenue",
+  "Total Revenue": "total_revenue_with_misc", total_revenue: "total_revenue_with_misc",
   "Total Rooms": "total_rooms", total_rooms: "total_rooms",
   "Total Sold Rooms": "rooms_sold", "Total Sold Rooms ": "rooms_sold",
   "Sold Rooms Without Comp": "rooms_sold_without_comp",
@@ -213,7 +213,7 @@ const ENTITY = {
   adjustments_refunds: "AdjustmentRefund",
 };
 const REVENUE_COL = {
-  occupancy: "total_revenue",
+  occupancy: "room_revenue",
   source: "net_revenue",
   gross: "room_rent",
   payments: "total",

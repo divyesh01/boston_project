@@ -148,7 +148,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     );
     const grossInPeriod = (grossRows || []).filter((r) => inRange(r.date, from, to));
 
-    const gross = sum(occRows, "total_revenue");
+    const gross = sum(occRows, "room_revenue");
 
     // ── Imported PMS tax lines per day (state / city / other) ──
     const taxImp = new Map();
@@ -169,7 +169,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       cur[key] += v;
       dayMap.set(date, cur);
     };
-    occRows.forEach((r) => bump(String(r.date).slice(0, 10), "gross", Number(r.total_revenue) || 0));
+    occRows.forEach((r) => bump(String(r.date).slice(0, 10), "gross", Number(r.room_revenue) || 0));
     srcRows.forEach((r) => {
       const rev = Number(r.net_revenue) || 0;
       const stays = Number(r.stays) || 0;
@@ -223,7 +223,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       const d = String(r.date).slice(0, 10);
       const pid = r.property_id || "";
       const key = `${d}|${pid}`;
-      occGrossByKey.set(key, (occGrossByKey.get(key) || 0) + (Number(r.total_revenue) || 0));
+      occGrossByKey.set(key, (occGrossByKey.get(key) || 0) + (Number(r.room_revenue) || 0));
       pushDateKey(key);
     });
 

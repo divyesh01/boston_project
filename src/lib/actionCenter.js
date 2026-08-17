@@ -114,7 +114,7 @@ export function buildActionCenter({
     const d = new Date(`${isoKey(r.date)}T00:00:00`);
     return d.getDay() === 0 || d.getDay() === 6;
   });
-  const weekendRevenue = sum(weekendRows, 'total_revenue');
+  const weekendRevenue = sum(weekendRows, 'room_revenue');
   const weekendRoomsSold = sum(weekendRows, 'rooms_sold');
   const weekendAdr = weekendRoomsSold > 0 ? weekendRevenue / weekendRoomsSold : 0;
   const weekendCap = sum(weekendRows, 'total_rooms');

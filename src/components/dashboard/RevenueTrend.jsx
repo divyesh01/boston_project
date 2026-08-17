@@ -8,10 +8,10 @@ export default function RevenueTrend({ rows, dateRange }) {
   const chartRef = useRef(null);
   const occThreshold = getOccThreshold();
   const data = rows
-    .filter((r) => Number(r.total_revenue || 0) > 0)
+    .filter((r) => Number(r.room_revenue || 0) > 0)
     .map((r) => ({
       date: String(r.date).slice(5),
-      revenue: r.total_revenue || 0,
+      revenue: r.room_revenue || 0,
       adr: r.adr || 0,
       occupancyPct: Math.round(Number(r.occupancy || 0) * 100),
     }));

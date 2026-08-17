@@ -130,7 +130,7 @@ export default function ModuleCards() {
 
   const stats = useMemo(() => {
     const rowsSold = occ.reduce((a, r) => a + (Number(r.rooms_sold) || 0), 0);
-    const revenue = occ.reduce((a, r) => a + (Number(r.total_revenue) || 0), 0);
+    const revenue = occ.reduce((a, r) => a + (Number(r.room_revenue) || 0), 0);
     const approved = payroll.filter((p) => p.payroll_status === "approved").length;
     // Card headline shows committed cost, matching Money Kept rather than the
     // gross of every draft.

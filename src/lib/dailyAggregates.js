@@ -73,7 +73,7 @@ export async function rebuildDailyAggregates({ propertyId = 'all', from = '', to
 
   for (const r of occ) {
     const d = ensure(r.property_id, String(r.date).slice(0, 10));
-    d.occ_revenue += Number(r.total_revenue) || 0;
+    d.occ_revenue += Number(r.room_revenue) || 0;
     d.occ_rooms_sold += Number(r.rooms_sold) || 0;
     d.occ_capacity_rooms += Number(r.total_rooms) || 0;
   }

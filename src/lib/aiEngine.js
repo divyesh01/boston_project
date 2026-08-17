@@ -439,7 +439,7 @@ async function latestDate(allowedPropertyIds = null) {
 }
 
 function occTotals(rows = []) {
-  const revenue = sum(rows, "total_revenue");
+  const revenue = sum(rows, "room_revenue");
   const roomsSold = sum(rows, "rooms_sold");
   const capacity = sum(rows, "total_rooms") || 0;
   const vacant = sum(rows, "vacant_rooms");
@@ -717,10 +717,10 @@ async function intentBestDay({ prop, range, question }) {
     : "revenue";
   const isLowest = /lowest|least|worst/i.test(q);
   const value = (r) => {
-    if (metric === "adr") return Number(r.adr) || (r.rooms_sold ? (Number(r.total_revenue) || 0) / r.rooms_sold : 0);
-    if (metric === "revpar") return Number(r.revpar) || (r.total_rooms ? (Number(r.total_revenue) || 0) / r.total_rooms : 0);
+    if (metric === "adr") return Number(r.adr) || (r.rooms_sold ? (Number(r.room_revenue) || 0) / r.rooms_sold : 0);
+    if (metric === "revpar") return Number(r.revpar) || (r.total_rooms ? (Number(r.room_revenue) || 0) / r.total_rooms : 0);
     if (metric === "occupancy") return Number(r.occupancy) || (r.total_rooms ? (Number(r.rooms_sold) || 0) / r.total_rooms : 0);
-    return Number(r.total_revenue) || 0;
+    return Number(r.room_revenue) || 0;
   };
   const pick = (a, b) => (isLowest ? value(a) - value(b) : value(b) - value(a));
   const sorted = [...rows].sort(pick);
@@ -733,7 +733,7 @@ async function intentBestDay({ prop, range, question }) {
     lines: [
       `**${isLowest ? "Lowest" : "Highest"} ${label} day — ${prop.label}**`,
       `- ${String(top.date || "").slice(0, 10) || "—"}: **${val}**`,
-      `- Rooms sold: ${num(Number(top.rooms_sold) || 0)} · Revenue: ${money(top.total_revenue)}`,
+      `- Rooms sold: ${num(Number(top.rooms_sold) || 0)} · Revenue: ${money(top.room_revenue)}`,
       `- Over ${fmtRange(range)}`,
     ],
     noData: null,

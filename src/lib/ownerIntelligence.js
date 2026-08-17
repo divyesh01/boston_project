@@ -24,8 +24,8 @@ export class OwnerIntelligenceService {
       
       const weekendOcc = weekends.length ? weekends.reduce((a, r) => a + Number(r.occupancy || 0), 0) / weekends.length : 0;
       const weekdayOcc = weekdays.length ? weekdays.reduce((a, r) => a + Number(r.occupancy || 0), 0) / weekdays.length : 0;
-      const weekendRev = weekends.reduce((a, r) => a + Number(r.total_revenue || 0), 0);
-      const weekdayRev = weekdays.reduce((a, r) => a + Number(r.total_revenue || 0), 0);
+      const weekendRev = weekends.reduce((a, r) => a + Number(r.room_revenue || 0), 0);
+      const weekdayRev = weekdays.reduce((a, r) => a + Number(r.room_revenue || 0), 0);
       
       byProperty[prop.property_id] = {
         property_name: prop.property_name,
@@ -44,15 +44,15 @@ export class OwnerIntelligenceService {
   // Find high/low revenue dates
   static findRevenueOutliers(occRows, properties, topN = 5) {
     const sorted = [...occRows]
-      .filter(r => Number(r.total_revenue || 0) > 0)
-      .sort((a, b) => Number(b.total_revenue) - Number(a.total_revenue));
+      .filter(r => Number(r.room_revenue || 0) > 0)
+      .sort((a, b) => Number(b.room_revenue) - Number(a.room_revenue));
     
     return {
       highest: sorted.slice(0, topN).map(r => ({
         date: String(r.date).slice(0, 10),
         property_id: r.property_id,
         property_name: properties.find(p => p.id === r.property_id)?.name || 'Unknown',
-        revenue: Number(r.total_revenue),
+        revenue: Number(r.room_revenue),
         occupancy: Number(r.occupancy || 0),
         adr: Number(r.adr || 0),
       })),
@@ -60,7 +60,7 @@ export class OwnerIntelligenceService {
         date: String(r.date).slice(0, 10),
         property_id: r.property_id,
         property_name: properties.find(p => p.id === r.property_id)?.name || 'Unknown',
-        revenue: Number(r.total_revenue),
+        revenue: Number(r.room_revenue),
         occupancy: Number(r.occupancy || 0),
         adr: Number(r.adr || 0),
       })),
@@ -214,7 +214,7 @@ export class OwnerIntelligenceService {
     
     // 2. Payment variance (collected vs expected)
     const paymentMetrics = CalculationService.calculatePaymentMetrics(payRows);
-    const expectedRevenue = occRows.reduce((a, r) => a + Number(r.total_revenue || 0), 0);
+    const expectedRevenue = occRows.reduce((a, r) => a + Number(r.room_revenue || 0), 0);
     const variance = paymentMetrics.totalCollected - expectedRevenue;
     if (Math.abs(variance) > expectedRevenue * 0.05) {
       leaks.push({
@@ -247,7 +247,7 @@ export class OwnerIntelligenceService {
     // "Profit Leakage"), so the addition must not drift.
     const totalCostCents = sumCents(expensesInPeriod.map((e) => e.amount))
       + sumCents(payrollInPeriod.map((p) => p.total_pay));
-    const grossCents = sumCents(occRows.map((r) => r.total_revenue));
+    const grossCents = sumCents(occRows.map((r) => r.room_revenue));
     const expenseRatio = grossCents > 0 ? totalCostCents / grossCents : 0;
 
     if (expenseRatio > 0.65) {
@@ -269,7 +269,7 @@ export class OwnerIntelligenceService {
     const insights = [];
     
     // Revenue trend
-    const dailyRevenue = occRows.reduce((a, r) => a + Number(r.total_revenue || 0), 0);
+    const dailyRevenue = occRows.reduce((a, r) => a + Number(r.room_revenue || 0), 0);
     const dailyRooms = occRows.reduce((a, r) => a + Number(r.rooms_sold || 0), 0);
     const avgOcc = occRows.length ? occRows.reduce((a, r) => a + Number(r.occupancy || 0), 0) / occRows.length : 0;
     

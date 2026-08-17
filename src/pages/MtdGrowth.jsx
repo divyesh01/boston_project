@@ -125,12 +125,12 @@ export default function MtdGrowth() {
     curElapsed.forEach((r) => {
       const d = String(r.date).slice(5);
       if (!map.has(d)) map.set(d, { date: d, current: 0, previous: 0 });
-      map.get(d).current += Number(r.total_revenue || 0);
+      map.get(d).current += Number(r.room_revenue || 0);
     });
     prevElapsed.forEach((r) => {
       const d = String(r.date).slice(5);
       if (!map.has(d)) map.set(d, { date: d, current: 0, previous: 0 });
-      map.get(d).previous += Number(r.total_revenue || 0);
+      map.get(d).previous += Number(r.room_revenue || 0);
     });
     return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
   }, [curElapsed, prevElapsed]);

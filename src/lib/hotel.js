@@ -113,7 +113,7 @@ export function normalizeName(name) {
 // Weighted portfolio calculations — never average property percentages
 export function portfolioStats(occRows, roomCounts) {
   const safeRows = occRows || [];
-  const revenue = sumCents(safeRows.map(r => r.total_revenue));
+  const revenue = sumCents(safeRows.map(r => r.room_revenue));
   const roomsSold = sumCents(safeRows.map(r => r.rooms_sold));
 
   // Calculate total capacity using per-row total_rooms (actual inventory per date)
@@ -215,7 +215,7 @@ export function inventoryInScope(property, properties) {
 // so Dashboard, Compare and MTD Growth cannot disagree for the same period.
 export function occupancyStats(occRows, properties) {
   const rows = occRows || [];
-  const revenue = sum(rows, "total_revenue");
+  const revenue = sum(rows, "room_revenue");
   const roomsSold = sum(rows, "rooms_sold");
   const capacity = capacityRoomNights(rows, properties);
   return {
@@ -242,7 +242,7 @@ export function perPropertyStats(occRows = [], properties = []) {
   byProp.forEach((rows, pid) => {
     const prop = properties.find((p) => p.id === pid);
     const fallbackRooms = prop?.rooms || PROPERTY.rooms;
-    const revenue = sumCents(rows.map(r => r.total_revenue));
+    const revenue = sumCents(rows.map(r => r.room_revenue));
     const roomsSold = sumCents(rows.map(r => r.rooms_sold));
     // Sum per-row total_rooms (actual inventory per date), fallback to Property.rooms
     let capacity = 0;

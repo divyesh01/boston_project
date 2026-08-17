@@ -684,7 +684,7 @@ export default function Payroll() {
   };
 
   const estAdr = (() => {
-    const rev = occRows.reduce((a, r) => a + (r.total_revenue || 0), 0);
+    const rev = occRows.reduce((a, r) => a + (r.room_revenue || 0), 0);
     const sold = occRows.reduce((a, r) => a + (r.rooms_sold || 0), 0);
     return sold > 0 ? rev / sold : 0;
   })();

@@ -71,7 +71,7 @@ export default function LowOccAlert({ occRows, sources }) {
                   <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
                     <div>
                       <p className="text-[10px] uppercase tracking-widest text-slate-500">Revenue</p>
-                      <p className="text-sm text-white">{money(r.total_revenue)}</p>
+                      <p className="text-sm text-white">{money(r.room_revenue)}</p>
                     </div>
                     <div>
                       <p className="text-[10px] uppercase tracking-widest text-slate-500">ADR</p>

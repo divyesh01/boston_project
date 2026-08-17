@@ -91,8 +91,8 @@ export default function MonthlyCalendar() {
       occupancy: s.occupancy,
       adr: s.adr,
       revpar: s.revpar,
-      highest: occRows.length ? Math.max(...occRows.map((r) => r.total_revenue || 0)) : 0,
-      lowest: occRows.length ? Math.min(...occRows.map((r) => r.total_revenue || 0)) : 0,
+      highest: occRows.length ? Math.max(...occRows.map((r) => r.room_revenue || 0)) : 0,
+      lowest: occRows.length ? Math.min(...occRows.map((r) => r.room_revenue || 0)) : 0,
       days: s.days,
     };
   }, [occRows, properties]);
@@ -198,7 +198,7 @@ export default function MonthlyCalendar() {
             ))}
             {grid.cells.map((cell, i) => {
               if (!cell) return <div key={i} className="min-h-[90px] sm:min-h-[120px]" />;
-              const revenue = cell.data?.total_revenue || 0;
+              const revenue = cell.data?.room_revenue || 0;
               const color = cell.data ? getRevenueColor(revenue) : "transparent";
               const occPct = cell.data?.occupancy ? (cell.data.occupancy > 1 ? cell.data.occupancy : cell.data.occupancy * 100) : 0;
               return (

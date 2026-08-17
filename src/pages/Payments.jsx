@@ -66,7 +66,7 @@ export default function Payments() {
     : sum(payRows, "total");
   const refunds = refundTotalFromTotals(methodTotals);
   const netPaymentCollected = totalCollected - refunds;
-  const expectedRevenue = sum(occRows, "total_revenue");
+  const expectedRevenue = sum(occRows, "room_revenue");
   const variance = totalCollected - expectedRevenue;
 
   // Payment distribution data for chart — exclude zero values
@@ -106,7 +106,7 @@ export default function Payments() {
     const byDate = new Map();
     occRows.forEach((r) => {
       const d = String(r.date).slice(0, 10);
-      byDate.set(d, { pmsTotal: Number(r.total_revenue) || 0 });
+      byDate.set(d, { pmsTotal: Number(r.room_revenue) || 0 });
     });
     payRows.forEach((r) => {
       const d = String(r.date).slice(0, 10);

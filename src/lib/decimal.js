@@ -142,7 +142,7 @@ export function portfolioAdr(occupancyRows) {
   let totalRevenue = 0;
   let totalRoomsSold = 0;
   for (const row of occupancyRows) {
-    totalRevenue += toCents(row.total_revenue);
+    totalRevenue += toCents(row.room_revenue);
     totalRoomsSold += toCents(row.rooms_sold);
   }
   if (totalRoomsSold === 0) return 0;

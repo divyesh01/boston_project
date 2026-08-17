@@ -164,9 +164,11 @@ export const AuthProvider = ({ children }) => {
   }, [user]);
 
   const validateCurrentAccountStatus = useCallback(async () => {
-    // Real-time account status check. Re-queries the live user record for the
-    // current session so Disabled/Locked accounts are revoked on the next route
-    // navigation/action instead of waiting for the 30s idle poll.
+    // If we already know the user was disabled locally, return valid so
+    // ProtectedRoute can show its dedicated Red Disabled Screen without
+    // preempting it with the generic 'revoked' banner.
+    if (user?.is_active === false) return { valid: true };
+
     try {
       const me = await db.auth.me();
       if (!me) return { valid: false, status: 'revoked' };
@@ -208,16 +210,23 @@ export const AuthProvider = ({ children }) => {
         detail: message.reason || 'Session revoked from another tab',
       });
       await db.auth.logout().catch(() => {});
-      setUser(null);
       setIsAuthenticated(false);
       authenticatedRef.current = false;
       if (message.status === 'logged_out') {
-        // Standard logout in another tab -> send this tab to the login page.
+        setUser(null);
         setAccountRestricted(null);
         navigateToLoginRef.current(window.location.pathname + window.location.search);
       } else {
         // Account was disabled/locked -> show the restricted banner immediately.
-        setAccountRestricted(message.status === 'disabled' || message.status === 'locked' ? message.status : 'revoked');
+        if (message.status === 'disabled') {
+          // Keep the user object but mark it inactive so the dedicated
+          // 'Account Disabled' screen in ProtectedRoute is triggered.
+          setUser((prev) => (prev ? { ...prev, is_active: false } : null));
+          setAccountRestricted(null);
+        } else {
+          setUser(null);
+          setAccountRestricted(message.status === 'locked' ? message.status : 'revoked');
+        }
       }
     } finally {
       crossTabRevokingRef.current = false;

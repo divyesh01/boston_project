@@ -694,24 +694,18 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
                     nameKey="name"
                     cx="50%"
                     cy="50%"
-                    outerRadius={110}
-                    innerRadius={55}
+                    outerRadius="75%"
+                    innerRadius="50%"
                     paddingAngle={2}
-                    label={({ name, value, percent }) => {
-                      const share = (percent || 0) * 100;
-                      const t = name && name.length > 18 ? name.slice(0, 16) + "\u2026" : name;
-                      if (share < 2) return "";
-                      if (share < 5) return `${t} (${share.toFixed(1)}%)`;
-                      return `${t} ${money(value)} (${share.toFixed(1)}%)`;
-                    }}
-                    labelLine={{ stroke: "#475569", strokeWidth: 1 }}
+                    label={false}
+                    labelLine={false}
                   >
                     {pieData.map((entry, i) => (
                       <Cell key={i} fill={entry.color} stroke="#040D1A" strokeWidth={2} />
                     ))}
                   </Pie>
                   <Tooltip contentStyle={tip} formatter={(v, name) => [money(v), name]} />
-                  <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
+                  <Legend layout="vertical" verticalAlign="middle" align="right" wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
                 </PieChart>
               </ResponsiveContainer>
             ) : (

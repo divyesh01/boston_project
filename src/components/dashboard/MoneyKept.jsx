@@ -4,7 +4,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   AreaChart, Area, Line,
 } from "recharts";
-import { ExecutiveFinancialPie } from '../charts/ExecutiveFinancialPie';
+import { ExecutiveLeaderLinePie } from '../charts/ExecutiveLeaderLinePie';
 import { X, Wallet } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { usePaymentData } from "@/lib/useHotelData";
@@ -686,7 +686,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
 
           {/* Pie chart */}
           <div className="w-full mt-8">
-            <ExecutiveFinancialPie
+            <ExecutiveLeaderLinePie
               data={[
                 { name: 'Money Kept', value: 920829, color: '#10b981' },
                 { name: 'OTA Commissions', value: 50287, color: '#ef4444' },

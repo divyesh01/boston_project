@@ -185,6 +185,7 @@ export default async function(req) {
       folder_path: `Hotel Dashboard Backups/${propertyName}/${year}/${month}/${reportType}`,
     });
   } catch (error) {
-    return Response.json({ error: error.message, status: "failed" }, { status: 500 });
+    console.error("Backup to Drive error:", error);
+    return Response.json({ error: "Internal server error", status: "failed" }, { status: 500 });
   }
 }

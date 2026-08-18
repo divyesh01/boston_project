@@ -206,6 +206,6 @@ ${JSON.stringify(summary, null, 2)}`;
       summary,
     });
   } catch (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+    return Response.json({ error: "Internal server error" }, { status: 500 });
   }
 }

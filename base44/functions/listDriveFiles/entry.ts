@@ -41,6 +41,7 @@ export default async function(req) {
     const data = await res.json();
     return Response.json({ files: data.files || [] });
   } catch (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+    console.error("List Drive files error:", error);
+    return Response.json({ error: "Internal server error" }, { status: 500 });
   }
 }

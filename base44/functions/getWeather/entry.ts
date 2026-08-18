@@ -43,6 +43,7 @@ export default async function(req) {
     const data = await res.json();
     return Response.json(data);
   } catch (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+    console.error("GetWeather error:", error);
+    return Response.json({ error: "Internal server error" }, { status: 500 });
   }
 }

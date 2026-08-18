@@ -83,6 +83,7 @@ export default async function(req) {
 
     return Response.json({ file_url, fileName });
   } catch (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+    console.error("Import Drive file error:", error);
+    return Response.json({ error: "Internal server error" }, { status: 500 });
   }
 }

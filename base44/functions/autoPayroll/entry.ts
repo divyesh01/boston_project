@@ -350,6 +350,7 @@ export default async function runAutoPayroll(req) {
       skipped,
     });
   } catch (error) {
-    return Response.json({ error: error.message, status: "failed" }, { status: 500 });
+    console.error("AutoPayroll error:", error);
+    return Response.json({ error: "Internal server error", status: "failed" }, { status: 500 });
   }
 }

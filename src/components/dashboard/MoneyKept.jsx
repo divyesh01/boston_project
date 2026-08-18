@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import {
-  ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend,
+  ResponsiveContainer, PieChart, Pie, Cell, Tooltip,
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   AreaChart, Area, Line,
 } from "recharts";
@@ -694,18 +694,28 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
                     nameKey="name"
                     cx="50%"
                     cy="50%"
-                    outerRadius="75%"
-                    innerRadius="50%"
+                    outerRadius="55%"
+                    innerRadius="40%"
                     paddingAngle={2}
-                    label={false}
-                    labelLine={false}
+                    labelLine={true}
+                    label={({ cx, cy, midAngle, outerRadius, percent, payload, value }) => {
+                      if (percent < 0.02) return null;
+                      const RADIAN = Math.PI / 180;
+                      const radius = outerRadius * 1.25;
+                      const x = cx + radius * Math.cos(-midAngle * RADIAN);
+                      const y = cy + radius * Math.sin(-midAngle * RADIAN);
+                      return (
+                        <text x={x} y={y} fill="#94a3b8" textAnchor={x > cx ? 'start' : 'end'} dominantBaseline="central" fontSize={11}>
+                          {`${payload.name} ${money(value)} (${(percent * 100).toFixed(0)}%)`}
+                        </text>
+                      );
+                    }}
                   >
                     {pieData.map((entry, i) => (
                       <Cell key={i} fill={entry.color} stroke="#040D1A" strokeWidth={2} />
                     ))}
                   </Pie>
                   <Tooltip contentStyle={tip} formatter={(v, name) => [money(v), name]} />
-                  <Legend layout="vertical" verticalAlign="middle" align="right" wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
                 </PieChart>
               </ResponsiveContainer>
             ) : (

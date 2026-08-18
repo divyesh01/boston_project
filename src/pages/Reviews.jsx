@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, PieChart, Pie, Cell, Legend,
+  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, PieChart, Pie, Cell,
 } from "recharts";
 import Card from "@/components/ui-exec/Card";
 import { useReviews } from "@/lib/useHotelData";
@@ -138,11 +138,30 @@ export default function Reviews() {
           {sentData.length ? (
             <ResponsiveContainer width="100%" height={220}>
               <PieChart>
-                <Pie data={sentData} dataKey="value" nameKey="name" innerRadius="50%" outerRadius="75%" paddingAngle={3} label={false} labelLine={false}>
+                <Pie 
+                  data={sentData} 
+                  dataKey="value" 
+                  nameKey="name" 
+                  innerRadius="40%" 
+                  outerRadius="55%" 
+                  paddingAngle={3} 
+                  labelLine={true}
+                  label={({ cx, cy, midAngle, outerRadius, percent, payload, value }) => {
+                    if (percent < 0.02) return null;
+                    const RADIAN = Math.PI / 180;
+                    const radius = outerRadius * 1.25;
+                    const x = cx + radius * Math.cos(-midAngle * RADIAN);
+                    const y = cy + radius * Math.sin(-midAngle * RADIAN);
+                    return (
+                      <text x={x} y={y} fill="#94a3b8" textAnchor={x > cx ? 'start' : 'end'} dominantBaseline="central" fontSize={11}>
+                        {`${payload.name} ${value} (${(percent * 100).toFixed(0)}%)`}
+                      </text>
+                    );
+                  }}
+                >
                   {sentData.map((entry) => <Cell key={entry.name} fill={entry.color} />)}
                 </Pie>
                 <Tooltip contentStyle={{ background: "#0F1F35", border: "1px solid #ffffff22", borderRadius: 8 }} />
-                <Legend layout="vertical" verticalAlign="middle" align="right" wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
               </PieChart>
             </ResponsiveContainer>
           ) : (

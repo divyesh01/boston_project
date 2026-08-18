@@ -37,8 +37,10 @@ import path from "node:path";
 // hard-crashed with EACCES/ENOENT for anyone else who ran it — a failure that
 // looks exactly like a real regression but says nothing about the code. The
 // fixture now travels with the repo.
+import { fileURLToPath } from "node:url";
+
 const LOCAL_STATS = path.join(
-  path.dirname(new URL(import.meta.url).pathname),
+  path.dirname(fileURLToPath(import.meta.url)),
   "data",
   "Hotel Statistics (1).csv"
 );

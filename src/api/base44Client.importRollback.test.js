@@ -56,6 +56,18 @@ beforeEach(async () => {
   await Promise.all(localDb.tables.map((t) => t.clear()));
   localStorage.clear();
   sessionStorage.clear();
+
+  // Mock authenticated owner so property isolation proxy permits writes
+  await db.auth.registerUser({
+    username: "owner",
+    email: "owner@test.local",
+    role: "owner",
+    permissions: "all",
+    property_access: "all",
+    is_active: true,
+    password: "Password1!",
+  });
+  await db.auth.login("owner@test.local", "Password1!", true);
 });
 
 describe("import rollback", () => {

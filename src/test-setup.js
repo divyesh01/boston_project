@@ -9,3 +9,21 @@ class ResizeObserverStub {
 }
 globalThis.ResizeObserver = globalThis.ResizeObserver || ResizeObserverStub;
 
+// Polyfill WebCrypto and localStorage for Node/JSDOM test environments
+if (!globalThis.crypto?.subtle) {
+  import("node:crypto").then((m) => {
+    globalThis.crypto = m.webcrypto;
+  });
+}
+
+if (!globalThis.localStorage) {
+  const __store = new Map();
+  const __storage = {
+    getItem: (k) => (__store.has(k) ? __store.get(k) : null),
+    setItem: (k, v) => __store.set(k, String(v)),
+    removeItem: (k) => __store.delete(k),
+    clear: () => __store.clear(),
+  };
+  globalThis.localStorage = __storage;
+  globalThis.sessionStorage = __storage;
+}

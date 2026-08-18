@@ -180,7 +180,7 @@ export function buildSyntheticRows(aggregates) {
       occRows.push({
         property_id: a.property_id,
         date,
-        total_revenue: revenue,
+        room_revenue: revenue,
         rooms_sold: roomsSold,
         total_rooms: capacity,
         occupancy: occ,

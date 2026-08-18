@@ -21,7 +21,8 @@ const UP = process.env.UPLOADS_DIR || REPO_DATA;
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, ...rest) => {
   if (typeof url === "string" && url.startsWith("file:///")) {
-    const p = decodeURIComponent(url.replace("file:///", "/"));
+    let p = decodeURIComponent(url.replace("file:///", "/"));
+    if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1);
     return new Response(fs.readFileSync(p, "utf8"), { status: 200 });
   }
   return realFetch(url, ...rest);

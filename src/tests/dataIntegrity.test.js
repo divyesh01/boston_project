@@ -7,6 +7,18 @@ describe('Data Integrity & Group 2', () => {
   beforeEach(async () => {
     // Clear databases before tests
     await Promise.all(localDb.tables.map(table => table.clear()));
+
+    // Mock authenticated owner so property isolation proxy permits writes
+    await db.auth.registerUser({
+      username: "owner",
+      email: "owner@test.local",
+      role: "owner",
+      permissions: "all",
+      property_access: "all",
+      is_active: true,
+      password: "Password1!",
+    });
+    await db.auth.login("owner@test.local", "Password1!", true);
   });
 
   it('15. Property uniqueness constraint: should reject duplicate property codes', async () => {

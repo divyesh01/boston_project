@@ -1997,18 +1997,18 @@ const functions = {
         throw localErr;
       }
     }
-    if (functionName === 'custom_auth_me') {
+    if (functionName === 'custom_auth_me' || functionName === 'custom_auth_check') {
       try {
         const local = await handleLocalAuthMe();
         if (local.user) return local;
-        const remote = await tryRemote('custom_auth_me', params);
+        const remote = await tryRemote(functionName, params);
         if (remote && remote.user) {
           const mirrored = await mirrorRemoteUserIntoLocal(remote.user);
           return { user: publicUserLocal(mirrored) || remote.user };
         }
         return local;
       } catch (e) {
-        console.error(`[localAuth] custom_auth_me failed:`, e);
+        console.error(`[localAuth] ${functionName} failed:`, e);
         throw e;
       }
     }

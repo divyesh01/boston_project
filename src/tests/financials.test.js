@@ -9,8 +9,8 @@ describe('CalculationService - Financial Metrics', () => {
     // Weighted average ADR should be (2000+5000) / (10+100) = 7000 / 110 = $63.63
     
     const occRows = [
-      { property_id: 'prop1', total_revenue: 2000, rooms_sold: 10, total_rooms: 10 },
-      { property_id: 'prop2', total_revenue: 5000, rooms_sold: 100, total_rooms: 100 },
+      { property_id: 'prop1', room_revenue: 2000, rooms_sold: 10, total_rooms: 10 },
+      { property_id: 'prop2', room_revenue: 5000, rooms_sold: 100, total_rooms: 100 },
     ];
     
     const propertyRoomCounts = { prop1: 10, prop2: 100 };
@@ -32,8 +32,8 @@ describe('CalculationService - Financial Metrics', () => {
     // Weighted average RevPAR = (1000 + 15000) / (50 + 150) = 16000 / 200 = $80
     
     const occRows = [
-      { property_id: 'prop1', total_revenue: 1000, rooms_sold: 10, total_rooms: 50 },
-      { property_id: 'prop2', total_revenue: 15000, rooms_sold: 150, total_rooms: 150 },
+      { property_id: 'prop1', room_revenue: 1000, rooms_sold: 10, total_rooms: 50 },
+      { property_id: 'prop2', room_revenue: 15000, rooms_sold: 150, total_rooms: 150 },
     ];
     
     const propertyRoomCounts = { prop1: 50, prop2: 150 };
@@ -48,9 +48,9 @@ describe('CalculationService - Financial Metrics', () => {
   it('calculates capacity correctly with missing total_rooms by falling back to propertyRoomCounts', () => {
     const occRows = [
       // Missing total_rooms, should fall back to propertyRoomCounts
-      { property_id: 'prop1', total_revenue: 1000, rooms_sold: 10 },
+      { property_id: 'prop1', room_revenue: 1000, rooms_sold: 10 },
       // Has total_rooms, should override propertyRoomCounts
-      { property_id: 'prop2', total_revenue: 2000, rooms_sold: 20, total_rooms: 120 }, 
+      { property_id: 'prop2', room_revenue: 2000, rooms_sold: 20, total_rooms: 120 }, 
     ];
     
     const propertyRoomCounts = { prop1: 50, prop2: 100 };
@@ -64,7 +64,7 @@ describe('CalculationService - Financial Metrics', () => {
   describe('Bulletproof Edge Cases', () => {
     it('handles zero capacity without throwing Infinity or NaN', () => {
       const occRows = [
-        { property_id: 'prop1', total_revenue: 1000, rooms_sold: 10, total_rooms: 0 },
+        { property_id: 'prop1', room_revenue: 1000, rooms_sold: 10, total_rooms: 0 },
       ];
       const propertyRoomCounts = { prop1: 0 };
       
@@ -78,7 +78,7 @@ describe('CalculationService - Financial Metrics', () => {
 
     it('handles zero rooms sold (zero denominator for ADR)', () => {
       const occRows = [
-        { property_id: 'prop1', total_revenue: 1000, rooms_sold: 0, total_rooms: 100 },
+        { property_id: 'prop1', room_revenue: 1000, rooms_sold: 0, total_rooms: 100 },
       ];
       const propertyRoomCounts = { prop1: 100 };
       
@@ -90,7 +90,7 @@ describe('CalculationService - Financial Metrics', () => {
 
     it('handles negative revenue adjustments correctly', () => {
       const occRows = [
-        { property_id: 'prop1', total_revenue: -500, rooms_sold: 10, total_rooms: 100 },
+        { property_id: 'prop1', room_revenue: -500, rooms_sold: 10, total_rooms: 100 },
       ];
       const propertyRoomCounts = { prop1: 100 };
       
@@ -103,7 +103,7 @@ describe('CalculationService - Financial Metrics', () => {
 
     it('handles string numeric inputs gracefully', () => {
       const occRows = [
-        { property_id: 'prop1', total_revenue: "1000", rooms_sold: "10", total_rooms: "100" },
+        { property_id: 'prop1', room_revenue: "1000", rooms_sold: "10", total_rooms: "100" },
       ];
       const propertyRoomCounts = { prop1: 100 };
       

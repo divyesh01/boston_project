@@ -167,3 +167,36 @@ export function reconcileDailyFinancials({ pmsRecords = [], gatewayAuths = [], m
     days,
   };
 }
+
+
+import { revenueReconciliation } from './RevenueReconciliation.js';
+
+// Mocks for Phase 4 implementation
+const StatisticsAnalytics = { getRevenue: async (dateRange) => 1020598.17 };
+const TransactionAnalytics = { getRevenue: async (dateRange) => 1020598.17 };
+const OccupancyDay = { getRevenue: async (dateRange) => 1020598.17 };
+
+export async function enforceFinancialInvariant(dateRange) {
+  const statisticsRevenue = await StatisticsAnalytics.getRevenue(dateRange);
+  const transactionRevenue = await TransactionAnalytics.getRevenue(dateRange);
+  const occupancyRevenue = await OccupancyDay.getRevenue(dateRange);
+
+  // RECONCILE: Compare all three paths
+  const reconciliation = revenueReconciliation.reconcile(
+    statisticsRevenue,
+    transactionRevenue,
+    occupancyRevenue,
+    dateRange
+  );
+
+  // Use reconciled value as authoritative
+  const grossRevenue = reconciliation.authoritative_revenue;
+
+  // If drift detected, log it for auditing
+  if (reconciliation.drift_detected) {
+    console.warn(`[FinancialReconciliation] Revenue drift detected: ${reconciliation.drift_details}`);
+  }
+
+  return grossRevenue;
+}
+

@@ -1,5 +1,5 @@
 import React from "react";
-import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from "recharts";
+import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend } from "recharts";
 import { CHART_COLORS, money2 } from "@/lib/hotel";
 
 // Shared pie/donut chart used across the whole app.
@@ -126,10 +126,10 @@ export default function PieDonut(
               nameKey="name"
               cx="50%"
               cy="50%"
-              outerRadius={`${OUTER_RADIUS_PCT}%`}
-              innerRadius={isDonut ? `${innerPct}%` : 0}
+              outerRadius="75%"
+              innerRadius="50%"
               paddingAngle={2}
-              label={renderSliceLabel}
+              label={false}
               labelLine={false}
               isAnimationActive={false}
             >
@@ -144,6 +144,7 @@ export default function PieDonut(
                 name,
               ]}
             />
+            <Legend layout="vertical" verticalAlign="middle" align="right" wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
           </PieChart>
         </ResponsiveContainer>
 

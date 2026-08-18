@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, PieChart, Pie, Cell,
+  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, PieChart, Pie, Cell, Legend,
 } from "recharts";
 import Card from "@/components/ui-exec/Card";
 import { useReviews } from "@/lib/useHotelData";
@@ -138,10 +138,11 @@ export default function Reviews() {
           {sentData.length ? (
             <ResponsiveContainer width="100%" height={220}>
               <PieChart>
-                <Pie data={sentData} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={3}>
+                <Pie data={sentData} dataKey="value" nameKey="name" innerRadius="50%" outerRadius="75%" paddingAngle={3} label={false} labelLine={false}>
                   {sentData.map((entry) => <Cell key={entry.name} fill={entry.color} />)}
                 </Pie>
                 <Tooltip contentStyle={{ background: "#0F1F35", border: "1px solid #ffffff22", borderRadius: 8 }} />
+                <Legend layout="vertical" verticalAlign="middle" align="right" wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
               </PieChart>
             </ResponsiveContainer>
           ) : (

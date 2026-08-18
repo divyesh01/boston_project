@@ -4,7 +4,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   AreaChart, Area, Line,
 } from "recharts";
-import { ProfessionalPieChart } from '../charts/ProfessionalPieChart';
+import { ExecutiveFinancialPie } from '../charts/ExecutiveFinancialPie';
 import { X, Wallet } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { usePaymentData } from "@/lib/useHotelData";
@@ -685,23 +685,17 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
           </div>
 
           {/* Pie chart */}
-          <div className="h-[380px] relative">
-            <div className="w-full">
-              {pieData.length > 0 ? (
-                <ProfessionalPieChart
-                  data={[
-                    { name: 'Money Kept', value: 920829, color: '#22c55e' },
-                    { name: 'Commissions', value: 50287, color: '#ef4444' },
-                    { name: 'Fees', value: 23816, color: '#f59e0b' },
-                    { name: 'Taxes', value: 16325, color: '#8b5cf6' }
-                  ]}
-                  title="Money Kept Breakdown"
-                  height={600}
-                />
-              ) : (
-                <p className="text-sm text-slate-400">No payment data yet.</p>
-              )}
-            </div>
+          <div className="w-full mt-8">
+            <ExecutiveFinancialPie
+              data={[
+                { name: 'Money Kept', value: 920829, color: '#10b981' },
+                { name: 'OTA Commissions', value: 50287, color: '#ef4444' },
+                { name: 'Processing Fees', value: 23816, color: '#f59e0b' },
+                { name: 'Business Taxes', value: 16325, color: '#8b5cf6' }
+              ]}
+              title="Money Kept Breakdown"
+              showLegend={true}
+            />
           </div>
         </div>
       </Card>

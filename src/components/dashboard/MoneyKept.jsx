@@ -4,7 +4,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   AreaChart, Area, Line,
 } from "recharts";
-import { ExecutiveLeaderLinePie } from '../charts/ExecutiveLeaderLinePie';
+import { FinancialBarChart } from '@/components/charts/FinancialBarChart';
 import { X, Wallet } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { usePaymentData } from "@/lib/useHotelData";
@@ -684,17 +684,17 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
             </div>
           </div>
 
-          {/* Pie chart */}
-          <div className="w-full mt-8">
-            <ExecutiveLeaderLinePie
+          {/* Bar chart */}
+          <div className="w-full">
+            <FinancialBarChart
               data={[
-                { name: 'Money Kept', value: 920829, color: '#10b981' },
-                { name: 'OTA Commissions', value: 50287, color: '#ef4444' },
-                { name: 'Processing Fees', value: 23816, color: '#f59e0b' },
-                { name: 'Business Taxes', value: 16325, color: '#8b5cf6' }
+                { name: 'Money Kept', value: Math.round(kept * 100) / 100, color: '#10b981' },
+                { name: 'OTA Commissions', value: Math.round(items.find(i => i.key === 'ota')?.amount * 100) / 100 || 0, color: '#ef4444' },
+                { name: 'Processing Fees', value: Math.round(items.find(i => i.key === 'cc' || i.key === 'credit_card_fees')?.amount * 100) / 100 || 0, color: '#f59e0b' },
+                { name: 'Business Taxes', value: Math.round(items.find(i => i.key === 'taxes')?.amount * 100) / 100 || 0, color: '#8b5cf6' }
               ]}
               title="Money Kept Breakdown"
-              showLegend={true}
+              totalLabel="NET REVENUE"
             />
           </div>
         </div>

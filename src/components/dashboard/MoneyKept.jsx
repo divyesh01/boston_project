@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from "react";
 import {
-  ResponsiveContainer, PieChart, Pie, Cell, Tooltip,
+  ResponsiveContainer, Cell, Tooltip,
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   AreaChart, Area, Line,
 } from "recharts";
+import { ProfessionalPieChart } from '../charts/ProfessionalPieChart';
 import { X, Wallet } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { usePaymentData } from "@/lib/useHotelData";
@@ -684,43 +685,23 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
           </div>
 
           {/* Pie chart */}
-          <div className="h-[340px] overflow-hidden">
-            {pieData.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={pieData}
-                    dataKey="value"
-                    nameKey="name"
-                    cx="50%"
-                    cy="50%"
-                    outerRadius="55%"
-                    innerRadius="40%"
-                    paddingAngle={2}
-                    labelLine={true}
-                    label={({ cx, cy, midAngle, outerRadius, percent, payload, value }) => {
-                      if (percent < 0.02) return null;
-                      const RADIAN = Math.PI / 180;
-                      const radius = outerRadius * 1.25;
-                      const x = cx + radius * Math.cos(-midAngle * RADIAN);
-                      const y = cy + radius * Math.sin(-midAngle * RADIAN);
-                      return (
-                        <text x={x} y={y} fill="#94a3b8" textAnchor={x > cx ? 'start' : 'end'} dominantBaseline="central" fontSize={11}>
-                          {`${payload.name} ${money(value)} (${(percent * 100).toFixed(0)}%)`}
-                        </text>
-                      );
-                    }}
-                  >
-                    {pieData.map((entry, i) => (
-                      <Cell key={i} fill={entry.color} stroke="#040D1A" strokeWidth={2} />
-                    ))}
-                  </Pie>
-                  <Tooltip contentStyle={tip} formatter={(v, name) => [money(v), name]} />
-                </PieChart>
-              </ResponsiveContainer>
-            ) : (
-              <p className="py-16 text-center text-sm text-slate-500">No revenue data to visualize.</p>
-            )}
+          <div className="h-[380px] relative">
+            <div className="w-full">
+              {pieData.length > 0 ? (
+                <ProfessionalPieChart
+                  data={[
+                    { name: 'Money Kept', value: 920829, color: '#22c55e' },
+                    { name: 'Commissions', value: 50287, color: '#ef4444' },
+                    { name: 'Fees', value: 23816, color: '#f59e0b' },
+                    { name: 'Taxes', value: 16325, color: '#8b5cf6' }
+                  ]}
+                  title="Money Kept Breakdown"
+                  height={600}
+                />
+              ) : (
+                <p className="text-sm text-slate-400">No payment data yet.</p>
+              )}
+            </div>
           </div>
         </div>
       </Card>

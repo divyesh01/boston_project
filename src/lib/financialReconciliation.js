@@ -171,15 +171,17 @@ export function reconcileDailyFinancials({ pmsRecords = [], gatewayAuths = [], m
 
 import { revenueReconciliation } from './RevenueReconciliation.js';
 
-// Mocks for Phase 4 implementation
-const StatisticsAnalytics = { getRevenue: async (dateRange) => 1020598.17 };
-const TransactionAnalytics = { getRevenue: async (dateRange) => 1020598.17 };
-const OccupancyDay = { getRevenue: async (dateRange) => 1020598.17 };
+// Production analytics layers
+import { summarize } from './transactionAnalytics.js';
+import { composition } from './statisticsAnalytics.js';
 
-export async function enforceFinancialInvariant(dateRange) {
-  const statisticsRevenue = await StatisticsAnalytics.getRevenue(dateRange);
-  const transactionRevenue = await TransactionAnalytics.getRevenue(dateRange);
-  const occupancyRevenue = await OccupancyDay.getRevenue(dateRange);
+export async function enforceFinancialInvariant(dateRange, transactionRows = [], statisticsRows = [], occupancyRows = []) {
+  // In production, we derive the revenue from the actual analytic functions and DB layers
+  const transactionRevenue = summarize(transactionRows).revenue;
+  const statisticsRevenue = composition(statisticsRows, 'revenue', 'ytd').reduce((sum, item) => sum + item.value, 0);
+  
+  // Occupancy aggregate is pre-calculated locally 
+  const occupancyRevenue = occupancyRows.reduce((sum, r) => sum + (Number(r.room_revenue) || 0), 0);
 
   // RECONCILE: Compare all three paths
   const reconciliation = revenueReconciliation.reconcile(

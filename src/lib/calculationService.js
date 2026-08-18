@@ -170,73 +170,80 @@ export class CalculationService {
       taxImp.set(d, cur);
     });
 
-    let state = 0, city = 0, other = 0;
+    let stateCents = 0, cityCents = 0, otherCents = 0;
     const dates = new Set([...taxBase.keys(), ...taxImp.keys()]);
     dates.forEach(d => {
       if (!inRange(d, dateRange.from, dateRange.to)) return;
       const imp = taxImp.get(d);
       const hasImported = imp && (imp.state + imp.city + imp.other) > 0.004;
       if (hasImported) {
-        state += imp.state;
-        city += imp.city;
-        other += imp.other;
+        stateCents += toCents(imp.state);
+        cityCents += toCents(imp.city);
+        otherCents += toCents(imp.other);
       } else {
         const base = taxBase.get(d) || 0;
         const r = getEffectiveTaxRates(propertyId, d);
-        state += base * r.state;
-        city += base * r.city;
-        other += base * r.other;
+        stateCents += multiply(base, r.state);
+        cityCents += multiply(base, r.city);
+        otherCents += multiply(base, r.other);
       }
     });
 
-    return { state, city, other, total: state + city + other };
+    return { 
+      state: fromCents(stateCents), 
+      city: fromCents(cityCents), 
+      other: fromCents(otherCents), 
+      total: fromCents(stateCents + cityCents + otherCents) 
+    };
   }
 
   static calculateMoneyKept(occRows = [], srcRows = [], grossRows = [], payRows = [], expenses = [], payroll = [], dateRange = { from: '', to: '' }, propertyId = null) {
-    const gross = sum(occRows, 'room_revenue');
+    const grossCents = sumCents((occRows || []).map(r => r.room_revenue));
     const ccFee = getCcFeeRate();
     const ccFeeRefunds = getCcFeeOnRefunds();
 
-    const otaCommissions = this.calculateChannelMetrics(srcRows).reduce((a, c) => a + c.commission, 0);
+    const otaCommissionsCents = sumCents(this.calculateChannelMetrics(srcRows).map(c => c.commission));
 
-    const cardTotal = sum(payRows, 'total') - sum(payRows, 'cash') - sum(payRows, 'check');
-    const ccFees = cardTotal * ccFee;
+    const cardTotalCents = sumCents((payRows || []).map(r => r.total)) - sumCents((payRows || []).map(r => r.cash)) - sumCents((payRows || []).map(r => r.check));
+    const ccFeesCents = multiply(fromCents(cardTotalCents), ccFee);
 
-    const refunds = refundTotal(payRows);
-    let refundFees = 0;
-    if (ccFeeRefunds) refundFees = refunds * ccFee;
+    const refundsDollars = refundTotal(payRows);
+    const refundsCents = toCents(refundsDollars);
+    let refundFeesCents = 0;
+    if (ccFeeRefunds) refundFeesCents = multiply(refundsDollars, ccFee);
 
     const expInPeriod = expenses.filter(e => inRange(e.expense_date, dateRange.from, dateRange.to));
     // Approved/paid only (COMMITTED_PAYROLL_STATUSES in src/lib/payrollCalc.js) —
     // a draft run must not reduce the owner's "money kept".
     const payInPeriod = filterCommittedPay(payroll).filter(p => inRange(p.pay_period_start, dateRange.from, dateRange.to));
-    const totalPayroll = sum(payInPeriod, 'total_pay');
-    const operatingExpenses = expInPeriod.filter(e => !(String(e.category || '').toLowerCase() === 'payroll')).reduce((a, e) => a + (e.amount || 0), 0);
+    
+    const totalPayrollCents = sumCents(payInPeriod.map(p => p.total_pay));
+    const operatingExpensesCents = sumCents(expInPeriod.filter(e => !(String(e.category || '').toLowerCase() === 'payroll')).map(e => e.amount));
 
     const taxLiability = this.calculateTaxLiability(srcRows, grossRows, propertyId, dateRange);
-    const estimatedTaxes = taxLiability.total;
+    const estimatedTaxesCents = toCents(taxLiability.total);
 
-    const totalDeductions = fromCents(sumCents([otaCommissions, ccFees, refundFees, refunds, totalPayroll, operatingExpenses, estimatedTaxes]));
-    const kept = fromCents(subtract(gross, totalDeductions));
+    const totalDeductionsCents = otaCommissionsCents + ccFeesCents + refundFeesCents + refundsCents + totalPayrollCents + operatingExpensesCents + estimatedTaxesCents;
+    const keptCents = grossCents - totalDeductionsCents;
 
     // The rate is "kept out of what was keepable", so the denominator is revenue
     // less the money that was never the hotel's to keep. It has to be guarded on
     // its own: `gross > 0` did not stop a full-refund or all-tax period from
     // dividing by zero and reporting Infinity as a percentage.
-    const keepableBase = gross - refunds - estimatedTaxes;
+    const keepableBaseCents = grossCents - refundsCents - estimatedTaxesCents;
 
     return {
-      gross,
-      otaCommissions,
-      ccFees,
-      refundFees,
-      refunds,
-      totalPayroll,
-      operatingExpenses,
-      estimatedTaxes,
-      totalDeductions,
-      kept,
-      keepRate: keepableBase > 0 ? kept / keepableBase : 0,
+      gross: fromCents(grossCents),
+      otaCommissions: fromCents(otaCommissionsCents),
+      ccFees: fromCents(ccFeesCents),
+      refundFees: fromCents(refundFeesCents),
+      refunds: fromCents(refundsCents),
+      totalPayroll: fromCents(totalPayrollCents),
+      operatingExpenses: fromCents(operatingExpensesCents),
+      estimatedTaxes: fromCents(estimatedTaxesCents),
+      totalDeductions: fromCents(totalDeductionsCents),
+      kept: fromCents(keptCents),
+      keepRate: keepableBaseCents > 0 ? keptCents / keepableBaseCents : 0,
     };
   }
 

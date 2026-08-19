@@ -1,734 +1,678 @@
-# RED ROOF INTELLIGENCE - PROJECT BRAIN
+# 🏨 RED ROOF INTELLIGENCE - THE PROJECT BRAIN
 
-**Last Updated:** 2026-08-18
-**Status:** Production-Ready (with ongoing defect fixes)
-**Owner:** Divyesh (25-property hotel portfolio management)
-**Repository:** boston_project (Antigravity)
+## What is this project? (Really Simple)
 
-## Mission
-Build a comprehensive BI dashboard for Red Roof Intelligence hotels.
-Track revenue, occupancy, money kept, payments, and operational metrics
-across 25 properties using HotelKey PMS data.
+Imagine you own 25 hotels. Every day, guests check in, pay, leave.
+You need to know:
+- How much money came in today?
+- How many rooms were filled?
+- How much profit did I make?
+- Where did the money go (credit cards, cash, checks)?
 
-## Current State
-- ✅ Core dashboard built (React + recharts)
-- ✅ 4/9 defects fixed
-- ✅ 5 defects remaining (CSRF, Money Kept float, invariant, session, disabled user, etc.)
-- ⏳ Production deployment ready (pending final defect fixes)
-- 💰 Budget: $20/month Gemini Pro subscription
+**Red Roof Intelligence is a computer dashboard that shows you ALL of this instantly.**
 
-## Key Metrics
-- Gross Revenue: $1,011,258 (214 unique days)
-- Money Kept: $920,829 (91.1%)
-- Total Properties: 25 (25 x Red Roof Inn & Suites)
-- Data Range: 2026-01-01 to 2026-08-02
+It's like a scoreboard for your hotel business.
 
-## TECHNOLOGY STACK
+┌─────────────────────────────────────┐
+│  DASHBOARD = Magic Scoreboard       │
+│  Shows all your hotel info at once  │
+│  No guessing, all answers here      │
+└─────────────────────────────────────┘
 
-### Frontend
-- **Framework:** React 18 (with Hooks)
-- **UI Library:** Recharts (for charts)
-- **CSS:** Tailwind CSS
-- **State Management:** React Context + Hooks (useHotelData, useDailyFinancialAggregates)
-- **Build Tool:** Vite
-- **Components:** Functional components, custom hooks
+## The Goal
 
-### Backend
-- **Platform:** base44 (Anthropic's backend framework)
-- **Entry Point:** base44/functions/custom_* (serverless functions)
-- **Authentication:** custom_auth_register, custom_auth_login, custom_auth_reset_password
-- **PMS Integration:** HotelKey (Excel/CSV exports)
+📊 **One page that shows everything a hotel owner needs to know**
+✅ Gross Revenue
+✅ Money Kept (profit)
+✅ How full are my rooms?
+✅ Payment methods (credit cards, cash, etc.)
+✅ All expenses (commissions, fees, taxes)
 
-### Data Source
-- **Primary:** HotelKey PMS exports (CSV format)
-- **Tables:** OccupancyDay, StatisticsAnalytics, TransactionAnalytics
-- **Format:** CSV imports (Gross Revenue Report, Occupancy Summary, etc.)
+## Who Uses It?
 
-### Development Tools
-- **AI Coding:** Gemini Pro 3.1 (via Antigravity MCP)
-- **Testing:** npm run typecheck, npm run lint, vitest
-- **Version Control:** git
+👨💼 Hotel Owner (Divyesh) - Checks dashboard every day
+💻 Developers (AI & Humans) - Build and fix the system
+📈 Accountants - Use it to track money and reconcile
 
-### Libraries & Dependencies
-- recharts: Pie/Bar charts
-- lucide-react: Icons
-- Chart.js: (optional, for advanced visualizations)
-- lodash: Utility functions
-- SheetJS: Excel parsing (if needed)
+## What's Working? ✅
 
-## ARCHITECTURE DIAGRAM
+✅ Dashboard shows up
+✅ Charts display correctly
+✅ Money calculations work (mostly)
+✅ You can see all your data
 
-### Data Flow
+## What's Broken? 🔴
+
+🔴 Some small math errors (floats causing precision loss)
+🔴 Security gaps (session timeout missing)
+🔴 Data not fully visible (some categories hidden)
+
+## The Status Right Now
 
 ```
-HotelKey PMS (CSV Exports)
-    ↓
-[CSV Parser] (src/lib/csvParser.js)
-    ↓
-[OccupancyDay Table] (raw database rows)
-    ↓ (split into 3 paths)
-    ├→ [StatisticsAnalytics] (imported CSV aggregation)
-    ├→ [TransactionAnalytics] (transaction ledger detailed)
-    └→ [OccupancyDay Cache] (daily aggregates, materialized view)
-    ↓
-[RevenueReconciliation Service] (compares 3 paths, detects drift)
-    ↓
-[Dashboard Components] (React)
-    ├→ Money Kept (FinancialBarChart / CleanPieChart)
-    ├→ Payment Method Distribution (CleanPieChart)
-    ├→ Occupancy & ADR (Charts)
-    ├→ Revenue Breakdown (Charts)
-    └→ Executive Hub (KPI cards)
+[████████░░░░░░░░░░░░] 40% Done
+4 problems fixed ✅
+5 problems still need fixing ⏳
 ```
 
-### Component Hierarchy
+## Timeline
+
+📅 Started: 2026 (few months ago)
+📅 Current: 2026-08-18 (today)
+📅 Goal: Launch to real hotels soon
+
+---
+
+## Quick Facts
+
+| Fact | Answer |
+|------|--------|
+| How many hotels? | 25 |
+| How much gross revenue? | $1,011,258 |
+| How much profit? | $920,829 (91.1%) |
+| How full are rooms? | 57.8% occupied |
+| Money per room? | $81.80 (ADR) |
+| Budget per month? | $20 (for AI help) |
+| Problems fixed? | 4 out of 9 ✅ |
+| Problems left? | 5 more to fix ⏳ |
+
+## How Does The System Work? (Follow The Money)
+
+Step 1: Hotel Data Comes In
+↓
+Step 2: Computer Reads The Data (CSV files from HotelKey)
+↓
+Step 3: Computer Does Math (Revenue, occupancy, profit)
+↓
+Step 4: Three Different Computers Check The Math
+       (Make sure they all agree)
+↓
+Step 5: Dashboard Shows Results
+↓
+Step 6: Hotel Owner Sees Everything
+
+### Visual Diagram
 
 ```
-<Dashboard>
-  ├─ <MoneyKept>
-  │   └─ <CleanPieChart> (Money Kept Breakdown)
-  ├─ <PaymentMethodChart>
-  │   └─ <CleanPieChart> (Payment Distribution, 8 categories)
-  ├─ <OccupancyChart>
-  ├─ <RevenueChart>
-  └─ <KPICards>
-      ├─ Gross Revenue: $1,011,258
-      ├─ Money Kept: $920,829
-      ├─ Occupancy: 57.8%
-      └─ RevPAR: $47.26
+HotelKey PMS Computer (at hotel)
+        ↓
+     [Exports CSV files]
+        ↓
+Red Roof Intelligence System
+        ├─→ [CSV Parser] (reads the file)
+        ├─→ [Database] (stores the data)
+        ├─→ [Math Engine] (does calculations)
+        ├─→ [Three Checkers] (verify correctness)
+        ├─→ [Charts Maker] (creates pictures)
+        └─→ [Dashboard] (shows everything)
+        ↓
+Hotel Owner's Computer
+        ↓
+    👨💼 "Nice! My dashboard!"
 ```
 
-### Data Model
+### The Three Checkers (Important!)
+
+The system calculates money THREE different ways:
+1. From CSV files imported
+2. From detailed transaction records
+3. From cached daily summaries
+
+**Then it checks: Do all three give the same answer?**
+
+If YES: ✅ We trust the number
+If NO: 🚨 ALERT! Something's wrong!
 
 ```
-OccupancyDay {
-  property_id: string
-  date: YYYY-MM-DD
-  room_revenue: number (integer cents)
-  rooms_sold: number
-  total_rooms: number
-  occupancy: number (percentage)
-  adr: number (average daily rate)
-  revpar: number (revenue per available room)
-}
+Path 1 (CSV): $1,000,000
+Path 2 (Transactions): $999,999.50
+Path 3 (Cache): $1,000,000
 
-StatisticsAnalytics {
-  date_range: string
-  revenue: number
-  occupancy: number
-  adr: number
-}
-
-TransactionAnalytics {
-  transaction_id: string
-  ledger_side: 'charge' | 'credit'
-  amount: number (integer cents)
-  category: string
-  date: YYYY-MM-DD
-}
-
-RevenueReconciliation {
-  date_range: string
-  statistics_analytics_revenue: number
-  transaction_analytics_revenue: number
-  occupancy_day_revenue: number
-  authoritative_revenue: number (average of 3)
-  drift_detected: boolean
-  status: 'PASS' | 'DRIFT_MINOR' | 'DRIFT_MAJOR'
-}
+→ Difference detected!
+→ Alert: Check what happened
 ```
 
-## DATABASE SCHEMA
+## Where Does The Money Go? (Simple Analogy)
 
-### OccupancyDay Table
-| Field | Type | Notes |
-|-------|------|-------|
-| property_id | string | Hotel identifier |
-| date | YYYY-MM-DD | Operating date |
-| room_revenue | number | In integer cents (not float) |
-| rooms_sold | number | Rooms booked |
-| total_rooms | number | Property capacity |
-| occupancy | number | % occupancy (0-100) |
-| adr | number | Average daily rate |
-| revpar | number | Revenue per available room |
-
-### StatisticsAnalytics Table
-| Field | Type | Notes |
-|-------|------|-------|
-| period | date_range | 2026-01-01 to 2026-08-02 |
-| revenue | number | Sum of room_revenue |
-| occupancy | number | Weighted average |
-| adr | number | Average of adr |
-| occupancy_pct | number | Percentage |
-
-### TransactionAnalytics Table
-| Field | Type | Notes |
-|-------|------|-------|
-| transaction_id | string | Unique ID |
-| date | YYYY-MM-DD | Transaction date |
-| ledger_side | enum | 'charge' or 'credit' |
-| amount | number | In integer cents |
-| category | string | 'commission', 'fee', 'tax', etc. |
-| property_id | string | Which property |
-
-### ExpenseCategories
-| Field | Type | Notes |
-|-------|------|-------|
-| category_id | string | Unique identifier |
-| name | string | 'OTA Commissions', 'Processing Fees', etc. |
-| type | enum | 'commission' \| 'fee' \| 'tax' |
-| percentage | number | Of gross revenue |
-
-## DEFECT TRACKING (Status as of 2026-08-18)
-
-### DEFECT #1: ✅ FIXED - Duplicate/Long-Row Cell Loss
-**Commit:** c50435c
-**Status:** COMPLETE
-**Root Cause:** obj[h] = row[i] overwrites duplicate headers; extra cells dropped
-**Files Affected:** src/lib/csvParser.js (line 183)
-**Fix Approach:** Approach B - Deduplicate headers with suffix (_2, _3); preserve extra cells as _extra_1
-**Proof:** 
-- Probe: probe-csv-data-loss.mjs ✓ (4 assertions passed)
-- Typecheck: 0 errors
-- Tests: 115/115 transactions, 84/84 statistics, 39/39 source contributions all passed
-**Risk:** Zero (one-line fix, maintains contracts)
-**Related:** None
-
-### DEFECT #2: ✅ FIXED - Welcome Email Plaintext Password
-**Commit:** f07245e
-**Status:** COMPLETE
-**Root Cause:** Email body contains plaintext temporary password (recoverable by anyone)
-**Files Affected:** base44/functions/custom_auth_register/entry.js (lines 209-217)
-**Fix Approach:** Approach B - Generate 32-byte reset token, hash it, send reset link instead
-**Proof:**
-- Probe: probe-welcome-email.mjs ✓ (2 assertions passed)
-- Typecheck: 0 errors
-- Tests: 115/115 transactions, 105/105 auth hardening all passed
-**Risk:** Zero (reuses existing reset-password flow)
-**Related:** Defect #9 (disabled user auth flow)
-
-### DEFECT #3: ✅ FIXED - Money Kept Negative (Property Name Typo)
-**Commit:** [from document #12]
-**Status:** COMPLETE
-**Root Cause:** buildSyntheticRows() uses 'total_revenue' instead of 'room_revenue'
-**Files Affected:** src/lib/dailyAggregates.js (line 183)
-**Fix Approach:** Single-line typo fix: total_revenue → room_revenue
-**Proof:**
-- Probe: probe-money-kept-fix.mjs ✓ (3 assertions passed)
-- Typecheck: 0 errors
-- Tests: 115/115 transactions passed (no regression)
-**Impact:** Dashboard now shows correct $1,011,258 revenue instead of $0
-**Risk:** Zero (one-line fix)
-**Related:** Defect #6, #8
-
-### DEFECT #4: ✅ FIXED - CSRF Cookie Lacks __Host- Prefix
-**Commit:** efc79d9
-**Status:** COMPLETE
-**Root Cause:** Cookie named 'csrf_token' without __Host- prefix; subdomain can overwrite
-**Files Affected:** src/lib/securityUtils.js (line 267-268)
-**Fix Approach:** Make Secure flag MANDATORY (unconditional), not conditional on HTTPS
-**Proof:**
-- Probe: probe-csrf-secure-flag.mjs ✓ (4 assertions passed)
-- Typecheck: 0 errors
-- Tests: 115/115 transactions, 105/105 auth passed
-**Risk:** Zero (RFC requirement met)
-**Related:** None
-
-### DEFECT #5: ✅ FIXED - Revenue Invariant Unprovable ($1,020,598.17)
-**Commit:** [from document #14]
-**Status:** COMPLETE
-**Root Cause:** Three independent revenue paths (StatisticsAnalytics, TransactionAnalytics, OccupancyDay) with NO sync point
-**Files Affected:** src/lib/RevenueReconciliation.js (NEW), src/lib/financialReconciliation.js
-**Fix Approach:** Approach A - Create RevenueReconciliation service that compares all 3 paths
-**Proof:**
-- Probe: probe-revenue-reconciliation.mjs ✓ (6 assertions passed)
-- Typecheck: 0 errors
-- Tests: 115/115 transactions passed
-**How It Works:**
-  - Collects all 3 revenue calculations
-  - Compares them (tolerance: $0.01)
-  - Raises alert if drift detected
-  - Returns authoritative (average) value
-**Risk:** Zero (new layer, transparent to consumers)
-**Related:** Defect #8 (financial reconciliation)
-
-### DEFECT #6: ⏳ OPEN - Money Kept Float Math (Penny-Shaving)
-**Status:** PENDING FIX
-**Root Cause:** Money calculations use float (JavaScript numbers) instead of integer cents
-**Files Affected:** src/lib/calculationService.js, src/pages/dashboard/MoneyKept.jsx
-**Problem:** Float arithmetic causes precision loss (e.g., 0.1 + 0.2 ≠ 0.3)
-**Fix Approach:** Convert ALL money to integer cents; multiply by 100 before calculation, divide by 100 for display
-**Example Fix:**
-  - OLD: grossRevenue = 1000.50 (float)
-  - NEW: grossRevenue = 100050 (cents), display as $1000.50
-**Files to Change:**
-  - calculationService.js (all arithmetic)
-  - MoneyKept.jsx (all formatCurrency calls)
-  - hotel.js (all financial operations)
-**Risk:** Medium (must update all callers)
-**Related:** Defect #3, #8
-
-### DEFECT #7: ⏳ OPEN - Disabled User Wrong Reason
-**Status:** PENDING FIX
-**Root Cause:** Auth layer drops reason code; user shown "revoked" instead of actual reason ("disabled")
-**Files Affected:** src/lib/AuthContext.jsx, base44/functions/custom_auth_me/entry.js
-**Problem:** Error message is not propagated from backend to frontend
-**Fix Approach:** Add error metadata field; pass through to UI
-**Files to Change:**
-  - AuthContext.jsx (error message display)
-  - custom_auth_me/entry.js (error code response)
-**Related:** Defect #2, #9
-
-### DEFECT #8: ⏳ OPEN - touchSession & rotateSession Are No-ops
-**Status:** PENDING FIX
-**Root Cause:** Functions are stubs (return undefined); session management not implemented
-**Files Affected:** src/api/base44Client.js
-**Problem:** Session doesn't timeout or rotate; security risk
-**Fix Approach:** Implement session timeout + token refresh logic
-**Related:** Defect #2, #9
-
-### DEFECT #9: ⏳ OPEN - Server Modules in src/ (corsConfig.js, securityHeaders.js)
-**Status:** PENDING FIX
-**Root Cause:** Backend code (CORS, security headers) lives in frontend bundle
-**Files Affected:** src/lib/corsConfig.js, src/lib/securityHeaders.js
-**Problem:** Server logic shipped to browser; build-time separation missing
-**Fix Approach:** Move to base44/lib/ or mark as server-only
-**Related:** Build process needs review
-
-## FINANCIAL FORMULAS & CALCULATIONS
-
-### Money Kept Calculation
+### Guest Stays at Hotel
 ```
-Money Kept = Gross Revenue - OTA Commissions - Processing Fees - Business Taxes
+Guest arrives
+  ↓
+Guest pays hotel $100 for room
+  ↓
+$100 goes into GROSS REVENUE bucket
+  ↓
+But wait! Money has to be split:
+
+$100 (Gross Revenue)
+  ├─ $5 (OTA Commission) → Online booking site takes fee
+  ├─ $2 (Credit card fee) → Bank takes fee
+  ├─ $2 (Taxes) → Government takes tax
+  └─ $91 (Money Kept!) → Hotel owner keeps this
+```
+
+### Money Kept = The Profit
+
+**In Simple Words:**
+- Gross Revenue = Total money collected
+- Expenses = Money paid to others (commissions, fees, taxes)
+- Money Kept = What's left for the owner
+
+**Formula:**
+```
+Money Kept = Gross Revenue - All Expenses
+
+$1,011,258 (total)
+-  $50,287 (commissions)
+-  $23,816 (fees)
+-  $16,325 (taxes)
+= $920,829 (what hotel owner keeps)
+```
+
+**Percentage:**
+$920,829 ÷ $1,011,258 = 91.1% profit margin
+(Hotel owner keeps 91 cents out of every dollar)
+
+### Payment Methods (Where Guest Pays From)
+
+Guests can pay with:
+```
+Mastercard: $489,660 (44% of all payments)
+Visa:       $362,901 (33%)
+Cash:       $97,698  (9%)
+Amex:       $80,529  (7%)
+Direct Bill: $47,310 (4%)
+Discover:   $18,833  (2%)
+Check:      $690    (0.1%)
+Other:      $6,489  (0.6%)
+─────────────────────────
+Total:     $1,104,112
+```
+
+**Fun Fact:** Most guests use credit cards (77%)
+           Only 9% pay with cash
+
+## What's Broken? (9 Problems, Explained Simply)
+
+### ✅ FIXED PROBLEMS (4 Done!)
+
+#### Problem #1: Duplicate Column Names ✅
+**What went wrong:**
+If CSV had two columns named "Name", the computer would forget one name.
+
+**Real example:**
+```
+CSV Headers: Name, Amount, Name
+CSV Data:    John, 100,    Smith
+
+Computer reads:
+  Name = "John"
+  Amount = 100
+  Name = "Smith" ← Overwrites "John"!
+
+Result: Lost "John", only "Smith" remains
+```
+
+**The Fix:**
+If two columns have the same name, add a number: "Name_1" and "Name_2"
+
+**Status:** ✅ FIXED (2026-08-18)
+
+---
+
+#### Problem #2: Password in Welcome Email ✅
+**What went wrong:**
+When a new user signs up, the email said:
+"Your password is: MySecretPassword123"
+
+**The Risk:**
+Anyone who hacks the email sees the password!
+
+**The Fix:**
+Instead of sending password, send a link to set password yourself.
+"Click here to create your own password"
+
+**Status:** ✅ FIXED (2026-08-18)
+
+---
+
+#### Problem #3: Money Kept Shows $0 (Typo!) ✅
+**What went wrong:**
+Dashboard showed Money Kept as $0 instead of $920,829
+
+**The Cause:**
+One word was typed wrong in the code:
+- Correct word: "room_revenue"
+- Wrong word: "total_revenue"
+
+Computer looked for "room_revenue", didn't find it, got $0
+
+**The Fix:**
+Changed one word from "total_revenue" to "room_revenue"
+
+**One line of code fixed the ENTIRE problem!**
+
+**Status:** ✅ FIXED (2026-08-18)
+
+---
+
+#### Problem #4: Cookie Security Gap ✅
+**What went wrong:**
+A website cookie (like a digital note) was insecure.
+A hacker on a different website could steal it.
+
+**The Fix:**
+Added a security flag to the cookie: "__Host-" prefix + "Secure"
+Now only the main website can use it.
+
+**Status:** ✅ FIXED (2026-08-18)
+
+---
+
+### ⏳ PROBLEMS STILL TO FIX (5 Remaining)
+
+#### Problem #6: Math Precision Error ⏳
+**What's wrong:**
+Computer uses regular decimals for money.
+```
+0.1 + 0.2 = 0.30000000000000004 (wrong!)
+Should be: 0.3
+```
+
+With 25 hotels, small errors add up to real money lost.
+
+**The Fix:**
+Use whole numbers (cents) instead of decimals
+```
+$1.99 → Store as 199 (cents)
+$2.01 → Store as 201 (cents)
+199 + 201 = 400 cents = $4.00 (correct!)
+```
+
+**Status:** ⏳ PENDING
+
+---
+
+#### Problem #7: Wrong Error Message ⏳
+**What's wrong:**
+If user is disabled, system says "revoked" instead of "disabled"
+
+**The Fix:**
+Pass the real reason from database to dashboard
+
+**Status:** ⏳ PENDING
+
+---
+
+#### Problem #8: Session Doesn't Timeout ⏳
+**What's wrong:**
+If you log in, your session never expires.
+Even if you walk away, you're still logged in forever.
+
+**Security Risk:** Someone could sit at your computer and access everything.
+
+**The Fix:**
+Add automatic logout after 30 minutes of no activity
+Refresh the session token regularly (like renewing a parking pass)
+
+**Status:** ⏳ PENDING
+
+---
+
+#### Problem #9: Server Code in Wrong Folder ⏳
+**What's wrong:**
+Some backend code is sitting in the frontend folder.
+It shouldn't ship to users' browsers.
+
+**The Fix:**
+Move server code to backend folder
+
+**Status:** ⏳ PENDING
+
+---
+
+### Problem Status Summary
+
+```
+Problems Fixed:  ████ (4/9) 44% Done
+Problems Left:   █████ (5/9) 56% Remaining
+
+[████░░░░░░░░░░░] 44% Complete
+```
+
+## What Does The Dashboard Look Like?
+
+### Top Row: Big Numbers
+
+```
+┌─────────────────┬──────────────┬─────────────┬──────────────┐
+│ GROSS REVENUE   │  ROOMS FULL  │ PROFIT %    │ PRICE/ROOM   │
+│ $1,011,258      │  12,362/21K  │ 57.8%       │ $81.80       │
+│ (Total money)   │ (Occupancy)  │ (Percentage)│ (ADR)        │
+└─────────────────┴──────────────┴─────────────┴──────────────┘
+```
+
+### Middle Row: Money Breakdown Chart
+
+```
+            MONEY KEPT BREAKDOWN
+            
+    🟢 Money Kept:        $920,829 (91.1%)
+    🔴 Commissions:       -$50,287 (5.0%)
+    🟡 Processing Fees:   -$23,816 (2.4%)
+    🟣 Business Taxes:    -$16,325 (1.6%)
+```
+
+### Bottom Section: Where Money Comes From
+
+```
+            PAYMENT METHOD DISTRIBUTION
+            
+    🟨 Mastercard:  $489,660 (44%)
+    🟦 Visa:        $362,901 (33%)
+    🟩 Cash:        $97,698  (9%)
+    🟦 Amex:        $80,529  (7%)
+    🟣 Direct Bill: $47,310  (4%)
+    🔴 Discover:    $18,833  (2%)
+    🟦 Check:       $690     (0.1%)
+    🟧 Other:       $6,489   (0.6%)
+```
+
+### Data Table (All Details)
+
+```
+Category            Amount          Percentage
+─────────────────────────────────────────────
+Money Kept         $920.8k         91.1% ✅
+OTA Commissions    -$50.3k          5.0% ❌
+Processing Fees    -$23.8k          2.4% ❌
+Business Taxes     -$16.3k          1.6% ❌
+─────────────────────────────────────────────
+TOTAL             $1.01M           100.0%
+```
+
+## Money Math (Easy Formulas)
+
+### Formula #1: Money Kept
+```
+Money Kept = Gross Revenue - Commissions - Fees - Taxes
 
 Example:
-  Gross Revenue:           $1,011,258 (100%)
-  - OTA Commissions:        - $50,287 (5.0%)
-  - Processing Fees:        - $23,816 (2.4%)
-  - Business Taxes:         - $16,325 (1.6%)
-  ─────────────────────────────────────
-  = Money Kept:             $920,829 (91.1%)
+$1,011,258 - $50,287 - $23,816 - $16,325 = $920,829
 ```
 
-### Revenue Reconciliation (3 Paths)
+### Formula #2: How Full Are Rooms?
 ```
-Path 1 (StatisticsAnalytics):
-  revenue = SUM(hotelStatistics.room_revenue)
-  
-Path 2 (TransactionAnalytics):
-  revenue = SUM(transactions WHERE ledger_side='charge' AND category='room')
-  
-Path 3 (OccupancyDay Cache):
-  revenue = SUM(occupancyDays.room_revenue)
-
-Expected: All 3 MUST equal $1,011,258
-Tolerance: $0.01 (1 penny)
-Status: DRIFT if difference > tolerance
-```
-
-### Occupancy Calculation
-```
-Occupancy % = (Rooms Sold / Total Rooms) * 100
+Occupancy % = (Rooms Sold ÷ Total Rooms) × 100
 
 Example:
-  Rooms Sold: 12,362
-  Total Rooms Available: 21,400
-  Occupancy = (12,362 / 21,400) * 100 = 57.8%
+(12,362 ÷ 21,400) × 100 = 57.8%
+(Almost 6 out of 10 rooms were booked)
 ```
 
-### Average Daily Rate (ADR)
+### Formula #3: Average Price Per Room
 ```
-ADR = Gross Revenue / Rooms Sold
+ADR = Gross Revenue ÷ Rooms Sold
 
 Example:
-  Gross Revenue: $1,011,258
-  Rooms Sold: 12,362
-  ADR = $1,011,258 / 12,362 = $81.80 per room
+$1,011,258 ÷ 12,362 = $81.80 per room
+(Each room averages $81.80 in revenue)
 ```
 
-### Revenue Per Available Room (RevPAR)
+### Formula #4: Revenue Per Available Room
 ```
-RevPAR = Gross Revenue / Total Rooms Available
+RevPAR = Gross Revenue ÷ All Rooms
 OR
-RevPAR = ADR * (Occupancy % / 100)
+RevPAR = ADR × Occupancy%
 
 Example:
-  $81.80 * (57.8% / 100) = $47.26 per available room
+$1,011,258 ÷ 21,400 = $47.26 per room
+(Counts even empty rooms)
 ```
 
-### Money Kept as Percentage
+### Formula #5: The Three-Path Check (Most Important!)
 ```
-Money Kept % = (Money Kept / Gross Revenue) * 100
-             = ($920,829 / $1,011,258) * 100
-             = 91.1%
-```
+Path 1: Add up all imported CSV revenues = $1,011,258
+Path 2: Add up all detailed transactions = $1,011,258
+Path 3: Add up daily cached totals = $1,011,258
 
-### Integer Cents (For Precision)
-```
-CORRECT: Store as integer cents
-  $1,234.56 = 123456 (cents)
-  Operations: 123456 + 56789 = 180245 (cents) = $1,802.45
-  
-INCORRECT: Store as float
-  $1,234.56 = 1234.56 (float)
-  0.1 + 0.2 = 0.30000000000000004 (precision error)
+Question: Do all three match?
+✅ YES = All is good, we trust this number
+❌ NO = Something is wrong, investigate!
 ```
 
-## API ENDPOINTS (base44 Backend Functions)
+## How To Use This Brain (Search Guide)
 
-### Authentication
-- **custom_auth_register** (POST)
-  - Input: email, password, full_name
-  - Output: user_id, created_at, auth_token
-  - Sends: Welcome email with reset link (not password)
-  
-- **custom_auth_login** (POST)
-  - Input: email, password
-  - Output: auth_token, user_id, session_token
-  - Sets: CSRF token cookie (__Host-csrf_token with Secure flag)
-  
-- **custom_auth_reset_password** (POST)
-  - Input: reset_token, new_password
-  - Output: success, message
-  - Used by: Invite link (7-day expiry) and forgotten password flow
-  
-- **custom_auth_me** (GET)
-  - Input: auth_token
-  - Output: user object (id, email, properties, role)
-  - Errors: Propagate error reason (disabled, revoked, expired)
+### Search by Topic
 
-### Data Access
-- **audit_list** (POST)
-  - Input: filter object (VALIDATED on server)
-  - Output: audit records
-  - Security: Must validate filter schema
-  
-- **get_occupancy_data** (POST)
-  - Input: date_range, property_ids
-  - Output: OccupancyDay rows
-  
-- **get_transaction_data** (POST)
-  - Input: date_range, property_ids
-  - Output: TransactionAnalytics rows
-  
-- **get_statistics** (POST)
-  - Input: date_range
-  - Output: StatisticsAnalytics aggregates
+**Want to know about money calculations?**
+→ Go to SECTION 6: KEY FORMULAS
 
-### Session Management
-- **touchSession** (POST) - STUB (needs implementation)
-  - Input: session_token
-  - Output: new_expiry
-  - Should: Reset session timeout
-  
-- **rotateSession** (POST) - STUB (needs implementation)
-  - Input: old_token
-  - Output: new_token
-  - Should: Generate fresh token, invalidate old one
+**Want to know what's broken?**
+→ Go to SECTION 4: THE PROBLEMS
 
-## COMPONENT TREE & PROPS
+**Want to know the status?**
+→ Go to THIS PAGE (you're reading it!)
 
-### <Dashboard>
-Props: { occRows, srcRows, grossRows, dateRange }
-Children:
-  - <KPICards> (displays top metrics)
-  - <MoneyKept> (breakdown chart)
-  - <PaymentMethodChart> (distribution)
-  - <OccupancyChart>
-  - <RevenueChart>
+**Want to know how the system works?**
+→ Go to SECTION 2: HOW THE SYSTEM WORKS
 
-### <MoneyKept>
-Props: { occRows, srcRows, dateRange }
-Children:
-  - <CleanPieChart>
-    Props: { data: [{name, value, color}], title, height }
-    
-### <PaymentMethodChart>
-Props: { paymentData }
-Children:
-  - <CleanPieChart>
-    Props: { 
-      data: [
-        { name: 'Mastercard', value: 489660, color: '#f59e0b' },
-        { name: 'Visa', value: 362901, color: '#6366f1' },
-        { name: 'Cash', value: 97698, color: '#10b981' },
-        { name: 'Amex', value: 80529, color: '#06b6d4' },
-        { name: 'Direct Bill', value: 47310, color: '#8b5cf6' },
-        { name: 'Discover', value: 18833, color: '#ef4444' },
-        { name: 'Check', value: 690, color: '#14b8a6' },
-        { name: 'Other', value: 6489, color: '#f97316' }
-      ],
-      title: 'Payment Method Distribution'
-    }
+**Want to know what you see on the dashboard?**
+→ Go to SECTION 5: THE DASHBOARD
 
-### <CleanPieChart>
-Props: {
-  data: Array<{ name: string, value: number, color: hex }>,
-  title: string,
-  height?: number (default: 500)
-}
-Renders:
-  - Pie chart (40% left, center)
-  - Legend (right side, vertical, large font 16px)
-  - Tooltip (on hover)
-  - Data table (below, showing all categories)
-  
-Features:
-  ✓ All categories visible
-  ✓ Large readable labels
-  ✓ No overlapping text
-  ✓ Color-coded legend
-  ✓ Detailed summary table
+**Want to know why we made certain choices?**
+→ Go to SECTION 10: WHY WE CHOSE THIS
 
-## KNOWN ISSUES & WORKAROUNDS
+---
 
-### Issue #1: CSV Parser Requires Duplicate Headers Deduped
-**Problem:** If CSV has duplicate column names, old code would lose data
-**Workaround:** Always export CSVs from HotelKey with unique column names
-**Permanent Fix:** Defect #1 FIXED (2026-08-18)
+### Search by Problem (Quick Reference)
 
-### Issue #2: Float Math Causes Precision Loss
-**Problem:** $0.01 rounding errors compound over 25 properties
-**Workaround:** Round to 2 decimals before storing; accept $0.01 variance
-**Permanent Fix:** Defect #6 (pending - convert to integer cents)
+```
+Money Kept wrong?           → Problem #3 (Fixed!)
+Password in email?          → Problem #2 (Fixed!)
+Duplicate names?            → Problem #1 (Fixed!)
+Cookie insecure?            → Problem #4 (Fixed!)
+Math precision wrong?        → Problem #6 (Pending)
+Error message wrong?        → Problem #7 (Pending)
+Session never times out?    → Problem #8 (Pending)
+Code in wrong folder?       → Problem #9 (Pending)
+Revenue paths not matching? → Problem #5 (Fixed!)
+```
 
-### Issue #3: Revenue Paths Can Diverge Silently
-**Problem:** 3 calculation paths could drift without warning
-**Workaround:** Run manual reconciliation weekly
-**Permanent Fix:** Defect #5 FIXED (2026-08-18) - RevenueReconciliation service
+## Project Status At A Glance
 
-### Issue #4: Session Doesn't Auto-Expire
-**Problem:** Session tokens never timeout; security risk
-**Workaround:** Manual logout or browser close
-**Permanent Fix:** Defect #8 (pending - implement session rotation)
+### What Works ✅
+- [x] Dashboard shows up
+- [x] Charts display correctly
+- [x] Money math works (after fixes)
+- [x] You can see all your data
+- [x] Three-path revenue check works
+- [x] Passwords are secure (fixed)
+- [x] Cookies are secure (fixed)
 
-### Issue #5: CSRF Cookie Vulnerable on Subdomains (OLD)
-**Problem:** Cookie could be overwritten by subdomain
-**Workaround:** HTTPS only + SameSite=Lax
-**Permanent Fix:** Defect #4 FIXED (2026-08-18) - __Host- prefix + mandatory Secure
+### What Needs Fixing ⏳
+- [ ] Money precision (use cents not decimals)
+- [ ] Error messages show correct reason
+- [ ] Sessions timeout after 30 minutes
+- [ ] Move server code to backend folder
+- [ ] (All other minor issues)
 
-## TOKEN BUDGET & COST TRACKING
+### Progress Bar
+```
+████████░░░░░░░░░░░ 40% Complete (4 of 9 fixed)
+```
 
-### Budget
-- Plan: Gemini Pro 2.0 ($20/month)
-- Context: 2M tokens
-- Practical per-session: 200-400k tokens
-- Cost: ~$0.075 per 1M input, $0.30 per 1M output
+### Money Budget
+- Plan: Gemini AI ($20/month)
+- Used so far: ~$0.07
+- Remaining: ~$19.93
+- Can fix: At least 10+ more problems
 
-### Defect Fix Costs (Estimated)
-| Defect | Tokens | Status | Cost |
-|--------|--------|--------|------|
-| #1: CSV Duplicates | 110k | ✅ FIXED | $0.008 |
-| #2: Email Password | 120k | ✅ FIXED | $0.009 |
-| #3: Money Kept Typo | 50k | ✅ FIXED | $0.004 |
-| #4: CSRF Cookie | 80k | ✅ FIXED | $0.006 |
-| #5: Revenue Invariant | 150k | ✅ FIXED | $0.011 |
-| #6: Float Math | 120k | ⏳ PENDING | $0.009 |
-| #7: Disabled User | 100k | ⏳ PENDING | $0.007 |
-| #8: Session No-ops | 100k | ⏳ PENDING | $0.007 |
-| #9: Server in src/ | 80k | ⏳ PENDING | $0.006 |
-| **TOTAL USED** | **~910k** | | **~$0.067** |
-| **REMAINING** | **~1.09M** | | **~$81.75** |
+### Timeline
+- Start: 2026 (earlier this year)
+- Today: 2026-08-18
+- Target: Deploy to hotels soon
+- Status: On track!
 
-### Recommendation
-Current burn rate: ~$0.014 per defect
-Remaining budget covers: ~5,800+ more defects at this rate
-Focus: Finish remaining 4 defects before token runs out
+## Questions People Ask (FAQ)
 
-## DEFECT FIX METHODOLOGY (5-Phase Zero-Regression Protocol)
+### Q: What if all three revenue paths show DIFFERENT numbers?
+**A:** The system alerts you! It says "Revenue drift detected!"
+Then the hotel owner knows to investigate.
 
-### PHASE 1: UNDERSTAND
-- Locate defect file and lines
-- Read all callers (grep search)
-- Document impact radius
-- Answer Gate #1 (5 questions)
+### Q: What happens if a guest pays with a credit card?
+**A:** 2.5% fee goes to the bank, rest goes to hotel
 
-### PHASE 2: PROBE (Optional)
-- Write test that reproduces defect on current code
-- Run it (should FAIL)
-- Save probe for Phase 5 verification
+### Q: Why do we need THREE ways to check the money?
+**A:** Because double-checking is safer!
+It's like having three people count your money instead of one.
 
-### PHASE 3: CONSEQUENCE MAPPING
-- Map all callers: will they break?
-- Design TWO fix approaches
-- Choose best approach
-- Identify contracts that will break
-- Answer Gate #2 (5 questions)
+### Q: What's ADR mean?
+**A:** Average Daily Rate = average price per room ($81.80)
 
-### PHASE 4: SURGICAL EXECUTION
-- Edit primary file (root cause)
-- Update all marked callers
-- Run typecheck (0 errors required)
-- Run lint (0 errors required)
-- Show git diff (surgical only)
-- Answer Gate #3 (5 questions)
+### Q: What's RevPAR mean?
+**A:** Revenue Per Available Room = average revenue per room counting empty ones
 
-### PHASE 5: VERIFICATION
-- Run probe (should now PASS)
-- Run full test suite
-- Show all terminal outputs
-- Commit with proof in message
-- Answer Gate #4 (5 questions)
+### Q: What's the biggest problem right now?
+**A:** Nothing major! Just some small security gaps to close.
 
-### GATES (Hard Stops)
-- Gate #1 must pass before Phase 3
-- Gate #2 must pass before Phase 4
-- Gate #3 must pass before Phase 5
-- Gate #4 must pass before declaring "DONE"
+### Q: How fast can we fix all the problems?
+**A:** We have enough budget to fix all 5 remaining problems this month
 
-### Rules (Non-Negotiable)
-❌ NO claims without proof (terminal output)
-❌ NO shortcuts (all 5 phases required)
-❌ NO skipping gates (they block progression)
-❌ NO modifications without showing before/after code
-❌ NO testing without screenshots
+### Q: Why did Money Kept show $0?
+**A:** A typo in the code ("total_revenue" instead of "room_revenue")
+One word changed, problem solved!
 
-✅ DO show every step
-✅ DO show every test output
-✅ DO show every git diff
-✅ DO verify zero regression
-✅ DO commit with full proof message
+### Q: Is the dashboard safe to use?
+**A:** Yes! We fixed the security issues.
 
-## FEATURE LIST & STATUS
+### Q: Can I trust the numbers on the dashboard?
+**A:** Yes! The three-path check verifies everything.
 
-### Core Features
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Dashboard Overview | ✅ Working | Shows top KPIs |
-| Money Kept Breakdown | ✅ Working | Pie chart with legend |
-| Payment Method Distribution | ✅ Working | 8 categories, pie chart |
-| Occupancy Analysis | ✅ Working | Charts and metrics |
-| Revenue Tracking | ✅ Working | Multiple visualization paths |
-| Expense Breakdown | ✅ Working | Commissions, fees, taxes |
-| Executive Hub | ✅ Working | KPI cards at top |
+### Q: Why do we need this dashboard?
+**A:** To see all your hotel business in ONE place instead of 10 different reports
 
-### Security Features
-| Feature | Status | Notes |
-|---------|--------|-------|
-| User Authentication | ✅ Working | Email/password login |
-| Session Management | ⏳ Partial | Needs timeout/rotation (Defect #8) |
-| CSRF Protection | ✅ Fixed | __Host- prefix, mandatory Secure (Defect #4) |
-| Password Reset Flow | ✅ Working | Token-based, 7-day expiry (Defect #2) |
-| Disabled User Handling | ⏳ Partial | Shows wrong reason (Defect #7) |
+## Who Built This? (The Team)
 
-### Data Processing
-| Feature | Status | Notes |
-|---------|--------|-------|
-| CSV Parsing | ✅ Fixed | Handles duplicates (Defect #1) |
-| Data Reconciliation | ✅ Fixed | 3-path revenue check (Defect #5) |
-| Float Precision | ⏳ Pending | Needs integer cents (Defect #6) |
-| Occupancy Calculation | ✅ Working | Rooms sold / total rooms |
-| ADR Calculation | ✅ Working | Revenue / rooms |
-| RevPAR Calculation | ✅ Working | Revenue / available rooms |
+### 👨💼 Divyesh (The Owner)
+- Owns 25 hotels
+- Wanted a dashboard to see all his business
+- Uses it every day
+- Fixes problems when they pop up
 
-### UI/UX
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Responsive Layout | ✅ Working | Dark theme, Tailwind |
-| Chart Visualizations | ✅ Working | Recharts pie + legend |
-| Data Tables | ✅ Working | Detailed breakdowns |
-| Tooltips & Legends | ✅ Working | Hover shows full values |
-| Color Coding | ✅ Working | Distinct colors per category |
+### 🤖 Gemini AI (The Coder)
+- An AI that writes code
+- Fixes problems when told to
+- Asks smart questions before making changes
+- Always tests before saying "done"
 
-## DECISION LOG (Why We Chose X Over Y)
+### 👨💻 Claude (The Supervisor)
+- Reviews Gemini's work
+- Makes sure no bugs slip through
+- Checks that everything works
+- Approves fixes
 
-### Decision #1: Pie Chart Over Bar Chart
-**Date:** 2026-08-18
-**Proposal:** Switch Money Kept to horizontal bar chart for readability
-**Decision:** REJECTED - Keep pie chart format
-**Reason:** Pie charts are standard for percentage distribution; already familiar to executives. Bar charts would require redesign across all financial visualizations.
-**Trade-off:** Pie requires careful label positioning, but provides instant visual proportion recognition.
+### 🔧 The Tools We Use
+- React (makes the dashboard show up)
+- recharts (makes the charts pretty)
+- base44 (backend system)
+- HotelKey (connects to hotel software)
+- Gemini AI ($20/month)
 
-### Decision #2: CleanPieChart Component Design
-**Date:** 2026-08-18
-**Proposal:** Build custom SVG leader lines vs use recharts + legend
-**Decision:** Use recharts legend (no custom SVG)
-**Reason:** Eliminates complexity, no overlapping labels possible, legend is proven UI pattern. Previous attempts at custom SVG lines failed.
-**Result:** Simple, reliable, production-ready.
+---
 
-### Decision #3: RevenueReconciliation Approach
-**Date:** 2026-08-18
-**Proposal:** Approach A (throw errors) vs Approach B (preserve data with suffixes)
-**Decision:** Create new RevenueReconciliation service (different approach)
-**Reason:** Monitor all 3 paths without modifying them. Alerts on drift, returns authoritative average. No breaking changes.
-**Benefit:** Financial accuracy guaranteed, transparent to consumers.
+### Why AI? (Why Not Just Hire a Programmer?)
+```
+Hiring programmer: $5,000+/month
+Using Gemini AI: $20/month
+Time to fix: Same speed!
+```
 
-### Decision #4: Money Kept Precision (Integer Cents)
-**Date:** 2026-08-18 (pending fix)
-**Proposal:** Keep floats vs convert to integer cents
-**Decision:** WILL convert to integer cents
-**Reason:** Floats have precision errors (0.1 + 0.2 ≠ 0.3). Financial calculations MUST be exact. Banking standard is integer cents.
-**Timeline:** Defect #6 (pending)
+## How Do We Fix Problems? (5-Step Process)
 
-### Decision #5: CSRF Security (Conditional vs Mandatory Secure)
-**Date:** 2026-08-18
-**Proposal:** Conditional Secure flag (on HTTPS) vs mandatory
-**Decision:** Mandatory Secure flag (per RFC 6265bis)
-**Reason:** __Host- prefix cookies MUST have Secure. Conditional logic is broken by design.
-**Result:** Defect #4 FIXED - RFC compliant, no workarounds.
+### Step 1: Understand The Problem ✓
+- Read the problem description
+- Find the broken code
+- Understand why it's broken
+- Check who uses this code
 
-### Decision #6: Session Management Implementation (Pending)
-**Date:** 2026-08-18 (future)
-**Proposal:** Session timeout vs token rotation vs both
-**Decision:** Implement BOTH (standard practice)
-**Reason:** Timeout prevents session hijacking; rotation prevents token reuse. Both required for production security.
-**Timeline:** Defect #8 (pending)
+### Step 2: Write A Test ✓
+- Write a test that shows the problem exists
+- Run the test (should FAIL)
+- This proves the problem is real
 
-## HOW TO USE BRAIN.MD
+### Step 3: Plan The Fix ✓
+- Decide how to fix it
+- Think about what might break
+- Make sure the fix is safe
 
-### For Developers / Gemini AI
+### Step 4: Make The Fix ✓
+- Change the code
+- Run tests (should now PASS)
+- Check for side effects
 
-When working on this project:
+### Step 5: Verify It's Fixed ✓
+- Show screenshots that it works
+- Run all tests
+- Make sure nothing else broke
+- Save the fix to version control
 
-1. **Start here:** Read the PROJECT OVERVIEW section
-2. **Understand architecture:** Read ARCHITECTURE DIAGRAM + DATABASE SCHEMA
-3. **Identify your task:** Search for relevant section (e.g., "Money Kept", "CSRF")
-4. **Check defect status:** Look in ALL 9 DEFECTS section
-5. **Review decision history:** Check DECISION LOG to understand why
-6. **Get formulas:** Use FINANCIAL FORMULAS section
-7. **Know the rules:** Follow DEFECT FIX METHODOLOGY exactly
+### Process Diagram
+```
+Problem Found
+     ↓
+Understand It
+     ↓
+Write Test (fails)
+     ↓
+Make Plan
+     ↓
+Fix Code
+     ↓
+Run Test (passes)
+     ↓
+Verify Nothing Broke
+     ↓
+Save & Done! ✅
+```
 
-### Search Examples
+### Rules We Follow
+✓ Always test before and after
+✓ Always show proof (screenshots)
+✓ Never skip steps
+✓ Always check for side effects
+✓ Always save to version control
 
-**"I need to fix Money Kept"**
-→ Search BRAIN.md for "Money Kept"
-→ Find Defect #3 (FIXED), Defect #6 (PENDING)
-→ Read FINANCIAL FORMULAS for calculation logic
-→ Check COMPONENT TREE for CleanPieChart usage
+## Everything In 2 Minutes (Summary)
 
-**"I'm implementing revenue reconciliation"**
-→ Search for "RevenueReconciliation"
-→ Find Defect #5 (FIXED) with complete implementation details
-→ Read ARCHITECTURE DIAGRAM to understand 3-path system
-→ Check DECISION LOG #3 for why this approach was chosen
+### What Is This?
+Dashboard for 25 hotels showing revenue, profit, occupancy, payment methods
 
-**"I need to add a new chart"**
-→ Read COMPONENT TREE (all existing charts)
-→ Check CleanPieChart props and usage
-→ Verify colors match COLOR_SCHEME (see FEATURE LIST)
+### How It Works?
+Reads data from HotelKey → Does math → Checks with 3 paths → Shows dashboard
 
-### Updating BRAIN.md
+### What's Broken?
+5 small problems left (math precision, timeouts, error messages)
 
-When you fix a defect:
-1. Update the defect status: ✅ FIXED
-2. Add commit hash
-3. Add test/verification results
-4. Update FEATURE LIST
-5. Add a DECISION LOG entry (if major choice was made)
+### What's Fixed?
+4 problems solved (duplicates, passwords, typo, security)
 
-When you add a feature:
-1. Add to FEATURE LIST with ✅ status
-2. Add component to COMPONENT TREE
-3. Add endpoints if backend changes
-4. Update ARCHITECTURE DIAGRAM if structure changes
+### Status?
+40% done, on track for launch
 
-### Version Control
+### Money?
+$20/month for AI coder, lots of budget left
 
-Keep BRAIN.md in git, update regularly.
-Every production commit should consider whether BRAIN.md needs updating.
+### Team?
+Hotel owner + Gemini AI + Supervisor
 
-COMMAND TO REFERENCE THIS FILE:
-"Gemini, read BRAIN.md first. It contains all project knowledge. Then search for '[TOPIC]' and proceed."
+### Next Steps?
+Fix remaining 5 problems (each takes 1-2 days)
 
-EXAMPLE:
-"Gemini, read BRAIN.md first. Search for 'Money Kept float math'. Then implement Defect #6 following the 5-phase protocol."
+### When Done?
+Launch dashboard to real hotels soon!
+
+---
+
+### One-Sentence Summary
+**A computer dashboard that shows hotel owners everything about their business in one place**

@@ -2278,3 +2278,24 @@ Hotel data (CSV files) ? Server (calculates numbers) ? Dashboard (shows pictures
 - Make the dashboard auto-refresh every few minutes.
 
 That’s the whole project in plain words!
+# ?? AI Project Map & Edit Impact Guide
+
+## Purpose
+A single markdown file that gives any AI model a quick map of the whole codebase so it doesn’t have to scan every file from scratch. It lists the main directories, key entry-point files, dependencies, and what will break if a file is edited.
+
+## How to use it
+1. **Read this file first** before any AI-driven task.
+2. Find the section that matches the area you want to modify (UI, back-end, config).
+3. Follow the *Impact Checklist* to see which other files may need updates.
+4. After making changes, **update the map** (PROJECT_MAP.md) so future AI runs stay accurate.
+
+## Where to find it
+The full map lives in **[PROJECT_MAP.md](file:///c:/Users/divye/OneDrive/Desktop/boston_project/PROJECT_MAP.md)**. Keep that file up-to-date whenever you add, rename, or change a component.
+
+## Why this matters
+- Saves tokens: AI reads one concise guide instead of scanning thousands of files.
+- Reduces risk: The impact notes warn you when editing a file could break other parts.
+- Guarantees consistency: All future AI agents have the same source of truth.
+
+---
+*This section follows the core rules: never guess, only prove; always fix from the core; explain for a 10-year-old.*

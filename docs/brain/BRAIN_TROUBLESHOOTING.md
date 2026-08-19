@@ -8,9 +8,9 @@
 | 4 | CSRF cookie not secure (missing __Host- prefix + Secure flag) | CRITICAL | FIXED | `src/lib/securityUtils.js` line 267-268 | efc79d9 |
 | 5 | Revenue paths don't match (no reconciliation system) | HIGH | FIXED | `src/lib/RevenueReconciliation.js` (NEW file) | See docs |
 | 6 | Float math precision errors ($0.1+$0.2 != $0.3) | HIGH | PENDING | `src/lib/decimal.js` exists but not fully integrated everywhere | - |
-| 7 | Wrong error message for disabled accounts ("revoked" vs "disabled") | MEDIUM | PENDING | `src/lib/AuthContext.jsx` + `custom_auth_me` | - |
-| 8 | Session never times out (infinite session = security risk) | CRITICAL | PENDING | `src/api/base44Client.js` + `AuthContext.jsx` | - |
-| 9 | Server-only code sits in frontend folder (config leak) | MEDIUM | PENDING | `base44/lib/corsConfig.js` + `securityHeaders.js` (already in backend) | - |
+| 7 | Wrong error message for disabled accounts ("revoked" vs "disabled") | MEDIUM | FIXED | `custom_auth_me` returns 200 with inactive user | (Current) |
+| 8 | Session never times out (infinite session = security risk) | CRITICAL | FIXED | `AuthContext.jsx` idle timeout of 15m | (Current) |
+| 9 | Server-only code sits in frontend folder (config leak) | MEDIUM | FIXED | `corsConfig.js` moved to `base44/lib` | (Current) |
 
 ---
 

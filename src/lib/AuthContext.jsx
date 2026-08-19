@@ -9,6 +9,7 @@ import { hasAllPropertyAccess } from '@/lib/launchPolicy';
 const AuthContext = /** @type {import('react').Context<any>} */ (createContext(null));
 
 const IDLE_CHECK_MS = 30 * 1000;
+const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000;
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
@@ -19,9 +20,11 @@ export const AuthProvider = ({ children }) => {
   const [authChecked, setAuthChecked] = useState(false);
   const [appPublicSettings, setAppPublicSettings] = useState({ id: 'local', public_settings: {} });
   const [accountRestricted, setAccountRestricted] = useState(null);
-  const activityEvents = useRef(0);
+
   const authenticatedRef = useRef(false);
   const crossTabRevokingRef = useRef(false);
+  const activityEvents = useRef(0);
+  const lastActivityTime = useRef(Date.now());
 
 
 
@@ -73,6 +76,7 @@ export const AuthProvider = ({ children }) => {
   }, [refreshUser]);
 
   const handleActivity = useCallback(() => {
+    lastActivityTime.current = Date.now();
     activityEvents.current += 1;
     if (activityEvents.current % 2 === 0) return;
     if (isAuthenticated) {
@@ -91,6 +95,18 @@ export const AuthProvider = ({ children }) => {
 
     checkUserAuth();
     const interval = setInterval(async () => {
+      // Idle timeout enforcement
+      if (authenticatedRef.current && Date.now() - lastActivityTime.current > INACTIVITY_TIMEOUT_MS) {
+        db.auth.logout().catch(() => {});
+        authenticatedRef.current = false;
+        setUser(null);
+        setIsAuthenticated(false);
+        const target = window.location.pathname + window.location.search;
+        const delim = target.includes('?') ? '&' : '?';
+        navigateToLoginRef.current(target + delim + 'timeout=1');
+        return;
+      }
+
       // Calls a read-only endpoint (custom_auth_check) that DOES NOT slide the session expiry.
       // This ensures unattended open tabs eventually log out, while still catching revocations.
       const ok = await db.auth.isAuthenticated();

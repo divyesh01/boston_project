@@ -27,7 +27,7 @@ export default async function (req) {
     // Fetch user
     const user = await base44.asServiceRole.entities.User.get(session.user_id);
     
-    if (!user || !user.is_active || user.is_locked) {
+    if (!user) {
       return Response.json({ user: null }, { status: 401 });
     }
 

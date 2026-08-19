@@ -38,3 +38,7 @@ npx skills add base44/skills
 - Prefer the existing Base44 CLI workflow over adding new npm scripts for Base44-specific tasks.
 - Reuse the existing SDK client and Vite plugin patterns before adding new Base44 integration paths.
 - Run the relevant checks from `package.json` before finishing code changes.
+
+## AI Core Philosophy
+See [AI_CORE_RULES.md](./AI_CORE_RULES.md) for the absolute rules all agents must follow: Never guess, only prove. Always fix from the core. Keep it simple enough for a 10-year-old.
+

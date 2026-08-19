@@ -1,4 +1,4 @@
-import fs from 'fs';
+﻿import fs from 'fs';
 import path from 'path';
 
 function walk(dir, fileList = []) {
@@ -32,7 +32,7 @@ files.forEach(file => {
 
 const sorted = Object.entries(importCounts).sort((a,b) => b[1] - a[1]).slice(0, 20);
 
-let md = '# 💥 LIVE DEPENDENCY DANGER MAP\n\n';
+let md = '# LIVE DEPENDENCY DANGER MAP\n\n';
 md += '> [!CAUTION]\n> **AUTO-GENERATED FILE.** Do not edit manually. Run `npm run brain:map` to regenerate.\n\n';
 md += 'These files are imported the most across the codebase. Editing them has a massive blast radius.\n\n';
 
@@ -46,9 +46,9 @@ md += '```\n\n';
 
 md += '### Top Danger Zones\n| File Base Name | Import Count | Danger Level |\n|----------------|--------------|--------------|\n';
 sorted.forEach(([name, count]) => {
-    let danger = count > 15 ? '🔴 CRITICAL' : (count > 5 ? '🟡 HIGH' : '🟢 MODERATE');
+    let danger = count > 15 ? '[CRITICAL]' : (count > 5 ? '[HIGH]' : '[MODERATE]');
     md += `| ${name} | ${count} | ${danger} |\n`;
 });
 
 fs.writeFileSync('docs/brain/BRAIN_DEPENDENCIES.md', md);
-console.log('✅ Generated Live Danger Map at docs/brain/BRAIN_DEPENDENCIES.md');
+console.log('Generated ASCII-Safe Live Danger Map');

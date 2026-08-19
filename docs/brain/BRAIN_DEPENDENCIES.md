@@ -1,4 +1,4 @@
-# 💥 LIVE DEPENDENCY DANGER MAP
+# LIVE DEPENDENCY DANGER MAP
 
 > [!CAUTION]
 > **AUTO-GENERATED FILE.** Do not edit manually. Run `npm run brain:map` to regenerate.
@@ -32,23 +32,23 @@ graph TD
 ### Top Danger Zones
 | File Base Name | Import Count | Danger Level |
 |----------------|--------------|--------------|
-| utils | 47 | 🔴 CRITICAL |
-| hotel | 46 | 🔴 CRITICAL |
-| base44Client | 39 | 🔴 CRITICAL |
-| Card | 39 | 🔴 CRITICAL |
-| useGlobalFilters | 29 | 🔴 CRITICAL |
-| useHotelData | 25 | 🔴 CRITICAL |
-| securityUtils | 23 | 🔴 CRITICAL |
-| status | 22 | 🔴 CRITICAL |
-| button | 16 | 🔴 CRITICAL |
-| decimal | 14 | 🟡 HIGH |
-| KpiCard | 13 | 🟡 HIGH |
-| input | 12 | 🟡 HIGH |
-| AuthContext | 11 | 🟡 HIGH |
-| label | 10 | 🟡 HIGH |
-| payrollCalc | 9 | 🟡 HIGH |
-| commissionRates | 8 | 🟡 HIGH |
-| paymentNorm | 8 | 🟡 HIGH |
-| use-toast | 8 | 🟡 HIGH |
-| localDb | 7 | 🟡 HIGH |
-| realtime | 7 | 🟡 HIGH |
+| utils | 47 | [CRITICAL] |
+| hotel | 46 | [CRITICAL] |
+| base44Client | 39 | [CRITICAL] |
+| Card | 39 | [CRITICAL] |
+| useGlobalFilters | 29 | [CRITICAL] |
+| useHotelData | 25 | [CRITICAL] |
+| securityUtils | 23 | [CRITICAL] |
+| status | 22 | [CRITICAL] |
+| button | 16 | [CRITICAL] |
+| decimal | 14 | [HIGH] |
+| KpiCard | 13 | [HIGH] |
+| input | 12 | [HIGH] |
+| AuthContext | 11 | [HIGH] |
+| label | 10 | [HIGH] |
+| payrollCalc | 9 | [HIGH] |
+| commissionRates | 8 | [HIGH] |
+| paymentNorm | 8 | [HIGH] |
+| use-toast | 8 | [HIGH] |
+| localDb | 7 | [HIGH] |
+| realtime | 7 | [HIGH] |

@@ -15,7 +15,9 @@
     "test": "vitest run",
     "ws": "node backend/websocket.js",
     "test:watch": "vitest",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "brain:map": "node scripts/generate-brain-map.mjs",
+    "brain:verify": "node scripts/verify-brain.mjs"
   },
   "dependencies": {
     "@base44/sdk": "^0.8.41",

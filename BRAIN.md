@@ -1,4 +1,4 @@
-# RED ROOF INTELLIGENCE - THE PROJECT BRAIN
+﻿# RED ROOF INTELLIGENCE - THE PROJECT BRAIN
 
 > **What is this file?** This is the SINGLE SOURCE OF TRUTH for the entire project.
 > Any AI model should read THIS FILE FIRST before doing any work.
@@ -32,6 +32,7 @@
 | 16 | [How To Run, Test, Deploy](#16-how-to-run-test-deploy) | Step-by-step commands |
 | 17 | [AI Rules](#17-ai-rules-for-any-model) | Rules every AI must follow |
 | 18 | [Glossary](#18-glossary) | Every term explained simply |\n| 19 | [Emergency Playbook](#19-emergency-playbook-for-humans) | What to do when things break |
+| 20 | [Appendix: All 418 Files](#20-appendix-all-418-files) | Complete codebase index |
 
 ---
 
@@ -319,7 +320,7 @@ When you fix a bug, add a feature, or change anything significant:
 
 ---
 
-# 🚨 19. EMERGENCY PLAYBOOK (For Humans)
+# ðŸš¨ 19. EMERGENCY PLAYBOOK (For Humans)
 
 > [!TIP]
 > **Hotel Owners & Managers:** If something goes wrong in real life, follow this guide before calling a developer.
@@ -345,3 +346,436 @@ When you fix a bug, add a feature, or change anything significant:
 1. Go to the Import page.
 2. Find the bad import in the "Recent Imports" list.
 3. Click the **Undo/Rollback** button. (The system treats imports as atomic ledgers, so clicking undo instantly wipes the data safely across all 5 tables without leaving ghost records).
+
+---
+
+# ðŸ—ƒï¸ 20. APPENDIX: ALL 418 FILES
+
+> [!NOTE]
+> For complete reference, here is the exhaustive list of every single file in the project. Use this to verify existence before creating new files.
+
+<details>
+<summary><strong>Click to expand the full file catalog</strong></summary>
+
+`	ext
+base44\.app.jsonc
+base44\.types\types.d.ts
+base44\auth\config.jsonc
+base44\config.jsonc
+base44\connectors\googledrive.jsonc
+base44\entities\AuditLog.jsonc
+base44\entities\Channel.jsonc
+base44\entities\ClerkShiftRecord.jsonc
+base44\entities\Expense.jsonc
+base44\entities\GrossRevenueDay.jsonc
+base44\entities\OccupancyDay.jsonc
+base44\entities\PaymentDay.jsonc
+base44\entities\PayrollRun.jsonc
+base44\entities\Property.jsonc
+base44\entities\RateLimit.jsonc
+base44\entities\Session.jsonc
+base44\entities\SourceDay.jsonc
+base44\entities\Staff.jsonc
+base44\entities\TimecardPunch.jsonc
+base44\entities\UploadedReport.jsonc
+base44\entities\User.jsonc
+base44\functions\aiAssistant\entry.ts
+base44\functions\audit_clear\entry.js
+base44\functions\audit_list\entry.js
+base44\functions\audit_log\entry.js
+base44\functions\audit_verify\entry.js
+base44\functions\autoPayroll\entry.ts
+base44\functions\autoPayroll\function.jsonc
+base44\functions\backupToDrive\entry.ts
+base44\functions\custom_auth_check\entry.js
+base44\functions\custom_auth_login\entry.js
+base44\functions\custom_auth_logout\entry.js
+base44\functions\custom_auth_me\entry.js
+base44\functions\custom_auth_register\entry.js
+base44\functions\custom_auth_reset_password\entry.js
+base44\functions\custom_auth_reset_request\entry.js
+base44\functions\custom_user_admin\entry.js
+base44\functions\deleteAccount\entry.ts
+base44\functions\getWeather\entry.ts
+base44\functions\importDriveFile\entry.ts
+base44\functions\listDriveFiles\entry.ts
+base44\lib\corsConfig.js
+base44\lib\securityHeaders.js
+scripts\_harness-auth.mjs
+scripts\_loader-boot.mjs
+scripts\acceptance-harness.mjs
+scripts\acceptance-report.json
+scripts\benchmark_performance.mjs
+scripts\data\Adjustments and Refunds Activity (1).csv
+scripts\data\Adjustments and Refunds Activity (2).csv
+scripts\data\Adjustments and Refunds Activity.csv
+scripts\data\All Transactions (1).csv
+scripts\data\All Transactions (2).csv
+scripts\data\All Transactions.csv
+scripts\data\Clerk Shift.csv
+scripts\data\Gross Revenue Report midelboro.csv
+scripts\data\Hotel Statistics (1).csv
+scripts\data\Hotel Statistics.csv
+scripts\data\Occupancy Summary midelboro.csv
+scripts\data\Payments Summary (1).csv
+scripts\data\Payments Summary (2).csv
+scripts\data\Payments Summary.csv
+scripts\data\Source Summary (1).csv
+scripts\data\Source Summary (2).csv
+scripts\data\Source Summary (3).csv
+scripts\data\Source Summary.csv
+scripts\data\timecard-sample.csv
+scripts\probe-active-vs-idle.mjs
+scripts\probe-adjustments.mjs
+scripts\probe-audit-chain.mjs
+scripts\probe-audit-filter.mjs
+scripts\probe-audit-list.mjs
+scripts\probe-auth-audit.mjs
+scripts\probe-auth-hardening.mjs
+scripts\probe-clerk-fraud-filter.mjs
+scripts\probe-config-exposure.mjs
+scripts\probe-csrf-host-prefix.mjs
+scripts\probe-csrf-secure-flag.mjs
+scripts\probe-csv-data-loss.mjs
+scripts\probe-csvParser-data-loss.mjs
+scripts\probe-date-validation.mjs
+scripts\probe-delete-guard.mjs
+scripts\probe-deploy-config.mjs
+scripts\probe-financial-invariant.mjs
+scripts\probe-hotel.mjs
+scripts\probe-housekeeping.mjs
+scripts\probe-idle-polling.mjs
+scripts\probe-import.mjs
+scripts\probe-import-rollback-id.mjs
+scripts\probe-import-txn-zone.mjs
+scripts\probe-import-validation.mjs
+scripts\probe-manual-entry-import.mjs
+scripts\probe-money-kept.mjs
+scripts\probe-money-kept-fix.mjs
+scripts\probe-money-kept-float.mjs
+scripts\probe-ota-sync.mjs
+scripts\probe-parse-amount.mjs
+scripts\probe-pricing.mjs
+scripts\probe-profit-leakage.mjs
+scripts\probe-property-isolation.mjs
+scripts\probe-realtime.mjs
+scripts\probe-red.mjs
+scripts\probe-red6.mjs
+scripts\probe-red8.mjs
+scripts\probe-revenue-reconciliation.mjs
+scripts\probe-reviews.mjs
+scripts\probe-roomboard.mjs
+scripts\probe-session-expiry.mjs
+scripts\probe-session-noop.mjs
+scripts\probe-session-slide.mjs
+scripts\probe-session-sliding.mjs
+scripts\probe-startup.mjs
+scripts\probe-ui-disabled-reason.mjs
+scripts\probe-ui-feedback.mjs
+scripts\probe-validation-gaps.mjs
+scripts\probe-weather.mjs
+scripts\probe-welcome-email.mjs
+scripts\repro-import-atomicity.mjs
+scripts\resolve-alias.mjs
+scripts\resolve-base44.mjs
+scripts\stubs\base44-runtime.mjs
+scripts\stubs\base44-sdk.mjs
+scripts\test_anomaly_detector.mjs
+scripts\test_auditlog_immutability.mjs
+scripts\test_bulletproof_auth.mjs
+scripts\test_defect_5_probe.mjs
+scripts\test_local_auth.mjs
+scripts\test_me_disabled.mjs
+scripts\test_realtime_revocation.mjs
+scripts\test_validator.mjs
+scripts\test-parser.mjs
+scripts\test-throttle.mjs
+scripts\test-throttle-standalone.mjs
+scripts\update-csrf.mjs
+scripts\update-test-csrf.mjs
+scripts\verify_cross_module_impact.mjs
+scripts\verify-actioncenter.mjs
+scripts\verify-anomaly-ingestion.mjs
+scripts\verify-coexistence.mjs
+scripts\verify-donut-labels.mjs
+scripts\verify-harness.mjs
+scripts\verify-import-rollback.mjs
+scripts\verify-imports.mjs
+scripts\verify-money-kept.mjs
+scripts\verify-motion.mjs
+scripts\verify-source-contributions.mjs
+scripts\verify-statistics.mjs
+scripts\verify-timecard.mjs
+scripts\verify-transactions.mjs
+src\api\authLocal.test.js
+src\api\autoPayroll.test.js
+src\api\base44Client.importRollback.test.js
+src\api\base44Client.js
+src\api\localDb.js
+src\App.jsx
+src\components\AIAssistant.jsx
+src\components\AnomalySignoffModal.jsx
+src\components\AuditCategoryFilter.jsx
+src\components\AuthLayout.jsx
+src\components\charts\ChartToolbar.jsx
+src\components\charts\PieDonut.jsx
+src\components\charts\PieDonut.test.jsx
+src\components\charts\UniversalChart.jsx
+src\components\CommandMenu.jsx
+src\components\compare\ChannelRevenue.jsx
+src\components\compare\CompareBars.jsx
+src\components\compare\CompareCard.jsx
+src\components\dashboard\ClerkAudit.jsx
+src\components\dashboard\ClerkAuditMatrix.jsx
+src\components\dashboard\ExecutiveCharts.jsx
+src\components\dashboard\LowOccAlert.jsx
+src\components\dashboard\ModuleCards.jsx
+src\components\dashboard\MoneyKept.jsx
+src\components\dashboard\OtaMatrix.jsx
+src\components\dashboard\PaymentMethodChart.jsx
+src\components\dashboard\PricingPanel.jsx
+src\components\dashboard\PropertyRanking.jsx
+src\components\dashboard\RevenueTrend.jsx
+src\components\dashboard\WeatherPanel.jsx
+src\components\dashboard\YieldAdvisor.jsx
+src\components\GlobalControlBar.jsx
+src\components\GoogleIcon.jsx
+src\components\HousekeepingSettingsModal.jsx
+src\components\Layout.jsx
+src\components\MFARecoveryModal.jsx
+src\components\MFASetup.jsx
+src\components\PasswordConfirmDialog.jsx
+src\components\PricingOverrideButton.jsx
+src\components\propertyMap.jsx
+src\components\ProtectedRoute.jsx
+src\components\ReconciliationExportButton.jsx
+src\components\ScrollToTop.jsx
+src\components\statistics\MetricExplorer.jsx
+src\components\TaxConfigModal.jsx
+src\components\transactions\CommissionsPanel.jsx
+src\components\transactions\EmployeeCompare.jsx
+src\components\transactions\LedgerStrip.jsx
+src\components\transactions\LedgerTable.jsx
+src\components\ui\accordion.jsx
+src\components\ui\accordion.test.jsx
+src\components\ui\alert.jsx
+src\components\ui\alert.test.jsx
+src\components\ui\alert-dialog.jsx
+src\components\ui\aspect-ratio.jsx
+src\components\ui\avatar.jsx
+src\components\ui\avatar.test.jsx
+src\components\ui\badge.jsx
+src\components\ui\badge.test.jsx
+src\components\ui\breadcrumb.jsx
+src\components\ui\button.jsx
+src\components\ui\button.test.jsx
+src\components\ui\calendar.jsx
+src\components\ui\card.jsx
+src\components\ui\card.test.jsx
+src\components\ui\carousel.jsx
+src\components\ui\chart.jsx
+src\components\ui\checkbox.jsx
+src\components\ui\checkbox.test.jsx
+src\components\ui\collapsible.jsx
+src\components\ui\command.jsx
+src\components\ui\context-menu.jsx
+src\components\ui\dialog.jsx
+src\components\ui\drawer.jsx
+src\components\ui\dropdown-menu.jsx
+src\components\ui\empty-state.jsx
+src\components\ui\error-boundary.jsx
+src\components\ui\form.jsx
+src\components\ui\hover-card.jsx
+src\components\ui\image.jsx
+src\components\ui\input.jsx
+src\components\ui\input.test.jsx
+src\components\ui\input-otp.jsx
+src\components\ui\label.jsx
+src\components\ui\label.test.jsx
+src\components\ui\loading.jsx
+src\components\ui\menubar.jsx
+src\components\ui\navigation-menu.jsx
+src\components\ui\pagination.jsx
+src\components\ui\popover.jsx
+src\components\ui\progress.jsx
+src\components\ui\progress.test.jsx
+src\components\ui\radio-group.jsx
+src\components\ui\resizable.jsx
+src\components\ui\ResponsiveSelect.jsx
+src\components\ui\scroll-area.jsx
+src\components\ui\select.jsx
+src\components\ui\separator.jsx
+src\components\ui\separator.test.jsx
+src\components\ui\sheet.jsx
+src\components\ui\sidebar.jsx
+src\components\ui\skeleton.jsx
+src\components\ui\skeleton.test.jsx
+src\components\ui\slider.jsx
+src\components\ui\sonner.jsx
+src\components\ui\status.jsx
+src\components\ui\switch.jsx
+src\components\ui\switch.test.jsx
+src\components\ui\table.jsx
+src\components\ui\table.test.jsx
+src\components\ui\tabs.jsx
+src\components\ui\tabs.test.jsx
+src\components\ui\textarea.jsx
+src\components\ui\textarea.test.jsx
+src\components\ui\toast.jsx
+src\components\ui\toaster.jsx
+src\components\ui\toggle.jsx
+src\components\ui\toggle.test.jsx
+src\components\ui\toggle-group.jsx
+src\components\ui\toggle-group.test.jsx
+src\components\ui\tooltip.jsx
+src\components\ui\types.js
+src\components\ui\use-toast.jsx
+src\components\ui-exec\Card.jsx
+src\components\ui-exec\KpiCard.jsx
+src\components\ui-exec\RangePicker.jsx
+src\components\ui-exec\StatusBadge.jsx
+src\components\UserNotRegisteredError.jsx
+src\crdt.jsx
+src\hooks\use-mobile.jsx
+src\hooks\usePullToRefresh.js
+src\hooks\useSettingsVersion.js
+src\hooks\use-size.jsx
+src\index.css
+src\lib\actionCenter.js
+src\lib\agenticAI.js
+src\lib\aiEngine.js
+src\lib\aiEngine.test.js
+src\lib\aiInsights.js
+src\lib\alertEngine.js
+src\lib\alertThresholds.js
+src\lib\anomalyDetector.js
+src\lib\anomalyDetector.test.js
+src\lib\anomalySignoff.js
+src\lib\app-params.js
+src\lib\auditFilter.js
+src\lib\auditLogger.js
+src\lib\AuthContext.jsx
+src\lib\authHelpers.js
+src\lib\authHelpers.test.js
+src\lib\authReturnTo.js
+src\lib\calculationService.js
+src\lib\chartExport.js
+src\lib\columnarAnalytics.js
+src\lib\commissionRates.js
+src\lib\crdtSync.js
+src\lib\csvParser.js
+src\lib\dailyAggregates.js
+src\lib\dataScanner.js
+src\lib\dataScanner.test.js
+src\lib\decimal.js
+src\lib\deleteGuard.js
+src\lib\donutLabelLayout.js
+src\lib\employeeId.js
+src\lib\expenseCategories.js
+src\lib\financialReconciliation.js
+src\lib\forecasting.js
+src\lib\fraudScoringEngine.js
+src\lib\hotel.js
+src\lib\hotelKeyRegression.test.js
+src\lib\housekeepingConfig.js
+src\lib\housekeepingService.js
+src\lib\importValidation.js
+src\lib\laborOptimization.js
+src\lib\launchPolicy.js
+src\lib\manualEntryImport.js
+src\lib\mfaRecovery.js
+src\lib\motion.js
+src\lib\navigation.js
+src\lib\ownerIntelligence.js
+src\lib\PageNotFound.jsx
+src\lib\parser.worker.js
+src\lib\paymentNorm.js
+src\lib\payrollCalc.js
+src\lib\pdfExport.js
+src\lib\permissions.js
+src\lib\pricingEngine.js
+src\lib\pricingOverride.js
+src\lib\pricingSettings.js
+src\lib\query-client.js
+src\lib\realtime.js
+src\lib\recalculationService.js
+src\lib\reconciliationExport.js
+src\lib\reportParsers.js
+src\lib\reputationService.js
+src\lib\RevenueReconciliation.js
+src\lib\revenueThresholds.js
+src\lib\roomBoard.js
+src\lib\security.js
+src\lib\securityUtils.js
+src\lib\securityUtils.test.js
+src\lib\sessionChannel.js
+src\lib\settingsBus.js
+src\lib\sound.js
+src\lib\statisticsAnalytics.js
+src\lib\taxConfig.js
+src\lib\taxLiability.js
+src\lib\taxLiability.test.js
+src\lib\taxSettings.js
+src\lib\timecardCalc.js
+src\lib\timecardCalc.test.js
+src\lib\transactionAnalytics.js
+src\lib\transactionNorm.js
+src\lib\ui-utils.js
+src\lib\universalParser.js
+src\lib\uploadRetention.js
+src\lib\useCountUp.jsx
+src\lib\useGlobalFilters.jsx
+src\lib\useHotelData.js
+src\lib\usePricing.js
+src\lib\utils.js
+src\lib\validator.js
+src\lib\weatherService.js
+src\lib\weatherSettings.js
+src\lib\yieldOptimizer.js
+src\lib\ySync.js
+src\main.jsx
+src\pages\ActionCenter.jsx
+src\pages\AuditLog.jsx
+src\pages\ChangePassword.jsx
+src\pages\ChannelManager.jsx
+src\pages\ChartBuilder.jsx
+src\pages\Compare.jsx
+src\pages\Dashboard.jsx
+src\pages\DataIntelligence.jsx
+src\pages\DataTemplate.jsx
+src\pages\DemoYDoc.jsx
+src\pages\Employees.jsx
+src\pages\Expenses.jsx
+src\pages\Forecasting.jsx
+src\pages\ForgotPassword.jsx
+src\pages\Housekeeping.jsx
+src\pages\Import.jsx
+src\pages\Login.jsx
+src\pages\Login.test.jsx
+src\pages\ManualEntry.jsx
+src\pages\MonthlyCalendar.jsx
+src\pages\MtdGrowth.jsx
+src\pages\OtaChannels.jsx
+src\pages\Payments.jsx
+src\pages\Payroll.jsx
+src\pages\Pricing.jsx
+src\pages\PrivacyPolicy.jsx
+src\pages\ResetPassword.jsx
+src\pages\Reviews.jsx
+src\pages\RoomBoard.jsx
+src\pages\Settings.jsx
+src\pages\Setup.jsx
+src\pages\Setup.test.jsx
+src\pages\Statistics.jsx
+src\pages\TermsOfService.jsx
+src\pages\Transactions.jsx
+src\pages\Users.jsx
+src\tests\dataIntegrity.test.js
+src\tests\financials.test.js
+src\test-setup.js
+src\types\ui.js
+src\utils\index.js
+src\utils\index.ts
+``n</details>
+
+

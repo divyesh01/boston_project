@@ -2207,3 +2207,74 @@ Severity 4 (Feature):      1 week
 - OWASP = Website security standards
 - PCI DSS = Payment security standards
 - GDPR = Privacy protection law
+# ?? Project Overview for Kids
+
+## What is this project?
+
+- **Name:** Red Roof Intelligence ??
+- **Goal:** Show hotel owners how much money they make, how full their rooms are, and where the money comes from.
+- **Why it matters:** Helps owners make smart decisions without guessing.
+
+## How does it work? (Simple picture)
+
+```
+Hotel data (CSV files) ? Server (calculates numbers) ? Dashboard (shows pictures and numbers)
+```
+
+## Where are the important pieces?
+
+- `src/` – the front-end UI you see in the browser.
+- `base44/` – the back-end code that talks to the database and does the math.
+- `scripts/` – helper tools for building and testing.
+- `public/` – static files like icons and the main HTML page.
+- `.env.*` – secret settings (don’t share!).
+
+## What are the most important files?
+
+| Folder | File | What it does (in kid language) |
+|-------|------|-------------------------------|
+| src | `App.jsx` | Starts the whole app.
+| src | `Dashboard.jsx` | Shows the big picture with charts.
+| src | `MoneyKept.jsx` | Shows how much profit you keep.
+| src | `Login.jsx` | Lets you sign in (kept safe).
+| base44 | `entry.js` (many) | Runs the back-end functions like “add a new hotel”.
+| base44 | `RevenueReconciliation.js` | Checks that three ways of counting money match.
+| scripts | `run-tests.ps1` | Runs all the tests to make sure nothing is broken.
+
+## How do I start the app? (Step-by-step)
+
+1. **Open a terminal** (PowerShell).
+2. Run `npm install` – this gets all the tools.
+3. Run `npm run dev` – this starts the front-end and the back-end together.
+4. Open a web browser and go to `http://localhost:5173` – you will see the dashboard.
+
+*(If you only want the front-end, run `npm run dev` after the back-end is already running with `base44 dev`).*
+
+## How do I check that everything works?
+
+- Run the test command: `npm test` – it will tell you if any part is broken.
+- Look for a green check (`?`) after each test.
+
+## Core Rules (the AI rules)
+
+- **Never guess, only prove.**
+- **Always fix from the core.**
+- **Explain everything so a 10-year-old can understand.**
+- **You may edit any file except those listed in PROTECTED_FILES.md.**
+
+## Quick glossary (already in the file, but here again for kids)
+
+- **Dashboard:** The picture board that shows numbers.
+- **Revenue:** Money that comes in.
+- **Profit (Money Kept):** Money left after paying costs.
+- **CSV:** A simple table file (like a spreadsheet).
+- **Token:** A secret ticket that proves you are allowed to do something.
+- **Session:** How long you stay logged in before the system logs you out.
+
+## What’s next?
+
+- Finish the pending bugs (float math, session timeout, server code, error messages).
+- Add the “Export to Excel” button.
+- Make the dashboard auto-refresh every few minutes.
+
+That’s the whole project in plain words!

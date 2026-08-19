@@ -1,2301 +1,988 @@
-# 🏨 RED ROOF INTELLIGENCE - THE PROJECT BRAIN
+# RED ROOF INTELLIGENCE - THE PROJECT BRAIN
 
-## What is this project? (Really Simple)
+> **What is this file?** This is the SINGLE SOURCE OF TRUTH for the entire project.
+> Any AI model should read THIS FILE FIRST before doing any work.
+> It tells you what every file does, what depends on what, and what breaks if you touch something.
+>
+> **Last updated:** 2026-08-18
+> **Total files in project:** ~312 source files (src/ + base44/ + scripts/)
+> **Core rules:** Never guess, only prove. Always fix from the core.
 
-Imagine you own 25 hotels. Every day, guests check in, pay, leave.
-You need to know:
+---
+
+# TABLE OF CONTENTS
+
+| # | Section | What It Covers |
+|---|---------|---------------|
+| 1 | [The Project In 60 Seconds](#1-the-project-in-60-seconds) | What this app does, who uses it |
+| 2 | [How Everything Connects](#2-how-everything-connects) | The big picture - data flow diagram |
+| 3 | [Directory Map](#3-directory-map-where-everything-lives) | Every folder and what is inside |
+| 4 | [All 36 Pages](#4-all-36-pages-what-users-see) | Every screen in the app |
+| 5 | [All 90+ Libraries](#5-all-90-libraries-the-engines-under-the-hood) | Every calculation, parser, engine |
+| 6 | [All 40+ Components](#6-all-40-components-reusable-ui-pieces) | Every reusable UI piece |
+| 7 | [All 16 Database Tables](#7-all-16-database-tables-entities) | Every entity - what data is stored |
+| 8 | [All 19 Backend Functions](#8-all-19-backend-functions-the-server-brain) | Every serverless function |
+| 9 | [All Config Files](#9-all-config-files) | Build, deploy, environment, security |
+| 10 | [All Test Scripts](#10-all-test-scripts-106-files) | Every test and probe script |
+| 11 | [The Dependency Map](#11-the-dependency-map-what-breaks-if-you-touch-it) | Edit X then Y breaks |
+| 12 | [The Money Math](#12-the-money-math-formulas) | Every financial formula |
+| 13 | [Security Architecture](#13-security-architecture) | Auth, sessions, CSRF, MFA, rate limiting |
+| 14 | [The 9 Known Problems](#14-the-9-known-problems-status-tracker) | Bug tracker with status |
+| 15 | [Protected Files](#15-protected-files-do-not-touch) | Files AI must never edit |
+| 16 | [How To Run, Test, Deploy](#16-how-to-run-test-deploy) | Step-by-step commands |
+| 17 | [AI Rules](#17-ai-rules-for-any-model) | Rules every AI must follow |
+| 18 | [Glossary](#18-glossary) | Every term explained simply |
+
+---
+
+# 1. THE PROJECT IN 60 SECONDS
+
+**Red Roof Intelligence** is a dashboard for hotel owners.
+
+Imagine you own **25 hotels**. Every day, hundreds of guests check in, pay, and leave.
+You need answers:
 - How much money came in today?
 - How many rooms were filled?
-- How much profit did I make?
-- Where did the money go (credit cards, cash, checks)?
+- How much profit did I keep after commissions and fees?
+- Which booking channel (Expedia, Booking.com, direct) makes the most money?
 
-**Red Roof Intelligence is a computer dashboard that shows you ALL of this instantly.**
+This app gives you ALL those answers on one screen - instantly.
 
-It's like a scoreboard for your hotel business.
-
-┌─────────────────────────────────────┐
-│  DASHBOARD = Magic Scoreboard       │
-│  Shows all your hotel info at once  │
-│  No guessing, all answers here      │
-└─────────────────────────────────────┘
-
-## The Goal
-
-📊 **One page that shows everything a hotel owner needs to know**
-✅ Gross Revenue
-✅ Money Kept (profit)
-✅ How full are my rooms?
-✅ Payment methods (credit cards, cash, etc.)
-✅ All expenses (commissions, fees, taxes)
-
-## Who Uses It?
-
-👨💼 Hotel Owner (Divyesh) - Checks dashboard every day
-💻 Developers (AI & Humans) - Build and fix the system
-📈 Accountants - Use it to track money and reconcile
-
-## What's Working? ✅
-
-✅ Dashboard shows up
-✅ Charts display correctly
-✅ Money calculations work (mostly)
-✅ You can see all your data
-
-## What's Broken? 🔴
-
-🔴 Some small math errors (floats causing precision loss)
-🔴 Security gaps (session timeout missing)
-🔴 Data not fully visible (some categories hidden)
-
-## The Status Right Now
-
-```
-[████████░░░░░░░░░░░░] 40% Done
-4 problems fixed ✅
-5 problems still need fixing ⏳
-```
-
-## Timeline
-
-📅 Started: 2026 (few months ago)
-📅 Current: 2026-08-18 (today)
-📅 Goal: Launch to real hotels soon
-
----
-
-## Quick Facts
-
-| Fact | Answer |
-|------|--------|
-| How many hotels? | 25 |
-| How much gross revenue? | $1,011,258 |
-| How much profit? | $920,829 (91.1%) |
-| How full are rooms? | 57.8% occupied |
-| Money per room? | $81.80 (ADR) |
-| Budget per month? | $20 (for AI help) |
-| Problems fixed? | 4 out of 9 ✅ |
-| Problems left? | 5 more to fix ⏳ |
-
-## How Does The System Work? (Follow The Money)
-
-Step 1: Hotel Data Comes In
-↓
-Step 2: Computer Reads The Data (CSV files from HotelKey)
-↓
-Step 3: Computer Does Math (Revenue, occupancy, profit)
-↓
-Step 4: Three Different Computers Check The Math
-       (Make sure they all agree)
-↓
-Step 5: Dashboard Shows Results
-↓
-Step 6: Hotel Owner Sees Everything
-
-### Visual Diagram
-
-```
-HotelKey PMS Computer (at hotel)
-        ↓
-     [Exports CSV files]
-        ↓
-Red Roof Intelligence System
-        ├─→ [CSV Parser] (reads the file)
-        ├─→ [Database] (stores the data)
-        ├─→ [Math Engine] (does calculations)
-        ├─→ [Three Checkers] (verify correctness)
-        ├─→ [Charts Maker] (creates pictures)
-        └─→ [Dashboard] (shows everything)
-        ↓
-Hotel Owner's Computer
-        ↓
-    👨💼 "Nice! My dashboard!"
-```
-
-### The Three Checkers (Important!)
-
-The system calculates money THREE different ways:
-1. From CSV files imported
-2. From detailed transaction records
-3. From cached daily summaries
-
-**Then it checks: Do all three give the same answer?**
-
-If YES: ✅ We trust the number
-If NO: 🚨 ALERT! Something's wrong!
-
-```
-Path 1 (CSV): $1,000,000
-Path 2 (Transactions): $999,999.50
-Path 3 (Cache): $1,000,000
-
-→ Difference detected!
-→ Alert: Check what happened
-```
-
-## Where Does The Money Go? (Simple Analogy)
-
-### Guest Stays at Hotel
-```
-Guest arrives
-  ↓
-Guest pays hotel $100 for room
-  ↓
-$100 goes into GROSS REVENUE bucket
-  ↓
-But wait! Money has to be split:
-
-$100 (Gross Revenue)
-  ├─ $5 (OTA Commission) → Online booking site takes fee
-  ├─ $2 (Credit card fee) → Bank takes fee
-  ├─ $2 (Taxes) → Government takes tax
-  └─ $91 (Money Kept!) → Hotel owner keeps this
-```
-
-### Money Kept = The Profit
-
-**In Simple Words:**
-- Gross Revenue = Total money collected
-- Expenses = Money paid to others (commissions, fees, taxes)
-- Money Kept = What's left for the owner
-
-**Formula:**
-```
-Money Kept = Gross Revenue - All Expenses
-
-$1,011,258 (total)
--  $50,287 (commissions)
--  $23,816 (fees)
--  $16,325 (taxes)
-= $920,829 (what hotel owner keeps)
-```
-
-**Percentage:**
-$920,829 ÷ $1,011,258 = 91.1% profit margin
-(Hotel owner keeps 91 cents out of every dollar)
-
-### Payment Methods (Where Guest Pays From)
-
-Guests can pay with:
-```
-Mastercard: $489,660 (44% of all payments)
-Visa:       $362,901 (33%)
-Cash:       $97,698  (9%)
-Amex:       $80,529  (7%)
-Direct Bill: $47,310 (4%)
-Discover:   $18,833  (2%)
-Check:      $690    (0.1%)
-Other:      $6,489  (0.6%)
-─────────────────────────
-Total:     $1,104,112
-```
-
-**Fun Fact:** Most guests use credit cards (77%)
-           Only 9% pay with cash
-
-## What's Broken? (9 Problems, Explained Simply)
-
-### ✅ FIXED PROBLEMS (4 Done!)
-
-#### Problem #1: Duplicate Column Names ✅
-**What went wrong:**
-If CSV had two columns named "Name", the computer would forget one name.
-
-**Real example:**
-```
-CSV Headers: Name, Amount, Name
-CSV Data:    John, 100,    Smith
-
-Computer reads:
-  Name = "John"
-  Amount = 100
-  Name = "Smith" ← Overwrites "John"!
-
-Result: Lost "John", only "Smith" remains
-```
-
-**The Fix:**
-If two columns have the same name, add a number: "Name_1" and "Name_2"
-
-**Status:** ✅ FIXED (2026-08-18)
-
----
-
-#### Problem #2: Password in Welcome Email ✅
-**What went wrong:**
-When a new user signs up, the email said:
-"Your password is: MySecretPassword123"
-
-**The Risk:**
-Anyone who hacks the email sees the password!
-
-**The Fix:**
-Instead of sending password, send a link to set password yourself.
-"Click here to create your own password"
-
-**Status:** ✅ FIXED (2026-08-18)
-
----
-
-#### Problem #3: Money Kept Shows $0 (Typo!) ✅
-**What went wrong:**
-Dashboard showed Money Kept as $0 instead of $920,829
-
-**The Cause:**
-One word was typed wrong in the code:
-- Correct word: "room_revenue"
-- Wrong word: "total_revenue"
-
-Computer looked for "room_revenue", didn't find it, got $0
-
-**The Fix:**
-Changed one word from "total_revenue" to "room_revenue"
-
-**One line of code fixed the ENTIRE problem!**
-
-**Status:** ✅ FIXED (2026-08-18)
-
----
-
-#### Problem #4: Cookie Security Gap ✅
-**What went wrong:**
-A website cookie (like a digital note) was insecure.
-A hacker on a different website could steal it.
-
-**The Fix:**
-Added a security flag to the cookie: "__Host-" prefix + "Secure"
-Now only the main website can use it.
-
-**Status:** ✅ FIXED (2026-08-18)
-
----
-
-### ⏳ PROBLEMS STILL TO FIX (5 Remaining)
-
-#### Problem #6: Math Precision Error ⏳
-**What's wrong:**
-Computer uses regular decimals for money.
-```
-0.1 + 0.2 = 0.30000000000000004 (wrong!)
-Should be: 0.3
-```
-
-With 25 hotels, small errors add up to real money lost.
-
-**The Fix:**
-Use whole numbers (cents) instead of decimals
-```
-$1.99 → Store as 199 (cents)
-$2.01 → Store as 201 (cents)
-199 + 201 = 400 cents = $4.00 (correct!)
-```
-
-**Status:** ⏳ PENDING
-
----
-
-#### Problem #7: Wrong Error Message ⏳
-**What's wrong:**
-If user is disabled, system says "revoked" instead of "disabled"
-
-**The Fix:**
-Pass the real reason from database to dashboard
-
-**Status:** ⏳ PENDING
-
----
-
-#### Problem #8: Session Doesn't Timeout ⏳
-**What's wrong:**
-If you log in, your session never expires.
-Even if you walk away, you're still logged in forever.
-
-**Security Risk:** Someone could sit at your computer and access everything.
-
-**The Fix:**
-Add automatic logout after 30 minutes of no activity
-Refresh the session token regularly (like renewing a parking pass)
-
-**Status:** ⏳ PENDING
-
----
-
-#### Problem #9: Server Code in Wrong Folder ⏳
-**What's wrong:**
-Some backend code is sitting in the frontend folder.
-It shouldn't ship to users' browsers.
-
-**The Fix:**
-Move server code to backend folder
-
-**Status:** ⏳ PENDING
-
----
-
-### Problem Status Summary
-
-```
-Problems Fixed:  ████ (4/9) 44% Done
-Problems Left:   █████ (5/9) 56% Remaining
-
-[████░░░░░░░░░░░] 44% Complete
-```
-
-## What Does The Dashboard Look Like?
-
-### Top Row: Big Numbers
-
-```
-┌─────────────────┬──────────────┬─────────────┬──────────────┐
-│ GROSS REVENUE   │  ROOMS FULL  │ PROFIT %    │ PRICE/ROOM   │
-│ $1,011,258      │  12,362/21K  │ 57.8%       │ $81.80       │
-│ (Total money)   │ (Occupancy)  │ (Percentage)│ (ADR)        │
-└─────────────────┴──────────────┴─────────────┴──────────────┘
-```
-
-### Middle Row: Money Breakdown Chart
-
-```
-            MONEY KEPT BREAKDOWN
-            
-    🟢 Money Kept:        $920,829 (91.1%)
-    🔴 Commissions:       -$50,287 (5.0%)
-    🟡 Processing Fees:   -$23,816 (2.4%)
-    🟣 Business Taxes:    -$16,325 (1.6%)
-```
-
-### Bottom Section: Where Money Comes From
-
-```
-            PAYMENT METHOD DISTRIBUTION
-            
-    🟨 Mastercard:  $489,660 (44%)
-    🟦 Visa:        $362,901 (33%)
-    🟩 Cash:        $97,698  (9%)
-    🟦 Amex:        $80,529  (7%)
-    🟣 Direct Bill: $47,310  (4%)
-    🔴 Discover:    $18,833  (2%)
-    🟦 Check:       $690     (0.1%)
-    🟧 Other:       $6,489   (0.6%)
-```
-
-### Data Table (All Details)
-
-```
-Category            Amount          Percentage
-─────────────────────────────────────────────
-Money Kept         $920.8k         91.1% ✅
-OTA Commissions    -$50.3k          5.0% ❌
-Processing Fees    -$23.8k          2.4% ❌
-Business Taxes     -$16.3k          1.6% ❌
-─────────────────────────────────────────────
-TOTAL             $1.01M           100.0%
-```
-
-## Money Math (Easy Formulas)
-
-### Formula #1: Money Kept
-```
-Money Kept = Gross Revenue - Commissions - Fees - Taxes
-
-Example:
-$1,011,258 - $50,287 - $23,816 - $16,325 = $920,829
-```
-
-### Formula #2: How Full Are Rooms?
-```
-Occupancy % = (Rooms Sold ÷ Total Rooms) × 100
-
-Example:
-(12,362 ÷ 21,400) × 100 = 57.8%
-(Almost 6 out of 10 rooms were booked)
-```
-
-### Formula #3: Average Price Per Room
-```
-ADR = Gross Revenue ÷ Rooms Sold
-
-Example:
-$1,011,258 ÷ 12,362 = $81.80 per room
-(Each room averages $81.80 in revenue)
-```
-
-### Formula #4: Revenue Per Available Room
-```
-RevPAR = Gross Revenue ÷ All Rooms
-OR
-RevPAR = ADR × Occupancy%
-
-Example:
-$1,011,258 ÷ 21,400 = $47.26 per room
-(Counts even empty rooms)
 ```
-
-### Formula #5: The Three-Path Check (Most Important!)
-```
-Path 1: Add up all imported CSV revenues = $1,011,258
-Path 2: Add up all detailed transactions = $1,011,258
-Path 3: Add up daily cached totals = $1,011,258
-
-Question: Do all three match?
-✅ YES = All is good, we trust this number
-❌ NO = Something is wrong, investigate!
-```
-
-## How To Use This Brain (Search Guide)
-
-### Search by Topic
-
-**Want to know about money calculations?**
-→ Go to SECTION 6: KEY FORMULAS
-
-**Want to know what's broken?**
-→ Go to SECTION 4: THE PROBLEMS
-
-**Want to know the status?**
-→ Go to THIS PAGE (you're reading it!)
-
-**Want to know how the system works?**
-→ Go to SECTION 2: HOW THE SYSTEM WORKS
-
-**Want to know what you see on the dashboard?**
-→ Go to SECTION 5: THE DASHBOARD
-
-**Want to know why we made certain choices?**
-→ Go to SECTION 10: WHY WE CHOSE THIS
-
----
-
-### Search by Problem (Quick Reference)
-
-```
-Money Kept wrong?           → Problem #3 (Fixed!)
-Password in email?          → Problem #2 (Fixed!)
-Duplicate names?            → Problem #1 (Fixed!)
-Cookie insecure?            → Problem #4 (Fixed!)
-Math precision wrong?        → Problem #6 (Pending)
-Error message wrong?        → Problem #7 (Pending)
-Session never times out?    → Problem #8 (Pending)
-Code in wrong folder?       → Problem #9 (Pending)
-Revenue paths not matching? → Problem #5 (Fixed!)
-```
-
-## Project Status At A Glance
-
-### What Works ✅
-- [x] Dashboard shows up
-- [x] Charts display correctly
-- [x] Money math works (after fixes)
-- [x] You can see all your data
-- [x] Three-path revenue check works
-- [x] Passwords are secure (fixed)
-- [x] Cookies are secure (fixed)
-
-### What Needs Fixing ⏳
-- [ ] Money precision (use cents not decimals)
-- [ ] Error messages show correct reason
-- [ ] Sessions timeout after 30 minutes
-- [ ] Move server code to backend folder
-- [ ] (All other minor issues)
-
-### Progress Bar
-```
-████████░░░░░░░░░░░ 40% Complete (4 of 9 fixed)
-```
-
-### Money Budget
-- Plan: Gemini AI ($20/month)
-- Used so far: ~$0.07
-- Remaining: ~$19.93
-- Can fix: At least 10+ more problems
-
-### Timeline
-- Start: 2026 (earlier this year)
-- Today: 2026-08-18
-- Target: Deploy to hotels soon
-- Status: On track!
-
-## Questions People Ask (FAQ)
-
-### Q: What if all three revenue paths show DIFFERENT numbers?
-**A:** The system alerts you! It says "Revenue drift detected!"
-Then the hotel owner knows to investigate.
-
-### Q: What happens if a guest pays with a credit card?
-**A:** 2.5% fee goes to the bank, rest goes to hotel
-
-### Q: Why do we need THREE ways to check the money?
-**A:** Because double-checking is safer!
-It's like having three people count your money instead of one.
-
-### Q: What's ADR mean?
-**A:** Average Daily Rate = average price per room ($81.80)
-
-### Q: What's RevPAR mean?
-**A:** Revenue Per Available Room = average revenue per room counting empty ones
-
-### Q: What's the biggest problem right now?
-**A:** Nothing major! Just some small security gaps to close.
-
-### Q: How fast can we fix all the problems?
-**A:** We have enough budget to fix all 5 remaining problems this month
-
-### Q: Why did Money Kept show $0?
-**A:** A typo in the code ("total_revenue" instead of "room_revenue")
-One word changed, problem solved!
-
-### Q: Is the dashboard safe to use?
-**A:** Yes! We fixed the security issues.
-
-### Q: Can I trust the numbers on the dashboard?
-**A:** Yes! The three-path check verifies everything.
-
-### Q: Why do we need this dashboard?
-**A:** To see all your hotel business in ONE place instead of 10 different reports
-
-## Who Built This? (The Team)
-
-### 👨💼 Divyesh (The Owner)
-- Owns 25 hotels
-- Wanted a dashboard to see all his business
-- Uses it every day
-- Fixes problems when they pop up
-
-### 🤖 Gemini AI (The Coder)
-- An AI that writes code
-- Fixes problems when told to
-- Asks smart questions before making changes
-- Always tests before saying "done"
-
-### 👨💻 Claude (The Supervisor)
-- Reviews Gemini's work
-- Makes sure no bugs slip through
-- Checks that everything works
-- Approves fixes
-
-### 🔧 The Tools We Use
-- React (makes the dashboard show up)
-- recharts (makes the charts pretty)
-- base44 (backend system)
-- HotelKey (connects to hotel software)
-- Gemini AI ($20/month)
-
----
-
-### Why AI? (Why Not Just Hire a Programmer?)
-```
-Hiring programmer: $5,000+/month
-Using Gemini AI: $20/month
-Time to fix: Same speed!
-```
-
-## How Do We Fix Problems? (5-Step Process)
-
-### Step 1: Understand The Problem ✓
-- Read the problem description
-- Find the broken code
-- Understand why it's broken
-- Check who uses this code
-
-### Step 2: Write A Test ✓
-- Write a test that shows the problem exists
-- Run the test (should FAIL)
-- This proves the problem is real
-
-### Step 3: Plan The Fix ✓
-- Decide how to fix it
-- Think about what might break
-- Make sure the fix is safe
-
-### Step 4: Make The Fix ✓
-- Change the code
-- Run tests (should now PASS)
-- Check for side effects
-
-### Step 5: Verify It's Fixed ✓
-- Show screenshots that it works
-- Run all tests
-- Make sure nothing else broke
-- Save the fix to version control
-
-### Process Diagram
-```
-Problem Found
-     ↓
-Understand It
-     ↓
-Write Test (fails)
-     ↓
-Make Plan
-     ↓
-Fix Code
-     ↓
-Run Test (passes)
-     ↓
-Verify Nothing Broke
-     ↓
-Save & Done! ✅
-```
-
-### Rules We Follow
-✓ Always test before and after
-✓ Always show proof (screenshots)
-✓ Never skip steps
-✓ Always check for side effects
-✓ Always save to version control
-
-## Everything In 2 Minutes (Summary)
-
-### What Is This?
-Dashboard for 25 hotels showing revenue, profit, occupancy, payment methods
-
-### How It Works?
-Reads data from HotelKey → Does math → Checks with 3 paths → Shows dashboard
-
-### What's Broken?
-5 small problems left (math precision, timeouts, error messages)
-
-### What's Fixed?
-4 problems solved (duplicates, passwords, typo, security)
-
-### Status?
-40% done, on track for launch
-
-### Money?
-$20/month for AI coder, lots of budget left
-
-### Team?
-Hotel owner + Gemini AI + Supervisor
-
-### Next Steps?
-Fix remaining 5 problems (each takes 1-2 days)
-
-### When Done?
-Launch dashboard to real hotels soon!
-
----
-
-### One-Sentence Summary
-**A computer dashboard that shows hotel owners everything about their business in one place**
-
-## Real Numbers (Not Made Up, Actual Data)
-
-### Time Period: 2026-01-01 to 2026-08-02 (217 days)
-
-### Revenue Numbers
-```
-Total Gross Revenue:     $1,011,258.17
-Total Money Kept:        $920,829.00
-Total Commissions:       -$50,287.45
-Total Processing Fees:   -$23,816.32
-Total Taxes:             -$16,325.40
-
-Profit Margin:           91.1% (Hotel keeps 91 cents per dollar)
-```
-
-### Room Numbers
-```
-Total Rooms Booked:      12,362
-Total Room Nights:       21,400 (capacity)
-Occupancy Rate:          57.8% (about 6 out of 10 rooms filled)
-Average Room Rate:       $81.80 per room
-Revenue Per Room:        $47.26 (RevPAR)
-```
-
-### Daily Averages
-```
-Daily Gross Revenue:     $4,659 per day
-Daily Money Kept:        $4,244 per day
-Daily Rooms Booked:      57 rooms per day
-```
-
-### Property Breakdown
-```
-Total Properties:        25 hotels
-Average per property:    $40,450 gross revenue
-Average occupancy:       57.8% across all 25 properties
-```
-
-### Payment Method Breakdown (Most Popular First)
-```
-1. Mastercard:    $489,660 (44.4%)
-2. Visa:          $362,901 (32.9%)
-3. Cash:          $97,698  (8.9%)
-4. Amex:          $80,529  (7.3%)
-5. Direct Bill:   $47,310  (4.3%)
-6. Discover:      $18,833  (1.7%)
-7. Other:         $6,489   (0.6%)
-8. Check:         $690     (0.1%)
-
-Total:           $1,104,112
-
-Interesting: Credit cards = 85.7% of all payments
-            Cash = only 8.9%
-            Checks = almost extinct (0.1%)
-```
-
-### Monthly Breakdown (What Each Month Looked Like)
-```
-January:   $156,000 (coldest month, fewest rooms booked)
-February:  $142,000
-March:     $148,000
-April:     $165,000 (spring break)
-May:       $180,000 (summer starting)
-June:      $198,000 (peak summer)
-July:      $201,000 (peak season, most rooms booked)
-August*:   $21,000 (only 2 days data - partial month)
-(*Only 01 Aug - 02 Aug collected)
-
-Peak Month: July ($201,000)
-Slowest Month: February ($142,000)
-Difference: $59,000 (42% more in peak season)
-```
-
-## Deep Dive Into Each Problem
-
-### ✅ PROBLEM #1: Duplicate Column Names (DETAILED)
-
-**What Happened:**
-When hotel data is exported from HotelKey, sometimes two columns have the same name.
-
-**Real Example:**
-```
-HotelKey Export Header:
-Name, Amount, Name, Date
-
-HotelKey Data:
-John Doe, 100, Room 105, 2026-08-01
-
-Old Code Did This:
-✓ Read "Name" = "John Doe"
-✓ Read "Amount" = 100
-✓ Read "Name" = "Room 105" ← Overwrote "John Doe"!
-✗ Lost "John Doe" forever!
-
-New Code Does This:
-✓ Read "Name_1" = "John Doe"
-✓ Read "Amount" = 100
-✓ Read "Name_2" = "Room 105"
-✓ Both preserved!
-```
-
-**Who Found It:** Claude (AI auditor)
-**When Found:** 2026-08-15
-**Severity:** HIGH (data loss = business critical)
-**Impact:** Affected every CSV import with duplicate headers
-**Files Changed:** src/lib/csvParser.js (line 183)
-**Lines Changed:** 1 line
-**Commit:** c50435c
-**Status:** ✅ FIXED 2026-08-18
-
-**How The Fix Works:**
-```javascript
-// OLD CODE (Wrong)
-const obj = {};
-headers.forEach((h, i) => {
-  obj[h] = row[i];  // If "Name" appears twice, second one overwrites first
-});
-
-// NEW CODE (Right)
-const obj = {};
-headers.forEach((h, i) => {
-  if (obj.hasOwnProperty(h)) {
-    // If column already exists, add a number
-    obj[h + "_" + (i + 1)] = row[i];
-  } else {
-    obj[h] = row[i];
-  }
-});
-// Result: obj["Name_1"] and obj["Name_2"] both exist!
-```
-
-**Proof It's Fixed:**
-```
-Test: probe-csv-data-loss.mjs
-✓ Assertion 1: Duplicate columns are renamed ✅
-✓ Assertion 2: No data is lost ✅
-✓ Assertion 3: All columns are preserved ✅
-✓ Assertion 4: Extra cells are captured ✅
-
-Test Results: 115/115 transactions verified ✅
-```
-
-**Why This Matters:**
-Without this fix, hotel revenue could be missing from reports.
-$1,000 room stay could be lost if names are duplicated.
-
-**Real World:** This happened to 25 hotels for several months
-           before we caught it.
-
----
-
-### ✅ PROBLEM #2: Password Sent In Email (DETAILED)
-
-**What Happened:**
-When a new employee signs up, the system sent an email:
-
-```
-From: Red Roof Intelligence
-To: john@hotel.com
-Subject: Your Account Created!
-
-Your account has been created.
-Your temporary password is: MySecurePass123
-
-Please log in immediately.
-```
-
-**The Security Problem:**
-```
-1. Email is sent (not encrypted)
-2. Email sits in Gmail/Outlook forever
-3. If hacker breaks into email account, password is visible
-4. Hacker logs in as that employee
-5. Hacker accesses all 25 hotels' data
-
-Risk Level: CRITICAL ⚠️
-```
-
-**What We Changed:**
-```
-OLD Email:
-"Your password is: MySecurePass123"
-
-NEW Email:
-"Click here to set your own password:
-https://redroofintell.com/reset-password?token=abc123xyz789
-
-This link expires in 7 days."
-```
-
-**How The New System Works:**
-```
-1. User signs up
-2. System generates random 32-byte token
-3. System hashes the token (one-way encryption)
-4. System stores hash in database
-5. System emails link with token (link expires in 7 days)
-6. User clicks link
-7. User enters new password (only they know)
-8. Token is deleted, password is stored (encrypted)
-9. User logs in with password they created
-
-Security Level: MUCH SAFER ✅
-```
-
-**Files Changed:**
-- base44/functions/custom_auth_register/entry.js (lines 209-217)
-
-**Commit:** f07245e
-**Status:** ✅ FIXED 2026-08-18
-
-**Why This Approach:**
+Hotel data (CSV files) --> Server Calculates --> Dashboard (React UI)
+(HotelKey PMS)             (Base44 Backend)      (What you see)
 ```
-Method A: Send temporary password
-- Con: Password visible in email
-- Con: User never changes it
-- Con: High security risk
 
-Method B: Send reset link (what we use)
-- Pro: Link expires in 7 days (temporary)
-- Pro: Only works once
-- Pro: User creates their own password
-- Pro: Password never sent in email
-- Pro: Industry standard
-```
+### Who Uses It
+| Person | Role | What They Do |
+|--------|------|-------------|
+| Divyesh | Hotel Owner | Checks dashboard daily, makes business decisions |
+| AI Agents | Developers | Build features, fix bugs, write tests |
+| Accountants | Finance | Track money, reconcile, audit |
+| Front Desk | Staff | Import daily reports, manage rooms |
 
-**Proof It's Fixed:**
+### Real Numbers (Actual Data: Jan 1 - Aug 2, 2026)
 ```
-Test: probe-welcome-email.mjs
-✓ Assertion 1: Email contains reset link ✅
-✓ Assertion 2: Email does NOT contain password ✅
-
-Auth Tests: 105/105 passed ✅
+Total Gross Revenue:    $1,011,258.17
+Total Money Kept:       $920,829.00
+Total Rooms Booked:     12,362
+Properties:             25 hotels
+Occupancy Rate:         57.8%
+Average Room Rate:      $81.80
+Profit Margin:          91.1%
 ```
 
 ---
 
-### ✅ PROBLEM #3: Money Kept Shows $0 (The Typo!) (DETAILED)
-
-**What Happened:**
-Hotel owner looked at dashboard and saw:
+# 2. HOW EVERYTHING CONNECTS
 
 ```
-Gross Revenue:    $1,011,258  ✅ Correct
-Money Kept:       $0          ❌ WRONG!
-Expected:         $920,829    (91.1% profit)
+USER'S BROWSER                          BASE44 CLOUD SERVER
++------------------------+             +------------------------+
+|                        |             |                        |
+|  React Frontend        |  <- HTTP -> |  19 Serverless         |
+|  (src/)                |             |  Functions             |
+|                        |             |  (base44/functions/)   |
+|  +------------------+  |             |                        |
+|  | 36 Pages         |  |             |  +------------------+  |
+|  | 40+ Components   |  |             |  | 16 Database      |  |
+|  | 90+ Libraries    |  |             |  | Tables           |  |
+|  +------------------+  |             |  | (base44/         |  |
+|                        |             |  |  entities/)      |  |
+|  Local IndexedDB       |             |  +------------------+  |
+|  (offline dev only)    |             |                        |
++------------------------+             |  Google Drive          |
+                                       |  (backup connector)    |
+                                       |                        |
+                                       |  OpenWeather API       |
+                                       |  (weather widget)      |
+                                       +------------------------+
 ```
 
-**The Investigation:**
-```
-Q: Why is Money Kept showing $0?
-
-Step 1: Check the formula
-Money Kept = Gross Revenue - Expenses
-Math: $1,011,258 - $50,287 - $23,816 - $16,325 = $920,829
-Formula is correct ✅
-
-Step 2: Check if data is being loaded
-Gross Revenue shows $1,011,258 ✅
-Money Kept shows $0 ❌
-
-Step 3: Check the code
-Found this in MoneyKept.jsx:
-const gross = sum(occRows, "room_revenue");
-
-Looking at occRows data structure:
-{
-  room_revenue: 1000,  ← This exists ✅
-  ...
-}
-
-Wait... let me check where occRows comes from...
-```
-
-**The Root Cause Found:**
-```
-File: src/lib/dailyAggregates.js
-Function: buildSyntheticRows()
-Line 183:
-
-total_revenue: revenue  ← WRONG NAME!
-
-Should be:
-room_revenue: revenue   ← CORRECT NAME!
-```
-
-**Why The Typo Caused Everything To Break:**
-```
-Dashboard asks: "Sum all the room_revenue values"
-
-But the data has: "total_revenue" (wrong name)
-
-Computer looks for "room_revenue" in the data...
-Doesn't find it...
-Returns undefined...
-Sum of undefined = 0
-
-Result: Money Kept = $0 (WRONG!)
-```
-
-**The Fix (One Line!):**
-```javascript
-// BEFORE (Line 183)
-total_revenue: revenue,
-
-// AFTER (Line 183)
-room_revenue: revenue,
-
-// That's it. One word. Solved entire problem.
-```
-
-**Impact:**
-```
-Before fix:
-- Dashboard shows: Money Kept = $0
-- Hotel owner sees: "I'm making no profit!" ❌
-- Actually: Hotel is making 91% profit ✅
-
-After fix:
-- Dashboard shows: Money Kept = $920,829
-- Hotel owner sees: "I'm making 91% profit!" ✅
-```
-
-**Files Changed:**
-- src/lib/dailyAggregates.js (line 183)
-
-**Commit:** [From document #12]
-**Status:** ✅ FIXED 2026-08-18
-
-**Proof It's Fixed:**
-```
-Test: probe-money-kept-fix.mjs
-✓ Assertion 1: room_revenue property exists ✅
-✓ Assertion 2: room_revenue is not undefined ✅
-✓ Assertion 3: total_revenue property is gone ✅
-
-Financial Tests: 115/115 transactions verified ✅
-Money Kept Dashboard: Now shows $920,829 ✅
-```
-
-**Lesson Learned:**
-One character typo can break an entire feature.
-Always double-check variable names!
-
----
-
-### ✅ PROBLEM #4: CSRF Cookie Not Secure (DETAILED)
-
-**What Is A Cookie?**
-A cookie is a small file that your browser keeps.
-It's like a digital note that remembers information about you.
-
-**Example:**
-```
-When you log in to Gmail:
-1. Gmail gives browser a cookie
-2. Cookie says: "This person is john@gmail.com"
-3. Browser keeps cookie
-4. Next time you visit Gmail, browser sends cookie
-5. Gmail says: "Oh, john@gmail.com is here. Let them in."
-```
-
-**CSRF Cookie Explained:**
-CSRF = Cross-Site Request Forgery (hacker attack)
-
-**The Attack (Without Protection):**
-```
-1. You log into Red Roof Intelligence
-2. Browser gets CSRF cookie
-3. You click on a link to evil-hacker-site.com (by accident)
-4. Hacker's website reads your CSRF cookie
-5. Hacker's website uses your cookie to make changes to YOUR hotel
-6. Hacker deletes your rates, changes prices, etc.
-
-Result: Your data is hacked! ❌
-```
-
-**The Old Problem:**
-```
-Cookie was named: csrf_token
-No special protection
-Any website could potentially read it
-
-Like leaving your house key on your porch
-Anyone walking by can grab it!
-```
-
-**The Fix:**
-```
-Cookie now named: __Host-csrf_token
-Plus mandatory security flag: Secure
-
-This means:
-✓ Only YOUR website can access it
-✓ Subdomains CANNOT access it
-✓ Must be sent over HTTPS (encrypted)
-✓ Cannot be stolen by evil-hacker-site.com
-
-Like putting your house key in a locked safe
-Only YOU have the combination!
-```
-
-**Technical Details:**
-```javascript
-// OLD CODE (Vulnerable)
-const secure = location.protocol === "https:" ? "; Secure" : "";
-document.cookie = `csrf_token=${token}; Path=/; SameSite=Lax${secure}`;
-
-Problems:
-- Name is just "csrf_token" (not __Host- protected)
-- Secure flag is conditional (missing on localhost)
-- Subdomains can overwrite this cookie
-
-// NEW CODE (Protected)
-document.cookie = `__Host-csrf_token=${token}; Path=/; SameSite=Lax; Secure`;
-
-Benefits:
-- __Host- prefix = extra protection
-- Secure flag = always present (RFC requirement)
-- SameSite=Lax = prevents cross-site attacks
-- No conditions = always safe
-```
-
-**Files Changed:**
-- src/lib/securityUtils.js (line 267-268)
-
-**Commit:** efc79d9
-**Status:** ✅ FIXED 2026-08-18
-
-**Proof It's Fixed:**
-```
-Test: probe-csrf-secure-flag.mjs
-✓ Assertion 1: Cookie has __Host- prefix ✅
-✓ Assertion 2: Cookie has Secure flag ✅
-✓ Assertion 3: Secure flag is mandatory ✅
-✓ Assertion 4: Works on localhost ✅
-
-Auth Tests: 105/105 passed ✅
-```
-
-**Why This Matters:**
-Without this fix, hackers could steal session data.
-With fix, your hotel data is protected.
-
----
-
-### ✅ PROBLEM #5: Revenue Paths Don't Match (DETAILED)
-
-**The Situation:**
-The system calculates hotel revenue THREE different ways:
+### The Three Revenue Paths (Critical!)
+The system calculates revenue THREE different ways and checks they match:
 
 ```
-Path 1: From imported CSV files
-Path 2: From detailed transaction records  
-Path 3: From cached daily aggregates
+Path 1: CSV Import --> GrossRevenueDay table --> Sum of room_revenue
+Path 2: CSV Import --> PaymentDay table --> Sum of all payment methods
+Path 3: CSV Import --> OccupancyDay table --> rooms_sold x ADR
 
-Question: Do all three give the same answer?
-```
-
-**Real Example:**
-```
-Path 1: "I added up all the CSV imports = $1,011,258"
-Path 2: "I added up all transactions = $1,011,257.50"
-Path 3: "I summed the daily cache = $1,011,260"
-
-Result: Three different numbers! 😱
-
-Which one is correct?
-What went wrong?
-Should we trust any of them?
-```
-
-**Why Three Paths Exist:**
-```
-Path 1 (CSV):
-- Input: HotelKey exported CSV files
-- Good for: Seeing what hotel exported
-- Problem: Might be outdated or incomplete
-
-Path 2 (Transactions):
-- Input: Detailed transaction ledger
-- Good for: Detailed audit trail
-- Problem: Takes longer to calculate
-
-Path 3 (Cache):
-- Input: Pre-calculated daily totals
-- Good for: Fast dashboard loading
-- Problem: Could be out of sync
-
-Solution: Check all three, alert if different
-```
-
-**The Old Problem:**
-```
-All three paths calculated independently
-No one checked if they matched
-Drift happened silently
-No alerts
-No one knew!
-
-Example disaster:
-- Dashboard shows: $1,000,000 revenue
-- Ledger shows: $999,000 revenue
-- $1,000 difference ignored
-- Repeats every day
-- Over a year: $365,000 missing!
-```
-
-**The Solution (What We Built):**
-```
-Created RevenueReconciliation Service
-
-Step 1: Collect all three path results
-Step 2: Compare them
-Step 3: Tolerance check (allow $0.01 rounding)
-Step 4: If all match: ✅ PASS (trust the number)
-Step 5: If different: 🚨 ALERT (investigate)
-Step 6: Return authoritative number (average of 3)
-
-Example:
-Path 1: $1,011,258.00
-Path 2: $1,011,257.50
-Path 3: $1,011,258.00
-─────────────────────
-Average: $1,011,257.83
-Drift: 50 cents (within tolerance)
-Status: ✅ PASS
-```
-
-**Files Changed:**
-- src/lib/RevenueReconciliation.js (NEW, 150+ lines)
-- src/lib/financialReconciliation.js (integration)
-
-**Commit:** [From document #14]
-**Status:** ✅ FIXED 2026-08-18
-
-**Proof It's Fixed:**
-```
-Test: probe-revenue-reconciliation.mjs
-✓ Assertion 1: All paths matching detected ✅
-✓ Assertion 2: Drift detected when present ✅
-✓ Assertion 3: Tolerance threshold works ✅
-✓ Assertion 4: Authoritative value calculated ✅
-✓ Assertion 5: Audit log created ✅
-✓ Assertion 6: Log history available ✅
-
-Financial Tests: 115/115 verified ✅
-```
-
-**Real Impact:**
-```
-Before fix:
-- Drift happened silently
-- No alerts
-- Could lose thousands without knowing
-
-After fix:
-- System notices immediately
-- Sends alert to accounting team
-- Can investigate
-- Prevents loss of money
+All three MUST match (within $0.01). If they don't --> ALERT!
 ```
 
 ---
 
-### ⏳ PROBLEM #6: Float Math Precision (DETAILED)
+# 3. DIRECTORY MAP (Where Everything Lives)
 
-**The Problem Explained Simply:**
 ```
-Computer stores money as decimals (like 1234.56)
-Decimals have precision errors
-
-Example:
-0.1 + 0.2 should = 0.3
-But computer says: 0.30000000000000004
-
-With 25 hotels, errors add up:
-0.004 × 25 hotels = 0.1 penny per day
-0.1 × 365 days = $36.50 per year MISSING
-Over 5 years: $182.50 lost to rounding!
-
-With more transactions: Could be thousands!
+boston_project/
+|-- src/                          <-- FRONTEND (269 files)
+|   |-- App.jsx                   <-- App entry point, all routes defined here
+|   |-- main.jsx                  <-- React root render + production security check
+|   |-- crdt.jsx                  <-- Real-time sync provider (Yjs)
+|   |-- index.css                 <-- Global styles + Tailwind + dark theme tokens
+|   |-- api/
+|   |   |-- base44Client.js       <-- SDK client (auth, entities, data) PROTECTED
+|   |   +-- localDb.js            <-- Dexie/IndexedDB schema (v1-v22, 30+ tables)
+|   |-- components/               <-- Reusable UI pieces (40+ files)
+|   |   |-- dashboard/            <-- Dashboard widgets (MoneyKept, RevenueTrend, etc.)
+|   |   |-- charts/               <-- Chart components (PieDonut, UniversalChart)
+|   |   |-- compare/              <-- Multi-property comparison
+|   |   |-- finance/              <-- Ledger, commissions
+|   |   |-- ui/                   <-- Shadcn UI primitives (50+ files)
+|   |   +-- ui-exec/              <-- Executive-styled cards (KpiCard, RangePicker)
+|   |-- hooks/                    <-- Custom React hooks (use-mobile, use-size, etc.)
+|   |-- lib/                      <-- Business logic engines (90+ files)
+|   |   |-- calculationService.js <-- Main financial calculator (ADR, RevPAR, etc.)
+|   |   |-- csvParser.js          <-- CSV import parser (handles duplicate columns)
+|   |   |-- dailyAggregates.js    <-- Daily summary builder (the room_revenue typo was here)
+|   |   |-- RevenueReconciliation.js <-- 3-path revenue checker
+|   |   |-- decimal.js            <-- Integer-cents math (prevents float errors)
+|   |   |-- fraudScoringEngine.js <-- Anomaly detection (Benford's Law, z-score)
+|   |   |-- anomalyDetector.js    <-- Statistical outlier detection (Welford's algo)
+|   |   |-- pricingEngine.js      <-- Dynamic room pricing (elasticity, demand)
+|   |   |-- universalParser.js    <-- Multi-grid streaming CSV parser
+|   |   |-- parser.worker.js      <-- Web Worker for CSV parsing (off main thread)
+|   |   |-- securityUtils.js      <-- CSRF, rate limiting, audit PROTECTED
+|   |   |-- AuthContext.jsx       <-- Auth provider, session mgmt PROTECTED
+|   |   |-- security.js           <-- Password hashing, MFA PROTECTED
+|   |   |-- permissions.js        <-- RBAC role system PROTECTED
+|   |   |-- deleteGuard.js        <-- Safe deletion: Confirm -> Rate-Limit -> CSRF
+|   |   |-- launchPolicy.js       <-- Production launch restrictions
+|   |   |-- crdtSync.js           <-- Yjs CRDT real-time sync
+|   |   +-- ... (90+ total files)
+|   |-- pages/                    <-- Full-page views (36 files)
+|   |   |-- Dashboard.jsx         <-- Main dashboard
+|   |   |-- Login.jsx             <-- Login page PROTECTED
+|   |   |-- Import.jsx            <-- CSV file upload
+|   |   |-- Payroll.jsx           <-- Employee payroll
+|   |   |-- Housekeeping.jsx      <-- Room status board
+|   |   +-- ... (36 total)
+|   +-- test/                     <-- Frontend test suites
+|
+|-- base44/                       <-- BACKEND (43 files)
+|   |-- config.jsonc              <-- Build commands + security headers (CSP, HSTS)
+|   |-- .app.jsonc                <-- Cloud app ID link (6a7d6856ee1cc714b1803c0e)
+|   |-- auth/config.jsonc         <-- Auth methods (password + Google OAuth)
+|   |-- connectors/
+|   |   +-- googledrive.jsonc     <-- Google Drive OAuth setup
+|   |-- entities/                 <-- DATABASE TABLES (16 .jsonc files)
+|   |   |-- User.jsonc            <-- Users, roles, scrypt passwords, MFA secrets
+|   |   |-- Session.jsonc         <-- Active login sessions (SHA-256 token hash)
+|   |   |-- Property.jsonc        <-- Hotel properties (code, name, rooms)
+|   |   |-- OccupancyDay.jsonc    <-- Daily room stats (sold, vacant, ADR, RevPAR)
+|   |   |-- GrossRevenueDay.jsonc <-- Daily revenue by department
+|   |   |-- PaymentDay.jsonc      <-- Daily payment method breakdown
+|   |   |-- AuditLog.jsonc        <-- Tamper-proof security log (APPEND-ONLY)
+|   |   +-- ... (16 total)
+|   |-- functions/                <-- SERVERLESS FUNCTIONS (19 folders)
+|   |   |-- custom_auth_login/    <-- Login with MFA + rate limiting (5/15min)
+|   |   |-- custom_auth_register/ <-- User registration + owner bootstrap
+|   |   |-- audit_log/            <-- SHA-256 HMAC chained audit entries
+|   |   |-- audit_clear/          <-- ALWAYS returns 403 (audit can NEVER be cleared)
+|   |   |-- autoPayroll/          <-- Monthly auto-payroll (last day of month)
+|   |   |-- aiAssistant/          <-- AI chatbot with anti-jailbreak prompts
+|   |   |-- backupToDrive/        <-- Google Drive backup with SSRF protection
+|   |   +-- ... (19 total)
+|   +-- lib/                      <-- Shared backend libraries
+|       |-- corsConfig.js         <-- CORS origin validator
+|       +-- securityHeaders.js    <-- CSP + security header generator
+|
+|-- scripts/                      <-- TEST & VERIFICATION (106 files)
+|   |-- _loader-boot.mjs          <-- Node test bootstrap (aliases, browser shims)
+|   |-- _harness-auth.mjs         <-- Creates test Owner account
+|   |-- acceptance-harness.mjs    <-- Runs ALL probe tests
+|   |-- probe-*.mjs               <-- 20+ individual probe tests
+|   |-- stubs/                    <-- Base44 SDK mocks for testing
+|   |   |-- base44-runtime.mjs    <-- In-memory serverless host mock
+|   |   +-- base44-sdk.mjs        <-- In-memory SDK mock with sorting
+|   +-- data/                     <-- 19 real CSV test files from actual hotels
+|
+|-- backend/                      <-- STANDALONE SERVICES (2 files)
+|   |-- webhooks.js               <-- Webhook ingestion + HMAC signature verify
+|   +-- websocket.js              <-- Yjs real-time sync server + auth + CSWSH defense
+|
+|-- public/                       <-- STATIC FILES (icons, manifest)
+|
+|-- BRAIN.md                      <-- THIS FILE (you are here!)
+|-- AI_CORE_RULES.md              <-- AI operating rules
+|-- PROTECTED_FILES.md            <-- Files AI cannot edit
+|-- AGENTS.md                     <-- Gemini/Antigravity agent rules
+|-- CLAUDE.md                     <-- Claude/OpenCode agent rules
+|-- BUSINESS.md                   <-- Hotel business rules + LLM prompts (52 KB)
+|-- LAUNCH_READINESS_CHECKLIST.md <-- Master audit report (101 KB, most detailed doc)
++-- (other docs...)
 ```
-
-**How Money Should Be Stored:**
-```
-WRONG WAY (Current):
-Store: $1234.56 as 1234.56 (decimal)
-Add: 1234.56 + 567.89 = 1802.44999999999 ❌
-
-RIGHT WAY (Need to fix):
-Store: $1234.56 as 123456 (cents)
-Add: 123456 + 56789 = 180245 (cents)
-Convert back: 180245 cents = $1802.45 ✅
-
-No decimals = No precision errors!
-```
-
-**Why This Matters:**
-```
-Accountants expect exact numbers
-Banking standard is integer cents
-Financial regulations require precision
-Rounding errors = audit failures
-
-If IRS finds $182.50 missing, that's a problem!
-```
-
-**The Fix (What We Need To Do):**
-```
-Step 1: Find all money variables
-Step 2: Change from decimal to integer cents
-Step 3: Update all calculations
-Step 4: Update all displays
-Step 5: Test everything
-
-Example code change:
-
-// OLD (Wrong)
-let money = 1234.56;  // decimal
-money = money + 567.89;
-console.log(money);  // 1802.45000000001 ❌
-
-// NEW (Right)
-let money = 123456;   // cents
-money = money + 56789;
-console.log(money / 100);  // 1802.45 ✅
-```
-
-**Files That Need Changing:**
-```
-- src/lib/calculationService.js (all math)
-- src/lib/financialReconciliation.js
-- src/pages/dashboard/MoneyKept.jsx
-- src/lib/hotel.js (all financial operations)
-- Anywhere money is calculated
-```
-
-**Status:** ⏳ PENDING (Not fixed yet)
-**Severity:** HIGH (affects accuracy)
-**Estimated Time:** 2-3 hours to fix
-**Testing:** Need to verify 100+ calculations
 
 ---
 
-### ⏳ PROBLEM #7: Wrong Error Message (DETAILED)
+# 4. ALL 36 PAGES (What Users See)
 
-**What Goes Wrong:**
-```
-User is disabled in the system
-System says: "You are revoked"
-Actually: User should see "Your account is disabled"
+Every page in the app, what it does, and what files it depends on.
 
-Wrong message confuses the user!
-```
+### Main Dashboard
+| Page | File | What It Does | Key Dependencies |
+|------|------|-------------|-----------------|
+| **Dashboard** | `src/pages/Dashboard.jsx` | Main scoreboard: revenue, occupancy, profit, charts | `MoneyKept`, `PaymentMethodChart`, `RevenueTrend`, `PropertyRanking`, `OtaMatrix`, `ExecutiveCharts`, `LowOccAlert`, `WeatherPanel`, `YieldAdvisor`, `PricingPanel` |
+| **Statistics** | `src/pages/Statistics.jsx` | Detailed stats with filters, MTD, YTD comparisons | `statisticsAnalytics.js`, `columnarAnalytics.js` |
+| **Compare** | `src/pages/Compare.jsx` | Side-by-side property and period comparison | `CompareBars`, `CompareCard`, `ChannelRevenue` |
+| **MtdGrowth** | `src/pages/MtdGrowth.jsx` | Month-to-date growth velocity tracking | `calculationService.js` |
+| **Forecasting** | `src/pages/Forecasting.jsx` | Predict future revenue (1, 7, 30, 90 day) | `forecasting.js` |
 
-**Technical Detail:**
-```
-Backend (database) knows: "User is disabled"
-Frontend (dashboard) shows: "User is revoked"
+### Operations
+| Page | File | What It Does | Key Dependencies |
+|------|------|-------------|-----------------|
+| **Import** | `src/pages/Import.jsx` | Upload CSV files from HotelKey, auto-classify, atomic undo | `csvParser.js`, `universalParser.js`, `parser.worker.js`, `importValidation.js`, `reportParsers.js` |
+| **ManualEntry** | `src/pages/ManualEntry.jsx` | Enter data by hand, copy-paste from spreadsheets | `manualEntryImport.js` |
+| **Housekeeping** | `src/pages/Housekeeping.jsx` | Room status board (clean/dirty/inspected), maid assignment | `housekeepingService.js`, `housekeepingConfig.js`, `laborOptimization.js` |
+| **RoomBoard** | `src/pages/RoomBoard.jsx` | Visual room grid: check-in/out, real-time CRDT sync | `roomBoard.js`, `crdtSync.js`, `pricingEngine.js` |
+| **MonthlyCalendar** | `src/pages/MonthlyCalendar.jsx` | Heatmap calendar: daily occupancy + revenue tiers | `revenueThresholds.js`, `hotel.js` |
 
-Data is lost between backend and frontend!
+### Finance
+| Page | File | What It Does | Key Dependencies |
+|------|------|-------------|-----------------|
+| **Transactions** | `src/pages/Transactions.jsx` | Detailed guest transaction ledger | `transactionAnalytics.js`, `transactionNorm.js` |
+| **Payments** | `src/pages/Payments.jsx` | Payment method breakdown (card/cash/check) | `paymentNorm.js`, `taxConfig.js`, `reconciliationExport.js` |
+| **Expenses** | `src/pages/Expenses.jsx` | Operating expense tracking, P&L rollup | `expenseCategories.js`, `deleteGuard.js` |
+| **OtaChannels** | `src/pages/OtaChannels.jsx` | OTA performance: net margin by channel | `commissionRates.js`, `pdfExport.js` |
+| **ChannelManager** | `src/pages/ChannelManager.jsx` | Channel commission configuration | `commissionRates.js` |
 
-Like a phone call:
-- Speaker says: "User is disabled"
-- Listener hears: "User is revoked"
-- Message got garbled!
-```
+### Staff & Payroll
+| Page | File | What It Does | Key Dependencies |
+|------|------|-------------|-----------------|
+| **Employees** | `src/pages/Employees.jsx` | Staff roster, clerk cash variance audit, anomaly sign-off | `anomalyDetector.js`, `anomalySignoff.js`, `ClerkAuditMatrix` |
+| **Payroll** | `src/pages/Payroll.jsx` | Payroll register: hourly/salary, overtime, compensation | `payrollCalc.js`, `timecardCalc.js`, `employeeId.js`, `deleteGuard.js` |
 
-**The Fix:**
-```
-Pass error reason from database to user's screen
+### Analytics & Intelligence
+| Page | File | What It Does | Key Dependencies |
+|------|------|-------------|-----------------|
+| **DataIntelligence** | `src/pages/DataIntelligence.jsx` | CSV health scoring, cross-report consistency, AI diagnostics | `dataScanner.js`, `aiInsights.js` |
+| **DataTemplate** | `src/pages/DataTemplate.jsx` | CSV template reference + sample generator | None |
+| **ChartBuilder** | `src/pages/ChartBuilder.jsx` | Custom chart creator (grouping, aggregation, multi-chart) | `chartExport.js`, `UniversalChart` |
+| **Pricing** | `src/pages/Pricing.jsx` | Dynamic pricing recommendations + overrides | `pricingEngine.js`, `pricingOverride.js`, `pricingSettings.js` |
+| **ActionCenter** | `src/pages/ActionCenter.jsx` | Automated alerts: Fix Today / Investigate / Opportunity | `actionCenter.js`, `alertEngine.js`, `anomalyDetector.js` |
+| **Reviews** | `src/pages/Reviews.jsx` | Guest review sentiment scoring + reputation | `reputationService.js` |
 
-Backend must say: "disabled" or "revoked" or "expired"
-Frontend must show exactly what backend said
-No garbling, no changes, just pass it through
-```
-
-**Status:** ⏳ PENDING
-**Files Affected:** 
-- src/lib/AuthContext.jsx
-- base44/functions/custom_auth_me/entry.js
-
----
-
-### ⏳ PROBLEM #8: Session Never Times Out (DETAILED)
-
-**What Is A Session?**
-```
-Session = How long you're logged in
-
-Example (grocery store):
-1. Get loyalty card (log in)
-2. Shop for 2 hours (session active)
-3. Leave store (log out)
-4. Come back tomorrow (new session)
-
-Website sessions:
-1. Log in to Red Roof Intelligence
-2. Session starts
-3. You work on the dashboard
-4. You go to lunch (leave computer on)
-5. Hacker sits at your computer
-6. They can access everything! ❌
-
-Why? Because session never timed out!
-```
-
-**The Problem:**
-```
-Current system:
-- User logs in
-- Session starts
-- Session NEVER expires
-- Even after 8 hours away
-- Computer still logged in
-- Anyone can access it!
-
-Like leaving your car running, doors unlocked
-for 24 hours!
-```
-
-**The Solution:**
-```
-Session should timeout after:
-- 30 minutes of no activity (auto logout)
-- Or refresh token every 5 minutes (sliding window)
-- Or both!
-
-If user inactive 30 min:
-✓ Automatically log them out
-✓ Next action requires login
-✓ Hacker can't get in
-```
-
-**How It Would Work:**
-```
-1. User logs in at 9:00 AM
-2. Session expires: 9:30 AM
-3. If no activity by 9:30: Auto logout ✅
-4. If user active at 9:29: Reset timer to 9:59 ✅
-5. Repeat every 30 minutes
-
-Result: No unauthorized access!
-```
-
-**Status:** ⏳ PENDING
-**Files Affected:**
-- src/api/base44Client.js (session functions)
-- src/lib/AuthContext.jsx
-
-**Severity:** HIGH (security)
+### Admin & Security
+| Page | File | What It Does | Key Dependencies |
+|------|------|-------------|-----------------|
+| **Login** | `src/pages/Login.jsx` PROTECTED | Sign in with MFA, remember-me | `AuthContext.jsx`, `security.js`, `MFASetup` |
+| **Setup** | `src/pages/Setup.jsx` PROTECTED | First-run owner creation wizard | `AuthContext.jsx`, `security.js`, `validator.js` |
+| **ForgotPassword** | `src/pages/ForgotPassword.jsx` PROTECTED | Request password reset (anti-enumeration) | `securityUtils.js`, `validator.js` |
+| **ResetPassword** | `src/pages/ResetPassword.jsx` PROTECTED | Execute password reset (token + complexity) | `security.js`, `securityUtils.js` |
+| **ChangePassword** | `src/pages/ChangePassword.jsx` | Change own password with strength check | `security.js`, `securityUtils.js`, `AuthContext.jsx` |
+| **Users** | `src/pages/Users.jsx` | User management: invitations, roles, lockouts, MFA | `permissions.js`, `security.js` |
+| **AuditLog** | `src/pages/AuditLog.jsx` | Security audit log viewer + chain verification | `securityUtils.js`, `auditFilter.js` |
+| **Settings** | `src/pages/Settings.jsx` | App settings: commissions, alerts, taxes, MFA | `commissionRates.js`, `alertThresholds.js`, `taxSettings.js` |
+| **PrivacyPolicy** | `src/pages/PrivacyPolicy.jsx` | Legal page | None |
+| **TermsOfService** | `src/pages/TermsOfService.jsx` | Legal page | None |
+| **DemoYDoc** | `src/pages/DemoYDoc.jsx` | Real-time CRDT sync demo | `crdt.jsx` |
 
 ---
 
-### ⏳ PROBLEM #9: Server Code in Frontend Folder (DETAILED)
-
-**The Problem:**
-```
-Backend code (should run on server only)
-is sitting in frontend folder (runs in browser)
-
-Like leaving your house keys on your porch
-where everyone can see them!
-```
-
-**Real Example:**
-```
-File: src/lib/corsConfig.js
-This file contains: CORS security rules
-
-Problem: Browser loads this file
-Result: Hacker can see your security config
-        and find ways around it!
-
-Same problem with:
-src/lib/securityHeaders.js
-```
-
-**What CORS Is:**
-```
-CORS = Cross-Origin Resource Sharing
-
-It controls: "Who can access my server?"
-
-Should be:
-✓ Only known websites
-✗ Not in browser where anyone can see it
-✗ Not in frontend code
-```
-
-**The Fix:**
-```
-Move to backend:
-FROM: src/lib/corsConfig.js
-TO: base44/lib/corsConfig.js
-
-Result:
-✓ Hacker can't see it
-✓ Only server knows about it
-✓ Much more secure
-```
-
-**Status:** ⏳ PENDING
-**Files Affected:**
-- src/lib/corsConfig.js (move to backend)
-- src/lib/securityHeaders.js (move to backend)
-
-**Severity:** MEDIUM (configuration leak)
-
-## Troubleshooting (What If Something Goes Wrong?)
-
-### Problem: Dashboard Shows Wrong Numbers
-
-**Possible Causes:**
-1. Revenue paths not matching (revenue drift)
-   → Check BRAIN.md Section 5 (Problem #5)
-   
-2. Float math errors
-   → Check BRAIN.md Section 14 (Problem #6)
-   
-3. Data not loaded correctly
-   → Check CSV import process
-   → Verify HotelKey export settings
-
-**How To Fix:**
-```
-Step 1: Search logs for errors
-Step 2: Run financial tests
-Step 3: Check revenue reconciliation alerts
-Step 4: Verify all three paths
-Step 5: Investigate which path is wrong
-```
-
-### Problem: User Can't Log In
-
-**Possible Causes:**
-1. Password was reset before
-   → User has old password
-   → Send password reset email
-   
-2. Account disabled
-   → Check error message (Problem #7)
-   → Contact admin to re-enable
-   
-3. Session expired
-   → User was inactive > 30 min
-   → Clear browser cache, try again
-
-**How To Fix:**
-```
-Step 1: Send password reset link
-Step 2: Wait 5 minutes
-Step 3: Try again
-Step 4: If still fails, check database
-```
-
-### Problem: Money Calculation Wrong
-
-**Possible Causes:**
-1. Float math error (Problem #6)
-   → Small rounding errors
-   → Should be < $0.01 per day
-   
-2. Expense not included
-   → Check all expense categories
-   → Verify percentages sum to 100%
-
-**How To Fix:**
-```
-Step 1: Run calculation tests
-Step 2: Verify all expense categories
-Step 3: Check for float errors
-Step 4: Reconcile with accounting
-```
-
-### Problem: Dashboard Loads Slow
-
-**Possible Causes:**
-1. Too much data
-   → Try shorter date range
-   → Filter by specific property
-   
-2. Browser cache full
-   → Clear browser cache
-   → Restart browser
-
-**How To Fix:**
-```
-Step 1: Check network speed
-Step 2: Clear browser cache
-Step 3: Try different date range
-Step 4: Use incognito mode
-Step 5: Try different browser
-```
-
-### Problem: Revenue Paths Don't Match (Drift Detected!)
-
-**This Is Important!**
-
-**Possible Causes:**
-1. New transactions arrived
-   → Revenue updated but cache not
-   → Cache should auto-update
-   → Wait 5 minutes, refresh
-   
-2. CSV import error
-   → Data corrupted during import
-   → Re-export from HotelKey
-   → Try importing again
-   
-3. Manual entry discrepancy
-   → Someone manually changed a value
-   → Check audit log for who
-   → Contact that person
-
-**How To Fix:**
-```
-Step 1: Note the drift amount (how much difference)
-Step 2: Check which path is wrong
-Step 3: Investigate that path's data
-Step 4: Reconcile with source
-Step 5: Document what happened
-Step 6: Prevent in future
-```
-
-**Critical:** Never ignore revenue drift!
-           It could mean thousands missing.
-
-## Technology Explained (Not Scary!)
-
-### React (The Dashboard Engine)
-```
-What is it? A library for building interactive websites
-What's it do? Makes the dashboard show up and respond to clicks
-Real analogy: Like a smart TV remote
-              Button → Screen changes
-              Same concept!
-Why we use it? Very popular, lots of support
-```
-
-### recharts (The Chart Maker)
-```
-What is it? A library for making beautiful charts
-What's it do? Takes data → Makes pie charts, bar charts
-Real analogy: Like Microsoft Excel
-              But prettier and interactive
-Why we use it? Easy to use, looks professional
-```
-
-### base44 (The Backend System)
-```
-What is it? A backend framework for building servers
-What's it do? Handles logins, data storage, calculations
-Real analogy: Like a restaurant kitchen
-              Backend = Kitchen (hidden, does the work)
-              Frontend = Dining room (what customers see)
-Why we use it? Built for exactly this type of system
-```
-
-### HotelKey (The Data Source)
-```
-What is it? Hotel management system used by real hotels
-What's it do? Tracks rooms, reservations, payments
-Real analogy: Like a filing cabinet for hotel data
-              Every room, every guest, every payment recorded
-Why we use it? Industry standard, trusted by hotels
-```
-
-### Gemini AI (The Code Writer)
-```
-What is it? Artificial intelligence that writes code
-What's it do? Fixes bugs, adds features, writes tests
-Real analogy: Like hiring a super-smart programmer
-              Works 24/7, never gets tired, costs $20/month
-Why we use it? Fast, affordable, good quality
-```
-
-### Git (The Time Machine)
-```
-What is it? Version control system
-What's it do? Saves every change we make
-              Lets us go back in time if needed
-Real analogy: Like having multiple save files in a video game
-              "Oops, that broke something, load the last save!"
-Why we use it? Never lose work, always know who changed what
-```
-
-## Project Timeline (The Story)
-
-### 2026 (Year Started)
-- January: Divyesh decides he needs a hotel dashboard
-- February: Hiring AI to help build it
-- March: Started building basic charts
-- April: Database schema designed
-- May: CSV parser built
-- June: Dashboard prototype working
-- July: Found major bugs
-
-### 2026-08-15 (Audit Happened)
-Claude reviewed entire system
-Found 11 major defects:
-1. CSV duplicate columns ❌
-2. Plaintext passwords in email ❌
-3. Money Kept shows $0 ❌
-4. CSRF cookie not secure ❌
-5. Revenue paths don't match ❌
-6. Float math errors ❌
-7. Wrong error messages ❌
-8. Sessions never timeout ❌
-9. Server code in frontend ❌
-(+ 2 more minor issues)
-
-### 2026-08-16 to 2026-08-18 (First Fixes)
-Defect #1: FIXED ✅ (CSV duplicate columns)
-Defect #2: FIXED ✅ (Password in email)
-Defect #3: FIXED ✅ (Money Kept typo)
-Defect #4: FIXED ✅ (CSRF cookie)
-Defect #5: FIXED ✅ (Revenue reconciliation)
-
-### 2026-08-18 to 2026-08-25 (Expected)
-Defect #6: Working on it (Float math)
-Defect #7: Working on it (Error message)
-Defect #8: Working on it (Session timeout)
-Defect #9: Working on it (Server code)
-
-### 2026-08-25 (Target)
-All defects fixed ✅
-Dashboard ready for production 🎉
-Ready to launch to real hotels
-
-### 2026-09-01 (Next Phase)
-Deploy to first hotel property
-Monitor for issues
-Scale to all 25 properties
-
-## Before & After Comparison
-
-### Before All Fixes ❌
-
-Dashboard would show:
-```
-Gross Revenue:       $1,011,258 (Correct)
-Money Kept:          $0         (WRONG!)
-Security:            Weak (cookies not protected)
-Password Email:      Plaintext password sent (BAD!)
-Revenue Paths:       Mismatched, no alerts
-Data Loss:           Could happen with duplicate columns
-Session Timeout:     Never (security risk)
-Error Messages:      Confusing, wrong info
-```
-
-### After All Fixes ✅
-
-Dashboard will show:
-```
-Gross Revenue:       $1,011,258 ✅
-Money Kept:          $920,829   ✅ (91.1% profit)
-Security:            Strong (RFC compliant)
-Password Email:      Reset link sent (SAFE!)
-Revenue Paths:       Match or alert on drift
-Data Loss:           Protected (duplicates handled)
-Session Timeout:     30 minutes inactive (SAFE!)
-Error Messages:      Clear, correct info
-```
-
-### Numbers Comparison
-
-| Metric | Before | After |
-|--------|--------|-------|
-| Security Score | 6/10 | 9/10 |
-| Data Loss Risk | HIGH | LOW |
-| Revenue Accuracy | 70% | 99.99% |
-| Session Security | POOR | GOOD |
-| User Trust | Declining | Rising |
-
-## Budget Breakdown (How Much Is This Costing?)
-
-### Monthly Budget
-```
-Gemini AI ($20/month):
-- Unlimited defect fixes
-- 24/7 availability
-- Fast code generation
-- Testing & verification
-
-Alternative (Hiring programmer):
-- $5,000+ per month
-- 40 hours/week
-- Takes vacations
-- Benefits, taxes, overhead
-
-Savings: $4,980/month! 💰
-```
-
-### Token Usage
-```
-Total Budget:        2,000,000 tokens
-Used So Far:         ~910,000 tokens (45%)
-Remaining:           ~1,090,000 tokens (55%)
-
-Cost So Far:         ~$0.07
-Remaining Budget:    ~$19.93
-Status:              Plenty left ✅
-
-Defects Done:        5 (used ~910k tokens)
-Defects Remaining:   4 (estimate ~400k tokens needed)
-Buffer:              ~690k tokens (extra)
-```
-
-### Time Investment
-```
-Planning & Design:   8 hours
-Building Features:   40 hours
-Finding Bugs:        6 hours
-Fixing Bugs:         12 hours
-Testing:             8 hours
-Documentation:       4 hours
-─────────────────
-Total:               78 hours
-Cost per hour:       $0.26 (20/month ÷ 78 hours)
-
-Programmer would cost:
-78 hours × $100/hour = $7,800
-Actual cost: $20
-Savings: $7,780! 🎉
-```
-
-### Time to Complete Remaining Defects
-```
-Defect #6 (Float math):      2-3 hours
-Defect #7 (Error message):   1-2 hours
-Defect #8 (Session):         3-4 hours
-Defect #9 (Server code):     1-2 hours
-Testing & Verification:      2-3 hours
-────────────────────
-Total:                       10-14 hours
-
-Expected completion:        2026-08-25
-```
-
-## Security Audit Results
-
-### Vulnerabilities Found: 5 Critical
-
-| # | Vulnerability | Severity | Status | Fix |
-|---|---|---|---|---|
-| 1 | CSRF token not protected | CRITICAL | ✅ FIXED | __Host- prefix + Secure |
-| 2 | Password in email | CRITICAL | ✅ FIXED | Reset link system |
-| 3 | Session no timeout | CRITICAL | ⏳ PENDING | Auto-logout after 30min |
-| 4 | Server code in browser | MEDIUM | ⏳ PENDING | Move to backend |
-| 5 | Float precision errors | MEDIUM | ⏳ PENDING | Use integer cents |
-
-### Security Score
-
-```
-Before Fixes: 6/10 (Many vulnerabilities)
-After Fixes:  9/10 (Most issues resolved)
-
-Remaining risks:
-- Session timeout (fix in progress)
-- Float precision (fix in progress)
-```
-
-### Compliance
-
-```
-✅ OWASP Top 10: 8/10 compliant
-✅ PCI DSS: Compliant (payment security)
-✅ GDPR: Compliant (data protection)
-⏳ Pending: Session management (in progress)
-
-Industry Standard: ISO 27001
-Current Status: 85% compliant
-```
-
-## More Questions & Answers (Extended FAQ)
-
-### Q: How do I know if the system is working correctly?
-
-**A:** You should see:
-- Gross Revenue = $1,011,258
-- Money Kept = $920,829
-- Occupancy = 57.8%
-- No error messages
-- All charts display
-
-If different: Something's wrong, contact support.
-
-### Q: What if revenue paths show different numbers?
-
-**A:** System will alert you automatically:
-"⚠️ Revenue reconciliation failed!"
-
-Then:
-1. Don't panic
-2. Check all three paths
-3. Find which one is wrong
-4. Investigate the data
-5. Reconcile manually
-6. Document what happened
-
-Example: Path 1 is right, Path 2 corrupted
-→ Re-import that path's data
-→ Test again
-
-### Q: How often should I refresh the dashboard?
-
-**A:** 
-- Manual refresh: Every 30 minutes
-- Auto-refresh: Every 5 minutes (when implemented)
-- After CSV import: Immediately (refresh now)
-
-### Q: Can I delete old data?
-
-**A:** NO! Historical data is permanent:
-- Needed for accounting
-- Needed for taxes
-- Needed for audits
-- Needed for trends
-
-Keep all data forever.
-
-### Q: What if I find an error in the numbers?
-
-**A:** 
-1. Screenshot the error
-2. Note the exact date/amount
-3. Note which property
-4. Email with details
-5. We'll investigate
-
-Don't try to "fix" it manually!
-
-### Q: How is my password stored?
-
-**A:** 
-- Never stored as plaintext
-- Encrypted with industry standard
-- Even we can't see it
-- Reset requires your email
-
-### Q: What happens if I forget my password?
-
-**A:**
-1. Click "Forgot Password"
-2. Enter your email
-3. Check your email
-4. Click the reset link
-5. Create new password
-6. Log in with new password
-
-Link expires in 7 days.
-
-### Q: Can someone else log into my account?
-
-**A:**
-- Only if they know your password
-- Password only you know
-- Reset link only works for your email
-- Session timeouts after 30 min
-- Sessions end when you close browser
-
-Pretty safe! ✅
-
-### Q: What if there's a security issue?
-
-**A:** Email immediately:
-- Describe the issue
-- What you were doing
-- When it happened
-- Screenshots if possible
-
-We'll:
-1. Investigate immediately
-2. Patch if needed
-3. Notify all users
-4. Document what happened
-
-### Q: How do you calculate Money Kept?
-
-**A:**
-Gross Revenue: $1,011,258
-- OTA Commissions: -$50,287
-- Processing Fees: -$23,816
-- Business Taxes: -$16,325
-= Money Kept: $920,829
-
-That's 91.1% profit margin!
-
-### Q: Why is occupancy only 57.8%?
-
-**A:** That's actually good for hotels!
-- Budget hotels: 50-60% typical
-- Full occupancy (100%): Rare, not realistic
-- 57.8% is healthy occupancy
-
-More occupancy = more profit
-But impossible to get 100% every day.
-
-### Q: Can I export data to Excel?
-
-**A:** YES (not implemented yet)
-Features planned:
-✅ Export to Excel
-✅ Export to CSV
-✅ Export to PDF
-✅ Email reports daily
-
-Coming soon!
-
-### Q: Who can see my data?
-
-**A:**
-- Only you (account owner)
-- Your designated staff
-- Not public
-- Not shared
-
-Your data stays private!
-
-### Q: Is the system backed up?
-
-**A:** YES:
-- Daily backups ✅
-- Off-site backup ✅
-- Disaster recovery plan ✅
-- If system fails: Can restore
-
-Your data is safe!
-
-## Why We Made These Choices
-
-### Decision #1: Why Fix Critical Bugs First?
-```
-Question: Should we add new features or fix bugs?
-
-Our choice: Fix bugs first ✅
-
-Reason: Broken features = users don't trust system
-        New features + bugs = waste of time
-        
-Timeline: Fix all bugs, THEN add features
-```
-
-### Decision #2: Why Use RevenueReconciliation Service?
-```
-Question: Ignore revenue drift or fix it?
-
-Our choice: Build reconciliation service ✅
-
-Reason: Ignoring drift = losing money
-        Drift = accounting disaster
-        Reconciliation = safety net
-        
-Result: Now we catch drift immediately
-```
-
-### Decision #3: Why Use Integer Cents (Pending)?
-```
-Question: Keep floats or switch to cents?
-
-Our choice: Switch to integer cents ✅
-
-Reason: Floats = precision errors
-        Cents = always exact
-        Finance industry standard = cents
-        
-Example: $0.01 error × 365 days = $3.65/year lost
-         × 25 hotels = $91.25/year
-         × 10 years = $912.50
-```
-
-### Decision #4: Why Session Timeout?
-```
-Question: Keep sessions forever or timeout?
-
-Our choice: Timeout after 30 minutes ✅
-
-Reason: Security standard = 30 min timeout
-        Leaving computer = risk
-        Timeout = no hacker access
-        
-Industry standard: Yes (all major sites do this)
-```
-
-### Decision #5: Why Rebuild BRAIN.md Simply?
-```
-Question: Keep technical docs or make simple?
-
-Our choice: Make simple, 10-year-old friendly ✅
-
-Reason: Developers spend less time confused
-        Problems solved faster
-        Documentation actually used
-        
-Result: This file you're reading! 📖
-```
-
-## What Comes Next (The Roadmap)
-
-### This Week (2026-08-18 to 2026-08-25)
-- [ ] Fix Defect #6 (Float math)
-- [ ] Fix Defect #7 (Error messages)
-- [ ] Fix Defect #8 (Session timeout)
-- [ ] Fix Defect #9 (Server code)
-- [ ] Test everything
-- [ ] Prepare for launch
-
-### Next Week (2026-08-25 to 2026-09-01)
-- [ ] Final testing
-- [ ] Security audit
-- [ ] Performance testing
-- [ ] Documentation
-- [ ] Staff training
-
-### Launch Week (2026-09-01)
-- [ ] Deploy to Property #1 (test property)
-- [ ] Monitor for issues
-- [ ] Fix any issues found
-- [ ] Prepare for scale-up
-
-### First Month (September 2026)
-- [ ] Gradually deploy to all 25 properties
-- [ ] Monitor each property
-- [ ] Gather feedback
-- [ ] Make improvements
-
-### Post-Launch Features (October+)
-```
-Planned features:
-✅ Daily email reports
-✅ Export to Excel/PDF
-✅ Multi-property comparison
-✅ Mobile dashboard
-✅ Advanced forecasting
-✅ Alert system (anomaly detection)
-✅ Custom reports
-✅ API for third-party apps
-```
-
-### Long-Term Vision (2027+)
-```
-Dream features:
-- Artificial intelligence predicts occupancy
-- Auto-adjust pricing based on demand
-- Competitor price comparison
-- Guest satisfaction tracking
-- Recommendation engine
-- Full accounting integration
-```
-
-## Need Help? (Support & Contact)
-
-### Who To Contact
-
-**Technical Issues:**
-- Email: support@redroofintell.com
-- Response time: 1 hour
-- Available: Monday-Friday 9am-5pm
-
-**Security Issues (URGENT):**
-- Email: security@redroofintell.com
-- Response time: 30 minutes
-- Available: 24/7
-
-**Feature Requests:**
-- Email: features@redroofintell.com
-- Response time: 1 business day
-- Monthly review: We vote on top 10 requests
-
-**Urgent Issues (System Down):**
-- Call: 1-800-HOTEL-BI
-- Text: URGENT to support
-- Response time: 15 minutes
-
-### How To Report A Bug
-
-```
-Include:
-1. What were you doing?
-2. What happened?
-3. What should happen?
-4. Screenshots
-5. When did it happen?
-6. Which property?
-7. Your email
-
-Format:
-Subject: BUG: [Short description]
-Body: [Detailed explanation above]
-```
-
-### Response Times
-
-```
-Severity 1 (System down):  15 minutes
-Severity 2 (Major bug):    1 hour
-Severity 3 (Minor bug):    1 business day
-Severity 4 (Feature):      1 week
-```
-
-## Glossary (Tech Words Explained)
-
-**ADR** = Average Daily Rate ($81.80 per room)
-**API** = Way for programs to talk to each other
-**Backend** = Server computer (does calculations)
-**CSV** = File format (like Excel but simpler)
-**CSRF** = Attack where hacker tricks you into doing something
-**Dashboard** = Main screen showing all info
-**Encryption** = Making data unreadable to hackers
-**Frontend** = Website screen (what you see)
-**Hash** = One-way encryption (can't be reversed)
-**HotelKey** = Hotel management software we use
-**Localhost** = Your own computer (for testing)
-**OTA** = Online Travel Agency (like Booking.com, Expedia)
-**RevPAR** = Revenue per available room
-**RFC** = Internet standard rule
-**Session** = How long you're logged in
-**Token** = Digital permission slip (like a ticket)
-**Tooltip** = Message that appears on hover
-**UX** = User Experience (how easy is it to use?)
-
-**Acronyms We Use:**
-- BI = Business Intelligence (dashboard)
-- CSV = Comma Separated Values (data file)
-- PMS = Property Management System (hotel software)
-- OWASP = Website security standards
-- PCI DSS = Payment security standards
-- GDPR = Privacy protection law
-# ?? Project Overview for Kids
-
-## What is this project?
-
-- **Name:** Red Roof Intelligence ??
-- **Goal:** Show hotel owners how much money they make, how full their rooms are, and where the money comes from.
-- **Why it matters:** Helps owners make smart decisions without guessing.
-
-## How does it work? (Simple picture)
-
-```
-Hotel data (CSV files) ? Server (calculates numbers) ? Dashboard (shows pictures and numbers)
-```
-
-## Where are the important pieces?
-
-- `src/` � the front-end UI you see in the browser.
-- `base44/` � the back-end code that talks to the database and does the math.
-- `scripts/` � helper tools for building and testing.
-- `public/` � static files like icons and the main HTML page.
-- `.env.*` � secret settings (don�t share!).
-
-## What are the most important files?
-
-| Folder | File | What it does (in kid language) |
-|-------|------|-------------------------------|
-| src | `App.jsx` | Starts the whole app.
-| src | `Dashboard.jsx` | Shows the big picture with charts.
-| src | `MoneyKept.jsx` | Shows how much profit you keep.
-| src | `Login.jsx` | Lets you sign in (kept safe).
-| base44 | `entry.js` (many) | Runs the back-end functions like �add a new hotel�.
-| base44 | `RevenueReconciliation.js` | Checks that three ways of counting money match.
-| scripts | `run-tests.ps1` | Runs all the tests to make sure nothing is broken.
-
-## How do I start the app? (Step-by-step)
-
-1. **Open a terminal** (PowerShell).
-2. Run `npm install` � this gets all the tools.
-3. Run `npm run dev` � this starts the front-end and the back-end together.
-4. Open a web browser and go to `http://localhost:5173` � you will see the dashboard.
-
-*(If you only want the front-end, run `npm run dev` after the back-end is already running with `base44 dev`).*
-
-## How do I check that everything works?
-
-- Run the test command: `npm test` � it will tell you if any part is broken.
-- Look for a green check (`?`) after each test.
-
-## Core Rules (the AI rules)
-
-- **Never guess, only prove.**
-- **Always fix from the core.**
-- **Explain everything so a 10-year-old can understand.**
-- **You may edit any file except those listed in PROTECTED_FILES.md.**
-
-## Quick glossary (already in the file, but here again for kids)
-
-- **Dashboard:** The picture board that shows numbers.
-- **Revenue:** Money that comes in.
-- **Profit (Money Kept):** Money left after paying costs.
-- **CSV:** A simple table file (like a spreadsheet).
-- **Token:** A secret ticket that proves you are allowed to do something.
-- **Session:** How long you stay logged in before the system logs you out.
-
-## What�s next?
-
-- Finish the pending bugs (float math, session timeout, server code, error messages).
-- Add the �Export to Excel� button.
-- Make the dashboard auto-refresh every few minutes.
-
-That�s the whole project in plain words!
-# ?? AI Project Map & Edit Impact Guide
-
-## Purpose
-A single markdown file that gives any AI model a quick map of the whole codebase so it doesn�t have to scan every file from scratch. It lists the main directories, key entry-point files, dependencies, and what will break if a file is edited.
-
-## How to use it
-1. **Read this file first** before any AI-driven task.
-2. Find the section that matches the area you want to modify (UI, back-end, config).
-3. Follow the *Impact Checklist* to see which other files may need updates.
-4. After making changes, **update the map** (PROJECT_MAP.md) so future AI runs stay accurate.
-
-## Where to find it
-The full map lives in **[PROJECT_MAP.md](file:///c:/Users/divye/OneDrive/Desktop/boston_project/PROJECT_MAP.md)**. Keep that file up-to-date whenever you add, rename, or change a component.
-
-## Why this matters
-- Saves tokens: AI reads one concise guide instead of scanning thousands of files.
-- Reduces risk: The impact notes warn you when editing a file could break other parts.
-- Guarantees consistency: All future AI agents have the same source of truth.
+# 5. ALL 90+ LIBRARIES (The Engines Under The Hood)
+
+These are the files in `src/lib/` -- the brains of the app. Grouped by what they do.
+
+### Money & Financial Engines
+| File | What It Does | If You Edit This... |
+|------|-------------|-------------------|
+| `calculationService.js` | **Main calculator**: ADR, RevPAR, occupancy, net revenue, weighted averages | Dashboard numbers change. Test ALL financial displays. |
+| `dailyAggregates.js` | Builds daily summary rows from raw data, caches results | Dashboard cards break. The room_revenue typo lived here (Problem #3). |
+| `financialReconciliation.js` | 4-way cross-check: PMS reports, gateway auth, batch settlement, bank deposits | Revenue drift alerts break. |
+| `RevenueReconciliation.js` | 3-path revenue matcher (Path 1 vs 2 vs 3) | Revenue audit breaks. |
+| `decimal.js` | Integer-cents math: toCents(), fromCents(), multiply(), divide() -- prevents float errors | ALL money calculations break. Critical for accuracy. |
+| `commissionRates.js` | OTA commission models (fixed, %, none, tax-exempt) | Channel revenue goes wrong. |
+| `expenseCategories.js` | Expense type definitions | Expense tracking breaks. |
+| `taxConfig.js` | Tax configuration rules | Tax calculations go wrong. |
+| `taxSettings.js` | Date-windowed property-specific tax rates | Tax liability miscalculated. |
+| `taxLiability.js` | Tax liability calculator | Tax reports wrong. |
+| `payrollCalc.js` | Payroll: gross-to-net wage computation | Employee pay calculated wrong. |
+| `timecardCalc.js` | Timecard hours/overtime (40h threshold, 30m break rules) | Overtime pay wrong. |
+| `recalculationService.js` | Triggers React Query cache invalidation when data changes | Stale dashboard data. |
+
+### Data Processing & Parsing
+| File | What It Does | If You Edit This... |
+|------|-------------|-------------------|
+| `csvParser.js` | Core CSV parser (handles duplicate columns -- Problem #1 fix) | ALL data imports break. |
+| `universalParser.js` | Multi-grid streaming CSV parser for complex reports | Complex CSV imports fail. |
+| `parser.worker.js` | Web Worker for background CSV parsing (off main thread) | Import page freezes browser. |
+| `reportParsers.js` | Parses specific HotelKey report types (Occupancy, Revenue, etc.) | Reports import with wrong column mapping. |
+| `importValidation.js` | 4-layer validation: structure, columns, data types, business logic | Bad data gets into database. |
+| `dataScanner.js` | Auto-detects CSV format, finds duplicates, date gaps, orphans | Data Intelligence page breaks. |
+| `transactionNorm.js` | Normalizes transaction data shapes | Transaction page shows wrong data. |
+| `paymentNorm.js` | Normalizes payment method names (Visa, MC, etc.) | Payment chart labels wrong. |
+| `hotel.js` | Core hotel data operations and transformations | Everything hotel-related breaks. |
+| `manualEntryImport.js` | Manual data entry processing | Manual Entry page breaks. |
+| `uploadRetention.js` | TTL cleanup of expired CSV previews from IndexedDB | Browser storage fills up. |
+
+### Security (Most Are Protected!)
+| File | What It Does | If You Edit This... |
+|------|-------------|-------------------|
+| `AuthContext.jsx` PROTECTED | Auth provider, session management, idle polling (30s), cross-tab logout | Login breaks for EVERYONE. |
+| `security.js` PROTECTED | PBKDF2 hashing (300k iterations), TOTP/MFA, WebCrypto | Passwords break, MFA breaks. |
+| `securityUtils.js` PROTECTED | CSRF tokens (__Host- prefix), rate limiting, SHA-256 audit chain | Security wide open to attacks. |
+| `permissions.js` PROTECTED | Roles: owner/admin/manager/front_desk/accountant/read_only | Users see data they should not. |
+| `validator.js` PROTECTED | Email/input validation rules | Bad data accepted, injection possible. |
+| `authHelpers.js` | Auth utility functions | Login flow breaks. |
+| `authReturnTo.js` | Remembers where user was before login redirect | User redirected wrong after login. |
+| `deleteGuard.js` | Safe deletion pipeline: Confirm -> Rate-Limit -> CSRF check | Accidental mass deletion possible. |
+| `launchPolicy.js` | Production launch restrictions (LAUNCH_POLICY_V1) | Wrong users get production access. |
+| `sessionChannel.js` | Cross-tab session sync via BroadcastChannel | Logout in one tab does not logout others. |
+| `mfaRecovery.js` | MFA recovery code generation + SHA-256 hash validation | Users locked out of MFA accounts forever. |
+| `auditLogger.js` | Frontend audit event logging | Security events not logged. |
+| `auditFilter.js` | Audit log filtering for viewer page | Audit page filters break. |
+
+### Analytics, AI & Intelligence
+| File | What It Does | If You Edit This... |
+|------|-------------|-------------------|
+| `anomalyDetector.js` | Welford's algorithm + Benford's Law + z-score outliers | Fraud detection breaks. |
+| `fraudScoringEngine.js` | Scores transactions: rate overrides, off-hours, large cash (>$200) | Fraud alerts stop. |
+| `statisticsAnalytics.js` | Statistical analysis engine for Statistics page | Statistics page breaks. |
+| `columnarAnalytics.js` | Column-level data analysis | Data Intelligence breaks. |
+| `transactionAnalytics.js` | Transaction pattern analysis, employee performance | Transaction insights wrong. |
+| `aiEngine.js` | AI prompt builder + intent parser + date resolver | AI Assistant answers wrong. |
+| `aiInsights.js` | AI-generated dashboard insight cards | AI insight cards break. |
+| `agenticAI.js` | Agentic AI orchestration + scheduling proposals | AI workflows break. |
+| `ownerIntelligence.js` | Owner-specific business intelligence metrics | Owner reports wrong. |
+| `forecasting.js` | Multi-model revenue prediction (1/7/30/90 day) | Forecasting page breaks. |
+| `revenueThresholds.js` | Revenue alert thresholds | Revenue alerts stop firing. |
+| `alertEngine.js` | Alert generation engine | All alerts stop. |
+| `alertThresholds.js` | Alert threshold configuration | Alert sensitivity wrong. |
+
+### Operations & Pricing
+| File | What It Does | If You Edit This... |
+|------|-------------|-------------------|
+| `pricingEngine.js` | Dynamic room pricing: elasticity, demand, weather, comp-set | Room prices calculated wrong. |
+| `pricingOverride.js` | Manual price overrides | Override prices do not apply. |
+| `pricingSettings.js` | Pricing sensitivity presets | Pricing defaults wrong. |
+| `housekeepingService.js` | Room status management (clean/dirty/inspected) | Room board wrong. |
+| `housekeepingConfig.js` | Housekeeping settings | Housekeeping defaults wrong. |
+| `roomBoard.js` | Room grid state management | Room board view breaks. |
+| `weatherService.js` | Live weather data + revenue correlation | Weather widget breaks. |
+| `weatherSettings.js` | Weather display configuration | Weather display wrong. |
+| `laborOptimization.js` | Staff scheduling optimization | Labor cost estimates wrong. |
+| `yieldOptimizer.js` | Revenue yield optimization suggestions | Yield suggestions wrong. |
+| `reputationService.js` | Guest review aggregation + sentiment | Reviews page breaks. |
+| `actionCenter.js` | Action item management (Fix Today/Investigate/Opportunity) | Action Center page breaks. |
+| `anomalySignoff.js` | Anomaly triage sign-off workflow | Anomaly triage breaks. |
+
+### Infrastructure & UI Utilities
+| File | What It Does | If You Edit This... |
+|------|-------------|-------------------|
+| `query-client.js` | React Query config (data fetching cache) | ALL data fetching breaks. |
+| `crdtSync.js` | Yjs CRDT real-time sync operations | Multi-user editing breaks. |
+| `ySync.js` | Yjs sync utilities | Real-time sync breaks. |
+| `realtime.js` | Real-time data subscription | Live updates stop. |
+| `settingsBus.js` | Settings event bus (BroadcastChannel) | Settings do not propagate across tabs. |
+| `navigation.js` | Route definitions, titles, icons | Sidebar navigation breaks. |
+| `app-params.js` | Global app parameters | App defaults wrong. |
+| `chartExport.js` | Export charts as high-DPI images | Chart export fails. |
+| `pdfExport.js` | Export data as PDF | PDF export fails. |
+| `reconciliationExport.js` | Export reconciliation reports | Reconciliation export fails. |
+| `motion.js` | Framer Motion animation config | Animations break. |
+| `sound.js` | Notification sounds (Web Audio) | Alert sounds stop. |
+| `donutLabelLayout.js` | Pie chart label positioning algorithm | Donut chart labels overlap. |
+| `useCountUp.jsx` | Number count-up animation for KPI cards | KPI animations break. |
+| `ui-utils.js` | UI helper functions | Various UI glitches. |
+| `utils.js` | General utility functions | Many things break subtly. |
+| `employeeId.js` | Employee ID generation | Employee IDs wrong. |
+| `uploadRetention.js` | Manages uploaded file cleanup | Old uploads never cleaned up. |
+
+### Custom Hooks
+| File | What It Does | If You Edit This... |
+|------|-------------|-------------------|
+| `useHotelData.js` | Fetches and caches ALL hotel data | ALL pages lose hotel data. |
+| `useGlobalFilters.jsx` | Global date/property filter state | All filters break across every page. |
+| `usePricing.js` | Pricing data hook | Pricing page loses data. |
+| `usePullToRefresh.js` | Pull-to-refresh gesture on mobile | Mobile refresh gesture breaks. |
+| `useSettingsVersion.js` | Subscribes to settings changes via settingsBus | UI does not recompute when settings change. |
+| `use-mobile.jsx` | Mobile viewport detection (<768px) | Mobile layout breaks. |
+| `use-size.jsx` | Element size tracking (ResizeObserver) | Responsive chart sizing breaks. |
 
 ---
-*This section follows the core rules: never guess, only prove; always fix from the core; explain for a 10-year-old.*
+
+# 6. ALL 40+ COMPONENTS (Reusable UI Pieces)
+
+### Dashboard Widgets (src/components/dashboard/)
+| Component | What It Shows | Key Data Source |
+|-----------|-------------|----------------|
+| `MoneyKept.jsx` | Net revenue bridge: deductions for commissions, fees, taxes | `dailyAggregates.js` -> `room_revenue` |
+| `PaymentMethodChart.jsx` | Pie chart of payment methods | `PaymentDay` entity |
+| `RevenueTrend.jsx` | Revenue over time line chart | `GrossRevenueDay` entity |
+| `PropertyRanking.jsx` | Properties ranked by revenue | `calculationService.js` |
+| `OtaMatrix.jsx` | OTA channel performance: gross, commission, net margin | `Channel` entity |
+| `ExecutiveCharts.jsx` | Multi-series area/bar: portfolio occupancy and revenue pacing | Multiple sources |
+| `LowOccAlert.jsx` | Low occupancy warning banner | `OccupancyDay` entity |
+| `WeatherPanel.jsx` | Weather forecast + revenue correlation | `getWeather` function |
+| `YieldAdvisor.jsx` | Revenue optimization tips | `yieldOptimizer.js` |
+| `PricingPanel.jsx` | Dynamic pricing overview card | `pricingEngine.js` |
+| `ModuleCards.jsx` | Feature module quick access tiles | Navigation config |
+| `ClerkAudit.jsx` | Clerk shift audit view | `ClerkShiftRecord` entity |
+| `ClerkAuditMatrix.jsx` | Clerk cash variance comparison matrix | `ClerkShiftRecord` entity |
+
+### Chart Components (src/components/charts/)
+| Component | What It Does |
+|-----------|-------------|
+| `UniversalChart.jsx` | Renders any chart type (bar, line, area, pie) + high-DPI export |
+| `PieDonut.jsx` | Donut/pie charts with custom label layout |
+| `ChartToolbar.jsx` | Chart filter/export toolbar |
+
+### Layout & Navigation
+| Component | What It Does |
+|-----------|-------------|
+| `Layout.jsx` | Main app shell: sidebar, header, content area, responsive drawer |
+| `GlobalControlBar.jsx` | Persistent top filter bar: property + date range + compare toggles |
+| `ProtectedRoute.jsx` | Route guard: role checks, active status, audit logging |
+| `ScrollToTop.jsx` | Auto-scroll to top on page change |
+| `AuthLayout.jsx` | Layout for login/setup pages |
+| `CommandMenu.jsx` | Cmd+K keyboard search palette |
+| `AIAssistant.jsx` | Slide-out AI chatbot panel |
+| `propertyMap.jsx` | Leaflet-based interactive property map |
+
+### Modals & Dialogs
+| Component | What It Does |
+|-----------|-------------|
+| `MFASetup.jsx` | MFA enrollment wizard with TOTP QR code |
+| `MFARecoveryModal.jsx` | MFA backup recovery code display |
+| `PasswordConfirmDialog.jsx` | Step-up password re-verification for sensitive actions |
+| `HousekeepingSettingsModal.jsx` | Housekeeping configuration |
+| `TaxConfigModal.jsx` | Tax rule management |
+| `AnomalySignoffModal.jsx` | Anomaly triage sign-off |
+| `PricingOverrideButton.jsx` | Manual price override trigger |
+| `ReconciliationExportButton.jsx` | Reconciliation report export trigger |
+| `UserNotRegisteredError.jsx` | Error display for unregistered users |
+
+### Finance & Comparison
+| Component | What It Does |
+|-----------|-------------|
+| `LedgerTable.jsx` | Virtualized guest transaction ledger table |
+| `LedgerStrip.jsx` | Compact ledger summary strip |
+| `CommissionsPanel.jsx` | Commission breakdown panel |
+| `EmployeeCompare.jsx` | Employee performance comparison |
+| `ChannelRevenue.jsx` | Channel revenue comparison |
+| `CompareBars.jsx` | Period-over-period delta bars |
+| `CompareCard.jsx` | Period comparison cards |
+
+### Executive UI (src/components/ui-exec/)
+| Component | What It Does |
+|-----------|-------------|
+| `Card.jsx` | Executive-styled card container |
+| `KpiCard.jsx` | KPI metric display with count-up animation |
+| `RangePicker.jsx` | Date range picker |
+| `StatusBadge.jsx` | Status indicator badge |
+
+---
+
+# 7. ALL 16 DATABASE TABLES (Entities)
+
+Every piece of data stored. Each table has Row-Level Security (RLS) = data isolated per property/user.
+
+### Core Tables
+| Entity | File | What It Stores | Who Can Access |
+|--------|------|---------------|---------------|
+| **User** | `User.jsonc` | Usernames, emails, display names, roles (owner/admin/manager/front_desk/accountant/read_only), property_access, granular permissions, scrypt password hashes, salts, TOTP MFA secrets, last TOTP counters, lockout flags, password reset tokens | Auth functions only |
+| **Session** | `Session.jsonc` | SHA-256 token hash, expiry timestamp, client IP, User-Agent, revocation flag | Auth functions only |
+| **Property** | `Property.jsonc` | Hotel code, name, total room count, address, phone, active status | All authenticated users |
+
+### Financial Data (Daily Records)
+| Entity | File | What It Stores |
+|--------|------|---------------|
+| **GrossRevenueDay** | `GrossRevenueDay.jsonc` | Daily departmental revenue: room rent, food, beverage, laundry, misc charges, advance deposits |
+| **PaymentDay** | `PaymentDay.jsonc` | Daily payment breakdown: cash, check, Visa, Amex, MasterCard, Discover, direct bill, wire, loyalty discounts |
+| **OccupancyDay** | `OccupancyDay.jsonc` | Daily room stats: total rooms, sold, vacant, clean, dirty, stayover, comps, no-shows, ADR, occupancy %, RevPAR |
+| **SourceDay** | `SourceDay.jsonc` | Daily booking source: revenue and stays per channel code (Expedia, Booking.com, Direct, etc.) |
+
+### Operational Data
+| Entity | File | What It Stores |
+|--------|------|---------------|
+| **Channel** | `Channel.jsonc` | OTA commission rates (type, rate, amount) and daily channel performance |
+| **ClerkShiftRecord** | `ClerkShiftRecord.jsonc` | Shift records: payments collected, cash drops, actual vs adjusted, transaction counts |
+| **Expense** | `Expense.jsonc` | Operating expenses: category, amount, frequency, payment status, taxability |
+| **Staff** | `Staff.jsonc` | Employee roster: department, role, pay type (hourly/salary), rates, hire date |
+| **TimecardPunch** | `TimecardPunch.jsonc` | Raw time punches: clock-in/out, break minutes, department |
+| **PayrollRun** | `PayrollRun.jsonc` | Finalized payroll: hours, regular/OT pay, bonuses, deductions, approval status |
+| **UploadedReport** | `UploadedReport.jsonc` | Upload metadata: file URL, row counts, Drive backup ID, backup status |
+
+### Security & System
+| Entity | File | What It Stores | Special Rules |
+|--------|------|---------------|--------------|
+| **AuditLog** | `AuditLog.jsonc` | Every security event: action, user_id, performed_by, IP, device, property_id, result, detail, SHA-256 hash, previous_hash | **APPEND-ONLY** (update: false, delete: false) |
+| **RateLimit** | `RateLimit.jsonc` | Brute-force buckets: client IP/account key, action (login/reset/mfa), attempt count, reset timestamp | Used by login, reset, MFA verification |
+
+---
+
+# 8. ALL 19 BACKEND FUNCTIONS (The Server Brain)
+
+### Authentication (8 functions)
+| Function | Folder | What It Does | If You Edit This... |
+|----------|--------|-------------|-------------------|
+| **Login** | `custom_auth_login/` | Rate limiting (5/15min per IP), scrypt verify (auto-upgrades legacy PBKDF2), TOTP MFA with counter replay prevention, session creation, HTTP-only Secure cookie, audit log | Login breaks for ALL users |
+| **Logout** | `custom_auth_logout/` | CSRF token validation, session revocation, cookie clearing | Users cannot log out (sessions persist) |
+| **Me** | `custom_auth_me/` | Returns sanitized user profile, slides session expiry (7d, max 30d) | Premature logout, profile fails to load |
+| **Check** | `custom_auth_check/` | Fast session validation (no sliding): token hash, revocation, user status | App cannot verify login state |
+| **Register** | `custom_auth_register/` | Owner bootstrap (when 0 owners exist), admin-only subsequent registration, scrypt hash, welcome email with reset link | Registration breaks |
+| **Reset Request** | `custom_auth_reset_request/` | Dual rate-limit (IP + email), 1-hour token, generic response (anti-enumeration) | Reset emails stop, or flooding attacks possible |
+| **Reset Password** | `custom_auth_reset_password/` | Token validation, password complexity (8+ chars, upper/lower/number), revoke all sessions | Password resets fail, weak passwords accepted |
+| **User Admin** | `custom_user_admin/` | Full CRUD, MFA mgmt (with step-up password), status toggle, session revocation on privilege change, chained audit | User management breaks entirely |
+
+### Audit Trail (4 functions)
+| Function | Folder | What It Does | If You Edit This... |
+|----------|--------|-------------|-------------------|
+| **Log** | `audit_log/` | SHA-256 HMAC: canonical payload + previous hash + AUDIT_CHAIN_SECRET | Audit chain breaks -- tampering goes undetected |
+| **Verify** | `audit_verify/` | Walks entire log, recomputes hashes, detects tampering/deletion | Cannot verify audit integrity |
+| **List** | `audit_list/` | Admin-only filtered query with property access enforcement | Audit page shows nothing |
+| **Clear** | `audit_clear/` | **ALWAYS returns HTTP 403** -- audit can NEVER be cleared | If changed: entire audit trail can be destroyed |
+
+### Business Operations (4 functions)
+| Function | Folder | What It Does | If You Edit This... |
+|----------|--------|-------------|-------------------|
+| **AI Assistant** | `aiAssistant/` | Tenant-scoped AI: validates session, enforces property boundaries, anti-jailbreak prompts, queries Base44 LLM | AI leaks cross-property data |
+| **Auto Payroll** | `autoPayroll/` | Monthly payroll (last day): reconcile timecards, 40h overtime threshold, 30m break rules, create PayrollRun | Employees paid wrong or double-paid |
+| **Delete Account** | `deleteAccount/` | Requires explicit "DELETE:<userId>" confirmation, wipes data across 5 entities | Accidental mass data deletion |
+| **Get Weather** | `getWeather/` | Proxy to OpenWeather API (hides API key from browser) | Weather widget breaks |
+
+### External Integrations (3 functions)
+| Function | Folder | What It Does | If You Edit This... |
+|----------|--------|-------------|-------------------|
+| **Backup to Drive** | `backupToDrive/` | SSRF-safe file download, hierarchical Drive folders, upload + update UploadedReport | Drive backups fail or SSRF vulnerability |
+| **Import Drive File** | `importDriveFile/` | Downloads from Drive via OAuth, IDOR defense (tenant property check) | Drive import breaks or cross-tenant leak |
+| **List Drive Files** | `listDriveFiles/` | Lists CSV/spreadsheet files from connected Google Drive | Drive file picker breaks |
+
+---
+
+# 9. ALL CONFIG FILES
+
+### Build & Deploy
+| File | What It Does | If You Edit This... |
+|------|-------------|-------------------|
+| `package.json` | NPM deps (React 18, Base44 SDK, Recharts, Dexie, Tailwind, Radix, Framer Motion), scripts (dev, build, test, lint, ws) | Build fails, tests fail, everything |
+| `vite.config.js` | Vite build: React plugin, Base44 plugin, SRI hash generator, dev security headers, console stripping, vendor chunk splitting | Production build fails |
+| `vercel.json` | Vercel deploy: SPA routing (/* -> /index.html), 1-year immutable caching for /assets/*, production security headers | 404 on refresh, security headers lost |
+| `sriPlugin.js` | Post-build: generates SHA-384 integrity hashes for all scripts/styles in index.html | Browsers block all scripts (SRI mismatch) |
+| `eslint.config.js` | ESLint 9: React + Hooks rules, unused import removal | Linting breaks in CI |
+| `vitest.config.js` | Test runner: JSDOM env, @/ path alias, setup hooks, coverage | Tests cannot run |
+| `tailwind.config.js` | Design tokens: HSL color vars, chart colors 1-5, sidebar colors, fonts, accordion animations | ALL styling breaks |
+| `components.json` | Shadcn UI: component paths, utility path, icon library | New UI components scaffolded wrong |
+| `jsconfig.json` | IDE: @/* -> ./src/* path alias, strict JSX, type definitions | Autocomplete and type-checking break |
+| `postcss.config.js` | PostCSS: loads Tailwind and autoprefixer | CSS processing fails |
+
+### Environment Variables
+| File | Key Setting | What It Controls | DANGER |
+|------|------------|-----------------|--------|
+| `.env.local` | `VITE_USE_LOCAL_AUTH=false` | Default: use real serverless auth | - |
+| `.env.development` | `VITE_USE_LOCAL_AUTH=true` | Dev: use local IndexedDB auth shim | - |
+| `.env.production` | `VITE_USE_LOCAL_AUTH=false` | Prod: MUST use real auth | Setting to true = SECURITY DISASTER |
+
+### Base44 Config
+| File | What It Does |
+|------|-------------|
+| `base44/config.jsonc` | Build commands + production security headers (CSP, HSTS preload, X-Frame DENY, nosniff) |
+| `base44/.app.jsonc` | Links to cloud app ID: `6a7d6856ee1cc714b1803c0e` |
+| `base44/auth/config.jsonc` | Auth methods enabled: password + Google OAuth (MS/FB/Apple/SAML disabled) |
+| `base44/connectors/googledrive.jsonc` | Google Drive OAuth scopes (drive + email) |
+
+---
+
+# 10. ALL TEST SCRIPTS (106 Files)
+
+### Test Infrastructure
+| File | What It Does |
+|------|-------------|
+| `scripts/_loader-boot.mjs` | Node bootstrap: @/ alias resolution, browser global shims (document, location), Web Worker shim |
+| `scripts/_harness-auth.mjs` | Creates in-memory Owner account for fail-closed auth in tests |
+| `scripts/resolve-alias.mjs` | Custom ESM loader: @/ -> src/ |
+| `scripts/resolve-base44.mjs` | Custom ESM loader: redirects @base44/sdk to local stubs |
+| `scripts/stubs/base44-runtime.mjs` | In-memory Base44 host mock (secret store, entity DB) |
+| `scripts/stubs/base44-sdk.mjs` | In-memory SDK mock with -field sorting and monotonic sequences |
+| `scripts/acceptance-harness.mjs` | Runs ALL probe tests in sequence |
+
+### How To Run Tests
+```powershell
+# Run ALL unit tests (Vitest)
+npm test
+
+# Run a specific probe test
+node --import ./scripts/_loader-boot.mjs scripts/probe-money-kept-fix.mjs
+
+# Run ALL probe tests together
+node --import ./scripts/_loader-boot.mjs scripts/acceptance-harness.mjs
+
+# Lint the code
+npm run lint
+```
+
+### Probe Tests (What Each One Proves)
+| Script | What It Verifies |
+|--------|-----------------|
+| `probe-money-kept-fix.mjs` | Money Kept shows correct value (not $0) |
+| `probe-csrf-secure-flag.mjs` | CSRF cookie has __Host- prefix + Secure flag |
+| `probe-financial-invariant.mjs` | Revenue paths match within tolerance |
+| `probe-money-kept-float.mjs` | Float math precision is handled correctly |
+| `probe-session-expiry.mjs` | Sessions expire after timeout |
+| `probe-session-slide.mjs` | Session sliding window extends correctly |
+| `probe-session-sliding.mjs` | Sliding session edge cases |
+| `probe-ui-disabled-reason.mjs` | Disabled account shows correct error |
+| `probe-active-vs-idle.mjs` | Active vs idle session detection |
+| `probe-audit-list.mjs` | Audit log listing works correctly |
+| `probe-idle-polling.mjs` | Idle polling does not waste resources |
+| `probe-session-noop.mjs` | Session no-op handling |
+| `probe-welcome-email.mjs` | Welcome email has reset link (no password) |
+| `test_defect_5_probe.mjs` | Revenue reconciliation drift detection |
+
+### Test Data (scripts/data/)
+19 real-world CSV files from actual hotel properties used for end-to-end testing.
+
+---
+
+# 11. THE DEPENDENCY MAP (What Breaks If You Touch It)
+
+This is the most important section for any AI. Before editing ANY file, check here.
+
+### RED = Editing These Breaks EVERYTHING
+| File | What Breaks | Danger |
+|------|-----------|--------|
+| `src/api/base44Client.js` PROTECTED | ALL data fetching, auth, entity access, rate limiting, property isolation | EXTREME |
+| `src/lib/AuthContext.jsx` PROTECTED | ALL login, logout, session management, idle detection, cross-tab sync | EXTREME |
+| `src/lib/security.js` PROTECTED | ALL password hashing, MFA, WebCrypto primitives | EXTREME |
+| `src/lib/permissions.js` PROTECTED | ALL role checks, route access, capability matrix | EXTREME |
+| `src/App.jsx` | ALL routing, page rendering, provider tree, lazy loading | EXTREME |
+| `base44/entities/User.jsonc` | ALL authentication + authorization | EXTREME |
+| `base44/entities/Session.jsonc` | ALL session management | EXTREME |
+| `.env.production` | Setting VITE_USE_LOCAL_AUTH=true = mock auth in production | EXTREME |
+
+### ORANGE = Editing These Breaks Major Features
+| File | What Breaks |
+|------|-----------|
+| `src/lib/calculationService.js` | ALL financial calculations on dashboard |
+| `src/lib/dailyAggregates.js` | Dashboard KPI cards (Money Kept, Revenue) |
+| `src/lib/csvParser.js` | ALL CSV data imports |
+| `src/lib/hotel.js` | ALL hotel data operations |
+| `src/lib/useHotelData.js` | ALL pages lose their data |
+| `src/lib/useGlobalFilters.jsx` | ALL filters (date, property) stop working |
+| `src/lib/decimal.js` | ALL money math becomes imprecise (float errors) |
+| `src/lib/query-client.js` | ALL React Query data fetching / caching |
+| `src/api/localDb.js` | Local dev database schema (30+ tables, 22 versions) |
+| `base44/functions/audit_log/entry.js` | Audit hash chain breaks (tamper detection fails) |
+| `base44/entities/Property.jsonc` | Multi-tenant scoping breaks, ADR/RevPAR divides by zero |
+| `base44/entities/AuditLog.jsonc` | Tamper-proof audit trail compromised |
+| `package.json` | Build, test, everything |
+| `vite.config.js` | Build pipeline |
+| `tailwind.config.js` | ALL styling across entire UI |
+| `src/index.css` | ALL global styles, dark theme, animations, focus rings |
+
+### GREEN = Editing These Is Lower Risk (Only Affects One Feature)
+| File | What Breaks |
+|------|-----------|
+| `src/lib/weatherService.js` | Only weather widget |
+| `src/lib/sound.js` | Only notification sounds |
+| `src/lib/motion.js` | Only animations |
+| `src/lib/donutLabelLayout.js` | Only donut chart labels |
+| `src/pages/PrivacyPolicy.jsx` | Only legal page |
+| `src/pages/TermsOfService.jsx` | Only legal page |
+| `src/pages/DemoYDoc.jsx` | Only CRDT demo page |
+| `src/components/ui/*` | Only that specific UI primitive |
+
+---
+
+# 12. THE MONEY MATH (Formulas)
+
+Every financial formula. All should use integer cents (not floating-point).
+
+```
+Occupancy %  = (Rooms Sold / Total Rooms) x 100
+ADR          = Room Revenue / Rooms Sold
+RevPAR       = Room Revenue / Total Rooms  (or ADR x Occupancy%)
+
+Money Kept   = Gross Revenue - OTA Commissions - Processing Fees - Business Taxes
+Profit Margin = Money Kept / Gross Revenue x 100
+
+Net Revenue (per channel) = Gross Revenue - Commission Amount
+Commission Amount = Gross Revenue x Commission Rate %
+
+Payroll:
+  Regular Pay  = Hours Worked (up to 40) x Hourly Rate
+  Overtime Pay = Hours Over 40 x (Hourly Rate x 1.5)
+  Gross Pay    = Regular Pay + Overtime Pay + Bonuses
+  Net Pay      = Gross Pay - Deductions
+```
+
+### The Golden Benchmark
+All three revenue paths must match:
+```
+Path 1 (GrossRevenueDay sum)  ~=  Path 2 (PaymentDay sum)  ~=  Path 3 (OccupancyDay x ADR)
+Tolerance: +/- $0.01
+If they do not match --> Revenue Reconciliation Alert fires
+```
+
+### Real Numbers
+```
+Gross Revenue:    $1,011,258.17
+- OTA Commissions: -$50,287.45
+- Processing Fees: -$23,816.32
+- Business Taxes:  -$16,325.40
+= Money Kept:     $920,829.00 (91.1% profit margin)
+```
+
+---
+
+# 13. SECURITY ARCHITECTURE
+
+### Authentication Flow
+```
+User enters email + password
+  --> Rate limiter checks (5 attempts / 15 min per IP)
+  --> scrypt hash verification (legacy PBKDF2 auto-upgrades to scrypt)
+  --> If MFA enabled: TOTP verification (counter replay prevented via mfa_last_counter)
+  --> Session created (SHA-256 token hash stored in Session entity)
+  --> HTTP-only Secure cookie set (7-day expiry, 30-day absolute max)
+  --> Audit log entry written (SHA-256 HMAC chained with AUDIT_CHAIN_SECRET)
+```
+
+### Session Management
+```
+Session lifetime:    7 days (slides if <3 days remaining)
+Absolute maximum:    30 days (no sliding after this)
+Idle detection:      30-second polling in AuthContext
+Revocation:          Immediate on logout, password change, or privilege change
+Cross-tab sync:      BroadcastChannel (sessionChannel.js)
+Storage:             Server-side (Session entity), client gets opaque HTTP-only cookie
+```
+
+### CSRF Protection
+```
+Cookie name:     __Host-csrf_token
+Flags:           Secure; Path=/; SameSite=Lax
+__Host- prefix:  HTTPS only, no subdomain override, Path must be /
+```
+
+### Rate Limiting
+```
+Login:            5 attempts per IP per 15 minutes
+Password Reset:   Rate limited by IP AND by target email
+MFA Verification: Rate limited per account
+```
+
+### Audit Log (Tamper-Proof Blockchain-Style)
+```
+Each entry = SHA-256 HMAC of:
+  canonical payload + previous entry's hash + AUDIT_CHAIN_SECRET
+
+Result: Linked chain. If anyone edits or deletes a row,
+the chain breaks and audit_verify detects the tampering.
+The audit_clear function ALWAYS returns 403 -- log can never be erased.
+```
+
+### Role-Based Access Control (RBAC)
+| Role | Can See | Can Do |
+|------|---------|--------|
+| `owner` | Everything across all properties | Everything including user management |
+| `admin` | Everything across all properties | Manage users, settings, imports |
+| `manager` | Assigned properties only | Import data, manage staff |
+| `front_desk` | Assigned properties only | Import daily reports only |
+| `accountant` | Financial data only | View-only financial reports |
+| `read_only` | Limited dashboard only | View-only, no actions |
+
+### Content Security Policy (CSP)
+Defined in both `base44/config.jsonc` and `vercel.json`:
+- script-src: self only
+- style-src: self + Google Fonts
+- connect-src: self + Base44 backend + WebSocket
+- frame-ancestors: none (no iframe embedding)
+- Subresource Integrity (SRI) hashes via sriPlugin.js
+
+---
+
+# 14. THE 9 KNOWN PROBLEMS (Status Tracker)
+
+| # | Problem | Severity | Status | Fix Location | Commit |
+|---|---------|----------|--------|-------------|--------|
+| 1 | Duplicate CSV column names cause data loss | HIGH | FIXED | `src/lib/csvParser.js` line 183 | c50435c |
+| 2 | Password sent in plaintext in welcome email | CRITICAL | FIXED | `base44/functions/custom_auth_register/entry.js` lines 209-217 | f07245e |
+| 3 | Money Kept shows $0 (typo: total_revenue should be room_revenue) | HIGH | FIXED | `src/lib/dailyAggregates.js` line 183 | See docs |
+| 4 | CSRF cookie not secure (missing __Host- prefix + Secure flag) | CRITICAL | FIXED | `src/lib/securityUtils.js` line 267-268 | efc79d9 |
+| 5 | Revenue paths don't match (no reconciliation system) | HIGH | FIXED | `src/lib/RevenueReconciliation.js` (NEW file) | See docs |
+| 6 | Float math precision errors ($0.1+$0.2 != $0.3) | HIGH | PENDING | `src/lib/decimal.js` exists but not fully integrated everywhere | - |
+| 7 | Wrong error message for disabled accounts ("revoked" vs "disabled") | MEDIUM | PENDING | `src/lib/AuthContext.jsx` + `custom_auth_me` | - |
+| 8 | Session never times out (infinite session = security risk) | CRITICAL | PENDING | `src/api/base44Client.js` + `AuthContext.jsx` | - |
+| 9 | Server-only code sits in frontend folder (config leak) | MEDIUM | PENDING | `base44/lib/corsConfig.js` + `securityHeaders.js` (already in backend) | - |
+
+---
+
+# 15. PROTECTED FILES (DO NOT TOUCH)
+
+These files are **permanently locked** from AI modification without explicit owner authorization.
+Full details: PROTECTED_FILES.md
+
+| # | File | Why Protected |
+|---|------|--------------|
+| 1 | `src/api/base44Client.js` | Core SDK: auth, entities, data access, rate limiting |
+| 2 | `src/lib/AuthContext.jsx` | Auth provider, session management, cross-tab revocation |
+| 3 | `src/lib/security.js` | Password hashing (PBKDF2/scrypt), TOTP/MFA, WebCrypto |
+| 4 | `src/lib/securityUtils.js` | CSRF tokens, rate limiting, audit entries, sanitization |
+| 5 | `src/lib/permissions.js` | Role-based access control, route permission mappings |
+| 6 | `src/lib/validator.js` | Email/input validation rules |
+| 7 | `src/pages/Login.jsx` | Login page with MFA flow |
+| 8 | `src/pages/Setup.jsx` | Owner account creation (first-run) |
+| 9 | `src/pages/ForgotPassword.jsx` | Password reset request flow |
+| 10 | `src/pages/ResetPassword.jsx` | Password reset execution |
+| 11 | `AGENTS.md` | AI agent rules (Gemini/Antigravity) |
+| 12 | `CLAUDE.md` | AI agent rules (Claude/OpenCode) |
+| 13 | `PROTECTED_FILES.md` | This protection list itself |
+| 14 | `.agents/rules/no-modify-protected.md` | Protection enforcement rule |
+
+---
+
+# 16. HOW TO RUN, TEST, DEPLOY
+
+### Start the App
+```powershell
+# Install dependencies (first time only)
+npm install
+
+# Start frontend + backend together (recommended for full development)
+base44 dev
+
+# Start frontend only (uses hosted Base44 backend)
+npm run dev
+
+# Open in browser
+# http://localhost:5173
+```
+
+### Run Tests
+```powershell
+# Run unit tests (Vitest, JSDOM)
+npm test
+
+# Run a specific probe test
+node --import ./scripts/_loader-boot.mjs scripts/probe-money-kept-fix.mjs
+
+# Run ALL probe tests (acceptance suite)
+node --import ./scripts/_loader-boot.mjs scripts/acceptance-harness.mjs
+
+# Lint the code
+npm run lint
+
+# Fix lint issues automatically
+npm run lint:fix
+```
+
+### Build for Production
+```powershell
+# Build production bundle (outputs to dist/)
+npm run build
+
+# Deploy via Vercel (automatic on git push to main, or manual CLI)
+```
+
+### Key Environment Variables / Secrets
+| Variable | Where It Lives | Required? | What It Does |
+|----------|---------------|-----------|-------------|
+| `AUDIT_CHAIN_SECRET` | Base44 Secrets | YES | Audit log HMAC key -- log will not work without it |
+| `OPENWEATHER_API_KEY` | Base44 Secrets | For weather | Weather widget API key |
+| `VITE_USE_LOCAL_AUTH` | `.env.*` files | Already set | Controls auth mode -- DO NOT set true in production |
+| `ALLOWED_ORIGINS` | Server env | For CORS | Comma-separated allowed origins |
+| `WEBHOOK_SECRET` | Server env | For webhooks | HMAC signature verification key |
+
+---
+
+# 17. AI RULES (For Any Model)
+
+### The 4 Golden Rules
+
+1. **NEVER GUESS, ONLY PROVE.**
+   - Scan the codebase before making changes.
+   - Write a test that fails to prove the problem exists.
+   - Run the test after fixing to prove it works.
+
+2. **ALWAYS FIX FROM THE CORE.**
+   - Find the root cause. Do not apply band-aids.
+   - If the core is complex, simplify it.
+
+3. **EXPLAIN LIKE I AM 10 YEARS OLD.**
+   - All documentation must be readable by a 10-year-old.
+   - Use plain language. No unnecessary jargon.
+
+4. **FULL PERMISSION GRANTED.**
+   - You may edit, delete, create, or refactor anything.
+   - EXCEPTION: Files in PROTECTED_FILES.md need owner permission first.
+
+### The 5-Step Workflow
+```
+1. SCAN    --> Read this BRAIN.md + relevant source files
+2. PROVE   --> Write a test that shows the problem
+3. FIX     --> Fix the root cause
+4. VERIFY  --> Run the test to prove it is fixed
+5. UPDATE  --> Update BRAIN.md to reflect what changed
+```
+
+### After Every Fix: UPDATE BRAIN.md!
+When you fix a bug, add a feature, or change anything significant:
+- Update the relevant section in this file
+- Change the status in the problem tracker (Section 14)
+- Add any new files to the directory map (Section 3) and library list (Section 5)
+- Update the dependency map if connections changed (Section 11)
+- This keeps the NEXT AI from wasting tokens re-scanning everything
+
+---
+
+# 18. GLOSSARY
+
+### Hotel Terms
+| Term | Meaning | Example |
+|------|---------|---------|
+| ADR | Average Daily Rate: avg price per room sold | $81.80 |
+| RevPAR | Revenue Per Available Room | $47.26 |
+| Occupancy % | How full the hotel is | 57.8% |
+| OTA | Online Travel Agency | Expedia, Booking.com |
+| PMS | Property Management System | HotelKey |
+| Comp Room | Free room (complimentary) | Loyalty guest |
+| No-Show | Guest booked but did not arrive | Charged anyway |
+| Direct Bill | Invoice sent to company | Corporate account |
+| Folio | Guest bill/invoice | All charges for one stay |
+| CPOR | Cost Per Occupied Room | Total costs / rooms sold |
+| GOPPAR | Gross Operating Profit Per Available Room | GOP / total rooms |
+| Flow-Through | % of incremental revenue that becomes profit | Higher = more efficient |
+
+### Tech Terms
+| Term | Meaning |
+|------|---------|
+| API | Way for programs to talk to each other |
+| Backend | Server code (hidden, does calculations) |
+| Frontend | Website UI (what you see in browser) |
+| CSV | Simple table file (like Excel but plain text) |
+| CSRF | Cross-Site Request Forgery (hacker trick) |
+| Entity | A database table in Base44 |
+| Hash | One-way encryption (cannot be reversed) |
+| MFA / TOTP | Multi-Factor Auth: 6-digit code from phone |
+| RBAC | Role-Based Access Control: who can do what |
+| RLS | Row-Level Security: data isolated per user/property |
+| scrypt | Strong password hashing algorithm |
+| PBKDF2 | Older password hashing (300k iterations, auto-upgrading to scrypt) |
+| Session | Server-side record of a logged-in user |
+| SRI | Subresource Integrity: browser verifies file not tampered |
+| WebSocket | Real-time two-way connection |
+| CRDT / Yjs | Technology for real-time collaborative editing |
+| Dexie | IndexedDB wrapper library for local browser storage |
+| BroadcastChannel | Browser API for cross-tab communication |
+| SSRF | Server-Side Request Forgery (attacker tricks server into making requests) |
+| IDOR | Insecure Direct Object Reference (accessing another user's data by guessing ID) |
+| CSWSH | Cross-Site WebSocket Hijacking |
+
+### Acronyms
+| Short | Full |
+|-------|------|
+| BI | Business Intelligence |
+| CSP | Content Security Policy |
+| GDPR | General Data Protection Regulation |
+| HSTS | HTTP Strict Transport Security |
+| OWASP | Open Web Application Security Project |
+| PCI DSS | Payment Card Industry Data Security Standard |
+
+---
+
+> REMEMBER: This file IS the project brain. When in doubt, search here first.
+> After making changes, UPDATE this file so the next AI does not have to scan 45,000 files.
+>
+> Core Rules: Never guess, only prove. Always fix from the core. Keep it simple.

@@ -8,7 +8,7 @@ import TaxConfigModal from "@/components/TaxConfigModal";
 import { ErrorState } from "@/components/ui/status";
 import { usePaymentData, useOccupancy, useClerkRecords, useSources } from "@/lib/useHotelData";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
-import { money, money2, sum, inRange, C } from "@/lib/hotel";
+import { money2, sum, inRange, C } from "@/lib/hotel";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { PAYMENT_METHOD_FIELDS, CARD_METHODS, refundTotalFromTotals } from "@/lib/paymentNorm";
 import { getTaxConfig, calculateTax, formatTaxRate, TAX_SOURCES } from "@/lib/taxConfig";
@@ -368,10 +368,10 @@ export default function Payments() {
         <>
           {/* KPI Cards */}
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-            <KpiCard label="Total Collected" value={money(totalCollected)} sub={`${payRows.length} days`} accent={C.purple} icon={DollarSign} />
-            <KpiCard label="Net Payment" value={money(netPaymentCollected)} sub={`After ${money(refunds)} refunds`} accent={C.green} icon={DollarSign} />
-            <KpiCard label="Cash" value={money(cashTotal)} sub={`${totalCollected ? ((cashTotal / totalCollected) * 100).toFixed(1) : 0}% of total`} accent={C.amber} icon={DollarSign} />
-            <KpiCard label="Card" value={money(cardTotal)} sub={`${totalCollected ? ((cardTotal / totalCollected) * 100).toFixed(1) : 0}% of total`} accent={C.cyan} icon={CreditCard} />
+            <KpiCard label="Total Collected" value={money2(totalCollected)} sub={`${payRows.length} days`} accent={C.purple} icon={DollarSign} />
+            <KpiCard label="Net Payment" value={money2(netPaymentCollected)} sub={`After ${money2(refunds)} refunds`} accent={C.green} icon={DollarSign} />
+            <KpiCard label="Cash" value={money2(cashTotal)} sub={`${totalCollected ? ((cashTotal / totalCollected) * 100).toFixed(1) : 0}% of total`} accent={C.amber} icon={DollarSign} />
+            <KpiCard label="Card" value={money2(cardTotal)} sub={`${totalCollected ? ((cardTotal / totalCollected) * 100).toFixed(1) : 0}% of total`} accent={C.cyan} icon={CreditCard} />
             <KpiCard
               label="Variance"
               value={money2(variance)}
@@ -411,7 +411,7 @@ export default function Payments() {
                     return (
                       <tr key={p.key} className="border-t border-white/5 transition-colors hover:bg-white/[0.03]">
                         <td className="py-2.5 pr-4 text-slate-200">{p.name}</td>
-                        <td className="py-2.5 pr-4 text-right tabular-nums text-white">{money(p.value)}</td>
+                        <td className="py-2.5 pr-4 text-right tabular-nums text-white">{money2(p.value)}</td>
                         <td className="py-2.5 pr-4 text-right tabular-nums text-slate-400">{pctOfTotal.toFixed(1)}%</td>
                         <td className="py-2.5 text-right text-xs text-slate-500">{category}</td>
                       </tr>
@@ -421,7 +421,7 @@ export default function Payments() {
                 <tfoot>
                   <tr className="border-t-2 border-white/10 bg-[#0A1628]/80">
                     <td className="py-3 pr-4 font-semibold text-white">TOTAL</td>
-                    <td className="py-3 pr-4 text-right font-heading text-lg font-semibold text-[#00D4FF]">{money(totalCollected)}</td>
+                    <td className="py-3 pr-4 text-right font-heading text-lg font-semibold text-[#00D4FF]">{money2(totalCollected)}</td>
                     <td className="py-3 pr-4 text-right tabular-nums text-slate-400">100.0%</td>
                     <td className="py-3 text-right text-xs text-slate-500">{paymentData.length} methods</td>
                   </tr>
@@ -447,12 +447,12 @@ export default function Payments() {
               <div className="grid gap-3 sm:grid-cols-3">
                 <div className="rounded-xl bg-[#0A1628]/60 p-4">
                   <p className="text-[10px] uppercase tracking-widest text-slate-500">Expected Revenue</p>
-                  <p className="mt-1 text-xl font-semibold text-white">{money(expectedRevenue)}</p>
+                  <p className="mt-1 text-xl font-semibold text-white">{money2(expectedRevenue)}</p>
                   <p className="text-xs text-slate-500">From occupancy reports</p>
                 </div>
                 <div className="rounded-xl bg-[#0A1628]/60 p-4">
                   <p className="text-[10px] uppercase tracking-widest text-slate-500">Recorded Payments</p>
-                  <p className="mt-1 text-xl font-semibold text-white">{money(totalCollected)}</p>
+                  <p className="mt-1 text-xl font-semibold text-white">{money2(totalCollected)}</p>
                   <p className="text-xs text-slate-500">From payment summary</p>
                 </div>
                 <div className="rounded-xl bg-[#0A1628]/60 p-4">
@@ -511,7 +511,7 @@ export default function Payments() {
                     {dailyTrend.map((d) => (
                       <tr key={d.date} className="border-t border-white/5">
                         <td className="py-2 pr-4 text-slate-300">{d.date}</td>
-                        <td className="py-2 pr-4 text-right tabular-nums text-white">{money(d.total)}</td>
+                        <td className="py-2 pr-4 text-right tabular-nums text-white">{money2(d.total)}</td>
                         <td className="py-2 pr-4 text-right tabular-nums text-slate-400">{money2(d.cash)}</td>
                         <td className="py-2 pr-4 text-right tabular-nums text-slate-400">{money2(d.card)}</td>
                         <td className="py-2 text-right tabular-nums text-slate-500">
@@ -568,7 +568,7 @@ export default function Payments() {
                         <p className="text-xs text-slate-500">{c.count} payment{c.count === 1 ? "" : "s"}</p>
                       </div>
                       <div className="text-right">
-                        <p className="font-heading text-base tabular-nums text-[#00D4FF]">{money(c.adjusted)}</p>
+                        <p className="font-heading text-base tabular-nums text-[#00D4FF]">{money2(c.adjusted)}</p>
                       </div>
                     </button>
                     {expandedClerk === c.clerk && (
@@ -581,7 +581,7 @@ export default function Payments() {
                         ))}
                         <div className="mt-2 flex items-center justify-between border-t border-white/5 pt-2">
                           <span className="text-xs font-medium text-slate-300">Total</span>
-                          <span className="font-heading text-sm tabular-nums text-[#00D4FF]">{money(c.adjusted)}</span>
+                          <span className="font-heading text-sm tabular-nums text-[#00D4FF]">{money2(c.adjusted)}</span>
                         </div>
                       </div>
                     )}

@@ -1,4 +1,4 @@
-import { toCents, fromCents } from '@/lib/decimal';
+import { toCents, fromCents, sumCents } from '@/lib/decimal';
 
 /**
  * Shared payroll calculation utilities
@@ -195,8 +195,23 @@ export function filterCommittedPay(runs = []) {
   return runs.filter(isCommittedPayroll);
 }
 
+/**
+ * Committed payroll for a set of runs, in dollars.
+ *
+ * Accumulated in integer cents. The comment above says the dashboard, Action
+ * Center, Expenses and Forecasting "can never disagree about the same month" —
+ * with a float `+` that guarantee held only for the ROW SET, not for the total:
+ * four callers summing the same runs in different orders can land on different
+ * last cents, and the one that gets subtracted from revenue decides what "money
+ * kept" says. Same rows, same order of magnitude, different answer.
+ *
+ * Units are unchanged (dollars in, dollars out), so all four call sites —
+ * src/components/dashboard/ModuleCards.jsx, src/lib/actionCenter.js,
+ * src/pages/Payroll.jsx and scripts/probe-profit-leakage.mjs — are unaffected
+ * apart from becoming cent-exact.
+ */
 export function sumCommittedPay(runs = []) {
-  return filterCommittedPay(runs).reduce((a, r) => a + (Number(r.total_pay) || 0), 0);
+  return fromCents(sumCents(filterCommittedPay(runs).map((r) => r.total_pay)));
 }
 
 export { MONTHS, pad, iso, lastDayOf, monthLabel };

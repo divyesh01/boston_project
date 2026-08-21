@@ -2,6 +2,34 @@
 
 Every piece of data stored. Each table has Row-Level Security (RLS) = data isolated per property/user.
 
+### The Canonical RLS Rule (read AND write must be byte-identical)
+
+10 of the 16 entities are property-scoped. Identify them by the `{{user.property_access}}`
+marker, never by a hardcoded list, so a new entity is covered automatically.
+
+```json
+{ "$and": [ {"user_condition":{"is_active":true}},
+            {"$or":[ {"user_condition":{"role":"admin"}},
+                     {"user_condition":{"role":"owner"}},
+                     {"data.property_id":{"$in":"{{user.property_access}}"}} ]} ] }
+```
+
+The operator ORDER is the whole security boundary, and both ways of getting it wrong are
+silent, because RLS is enforced by the **Base44 host** -- no local suite can observe it:
+
+| Corruption | Effect |
+|-----------|--------|
+| Inner `$or` flipped to `$and` | Demands one user be admin AND owner simultaneously. Nobody can read. Table looks empty. |
+| Outer `$and` flipped to `$or` | ANY active user passes regardless of role or property. **Cross-property data leak.** |
+
+**Fixed 2026-08-19:** `fix_entities.py` did a naive positional string replacement and left 9
+entities (`ClerkShiftRecord`, `Expense`, `OccupancyDay`, `PaymentDay`, `PayrollRun`,
+`SourceDay`, `Staff`, `TimecardPunch`, `UploadedReport`) with the sequence
+`[$and,$and,$or,$or]` instead of `[$and,$or,$and,$or]`. `GrossRevenueDay.jsonc` was the
+surviving healthy reference. Guarded by `scripts/probe-db-mock-rls.mjs`, which does not
+merely diff the JSON -- it EXECUTES every shipped rule against a 9-case access matrix
+(180 assertions), including the cross-property deny that SECURITY.md section 3 requires.
+
 ### Core Tables
 | Entity | File | What It Stores | Who Can Access |
 |--------|------|---------------|---------------|
@@ -73,6 +101,37 @@ Every piece of data stored. Each table has Row-Level Security (RLS) = data isola
 | **Import Drive File** | `importDriveFile/` | Downloads from Drive via OAuth, IDOR defense (tenant property check) | Drive import breaks or cross-tenant leak |
 | **List Drive Files** | `listDriveFiles/` | Lists CSV/spreadsheet files from connected Google Drive | Drive file picker breaks |
 
+### Fixed 2026-08-19: the `__B44_DB__` fake-database shim
+
+Seven of these functions (`aiAssistant`, `autoPayroll`, `backupToDrive`, `deleteAccount`,
+`getWeather`, `importDriveFile`, `listDriveFiles`) each opened with an injected line:
+
+```js
+const db = globalThis.__B44_DB__ || { entities: {...}, auth: { me: async () => null } };
+```
+
+whose methods returned `[]` / `null` / `{}`. So **every read returned "no rows" and every
+write was silently discarded.** `getWeather` returned 401 for everyone; two
+`AuditLog.create` calls went nowhere. Nothing caught it for months because
+`eslint.config.js` ignores `base44/**` entirely and `jsconfig.json`'s `include` is `src/**`
+only -- **`base44/**` is checked by NO automated tooling except the probes.**
+
+Origin was `AGENTS.md` line 1, which carried the same statement above its own heading: an
+agent reads its own rulebook and copies line 1 as the house way to query the database. The
+same codemod also broke `public/manifest.json` (one prepended JS line made `JSON.parse`
+fail, so browsers discarded the entire manifest and it shipped that way in `dist/`).
+
+Two traps when repairing this class of defect:
+
+- Preserve each author's elevation intent -- `db.asServiceRole.X` -> `base44.asServiceRole.X`,
+  bare `db.X` -> `base44.X`. Do NOT blanket-elevate.
+- `autoPayroll` never had an SDK client in ANY revision, so a mechanical `db.` -> `base44.`
+  rename leaves it broken. It needed `createClientFromRequest` added, and its call sites
+  deliberately elevated to `asServiceRole` because a scheduled cron run has no session
+  cookie and would be denied by the very RLS rules being repaired.
+
+`autoPayroll` and `deleteAccount` are now WRITERS on the audit chain (see BRAIN_SECURITY.md).
+
 ---
 
 # 9. ALL CONFIG FILES
@@ -94,7 +153,8 @@ Every piece of data stored. Each table has Row-Level Security (RLS) = data isola
 ### Environment Variables
 | File | Key Setting | What It Controls | DANGER |
 |------|------------|-----------------|--------|
-| `.env.local` | `VITE_USE_LOCAL_AUTH=false` | Default: use real serverless auth | - |
+| `.env.example` | **committed template** | The only place the required variable names are written down, each annotated with the file:line that reads it. `.gitignore` has an explicit `!.env.example` negation so `.env.*` cannot swallow it. | Deleting it leaves a new deploy nothing to copy |
+| `.env.local` | `VITE_USE_LOCAL_AUTH=false` | Default: use real serverless auth | Loaded by Vite in **every** mode including `vite build` — never put `true` here |
 | `.env.development` | `VITE_USE_LOCAL_AUTH=true` | Dev: use local IndexedDB auth shim | - |
 | `.env.production` | `VITE_USE_LOCAL_AUTH=false` | Prod: MUST use real auth | Setting to true = SECURITY DISASTER |
 
@@ -108,7 +168,22 @@ Every piece of data stored. Each table has Row-Level Security (RLS) = data isola
 
 ---
 
-# 10. ALL TEST SCRIPTS (106 Files)
+# 10. ALL TEST SCRIPTS — counts CORRECTED 2026-08-20
+
+Measured, not estimated. The heading here previously read "106 Files", which matched
+nothing countable:
+
+```
+scripts/ on disk, all files incl. subdirs   117
+  .mjs at the top level of scripts/          95
+  named probe-*.mjs / verify-*.mjs           73
+  auto-discovered as suites by verify:all    71   <- the number that matters
+vitest .test/.spec files elsewhere in repo   34
+```
+
+71, not 73, because `verify-all.mjs` (the runner) and `verify-brain.mjs` (a docs gate) are
+suite-named but excluded by name. Run `npm run verify:all -- --list` for the live list and
+the exclusion reasons; every run also prints a `list <id> (<n> discovered)` fingerprint.
 
 ### Test Infrastructure
 | File | What It Does |
@@ -119,7 +194,52 @@ Every piece of data stored. Each table has Row-Level Security (RLS) = data isola
 | `scripts/resolve-base44.mjs` | Custom ESM loader: redirects @base44/sdk to local stubs |
 | `scripts/stubs/base44-runtime.mjs` | In-memory Base44 host mock (secret store, entity DB) |
 | `scripts/stubs/base44-sdk.mjs` | In-memory SDK mock with -field sorting and monotonic sequences |
-| `scripts/acceptance-harness.mjs` | Runs ALL probe tests in sequence |
+| `scripts/acceptance-harness.mjs` | 11 stateful sections that must run in order. **It does NOT run all probe tests** — that is `npm run verify:all`. It is not even auto-discovered (its name matches neither `probe-*` nor `verify-*`), it needs `vite`, and section 3.5 deletes ~7918 rows through `fake-indexeddb` so it cannot finish in a Linux sandbox. Opt-in flags: `HARNESS_SKIP=3,4`, `HARNESS_TIMING=1` |
+| `scripts/probe-db-mock-rls.mjs` | **The only automated guard on `base44/**`.** Fails on any `__B44_DB__` shim or `db.*` call site in a serverless entry, deep-equals every property-scoped RLS rule against the canonical rule, then EXECUTES all 20 shipped rules against a 9-case access matrix. Mutation-self-tests every run: it rebuilds both historical RLS corruptions and fails if the matrix does not catch them. |
+| `scripts/probe-audit-chain.mjs` | Imports the REAL serverless entry files (via `resolve-base44.mjs`) and asserts all 7 copies of the canonical audit payload agree with the verifier |
+| `scripts/probe-deploy-config.mjs` | Parses (not pattern-matches) `manifest.json`, `vercel.json`, CSP headers |
 
 ### How To Run Tests
 ```powershell
+# EVERYTHING. Start here -- auto-discovers all 72 suites, distinguishes PASS / FAIL /
+# BROKEN (could not start) / TIMEOUT (could not finish) / BAD-EXIT / SKIP.
+npm run verify:all
+npm run verify:all -- --list            # the live list + why anything is excluded
+npm run verify:all -- --filter money    # one slice (plain substring match)
+npm run verify:all -- --shard 3/9       # the 3rd of 9 slices, for a capped wall clock
+
+# One suite
+node --import ./scripts/_loader-boot.mjs scripts/probe-money-kept-fix.mjs
+
+# Probes that run standalone (no loader needed -- they stub the host themselves)
+node scripts/probe-db-mock-rls.mjs
+node scripts/probe-audit-chain.mjs
+node scripts/probe-deploy-config.mjs
+
+# Static gates
+npm run lint            # eslint . --quiet     0 errors expected
+npm run lint:fix
+npm run typecheck       # tsc -p ./jsconfig.json with checkJs -- JSDoc is load-bearing
+npm run brain:verify    # documentation gate (git hook); NOT a behaviour suite
+
+# Vitest unit tests (34 .test/.spec files)
+npm test                # vitest run
+npm run test:watch
+```
+
+> [!CAUTION]
+> **`npm test` and `scripts/acceptance-harness.mjs` do not run in a Linux sandbox** when
+> `node_modules` was installed on Windows. Measured 2026-08-20:
+> `Error: Cannot find module @rollup/rollup-linux-x64-gnu`. Same cause as the
+> `verify-harness.mjs` SKIP. That is an environment limit, **not** a passing result — run
+> them on Windows or in CI, and record them as *Not Run* anywhere else.
+>
+> **Do not lower `--timeout` to make a run fit a command-time cap.** It kills slow suites
+> and labels them TIMEOUT, which fabricates failures. Shard the list instead, and confirm
+> every shard printed the same `list <id>` before adding the shards up. Both traps are
+> written up in BRAIN_TROUBLESHOOTING.md 22.3 and 22.5.
+
+> [!IMPORTANT]
+> `verify-transactions.mjs` and `verify-coexistence.mjs` MUST be run with
+> `node --import ./scripts/_loader-boot.mjs`. Bare `node scripts/verify-*.mjs` dies on the
+> `@/lib` alias or attempts a real HTTP call, which looks like a code failure but is not.

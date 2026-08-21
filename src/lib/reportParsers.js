@@ -168,6 +168,38 @@ const COLUMN_MAP = {
   "Zero Rate Rooms": "zero_rate_rooms", "Day Use Rooms": "day_use_rooms",
   "Total No Shows": "no_shows", "Total Cancellations": "cancellations",
   "Total Guests": "total_guests",
+  // The Occupancy Summary export prints FOUR occupancy columns, one per denominator
+  // convention, all in percent form (19 means 19%). Only ONE is mapped, deliberately:
+  //
+  //   Occupancy Including OOO Comp and House Use            <- mapped
+  //   Occupancy Excluding OOO Comp and House Use            <- not mapped
+  //   Occupancy Including OOO Excluding Comp and House Use  <- not mapped
+  //   Occupancy Excluding OOO Including Comp and House Use  <- not mapped
+  //
+  // Mapping more than one would be a silent bug rather than extra coverage: mapRow
+  // iterates Object.entries, so the last matching column in the row would overwrite
+  // the earlier ones and which definition "won" would depend on column order.
+  //
+  // The one chosen is the one that matches the audited room counts. Measured over
+  // `scripts/data/Occupancy Summary midelboro.csv`: 214 rows compared,
+  // `Total Sold Rooms / Total Rooms x 100` equals this column on every row, 0
+  // mismatches at 2dp. The other three use denominators the data model does not carry
+  // (out-of-order, comp and house-use rooms are separate columns), so importing them
+  // as "occupancy" would mean four different numbers under one name.
+  //
+  // ADDED 2026-08-20. Before this, no header spelling mapped to `occupancy` at all,
+  // even though `occupancy` is in NUMERIC_FIELDS and is a declared field on the
+  // OccupancyDay entity. Consequences, in order of how quietly each one failed:
+  //   1. Every import of a clean Occupancy Summary raised an `unknown_columns`
+  //      warning naming all four columns. A warning that fires on every good file
+  //      trains the owner to dismiss the one that matters.
+  //   2. A file with sold rooms but no `Total Rooms` imported occupancy as 0 — a full
+  //      hotel recorded as empty, and it propagates into ADR and RevPAR.
+  //   3. The percent-form branch in scanReport was unreachable, so it could not be
+  //      tested. See the DEFECT FIXED note there.
+  // This mapping changes no imported value for the real file (room counts are present
+  // and still take precedence); it only makes the fallback reachable and correct.
+  "Occupancy Including OOO Comp and House Use": "occupancy",
   "Revpar With OOO Rooms": "revpar", "Revpar Without OOO Rooms": "revpar_without_ooo",
   "RevPAR With OOO Rooms": "revpar", "RevPAR Without OOO Rooms": "revpar_without_ooo",
   "Room Rent": "room_rent", "Misc Charge": "misc_charge",
@@ -182,6 +214,18 @@ const COLUMN_MAP = {
   "CLOSED BALANCE FOLIO": "closed_balance_folio", CORPAY: "corpay",
   "DIRECT BILL": "direct_bill", AMEX: "amex", DISCOVER: "discover",
   MASTER: "master", VISA: "visa",
+  // The Payments Summary prints its tender columns in all-caps, so `OTHER` never
+  // matched the `Other: "other"` entry above (this map is exact-match, not
+  // case-folded). ADDED 2026-08-20: `other` is a DECLARED field on the PaymentDay
+  // entity, so the schema always expected this column — only the mapping was missing,
+  // and the tender was dropped from the method breakdown without a word.
+  //
+  // Measured impact on existing data: nil. Across all three real Payments Summary
+  // files (217 rows) the OTHER column is 0.00 on every row, so no historical figure
+  // moves. The defect was latent: the first day a guest settles through an "other"
+  // tender, the per-method breakdown stops summing to the printed `Total` and the
+  // difference has nowhere to show up.
+  OTHER: "other",
   "LOYALTY CERTIFICATE": "loyalty_certificate", "LOYALTY DISCOUNT": "loyalty_discount",
   "VIP PASS": "vip_pass", "WIRE TRANSFER": "wire_transfer",
   Total: "total", TOTAL: "total",
@@ -203,7 +247,13 @@ const NUMERIC_FIELDS = new Set([
   "total",
 ]);
 
-const ENTITY = {
+// The report-type -> store map. EXPORTED 2026-08-20 so that the set of stores an
+// import writes to is declared exactly once. src/lib/importReset.js derives what a
+// "clear all imported data" must empty from these values, because the previous
+// arrangement kept a second, hand-copied list of table names inside a React event
+// handler in src/pages/Import.jsx — and that copy was already two entries short.
+// Adding a report type here now also teaches clear-all about it.
+export const ENTITY = {
   occupancy: "OccupancyDay",
   source: "SourceDay",
   gross: "GrossRevenueDay",
@@ -493,14 +543,44 @@ export async function scanReport(type, fileUrl, meta = {}) {
         }
         r.date = converted;
       }
-      // For occupancy: calculate occupancy ratio from rooms_sold/total_rooms if occupancy not set or > 1
+      // Occupancy arrives in two forms depending on the PMS export: a ratio (0.85)
+      // or a percentage (85). Room counts, when present, are two audited integers and
+      // are preferred over either printed form.
+      //
+      // DEFECT FIXED 2026-08-20 — DO NOT COLLAPSE THESE BRANCHES BACK. The code was:
+      //
+      //     if (!r.occupancy || r.occupancy > 1) { ...sold/total, else 0... }
+      //     else if (r.occupancy > 1) { r.occupancy = r.occupancy / 100; }
+      //
+      // The `else if` is unreachable: the `if` above it already caught every value
+      // > 1. So an export that prints occupancy as `85` with no room-count columns
+      // fell into the first branch, found total === 0, and was assigned **0** — the
+      // percentage was thrown away and the day was recorded as an empty hotel. Silent,
+      // no warning, and it survives into ADR and RevPAR because those read occupancy.
+      //
+      // Only the `printed > 1 && total === 0` case changes behaviour here. Every other
+      // input produces exactly what it produced before, which is what makes this safe
+      // to apply to historical re-imports.
+      //
+      // BEST OUTCOME NOTE: a ratio already in (0, 1] is left EXACTLY as imported even
+      // when room counts are present. Recomputing it from the counts would silently
+      // overwrite what the PMS printed, and a disagreement between the printed ratio
+      // and sold/total is a data-quality signal the owner should see rather than one
+      // this parser should paper over.
       if (resolvedType === "occupancy") {
-        if (!r.occupancy || r.occupancy > 1) {
+        const printed = Number(r.occupancy);
+        if (!printed || printed > 1) {
           const sold = Number(r.rooms_sold) || 0;
           const total = Number(r.total_rooms) || 0;
-          r.occupancy = total > 0 ? sold / total : 0;
-        } else if (r.occupancy > 1) {
-          r.occupancy = r.occupancy / 100;
+          if (total > 0) {
+            r.occupancy = sold / total;
+          } else if (printed > 1) {
+            // Percent form with nothing to derive from. Values over 100 stay over 1
+            // on purpose: >100% occupancy is the signal for a duplicated import.
+            r.occupancy = printed / 100;
+          } else {
+            r.occupancy = 0;
+          }
         }
       }
       return r;
@@ -516,6 +596,43 @@ export async function scanReport(type, fileUrl, meta = {}) {
   // Validation runs on the raw grid + mapped rows so the scan preview can show
   // what would be corrupted before anything is imported. Errors block the
   // import unless force-imported; warnings only display.
+  //
+  // ADDED 2026-08-20 — the occupancy default disarmed a required-column check.
+  //
+  // `REQUIRED_FIELDS.occupancy` in importValidation.js demands one of `occupancy` or
+  // `rooms_sold`, and it decides "present" by looking for the field on a mapped row.
+  // The branch above always writes `r.occupancy`, including the `= 0` fallback — so a
+  // file carrying neither an occupancy column nor room counts arrived at the
+  // validator with `occupancy: 0` on every row, satisfied the requirement, and
+  // imported with **no findings at all**. Every day recorded as an empty hotel, and
+  // the one layer built to catch exactly that had been switched off by an upstream
+  // default. Found by scripts/probe-validation-gaps.mjs, which asserts the finding.
+  //
+  // Reported through `extraFindings` rather than by removing the `= 0` default: the
+  // default is what keeps `occupancy` a number for every downstream consumer, and
+  // `extraFindings` is the sanctioned channel for "a problem only the parser that
+  // owns this format can see". No imported value changes.
+  //
+  // The all-rows-affected escalation mirrors `unparseable_dates` in the same module
+  // instead of inventing a second convention: a whole file of underivable rows is a
+  // wrong-file error, while a handful is a warning that must not block the rest.
+  const underivable = resolvedType === "occupancy"
+    ? processed.filter((r) => Number(r.occupancy) === 0 && !(Number(r.total_rooms) > 0)).length
+    : 0;
+  const extraFindings = [];
+  if (underivable) {
+    const all = underivable === processed.length;
+    extraFindings.push(makeFinding(
+      "structural",
+      all ? SEVERITY.ERROR : SEVERITY.WARNING,
+      "occupancy_underivable",
+      all
+        ? `No occupancy could be determined for any of the ${underivable} row(s): the file has neither a recognised occupancy column nor "Total Rooms". Every day would import as an empty hotel. This may not be an Occupancy Summary.`
+        : `${underivable} row(s) have no occupancy and no "Total Rooms" to derive it from, so they imported as 0% — an empty hotel for those days.`,
+      { count: underivable, rows: processed.length },
+    ));
+  }
+
   const validation = validateImport({
     rawRows,
     rows: processed,
@@ -523,6 +640,7 @@ export async function scanReport(type, fileUrl, meta = {}) {
     knownColumns: new Set(Object.keys(COLUMN_MAP)),
     coercions,
     dateFailures: debugInfo.dateParseErrors || 0,
+    extraFindings,
   });
 
   return {
@@ -953,7 +1071,13 @@ function scanClerkReport(rawRows, meta, objects = []) {
 // The parser uses a state machine over rawRows (already tokenized by parseCsvText)
 // to detect section boundaries and extract every cell without loss.
 
-function scanAdjustmentsRefunds(rawRows, meta) {
+// Exported so scripts/probe-adjustments.mjs can drive it directly against a real
+// CSV fixture. It was module-private, so that probe died at import with
+// "does not provide an export named 'scanAdjustmentsRefunds'" and had never run.
+// Exporting is the honest fix: the alternative — copying the parser into the probe
+// — is what scripts/test-parser.mjs already did, and that copy has since drifted
+// from this one, so it proves nothing about shipped behaviour.
+export function scanAdjustmentsRefunds(rawRows, meta) {
   const adjustments = [];
   const refunds = [];
   const summary = {};
@@ -972,6 +1096,66 @@ function scanAdjustmentsRefunds(rawRows, meta) {
       const lower = h.toLowerCase().trim();
       return keywords.some((kw) => lower.includes(kw));
     });
+  };
+
+  // Is this row a totals/subtotal line rather than a record?
+  //
+  // THIS USED TO BE A SUBSTRING TEST AND IT LOST MONEY. The old code asked
+  // `has("total")`, which is true when ANY cell of the row contains the substring
+  // anywhere, and it asked before the data-row branches ran. Measured 2026-08-20
+  // with scripts/probe-adjustments.mjs §3, against this function:
+  //
+  //   Date,...,Guest Name,...,Adjusted Amount,...,Remarks
+  //   01-Feb-26,...,"Smith, John",...,-25.00,...,total comp approved
+  //     -> adjustments: []                              (the row is GONE)
+  //     -> summary: { "adj_01-Feb-26": 0 }              (filed as a subtotal of 0)
+  //
+  // A guest surname, a remark, a charge type — any cell mentioning a total erased
+  // that row from the import. Worse on a table narrow enough to reach the old
+  // `row.length <= 5` arm: the same match set state = "SUMMARY", so every REMAINING
+  // row of the table was swallowed too. Silent row loss on a financial import is
+  // exactly what this project forbids; nothing surfaced, no count, no warning.
+  //
+  // A totals line is now identified by three structural properties, all required:
+  //   1. its first populated cell READS as a total label ("Total", "Sub-Total",
+  //      "Grand Total", "Total Adjustments", "Room Total"),
+  //   2. that cell sits at the left edge — in or before the date column, where
+  //      labels live; a record's first populated cell is its date, so a guest
+  //      literally named "Total Wine & More" can never qualify, and
+  //   3. the row carries no usable transaction date.
+  // Text in a remark is now just text, while a real "Sub-Total" line is still
+  // recognised and still kept out of the record arrays.
+  const TOTAL_LABEL = /^(?:grand\s+|sub[-\s]?)?totals?\b|\btotals?\s*:?\s*$/;
+  const isTotalsLine = (cells, headers) => {
+    const firstIdx = cells.findIndex((c) => String(c).trim() !== "");
+    if (firstIdx < 0) return false;
+    if (!TOTAL_LABEL.test(String(cells[firstIdx]).toLowerCase().trim())) return false;
+    const dIdx = headerIndex(headers, "date");
+    if (dIdx >= 0 && firstIdx > dIdx) return false;
+    const dateCell = dIdx >= 0 && dIdx < cells.length ? String(cells[dIdx]).trim() : "";
+    return !isIsoDate(convertDate(dateCell));
+  };
+
+  // What number does a totals line carry?
+  //
+  // This used to be `parseAmount(row[row.length - 1])`, which assumes the amount is
+  // the final cell. It frequently is not: "Total,,,-48.00," — a totals line on a
+  // table whose last column is Username — recorded 0, so the summary silently
+  // disagreed with the rows it was meant to be summarising. Prefer the table's own
+  // amount column, and fall back to the last cell that actually parses as money.
+  // The label cell never parses as money, so the fallback cannot mistake it for a
+  // value.
+  const totalsValue = (cells, headers) => {
+    const amtIdx = headerIndex(headers, "adjusted amount", "amount");
+    if (amtIdx >= 0 && amtIdx < cells.length) {
+      const v = parseAmount(cells[amtIdx]);
+      if (v != null) return v;
+    }
+    for (let c = cells.length - 1; c >= 0; c--) {
+      const v = parseAmount(cells[c]);
+      if (v != null) return v;
+    }
+    return 0;
   };
 
   for (let i = 0; i < rawRows.length; i++) {
@@ -1001,25 +1185,34 @@ function scanAdjustmentsRefunds(rawRows, meta) {
       continue;
     }
 
-    // Detect totals/summary row (e.g. "Total", "Grand Total")
-    if (has("total") && (has("grand") || row.length <= 5)) {
-      state = "SUMMARY";
-      // Parse totals — typically label + value pairs
-      const label = String(row[0] || "").trim();
-      const value = parseAmount(row[row.length - 1]) ?? 0;
-      summary[label] = value;
+    // Totals / subtotal line. One branch handles all three positions (top level,
+    // inside the adjustments table, inside the refunds table) so the "is this a
+    // total?" question is answered in exactly one place — isTotalsLine above.
+    //
+    // Only a TOP-LEVEL totals line opens the SUMMARY section. A subtotal printed
+    // inside a table must not put the scanner into a state that then eats the rest
+    // of that table, which is how the old `row.length <= 5` arm behaved.
+    const activeHeaders = state === "ADJUSTMENTS" ? adjHeaders : state === "REFUNDS" ? refHeaders : null;
+    if (isTotalsLine(row, activeHeaders)) {
+      // Label the value by where it was found, preserving the existing key scheme
+      // (`adj_`/`ref_` inside a table, bare label at top level) that the preview
+      // in the import UI reads.
+      const label = String(row[0] || "").trim() || "Total";
+      const value = totalsValue(row, activeHeaders);
+      if (state === "ADJUSTMENTS") summary[`adj_${label}`] = value;
+      else if (state === "REFUNDS") summary[`ref_${label}`] = value;
+      else {
+        state = "SUMMARY";
+        summary[label] = value;
+      }
       continue;
     }
 
     // Parse adjustment row
     if (state === "ADJUSTMENTS" && adjHeaders) {
-      // Skip sub-total rows
-      if (has("total") || has("sub-total") || has("subtotal")) {
-        const label = String(row[0] || "").trim();
-        summary[`adj_${label}`] = parseAmount(row[row.length - 1]) ?? 0;
-        continue;
-      }
-
+      // No subtotal test here any more — isTotalsLine already ran above for this
+      // state and consumed the row if it was one. The old test at this point was a
+      // second `has("total")` substring scan, so it dropped the same data rows.
       const dateIdx      = headerIndex(adjHeaders, "date");
       const timeIdx      = headerIndex(adjHeaders, "time");
       const txnTypeIdx   = headerIndex(adjHeaders, "transaction type");
@@ -1055,13 +1248,9 @@ function scanAdjustmentsRefunds(rawRows, meta) {
 
     // Parse refund row
     if (state === "REFUNDS" && refHeaders) {
-      // Skip sub-total rows
-      if (has("total") || has("sub-total") || has("subtotal")) {
-        const label = String(row[0] || "").trim();
-        summary[`ref_${label}`] = parseAmount(row[row.length - 1]) ?? 0;
-        continue;
-      }
-
+      // Same as the adjustments branch: isTotalsLine above already consumed a real
+      // subtotal line, and the substring test that used to sit here dropped refunds
+      // whose remarks mentioned a total.
       const dateIdx      = headerIndex(refHeaders, "date");
       const timeIdx      = headerIndex(refHeaders, "time");
       const guestIdx     = headerIndex(refHeaders, "guest name", "name");

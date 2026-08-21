@@ -86,6 +86,15 @@ export default function OtaChannels() {
     setCommissionRates(updated);
   };
 
+  // Memoised: this used to be an inline `.filter(...)` in the JSX, which handed
+  // PaymentMethodChart a brand-new array identity on every render and defeated
+  // its useMemo, so the whole payment-method rollup recomputed on every
+  // keystroke in the fee box.
+  const payRowsInRange = useMemo(
+    () => payRows.filter((r) => inRange(r.date, dateRange.from, dateRange.to)),
+    [payRows, dateRange.from, dateRange.to]
+  );
+
   const updateCcFee = (v) => {
     const val = parseFloat(v) || 0;
     const frac = Math.min(0.9999, Math.max(0, val / 100));
@@ -245,7 +254,7 @@ export default function OtaChannels() {
           </div>
         </Card>
 
-        <PaymentMethodChart payRows={payRows.filter((r) => inRange(r.date, dateRange.from, dateRange.to))} />
+        <PaymentMethodChart payRows={payRowsInRange} />
 
         {channels.length > 0 && (
           <Card title="Channel Optimization Insights">

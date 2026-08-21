@@ -8,9 +8,10 @@ import KpiCard from "@/components/ui-exec/KpiCard";
 import StatusBadge from "@/components/ui-exec/StatusBadge";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
-import { money, num, pct, C, PROPERTY } from "@/lib/hotel";
+import { num, pct, C, PROPERTY, money2 } from "@/lib/hotel";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { nextEmployeeId } from "@/lib/employeeId";
+import { reserveEmployeeId } from "@/lib/employeeId";
+import { sumCents, fromCents } from "@/lib/decimal";
 import { guardDestructiveAction } from "@/lib/deleteGuard";
 import { toast } from "sonner";
 import { sfx } from "@/lib/sound";
@@ -292,6 +293,9 @@ export default function Payroll() {
       // Optionally add them to the directory so the monthly engine picks them
       // up from here on, instead of the owner re-entering the amount forever.
       if (quickForm.saveToStaff && !existingStaff) {
+        // Reserved, not derived: the id is persisted before use so a deleted
+        // employee's id can never be handed to this new hire (see employeeId.js).
+        const reservedId = await reserveEmployeeId(name, staff);
         await db.entities.Staff.create({
           employee_name: name,
           department: quickForm.department || "",
@@ -303,7 +307,7 @@ export default function Payroll() {
           bonus: 0,
           deductions: 0,
           active: true,
-          employee_id: nextEmployeeId(name, staff),
+          employee_id: reservedId,
           property_id: propertyId,
           property_name: propertyName,
         });
@@ -314,14 +318,14 @@ export default function Payroll() {
         await db.audit.log({
           username: "system",
           action: "Payroll Quick Add",
-          detail: `${name} — ${money(amount)} for ${quickPeriod.label} (${quickForm.status}).`,
+          detail: `${name} — ${money2(amount)} for ${quickPeriod.label} (${quickForm.status}).`,
         });
       } catch (e) {
         console.error("[audit] quick payroll:", e);
       }
 
       invalidateMoney();
-      setEngineMsg({ status: "ok", message: `Recorded ${money(amount)} for ${name} — ${quickPeriod.label}.` });
+      setEngineMsg({ status: "ok", message: `Recorded ${money2(amount)} for ${name} — ${quickPeriod.label}.` });
       setQuickForm((f) => ({ ...f, employee_name: "", department: "", amount: "", saveToStaff: false }));
       setShowQuickAdd(false);
       sfx.success();
@@ -339,6 +343,9 @@ export default function Payroll() {
     if (!staffForm.employee_name || !staffForm.base_rate) return;
     const baseRate = Number(staffForm.base_rate) || 0;
     const p = propFor();
+    // Reserved before the create so two rapid clicks cannot both be issued the
+    // same id, and so a departed employee's id is never reissued.
+    const reservedId = await reserveEmployeeId(staffForm.employee_name, staff);
     await db.entities.Staff.create({
       ...staffForm,
       base_rate: baseRate,
@@ -347,7 +354,7 @@ export default function Payroll() {
       overtime_rate: Number(staffForm.overtime_rate) || baseRate * 1.5,
       bonus: Number(staffForm.bonus) || 0,
       deductions: Number(staffForm.deductions) || 0,
-      employee_id: nextEmployeeId(staffForm.employee_name, staff),
+      employee_id: reservedId,
       property_id: property !== "all" ? property : "",
       property_name: p?.name || "",
     });
@@ -364,13 +371,27 @@ export default function Payroll() {
   };
 
   const handleDeleteStaff = async (s) => {
+    // Matched by name because PayrollRun stores employee_name, not a link to this
+    // record (base44/entities/PayrollRun.jsonc has no staff_id). Normalised, because
+    // a missed match under-reports — it would tell the owner no pay history exists
+    // when it does, which is the one number worth knowing before removing someone.
+    const nameKey = String(s?.employee_name || "").trim().toLowerCase();
+    const ownRuns = nameKey
+      ? payroll.filter((r) => String(r?.employee_name || "").trim().toLowerCase() === nameKey)
+      : [];
+    const ownRunCents = sumCents(ownRuns.map((r) => r?.total_pay || 0));
+
     const gate = guardDestructiveAction({
       title: `Remove ${s?.employee_name || "this staff member"} from the directory?`,
       lines: [
-        `${s?.employee_id || "no employee id"} · ${s?.department || "no department"} · ${money(s?.base_rate || 0)}${s?.pay_type === "salary" ? "/mo" : "/hr"}`,
-        "Payroll runs already recorded for this person are kept — runs store the employee name, not a link to this record.",
+        `${s?.employee_id || "no employee id"} · ${s?.department || "no department"} · ${money2(s?.base_rate || 0)}${s?.pay_type === "salary" ? "/mo" : "/hr"}`,
         "They will no longer appear in future payroll runs or projections.",
       ],
+      dependents: [{
+        label: ownRuns.length === 1 ? "payroll run" : "payroll runs",
+        count: ownRuns.length,
+        detail: `${money2(fromCents(ownRunCents))} already recorded`,
+      }],
     });
     if (!gate.ok) {
       if (gate.message) toast.error(gate.message);
@@ -601,7 +622,7 @@ export default function Payroll() {
           await db.audit.log({
             username: "system",
             action: "Historical Payroll Posted",
-            detail: `Posted ${created} historical payroll run(s) for ${staffSource.length} staff over ${periods.length} month(s). Total: ${money(postedTotal)}. Skipped ${skipped} existing.`,
+            detail: `Posted ${created} historical payroll run(s) for ${staffSource.length} staff over ${periods.length} month(s). Total: ${money2(postedTotal)}. Skipped ${skipped} existing.`,
           });
         } catch (e) {
           console.error("[audit] historical payroll:", e);
@@ -642,9 +663,9 @@ export default function Payroll() {
     const gate = guardDestructiveAction({
       title: `Delete the payroll run for ${p?.employee_name || "this employee"}?`,
       lines: [
-        `${money(p?.total_pay || 0)} · ${p?.pay_period_start || "—"} to ${p?.pay_period_end || "—"} · marked ${p?.payroll_status || "draft"}`,
+        `${money2(p?.total_pay || 0)} · ${p?.pay_period_start || "—"} to ${p?.pay_period_end || "—"} · marked ${p?.payroll_status || "draft"}`,
         committed
-          ? `This run is ${p.payroll_status}, so deleting it removes the record of pay already committed and will increase reported Money Kept by ${money(p?.total_pay || 0)}.`
+          ? `This run is ${p.payroll_status}, so deleting it removes the record of pay already committed and will increase reported Money Kept by ${money2(p?.total_pay || 0)}.`
           : "This run is not approved or paid, so Money Kept does not change.",
       ],
     });
@@ -800,10 +821,10 @@ export default function Payroll() {
       </header>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Total Payroll" value={money(totalPay)} sub={`${payroll.length} runs · OT ${money(totalOT)}`} accent={C.green} icon={DollarSign} />
-        <KpiCard label="Deducted From Cash" value={money(committedPay)} sub={draftCount ? `${draftCount} draft not counted` : "All runs counted"} accent={C.cyan} icon={Wallet} />
+        <KpiCard label="Total Payroll" value={money2(totalPay)} sub={`${payroll.length} runs · OT ${money2(totalOT)}`} accent={C.green} icon={DollarSign} />
+        <KpiCard label="Deducted From Cash" value={money2(committedPay)} sub={draftCount ? `${draftCount} draft not counted` : "All runs counted"} accent={C.cyan} icon={Wallet} />
         <KpiCard label="Approved" value={num(approvedCount)} sub={`${paidCount} paid · ${draftCount} draft`} accent={C.amber} icon={CheckCircle2} />
-        <KpiCard label="Deductions" value={money(totalDeductions)} sub={`Bonus: ${money(totalBonus)}`} accent={C.coral} icon={DollarSign} />
+        <KpiCard label="Deductions" value={money2(totalDeductions)} sub={`Bonus: ${money2(totalBonus)}`} accent={C.coral} icon={DollarSign} />
       </div>
 
       {/* ─── Automated Payroll Engine ─── */}
@@ -948,13 +969,13 @@ export default function Payroll() {
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <div className="rounded-xl border border-[#00D4FF]/30 bg-[#00D4FF]/[0.06] p-3">
                 <p className="text-[10px] uppercase tracking-widest text-slate-500">Payroll — {projection.months} mo</p>
-                <p className="mt-1 font-heading text-2xl font-semibold text-white">{money(projection.totalPay)}</p>
-                <p className="mt-0.5 text-[10px] text-slate-500">{money(projection.avgMonthly)} / month average</p>
+                <p className="mt-1 font-heading text-2xl font-semibold text-white">{money2(projection.totalPay)}</p>
+                <p className="mt-0.5 text-[10px] text-slate-500">{money2(projection.avgMonthly)} / month average</p>
               </div>
               <div className="rounded-xl border border-[#00E096]/30 bg-[#00E096]/[0.06] p-3">
                 <p className="text-[10px] uppercase tracking-widest text-slate-500">Revenue @ {occPct}% occ</p>
-                <p className="mt-1 font-heading text-2xl font-semibold text-white">{money(projection.totalRev)}</p>
-                <p className="mt-0.5 text-[10px] text-slate-500">{money(projection.avgRevMonthly)} / month · {projection.rooms} rooms</p>
+                <p className="mt-1 font-heading text-2xl font-semibold text-white">{money2(projection.totalRev)}</p>
+                <p className="mt-0.5 text-[10px] text-slate-500">{money2(projection.avgRevMonthly)} / month · {projection.rooms} rooms</p>
               </div>
               <div className="rounded-xl border border-[#FFB547]/30 bg-[#FFB547]/[0.06] p-3">
                 <p className="text-[10px] uppercase tracking-widest text-slate-500">Payroll % of revenue</p>
@@ -984,8 +1005,8 @@ export default function Payroll() {
                   {projection.rows.map((r, i) => (
                     <tr key={i} className="border-b border-white/5">
                       <td className="py-2 pr-3 font-medium text-white">{r.label}</td>
-                      <td className="py-2 px-3 text-right tabular-nums text-white">{money(r.total)}</td>
-                      <td className="py-2 px-3 text-right tabular-nums text-slate-300">{money(r.revenueAtOcc)}</td>
+                      <td className="py-2 px-3 text-right tabular-nums text-white">{money2(r.total)}</td>
+                      <td className="py-2 px-3 text-right tabular-nums text-slate-300">{money2(r.revenueAtOcc)}</td>
                       <td className="py-2 px-3 text-right tabular-nums text-[#FFB547]">{r.revenueAtOcc > 0 ? pct(r.total / r.revenueAtOcc) : "—"}</td>
                       <td className="py-2 px-3 text-right tabular-nums text-[#00D4FF]">{pct(r.breakEvenOcc / 100)}</td>
                       <td className="py-2 px-3 text-right">
@@ -1000,8 +1021,8 @@ export default function Payroll() {
             <div className="rounded-xl border border-[#00E096]/20 bg-[#00E096]/[0.04] p-3 text-xs text-slate-300">
               <p className="font-medium text-[#00E096]">Reading the break-even</p>
               <p className="mt-1">
-                With {projection.rooms} rooms at {money(projection.adr)}/night you need <span className="font-semibold text-white">{pct(projection.breakEvenOcc / 100)}</span> occupancy for room revenue alone to cover your
-                {money(projection.totalPay)} payroll ({money(projection.avgMonthly)}/mo). At {occPct}% occupancy you pull {money(projection.avgRevMonthly)}/month of room revenue — your payroll runs {pct(projection.payrollRatio / 100)} of it.
+                With {projection.rooms} rooms at {money2(projection.adr)}/night you need <span className="font-semibold text-white">{pct(projection.breakEvenOcc / 100)}</span> occupancy for room revenue alone to cover your
+                {money2(projection.totalPay)} payroll ({money2(projection.avgMonthly)}/mo). At {occPct}% occupancy you pull {money2(projection.avgRevMonthly)}/month of room revenue — your payroll runs {pct(projection.payrollRatio / 100)} of it.
               </p>
             </div>
           </div>
@@ -1106,7 +1127,7 @@ export default function Payroll() {
                   <div>
                     <p className="text-sm text-white">{s.employee_name}</p>
                     <p className="text-xs text-slate-500">
-                      {s.department || "—"} · {s.pay_type} · {s.pay_type === "salary" ? money(s.base_rate) + "/mo" : money(s.base_rate) + "/hr"}
+                      {s.department || "—"} · {s.pay_type} · {s.pay_type === "salary" ? money2(s.base_rate) + "/mo" : money2(s.base_rate) + "/hr"}
                     </p>
                   </div>
                 </div>
@@ -1147,7 +1168,7 @@ export default function Payroll() {
       {/* ─── Payroll runs ─── */}
       <Card
         title="Payroll Runs"
-        subtitle={`${payroll.length} entries · ${money(totalPay)} total`}
+        subtitle={`${payroll.length} entries · ${money2(totalPay)} total`}
         right={
           <button
             onClick={() => setShowForm(true)}
@@ -1256,8 +1277,8 @@ export default function Payroll() {
               </div>
               <div className="flex items-center gap-4">
                 <div className="text-right">
-                  <p className="text-xs text-slate-500">Reg {money(p.regular_pay || 0)} · OT {money(p.overtime_pay || 0)}</p>
-                  <p className="text-sm font-heading text-white">{money(p.total_pay || 0)}</p>
+                  <p className="text-xs text-slate-500">Reg {money2(p.regular_pay || 0)} · OT {money2(p.overtime_pay || 0)}</p>
+                  <p className="text-sm font-heading text-white">{money2(p.total_pay || 0)}</p>
                 </div>
                 <select
                   value={p.payroll_status || "draft"}
@@ -1399,7 +1420,7 @@ export default function Payroll() {
                   className="mt-0.5 h-4 w-4 accent-[#00E096]"
                 />
                 <span className="text-xs text-slate-300">
-                  Also add to Staff Directory as a {money(Number(quickForm.amount) || 0)}/month salary
+                  Also add to Staff Directory as a {money2(Number(quickForm.amount) || 0)}/month salary
                   <span className="block text-[10px] text-slate-500">So the monthly engine pays them automatically from now on.</span>
                 </span>
               </label>
@@ -1410,7 +1431,7 @@ export default function Payroll() {
                 </div>
               ) : (
                 <div className="rounded-xl border border-[#00E096]/20 bg-[#00E096]/[0.04] p-3 text-xs text-slate-300">
-                  {money(Number(quickForm.amount) || 0)} will be deducted from Money Kept for {quickPeriod.label}.
+                  {money2(Number(quickForm.amount) || 0)} will be deducted from Money Kept for {quickPeriod.label}.
                 </div>
               )}
 
@@ -1473,7 +1494,7 @@ export default function Payroll() {
                   </div>
                   <div className="rounded-xl border border-[#6C63FF]/30 bg-[#6C63FF]/[0.06] p-3">
                     <p className="text-[10px] uppercase tracking-widest text-slate-500">Total Amount</p>
-                    <p className="mt-1 font-heading text-2xl font-semibold text-white">{money(historicalPreview.newAmount)}</p>
+                    <p className="mt-1 font-heading text-2xl font-semibold text-white">{money2(historicalPreview.newAmount)}</p>
                     <p className="mt-0.5 text-[10px] text-slate-500">Deducted from money kept</p>
                   </div>
                   <div className="rounded-xl border border-[#FFB547]/30 bg-[#FFB547]/[0.06] p-3">
@@ -1501,7 +1522,7 @@ export default function Payroll() {
                             <span className="ml-1 text-slate-500">{it.department ? `· ${it.department}` : ""}</span>
                           </td>
                           <td className="py-2 px-3 text-slate-400">{it.period}</td>
-                          <td className="py-2 px-3 text-right tabular-nums text-white">{money(it.payCalc.total_pay)}</td>
+                          <td className="py-2 px-3 text-right tabular-nums text-white">{money2(it.payCalc.total_pay)}</td>
                           <td className="py-2 px-3 text-right">
                             {it.existing
                               ? <span className="text-[#FFB547]">Skip</span>
@@ -1635,7 +1656,7 @@ export default function Payroll() {
                       <li key={s.id} className="flex items-center justify-between text-white">
                         <span>{s.employee_name} ({s.department || "—"})</span>
                         <span className="text-slate-400">
-                          {s.pay_type === "salary" ? money(s.base_rate) + "/mo" : money(s.base_rate) + "/hr"}
+                          {s.pay_type === "salary" ? money2(s.base_rate) + "/mo" : money2(s.base_rate) + "/hr"}
                         </span>
                       </li>
                     ))}

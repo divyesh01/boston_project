@@ -52,7 +52,7 @@
           }
         },
         {
-          "$and": [
+          "$or": [
             {
               "user_condition": {
                 "role": "admin"
@@ -73,7 +73,7 @@
       ]
     },
     "write": {
-      "$or": [
+      "$and": [
         {
           "user_condition": {
             "is_active": true

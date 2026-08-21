@@ -1,5 +1,3 @@
-const db = globalThis.__B44_DB__ || { auth:{ isAuthenticated: async()=>false, me: async()=>null }, entities:new Proxy({}, { get:()=>({ filter:async()=>[], get:async()=>null, create:async()=>({}), update:async()=>({}), delete:async()=>({}) }) }), integrations:{ Core:{ UploadFile:async()=>({ file_url:'' }) } } };
-
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import * as crypto from 'node:crypto';
 import * as dns from 'node:dns';
@@ -8,6 +6,9 @@ import { promisify } from 'node:util';
 const dnsLookup = promisify(dns.lookup);
 
 const DRIVE_API = "https://www.googleapis.com/drive/v3";
+const MAX_BACKUP_BYTES = 50 * 1024 * 1024;
+const FETCH_TIMEOUT_MS = 30_000;
+const MAX_REDIRECTS = 3;
 
 // Reject URLs targeting local/private networks to prevent SSRF. Covers the
 // private ranges the original allowlist missed (CGNAT 100.64/10, 192.0.0/24,
@@ -52,6 +53,7 @@ async function isUrlBlocked(raw) {
     return true;
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return true;
+  if (url.username || url.password || url.port) return true;
   const host = url.hostname.toLowerCase();
   // Reserved hostnames
   if (host === 'localhost' || host === '0.0.0.0' || host.endsWith('.local') || host.endsWith('.internal') || host.endsWith('.localdomain') || host.endsWith('.localhost')) return true;
@@ -66,6 +68,33 @@ async function isUrlBlocked(raw) {
   } catch {
     return true; // resolution failure -> block
   }
+}
+
+function isRedirect(response) {
+  return response.status === 301 || response.status === 302 || response.status === 303 ||
+    response.status === 307 || response.status === 308;
+}
+
+// Fetch manually so every redirect target is independently parsed and resolved.
+// Native redirect following would otherwise bypass the URL validation above.
+async function fetchValidatedFile(rawUrl) {
+  let currentUrl = rawUrl;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+    if (await isUrlBlocked(currentUrl)) {
+      throw new Error("fileUrl is not an allowed public http(s) URL");
+    }
+    const response = await fetch(currentUrl, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!isRedirect(response)) return response;
+    const location = response.headers.get('location');
+    if (!location || hop === MAX_REDIRECTS) {
+      throw new Error("File URL has an invalid or excessive redirect chain");
+    }
+    currentUrl = new URL(location, currentUrl).toString();
+  }
+  throw new Error("File URL has an invalid redirect chain");
 }
 
 async function sanitizeDriveFolder(name) {
@@ -114,6 +143,11 @@ export default async function(req) {
     }
     const user = await base44.asServiceRole.entities.User.get(session.user_id);
     if (!user || !user.is_active || user.is_locked) return Response.json({ error: "Unauthorized" }, { status: 401 });
+    // This sends data to the app's connected Drive account, so it is a
+    // privileged export operation rather than an ordinary authenticated action.
+    if (user.role !== 'owner' && user.role !== 'admin') {
+      return Response.json({ error: "Forbidden" }, { status: 403 });
+    }
     const _csrfHeader = req.headers.get('x-csrf-token');
     const _cookieHeader = req.headers.get('cookie') || '';
     const _csrfCookieMatch = _cookieHeader.match(/__Host-csrf_token=([^;]+)/);
@@ -126,16 +160,20 @@ export default async function(req) {
     const body = await req.json();
     const { fileUrl, fileName, propertyName, year, month, reportType, uploadedReportId } = body;
     if (!fileUrl || !fileName) return Response.json({ error: "fileUrl and fileName required" }, { status: 400 });
-    if (await isUrlBlocked(fileUrl)) {
-      return Response.json({ error: "fileUrl is not an allowed http(s) URL" }, { status: 400 });
-    }
+    const { accessToken } = await base44.asServiceRole.connectors.getConnection("googledrive");
 
-    const { accessToken } = await db.asServiceRole.connectors.getConnection("googledrive");
-
-    // Fetch the file content
-    const fileRes = await fetch(fileUrl);
+    // Redirects are not trusted implicitly: every target is screened before it
+    // is requested, and the transfer is bounded in both time and size.
+    const fileRes = await fetchValidatedFile(fileUrl);
     if (!fileRes.ok) return Response.json({ error: "Failed to fetch file" }, { status: 500 });
+    const contentLength = Number(fileRes.headers.get('content-length'));
+    if (Number.isFinite(contentLength) && contentLength > MAX_BACKUP_BYTES) {
+      return Response.json({ error: "File is too large to back up" }, { status: 413 });
+    }
     const fileBlob = await fileRes.blob();
+    if (fileBlob.size > MAX_BACKUP_BYTES) {
+      return Response.json({ error: "File is too large to back up" }, { status: 413 });
+    }
     const contentType = fileRes.headers.get("content-type") || "application/octet-stream";
 
     // Create folder structure: Hotel Dashboard Backups → Property → Year → Month → Report Type
@@ -162,7 +200,7 @@ export default async function(req) {
 
       // Update UploadedReport status to failed
       if (uploadedReportId) {
-        await db.entities.UploadedReport.update(uploadedReportId, {
+        await base44.entities.UploadedReport.update(uploadedReportId, {
           drive_backup_status: "failed",
         });
       }
@@ -173,7 +211,7 @@ export default async function(req) {
 
     // Update UploadedReport with Drive file ID and backup status
     if (uploadedReportId) {
-      await db.entities.UploadedReport.update(uploadedReportId, {
+      await base44.entities.UploadedReport.update(uploadedReportId, {
         drive_file_id: uploadData.id,
         drive_backup_status: "backed_up",
       });

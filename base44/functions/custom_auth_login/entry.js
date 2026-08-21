@@ -136,9 +136,49 @@ function generateBase32Secret(length = 32) {
   return secret;
 }
 
+// The fields a browser may see, as an ALLOWLIST.
+//
+// This used to be a denylist: it destructured the sensitive columns away and
+// spread the rest, which made every column later added to the User entity public
+// by default. That is how `mfa_secret_pending` got out. custom_auth_login writes
+// a live TOTP enrolment seed to that column when it force-enrols an owner or
+// admin, nobody thought to add it here, and so `list`, `search`, `getById`,
+// `update`, `set_status` and the login response itself handed any admin the
+// second-factor seed of every colleague mid-enrolment - with no audit row to
+// show it had been read. An allowlist fails closed instead: a new column is
+// invisible here until someone deliberately names it.
+//
+// Every entry below is either a field the UI provably reads (src/pages/Users.jsx,
+// src/pages/Settings.jsx, src/lib/AuthContext.jsx, src/components/Layout.jsx,
+// src/lib/launchPolicy.js, and mirrorRemoteUserIntoLocal in
+// src/api/base44Client.js) or a non-secret operational field an admin screen
+// needs to explain why an account is in the state it is in.
+//
+// Deliberately absent, and each one for a reason: password_hash and salt (the
+// credential), mfa_secret and mfa_secret_pending (the second factor itself),
+// mfa_last_counter (tells an observer when the factor was last used, and is only
+// ever compared server-side), reset_token_hash and reset_token_expires_at (a
+// live reset capability), session_created and session_expires (session bookkeeping
+// the client already has in its cookie).
+//
+// Kept byte-identical to the copies in the other auth functions. The base44 host
+// gives these functions no shared module they can all import, so
+// scripts/probe-auth-hardening.mjs section 17 asserts the copies never drift
+// and that no sensitive column from base44/entities/User.jsonc is ever named here.
+const PUBLIC_USER_FIELDS = [
+  'id', 'email', 'username', 'full_name', 'display_name', 'role',
+  'property_access', 'permissions', 'is_active', 'is_locked',
+  'must_change_password', 'mfa_enabled', 'email_confirmed',
+  'last_login', 'failed_login_count', 'locked_until',
+  'created_date', 'updated_date',
+];
+
 export function publicUser(user) {
   if (!user) return null;
-  const { password_hash, salt, mfa_secret, reset_token_hash, reset_token_expires_at, session_created, session_expires, ...safe } = user;
+  const safe = {};
+  for (const field of PUBLIC_USER_FIELDS) {
+    if (user[field] !== undefined) safe[field] = user[field];
+  }
   return safe;
 }
 
@@ -268,7 +308,12 @@ export default async function (req) {
         await base44.asServiceRole.entities.RateLimit.update(rl.id, { count: rl.count, reset_at: rl.reset_at });
       } else {
         if (rl.count >= 5) {
-          return Response.json({ error: "Too many login attempts. Please try again later." }, { status: 429 });
+          const resetAtTime = new Date(rl.reset_at).getTime();
+          const retryAfter = isNaN(resetAtTime) ? 900 : Math.max(1, Math.ceil((resetAtTime - now) / 1000));
+          return Response.json(
+            { error: "Too many login attempts. Please try again later." },
+            { status: 429, headers: { "Retry-After": String(retryAfter) } }
+          );
         }
         rl.count += 1;
         await base44.asServiceRole.entities.RateLimit.update(rl.id, { count: rl.count });

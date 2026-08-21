@@ -27,8 +27,9 @@
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(new URL('..', import.meta.url).pathname);
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (p) => readFileSync(path.join(ROOT, p), 'utf8');
 
 // Negative assertions ("this string must be gone") run against source with
@@ -107,6 +108,9 @@ try {
 }
 
 let prodCsp = '';
+// Hoisted out of the block below so section 3 can compare the other copies of
+// the header set against the one that is actually served in production.
+let prodHeaders = {};
 if (vercel) {
   // The SPA fallback. Vercel checks the filesystem before applying rewrites, so
   // a catch-all cannot shadow /assets, /manifest.json or a real function route.
@@ -122,6 +126,7 @@ if (vercel) {
   const broad = (vercel.headers || []).find((h) => h.source === '/(.*)');
   check('a header rule covers every path', Boolean(broad));
   const H = Object.fromEntries((broad?.headers || []).map((h) => [h.key, h.value]));
+  prodHeaders = H;
   prodCsp = H['Content-Security-Policy'] || '';
 
   for (const key of [
@@ -227,6 +232,103 @@ section('3. Single source of truth for headers');
     'a hand-copied dev policy drifts, and dev is where blob: was first missed');
   check('the dev CSP still allows the HMR socket',
     Boolean(devBlock) && /ws:/.test(devBlock[0]));
+
+  // The third copy. base44/config.jsonc is not documentation — it carries
+  // installCommand, buildCommand and outputDirectory, so base44 hosting serves
+  // this app from it, and a policy that is only correct in vercel.json is only
+  // correct on one of the two hosts this repo deploys to.
+  //
+  // The two had drifted in opposite directions at the same time, which is the
+  // worst way for a policy to be wrong: base44's connect-src was
+  // `'self' https: wss:`, so an injected script could post the whole ledger to
+  // any origin on the internet, while it omitted `blob:` and had no worker-src
+  // at all — and those two are load-bearing, not decorative (UploadFile() hands
+  // the parser a blob: URL and the parser runs in a Worker built from a blob).
+  // Loose about exfiltration and strict about the app's own plumbing manages to
+  // be both unsafe and broken.
+  //
+  // Hand-copying is what failed, so this compares them key by key rather than
+  // adding a codegen step. That is the pattern already used for the four copies
+  // of publicUser() and the three copies of the audit payload: a probe that
+  // fails loudly beats a build step nobody runs.
+  let b44 = null;
+  try {
+    b44 = JSON.parse(stripComments(read('base44/config.jsonc')));
+    check('base44/config.jsonc parses once comments are stripped', true);
+  } catch (e) {
+    check('base44/config.jsonc parses once comments are stripped', false, e.message);
+  }
+  const b44Rule = (b44?.site?.headers || []).find((h) => h.source === '**');
+  check('base44/config.jsonc has a catch-all header rule',
+    Boolean(b44Rule),
+    'base44 hosting would serve a private hotel dashboard with no security headers at all');
+  const B = Object.fromEntries((b44Rule?.headers || []).map((h) => [h.key, h.value]));
+
+  // X-XSS-Protection is deliberately NOT in this list. vercel.json sets it and
+  // this file must not copy it: the auditor it controlled was removed from every
+  // current browser, so it is already a no-op there, and mirroring a no-op only
+  // widens the surface that has to be kept identical.
+  const CANONICAL_HEADERS = [
+    'Content-Security-Policy', 'Strict-Transport-Security', 'X-Frame-Options',
+    'X-Content-Type-Options', 'Referrer-Policy', 'Permissions-Policy',
+    'Cross-Origin-Opener-Policy', 'Cross-Origin-Resource-Policy',
+  ];
+  for (const key of CANONICAL_HEADERS) {
+    check(`base44/config.jsonc serves ${key} byte-identically to vercel.json`,
+      Boolean(prodHeaders[key]) && B[key] === prodHeaders[key],
+      `vercel="${prodHeaders[key] || '(absent)'}" base44="${B[key] || '(absent)'}"`);
+  }
+  // Pinning the value too, so that lowering it in both files at once still
+  // fails. Byte-equality alone would call two matching downgrades correct.
+  check('both hosts advertise the two-year HSTS max-age',
+    /max-age=63072000/.test(B['Strict-Transport-Security'] || '')
+      && /max-age=63072000/.test(prodHeaders['Strict-Transport-Security'] || ''),
+    'a shorter max-age is a downgrade window for every returning front-desk browser');
+  check('base44/config.jsonc adds no header vercel.json does not also set',
+    Object.keys(B).every((k) => CANONICAL_HEADERS.includes(k)),
+    `undeclared: ${Object.keys(B).filter((k) => !CANONICAL_HEADERS.includes(k)).join(', ')}`);
+
+  // A fourth copy is what caused this item, so any other file that writes a
+  // policy has to be declared here on purpose. base44/lib/securityHeaders.js
+  // was that fourth copy, and it was deleted rather than corrected:
+  //
+  //   · Its output was unsafe. buildCompleteCsp() emitted 'unsafe-inline' and
+  //     'unsafe-eval' plus a blanket https: in BOTH default-src and script-src
+  //     — the primary XSS control switched off — with HSTS 31536000, no
+  //     worker-src, and a bare unquoted `self` that is a hostname, not a keyword.
+  //   · It could not run. package.json declares "type": "module" and there is no
+  //     base44/package.json to override it, so the file's `module.exports = {…}`
+  //     assigned to Node 22's global `module` function instead of throwing:
+  //     importing it yielded zero exports, measured.
+  //   · Nothing imported it, so its only reachable use was a human pasting
+  //     buildNginxSnippet() output into a real server — a file that hands an
+  //     operator a broken policy while looking authoritative.
+  const POLICY_AUTHORS = new Set([
+    'vercel.json', 'base44/config.jsonc', 'vite.config.js',
+    'scripts/probe-deploy-config.mjs',
+  ]);
+  const configFiles = [];
+  (function rec(dir, rel) {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (/^(node_modules|dist|coverage|\.git)$/.test(e.name)) continue;
+      const full = path.join(dir, e.name);
+      const relPath = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) rec(full, relPath);
+      else if (/\.(jsx?|mjs|cjs|jsonc?|html)$/.test(e.name)) configFiles.push([full, relPath]);
+    }
+  })(ROOT, '');
+  // Prose is excluded by that extension filter on purpose: the audit reports
+  // quote the policy, and a document describing a header is not a header.
+  const policyWriters = configFiles
+    .filter(([full]) => /default-src/.test(readFileSync(full, 'utf8')))
+    .map(([, relPath]) => relPath)
+    .filter((relPath) => !POLICY_AUTHORS.has(relPath));
+  check('no undeclared file defines a Content-Security-Policy',
+    policyWriters.length === 0,
+    `${policyWriters.join(', ')} — each copy is kept in step by hand, so a new one is a new drift source`);
+  // Premise: without this the check above passes for a walk that found nothing.
+  check('the policy-author scan actually read the tree',
+    configFiles.length > 50, `scanned ${configFiles.length} files`);
 }
 
 // ── 4. The manifest and icons ──────────────────────────────────────────────
@@ -310,11 +412,21 @@ section('5. Document shell');
 // ── 6. Server-shaped modules must not reach the browser bundle ──────────────
 section('6. No server-only module in the client graph');
 {
-  // Both of these evaluate `process.env.X` at module scope. `process` does not
-  // exist in the browser and Vite does not shim it, so importing either from
-  // anything reachable by src/main.jsx is a white screen on load — not a
-  // degraded feature. Today nothing imports them; this is the guard.
-  const serverOnly = ['corsConfig', 'securityHeaders'];
+  // corsConfig.js evaluates `process.env.ALLOWED_ORIGINS` at module scope.
+  // `process` does not exist in the browser and Vite does not shim it, so
+  // importing it from anything reachable by src/main.jsx is an immediate
+  // ReferenceError — a white screen on load, not a degraded feature. Nothing
+  // imports it today; this is the guard.
+  //
+  // It is guarded rather than trusted because it also cannot work as written:
+  // package.json declares "type": "module", nothing under base44/ overrides
+  // that, and the file assigns `module.exports`, so importing it yields zero
+  // exports (measured). Its sibling securityHeaders.js had the same defect plus
+  // an unsafe policy and was deleted — see section 3.
+  const serverOnly = ['corsConfig'];
+  check('base44/lib/securityHeaders.js has not come back',
+    !existsSync(path.join(ROOT, 'base44/lib/securityHeaders.js')),
+    "it emitted 'unsafe-inline' and 'unsafe-eval' in script-src and could not be imported at all — section 3");
   const files = [];
   (function walk(dir) {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -419,6 +531,79 @@ section('7. Console stripping');
     debuggers.length === 0,
     debuggers.map((f) => path.relative(ROOT, f)).join(', '));
 }
+
+// ── 8. Dependency supply chain ──────────────────────────────────────────────
+section('8. Dependency supply chain');
+{
+  const pkg = JSON.parse(read('package.json'));
+  const xlsxSpec = (pkg.dependencies || {}).xlsx || '';
+
+  // The user chose the npm registry version for supply-chain integrity (npm audit,
+  // lockfile integrity).  We accept that despite the known CVEs in 0.18.5,
+  // because the registry is the only source and we have no newer version.
+  // The lockfile provides integrity to prevent tampering.
+  check('xlsx resolves to the npm registry (not a CDN tarball)',
+    /^npm:/.test(xlsxSpec) || /^https:\/\/registry\.npmjs\.org/.test(xlsxSpec) || /^\^?\d+\.\d+\.\d+$/.test(xlsxSpec),
+    `spec is "${xlsxSpec}" — expected npm registry`);
+  const ver = (xlsxSpec.match(/(\d+)\.(\d+)\.(\d+)/) || []).slice(1).map(Number);
+  check('the xlsx version is readable', ver.length === 3, xlsxSpec);
+  // We do not enforce a minimum version because npm has no newer version.
+  // A future upgrade would need to come from a fork or alternative.
+  check('xlsx version is at least 0.18.5 (the npm version)',
+    ver.length === 3 && (ver[0] > 0 || (ver[0] === 0 && (ver[1] > 18 || (ver[1] === 18 && ver[2] >= 5)))),
+    `version ${ver.join('.')} — npm only has 0.18.5`);
+
+  // The lockfile entry must have integrity to prevent tampering.
+  const lock = JSON.parse(read('package-lock.json'));
+  const lockEntry = (lock.packages || {})['node_modules/xlsx'] || {};
+  check('the lockfile pins xlsx by integrity hash',
+    /^sha(512|384|256)-/.test(lockEntry.integrity || ''),
+    'without integrity, npm ci could install a tampered package');
+  check('the lockfile and package.json resolve to the same version',
+    Boolean(lockEntry.version) && lockEntry.version === (xlsxSpec.replace(/^[\^~]/, '')),
+    `lock version="${lockEntry.version || '(absent)'}" pkg="${xlsxSpec}"`);
+}
+
+// ── 9. No committed credentials ────────────────────────────────────────────
+//
+// test-auth.cjs was a 50-line one-off puppeteer script at the repo root that
+// hardcoded the owner's real email and real password. It was deleted 2026-08-21
+// rather than patched: nothing referenced it (no package.json script, no import
+// anywhere in the tracked tree) and `puppeteer` is neither declared in
+// package.json nor present in node_modules, so the file could not run. The
+// credential was the only live thing in it — and the `password` it defined was
+// never even read by the function body below it.
+//
+// Why it survived so long is the finding worth keeping: a root-level .cjs file
+// sits outside every gate this repo has. eslint.config.js ignores "*.cjs",
+// jsconfig.json only type-checks src/, and scripts/verify-all.mjs only globs
+// probe-*/verify-* under scripts/. No tool was ever going to read it. This
+// section is the gate that file needed.
+//
+// These assertions deliberately do NOT contain the credential they defend
+// against — CLAUDE.md section 6 forbids hardcoding one anywhere, a probe
+// included. They match the SHAPE of a secret assignment instead.
+check('the credential-carrying debug script has not come back',
+  !existsSync(path.join(ROOT, 'test-auth.cjs')),
+  'test-auth.cjs hardcoded the owner\'s real email and password, was referenced by nothing, and could not run — section 9');
+
+const rootScripts = readdirSync(ROOT, { withFileTypes: true })
+  .filter((e) => e.isFile() && /\.(cjs|mjs|js)$/.test(e.name))
+  .map((e) => e.name);
+// `password: process.env.X` is correct and must stay legal; a literal must not.
+const SECRET_ASSIGN = /\b(password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]+\s*['"`][^'"`\n]{8,}['"`]/i;
+const leakers = rootScripts.filter((n) => {
+  const src = stripComments(read(n));
+  return SECRET_ASSIGN.test(src) && !/process\.env/.test(src);
+});
+check('no root-level script hardcodes a credential literal',
+  leakers.length === 0,
+  leakers.length
+    ? `${leakers.join(', ')} — read the value from process.env instead`
+    : `scanned ${rootScripts.length} root-level scripts`);
+check('the root-script scan actually had files to read',
+  rootScripts.length > 3,
+  `only ${rootScripts.length} matched, so a clean result here would mean nothing`);
 
 // ── Result ─────────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(60)}`);

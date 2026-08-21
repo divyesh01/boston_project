@@ -2,7 +2,8 @@ import React, { useMemo, useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import Card from "@/components/ui-exec/Card";
 import { useOccupancy, useRooms, useRoomStays, useHousekeepingTasks, useReservations, useWeatherSnapshots } from "@/lib/useHotelData";
-import { C, num, pct, money, money2, avg, inventoryInScope, occupancyStats } from "@/lib/hotel";
+import { C, num, pct, money2, avg, inventoryInScope, occupancyStats } from "@/lib/hotel";
+import { fromCents } from "@/lib/decimal";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { db } from "@/api/base44Client";
 import { buildRoomBoard, roomBoardStats, generateRoomRegister, toRateCents } from "@/lib/roomBoard";
@@ -361,17 +362,17 @@ export default function RoomBoard() {
                   <p className="truncate text-[10px] text-slate-500">{t.room_type}{t.floor ? ` · Fl ${t.floor}` : ""}</p>
                   {t.kind === "occupied" && (
                     <p className="mt-0.5 truncate text-[10px] text-[#00E096]">
-                      {money(t.rate_cents)}{t.check_out ? ` → ${t.check_out}` : ""}
+                      {money2(fromCents(t.rate_cents))}{t.check_out ? ` → ${t.check_out}` : ""}
                     </p>
                   )}
                   {!isPortfolio && pricingEnabled && !t.guest_name && (
                     <p className="mt-0.5 truncate text-[10px] text-[#6C63FF]">
-                      Suggested {money2(recommendedByType[t.room_type]?.recommendedCents || 0)}
+                      Suggested {money2(fromCents(recommendedByType[t.room_type]?.recommendedCents || 0))}
                     </p>
                   )}
                   {!isPortfolio && pricingEnabled && t.guest_name && recommendedByType[t.room_type] && (
                     <p className="mt-0.5 truncate text-[10px] text-slate-500">
-                      vs rec {money2(recommendedByType[t.room_type].recommendedCents)}
+                      vs rec {money2(fromCents(recommendedByType[t.room_type].recommendedCents))}
                     </p>
                   )}
                   {!isPortfolio && (
@@ -395,8 +396,8 @@ export default function RoomBoard() {
 
         {rooms.length > 0 && dayStats.soldCount > 0 && (
           <div className="mt-4 border-t border-white/5 pt-3 text-xs text-slate-400">
-            <span className="font-semibold text-white">{money(dayStats.revenueCents)}</span> night revenue ·{" "}
-            <span className="font-semibold text-white">{money2(dayStats.adrCents)}</span> ADR on {num(dayStats.soldCount)} room
+            <span className="font-semibold text-white">{money2(fromCents(dayStats.revenueCents))}</span> night revenue ·{" "}
+            <span className="font-semibold text-white">{money2(fromCents(dayStats.adrCents))}</span> ADR on {num(dayStats.soldCount)} room
             {dayStats.soldCount === 1 ? "" : "s"} · {pct(dayStats.occupancy)} occupancy on {boardDate}
           </div>
         )}
@@ -495,7 +496,7 @@ export default function RoomBoard() {
             {suggestedForRoom && (
               <div className="mt-1 rounded-md border border-[#6C63FF]/20 bg-[#6C63FF]/5 px-2 py-1.5 text-xs">
                 <span className="text-slate-400">Suggested: </span>
-                <span className="font-medium text-[#6C63FF]">{money2(suggestedForRoom.recommendedCents)}</span>
+                <span className="font-medium text-[#6C63FF]">{money2(fromCents(suggestedForRoom.recommendedCents))}</span>
                 <span className="text-slate-500"> · occ {Math.round(suggestedForRoom.occupancy * 100)}% → {Math.round((suggestedForRoom.multiplierBps / 10000) * 100)}× base</span>
               </div>
             )}
@@ -539,7 +540,7 @@ export default function RoomBoard() {
             <Card title="Revenue lost to out-of-service rooms">
               <p className="text-sm text-slate-300">
                 <span className="font-heading text-2xl font-semibold" style={{ color: C.coral }}>
-                  {money(stats.oooLoss)}
+                  {money2(stats.oooLoss)}
                 </span>{" "}
                 of room revenue was unavailable to sell across this period.
               </p>

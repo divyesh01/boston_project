@@ -65,32 +65,42 @@ export default function PaymentMethodChart({ payRows }) {
       title="Payment Method Distribution"
       subtitle={`Total ${money2(totals.totalGross)} · CC fees ${money2(totals.ccFees)} (${pct(ccFee, 2)} on cards) · Net kept ${money2(totals.netKept)}`}
     >
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="h-[280px]">
-          <PieDonut data={chart} type="donut" height="100%" formatter={money2} />
-        </div>
+      {/* Big single donut — every category labelled on the chart */}
+      <div className="h-[700px]">
+        <PieDonut data={chart} type="donut" height="100%" formatter={money2} showLegend={false} />
+      </div>
 
-        <div className="space-y-2">
-          {chart.map((c) => (
-            <div key={c.name} className="flex items-center gap-3 rounded-lg bg-white/[0.03] px-3 py-2">
-              <div className="h-3 w-3 shrink-0 rounded-full" style={{ background: c.color }} />
-              <span className="flex-1 text-sm text-slate-200">{c.name}{c.isCard && <span className="ml-1 text-[10px] text-slate-500">· {pct(ccFee, 1)} fee</span>}</span>
-              <span className="text-right text-sm font-medium tabular-nums text-white">{money2(c.value)}</span>
-              <span className="w-20 text-right text-xs tabular-nums text-slate-400">
+      {/* Per-category gross vs net (after card fees) */}
+      <div className="mt-6 grid gap-x-8 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
+        {chart.map((c) => (
+          <div key={c.name} className="flex items-center gap-3 rounded-lg bg-white/[0.03] px-3 py-2.5">
+            <div className="h-3.5 w-3.5 shrink-0 rounded-full" style={{ background: c.color }} />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium text-slate-200">
+                {c.name}
+                {c.isCard && <span className="ml-1.5 text-xs text-slate-500">· {pct(ccFee, 1)} fee</span>}
+              </div>
+              <div className="text-sm font-semibold tabular-nums text-white">{money2(c.value)}</div>
+            </div>
+            <div className="shrink-0 text-right">
+              <div className="text-xs text-slate-400">after fees</div>
+              <div className="text-sm tabular-nums text-[#00E096]">
                 {c.isCard ? money2(c.value * (1 - ccFee)) : money2(c.value)}
-              </span>
-            </div>
-          ))}
-          <div className="mt-3 border-t border-white/5 pt-3">
-            <div className="flex justify-between text-sm">
-              <span className="text-slate-400">CC/Debit processing fees</span>
-              <span className="tabular-nums text-[#FF6B6B]">-{money2(totals.ccFees)}</span>
-            </div>
-            <div className="mt-1 flex justify-between text-sm font-medium">
-              <span className="text-slate-300">Net kept (after fees)</span>
-              <span className="tabular-nums text-[#00E096]">{money2(totals.netKept)}</span>
+              </div>
             </div>
           </div>
+        ))}
+      </div>
+
+      {/* Fee summary */}
+      <div className="mt-6 border-t border-white/10 pt-5">
+        <div className="flex justify-between text-base">
+          <span className="text-slate-400">CC/Debit processing fees</span>
+          <span className="tabular-nums text-[#FF6B6B]">-{money2(totals.ccFees)}</span>
+        </div>
+        <div className="mt-1 flex justify-between text-base font-semibold">
+          <span className="text-slate-300">Net kept (after fees)</span>
+          <span className="tabular-nums text-[#00E096]">{money2(totals.netKept)}</span>
         </div>
       </div>
     </Card>

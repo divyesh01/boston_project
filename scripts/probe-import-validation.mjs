@@ -126,6 +126,75 @@ T("the zero-filled amount is reported",
   badAmount.validation?.findings?.some((f) => f.code === "unparseable_numbers" && f.field === "amount"),
   JSON.stringify(badAmount.validation?.findings?.map((f) => f.code)));
 
+// ── 3b. The fabricated zero must block on its own merit ────────────────────
+//
+// Section 3 proves the "N/A" is *reported*, but that file is also blocked by the
+// checksum: dropping 87.30 out of a summed column makes the parsed total disagree
+// with the trailer. So section 3 cannot say whether the fabricated zero itself
+// blocks anything. Remove the checksum error and the question is answered.
+//
+// Here the trailer is reduced by exactly the amount that was blanked, so the file
+// agrees with itself and the only defect left is a numeric cell the parser could
+// not read and silently turned into 0. This matters beyond the ledger: a
+// transactions export happens to carry a trailer total, but Hotel Statistics and
+// the summary reports do not, so for those files this finding is the only line of
+// defence that exists.
+console.log("\n=== 3b. A fabricated zero with a self-consistent trailer ===");
+const isoText = (() => {
+  const l = txnText.split(/\r?\n/);
+  const blanked = parseFloat(l[tamperedAt].match(AMOUNT_RE)[1].replace(/,/g, ""));
+  l[tamperedAt] = l[tamperedAt].replace(AMOUNT_RE, '"N/A"');
+  // The trailer is the summary row: it carries an amount but no date.
+  for (let i = l.length - 1; i > 0; i--) {
+    if (!l[i].trim() || DATED_ROW_RE.test(l[i])) continue;
+    const m = l[i].match(AMOUNT_RE);
+    if (!m) continue;
+    const declared = parseFloat(m[1].replace(/,/g, ""));
+    // parseAmount strips "$" and "," alike, so an un-grouped number is read the
+    // same as a grouped one and this needs no comma formatter.
+    l[i] = l[i].replace(m[0], `"$${(declared - blanked).toFixed(2)}"`);
+    break;
+  }
+  return l.join("\n");
+})();
+const iso = await scanText("transactions", "fabricated-zero.csv", isoText);
+console.log(`    checksum=${JSON.stringify(iso.checksum)}`);
+show("validation", iso.validation);
+const isoFinding = iso.validation?.findings?.find((f) => f.code === "unparseable_numbers");
+T("the file agrees with its own trailer, so the checksum is not the blocker",
+  iso.checksum?.matches === true, JSON.stringify(iso.checksum));
+T("no checksum error remains to confuse the result",
+  !iso.validation?.errors?.some((f) => f.code === "checksum_mismatch"),
+  JSON.stringify(iso.validation?.errors?.map((f) => f.code)));
+T("the fabricated zero is rated as corruption, not a warning",
+  isoFinding?.severity === "error", `severity=${isoFinding?.severity}`);
+T("the fabricated zero alone BLOCKS the import", iso.validation?.ok === false,
+  `ok=${iso.validation?.ok} errors=${JSON.stringify(iso.validation?.errors?.map((f) => f.code))}`);
+T("and it is the only thing blocking",
+  iso.validation?.errors?.length === 1
+    && iso.validation.errors[0].code === "unparseable_numbers",
+  JSON.stringify(iso.validation?.errors?.map((f) => f.code)));
+T("the message still names the column an operator can go look at",
+  isoFinding?.field === "amount" && /treated as 0/.test(isoFinding?.message || ""),
+  JSON.stringify(isoFinding));
+
+// A partial parse was already an error. "12abc" → 12 is the sibling of this
+// defect — same cause, same harm — and the two must not drift apart again.
+const truncText = txnText.split(/\r?\n/)
+  .map((l, i) => (i === tamperedAt ? l.replace(AMOUNT_RE, '"12abc"') : l)).join("\n");
+const trunc = await scanText("transactions", "truncated.csv", truncText);
+T("a partly-numeric amount is still an error",
+  trunc.validation?.errors?.some((f) => f.code === "truncated_numbers"),
+  JSON.stringify(trunc.validation?.errors?.map((f) => f.code)));
+
+// An error is a gate, not a wall: the operator can still force a file through
+// after reading what is wrong with it. If that escape ever disappears, one stray
+// cell would make a file permanently unimportable, which is its own outage.
+const parserSrc = read(join("..", "..", "src", "lib", "reportParsers.js"));
+T("a blocked import can still be forced by the operator",
+  /!validation\.ok\s*&&\s*!forceImport/.test(parserSrc),
+  "the forceImport escape hatch in importReport is gone");
+
 // ── 4. The real hotel statistics file ──────────────────────────────────────
 console.log("\n=== 4. Hotel Statistics (1).csv — the real snapshot ===");
 const statName = "Hotel Statistics (1).csv";

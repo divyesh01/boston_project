@@ -18,6 +18,8 @@
 // Getting either wrong produces numbers that look plausible and are wrong, which
 // is worse than a visible error, so the accessors here are deliberately narrow.
 
+import { sumCents, toCents, fromCents } from '@/lib/decimal';
+
 export const PERIODS = [
   ["actual_today", "Today", "The business date itself"],
   ["mtd", "Month to date", "1st of the month through the business date"],
@@ -34,13 +36,36 @@ export const PERIOD_LABEL = {
   ly_ytd: "Last year, year to date",
 };
 
-// Section display order. The parser derives section names from content, so this
-// is a presentation preference, not a contract — unknown sections fall to the
-// end in their natural order rather than being dropped.
-const SECTION_ORDER = [
-  "Room Inventory", "Occupancy", "ADR & RevPAR", "Revenue",
-  "Tax", "Payments", "Guests", "Reservations", "Forecast", "General",
-];
+// ─── Section vocabulary ───
+//
+// The canonical section names, exactly as they appear in the vendor export. The
+// parser derives section names from content, so the ORDER below is a presentation
+// preference, not a contract — unknown sections fall to the end in their natural
+// order rather than being dropped. The NAMES, however, are a contract.
+//
+// Exported because a mistyped section is INVISIBLE: composition() below simply
+// matches nothing and returns [], which sums to $0.00 and reads like "this
+// property earned nothing" rather than "you spelled the section wrong". That is
+// precisely how financialReconciliation.js came to pass 'revenue' (lowercase) and
+// silently valued the whole statistics revenue leg at $0.00 — see BRAIN_FINANCE.md.
+// Use these constants at call sites instead of bare string literals.
+export const STAT_SECTIONS = Object.freeze({
+  ROOM_INVENTORY: "Room Inventory",
+  OCCUPANCY: "Occupancy",
+  ADR_REVPAR: "ADR & RevPAR",
+  REVENUE: "Revenue",
+  TAX: "Tax",
+  PAYMENTS: "Payments",
+  GUESTS: "Guests",
+  RESERVATIONS: "Reservations",
+  FORECAST: "Forecast",
+  GENERAL: "General",
+});
+
+// Derived from STAT_SECTIONS rather than repeated, so the display order and the
+// canonical vocabulary cannot drift apart — maintaining the same names in two
+// hand-written lists is the defect class this whole block exists to prevent.
+const SECTION_ORDER = Object.values(STAT_SECTIONS);
 
 export function orderSections(names) {
   const known = SECTION_ORDER.filter((s) => names.includes(s));
@@ -287,12 +312,63 @@ export { HEADLINE };
 // of them zero on any given day. Sorting by magnitude and dropping the zeros is
 // what makes the section readable; the full list stays available in the section
 // table, so nothing is hidden, only deprioritised.
+//
+// The canonical section vocabulary lives in STAT_SECTIONS at the top of this file.
+//
+// The two Revenue lines that are room revenue. Everything else in the section is
+// ancillary (pet fee, laundry, property damage, restaurant, ...). This split is
+// what makes the OccupancyDay path comparable to the statistics path at all:
+// OccupancyDay.room_revenue is ROOM-ONLY, so comparing it against the section
+// total is an apples-to-oranges comparison that reports the ancillary sum as
+// bogus "drift".
+export const ROOM_REVENUE_LINES = Object.freeze(['Taxable Room Revenue', 'Exempt Room Revenue']);
+
+// Section matching is case- and whitespace-insensitive on purpose. An exact ===
+// makes the vendor's capitalisation part of our contract: if a future HotelKey
+// export ships 'REVENUE' instead of 'Revenue', an exact match returns [] and the
+// revenue section silently reads $0 rather than failing loudly. Metric names are
+// already compared case-insensitively elsewhere in this file (see trend()), so
+// this makes section matching consistent with metric matching.
+const sameSection = (a, b) =>
+  String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+
 export function composition(rows = [], section, period = "actual_today") {
   return rows
-    .filter((r) => r.section === section && r.period === period && !r.is_total)
+    .filter((r) => sameSection(r.section, section) && r.period === period && !r.is_total)
     .map((r) => ({ name: r.metric_name, value: Number(r.value) || 0 }))
     .filter((r) => r.value !== 0)
     .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+}
+
+/**
+ * Split the Revenue section into its room and ancillary halves.
+ *
+ * Measured against the real Middleborough export: Taxable Room Revenue
+ * ($637,805.60) + Exempt Room Revenue ($373,453.07) = $1,011,258.67, which is
+ * EXACTLY sum(OccupancyDay.room_revenue). The remaining ten lines total
+ * $9,339.50 and make up the difference to the $1,020,598.17 section total. So the
+ * three revenue derivations do not disagree — two of them measure total revenue
+ * and one measures room revenue. Compare `room` against the occupancy path and
+ * `total` against the transaction ledger.
+ *
+ * @param {Array<Object>} rows - snapshot rows (from snapshotFor)
+ * @param {string} [period='ytd']
+ * @returns {{room: number, ancillary: number, total: number,
+ *            roomLines: Array<{name: string, value: number}>,
+ *            ancillaryLines: Array<{name: string, value: number}>}}
+ */
+export function revenueSplit(rows = [], period = 'ytd') {
+  const lines = composition(rows, STAT_SECTIONS.REVENUE, period);
+  const isRoom = (name) =>
+    ROOM_REVENUE_LINES.some((r) => r.toLowerCase() === String(name ?? '').trim().toLowerCase());
+  const roomLines = lines.filter((l) => isRoom(l.name));
+  const ancillaryLines = lines.filter((l) => !isRoom(l.name));
+  // Integer cents: these figures are reconciled to the exact cent, so a float
+  // reduce would introduce the very drift the reconciler is built to detect.
+  const sumOf = (ls) => fromCents(sumCents(ls.map((l) => l.value)));
+  const room = sumOf(roomLines);
+  const ancillary = sumOf(ancillaryLines);
+  return { room, ancillary, total: fromCents(toCents(room) + toCents(ancillary)), roomLines, ancillaryLines };
 }
 
 // ─── Data-quality summary ───

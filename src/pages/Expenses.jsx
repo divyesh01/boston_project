@@ -9,7 +9,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRef } from "react";
 import { useGlobalFilters, MONTHS_LONG } from "@/lib/useGlobalFilters";
 import { useOccupancy, usePaymentData } from "@/lib/useHotelData";
-import { money, sum, inRange, pct, C } from "@/lib/hotel";
+import { sum, inRange, pct, C, money2 } from "@/lib/hotel";
 import { filterCommittedPay } from "@/lib/payrollCalc";
 import { refundTotal } from "@/lib/paymentNorm";
 import { toast } from "sonner";
@@ -271,7 +271,7 @@ export default function Expenses() {
     const gate = guardDestructiveAction({
       title: `Delete the expense "${x?.expense_name || "untitled"}"?`,
       lines: [
-        `${money(x?.amount || 0)} · ${x?.vendor || "no vendor"} · ${expenseLabel(x?.category)} · ${frequencyLabel(x?.frequency)}`,
+        `${money2(x?.amount || 0)} · ${x?.vendor || "no vendor"} · ${expenseLabel(x?.category)} · ${frequencyLabel(x?.frequency)}`,
         "Net profit and break-even on this page are computed from expenses, so both will change.",
       ],
     });
@@ -296,9 +296,9 @@ export default function Expenses() {
     const gate = guardDestructiveAction({
       title: `Delete the payroll run for ${p?.employee_name || "this employee"}?`,
       lines: [
-        `${money(p?.total_pay || 0)} · ${p?.department || "no department"} · ${p?.hours || 0}h · marked ${p?.payroll_status || "draft"}`,
+        `${money2(p?.total_pay || 0)} · ${p?.department || "no department"} · ${p?.hours || 0}h · marked ${p?.payroll_status || "draft"}`,
         committed
-          ? `This run is ${p.payroll_status}, so deleting it removes the record of pay already committed and will increase reported Money Kept by ${money(p?.total_pay || 0)}.`
+          ? `This run is ${p.payroll_status}, so deleting it removes the record of pay already committed and will increase reported Money Kept by ${money2(p?.total_pay || 0)}.`
           : "This run is not approved or paid, so Money Kept does not change.",
       ],
     });
@@ -355,7 +355,7 @@ export default function Expenses() {
               <p className="text-xs uppercase tracking-widest text-slate-500">Gross Revenue (Imported)</p>
               <DollarSign className="h-4 w-4 text-slate-600" />
             </div>
-            <p className="mt-2 font-heading text-2xl font-semibold text-white">{money(grossRevenue)}</p>
+            <p className="mt-2 font-heading text-2xl font-semibold text-white">{money2(grossRevenue)}</p>
             <p className="mt-1 text-xs text-slate-500">From {occRows.length} days of occupancy data</p>
           </div>
           <div className="rounded-xl border border-[#FF6B6B]/10 bg-[#FF6B6B]/[0.03] p-4">
@@ -363,7 +363,7 @@ export default function Expenses() {
               <p className="text-xs uppercase tracking-widest text-slate-500">Refunds & Adjustments</p>
               <TrendingDown className="h-4 w-4 text-[#FF6B6B]/60" />
             </div>
-            <p className="mt-2 font-heading text-2xl font-semibold text-[#FF6B6B]">-{money(refundsAndAdjustments)}</p>
+            <p className="mt-2 font-heading text-2xl font-semibold text-[#FF6B6B]">-{money2(refundsAndAdjustments)}</p>
             <p className="mt-1 text-xs text-slate-500">Folio closures, loyalty discounts</p>
           </div>
           <div className="rounded-xl border border-[#00E096]/10 bg-[#00E096]/[0.03] p-4">
@@ -371,7 +371,7 @@ export default function Expenses() {
               <p className="text-xs uppercase tracking-widest text-slate-500">Net Revenue</p>
               <TrendingUp className="h-4 w-4 text-[#00E096]/60" />
             </div>
-            <p className="mt-2 font-heading text-2xl font-semibold text-[#00E096]">{money(netRevenue)}</p>
+            <p className="mt-2 font-heading text-2xl font-semibold text-[#00E096]">{money2(netRevenue)}</p>
             <p className="mt-1 text-xs text-slate-500">Gross − Refunds</p>
           </div>
         </div>
@@ -385,7 +385,7 @@ export default function Expenses() {
               <p className="text-xs uppercase tracking-widest text-slate-500">Total Employee Payroll</p>
               <Users className="h-4 w-4 text-slate-600" />
             </div>
-            <p className="mt-2 font-heading text-2xl font-semibold text-white">{money(totalPayroll)}</p>
+            <p className="mt-2 font-heading text-2xl font-semibold text-white">{money2(totalPayroll)}</p>
             <p className="mt-1 text-xs text-slate-500">{payrollInPeriod.length} payroll records</p>
           </div>
           <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">
@@ -393,7 +393,7 @@ export default function Expenses() {
               <p className="text-xs uppercase tracking-widest text-slate-500">Total Operating Expenses</p>
               <Receipt className="h-4 w-4 text-slate-600" />
             </div>
-            <p className="mt-2 font-heading text-2xl font-semibold text-white">{money(operatingExpenses)}</p>
+            <p className="mt-2 font-heading text-2xl font-semibold text-white">{money2(operatingExpenses)}</p>
             <p className="mt-1 text-xs text-slate-500">{expensesInPeriod.length} expense entries</p>
           </div>
           <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">
@@ -401,7 +401,7 @@ export default function Expenses() {
               <p className="text-xs uppercase tracking-widest text-slate-500">Total Monthly Costs</p>
               <Wallet className="h-4 w-4 text-slate-600" />
             </div>
-            <p className="mt-2 font-heading text-2xl font-semibold text-[#FFB547]">{money(totalCosts)}</p>
+            <p className="mt-2 font-heading text-2xl font-semibold text-[#FFB547]">{money2(totalCosts)}</p>
             <p className="mt-1 text-xs text-slate-500">Payroll + Operating Expenses</p>
           </div>
         </div>
@@ -412,11 +412,11 @@ export default function Expenses() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">
             <p className="text-xs uppercase tracking-widest text-slate-500">Net Revenue</p>
-            <p className="mt-1 font-heading text-xl font-semibold text-white">{money(netRevenue)}</p>
+            <p className="mt-1 font-heading text-xl font-semibold text-white">{money2(netRevenue)}</p>
           </div>
           <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">
             <p className="text-xs uppercase tracking-widest text-slate-500">Total Costs</p>
-            <p className="mt-1 font-heading text-xl font-semibold text-[#FFB547]">{money(totalCosts)}</p>
+            <p className="mt-1 font-heading text-xl font-semibold text-[#FFB547]">{money2(totalCosts)}</p>
           </div>
           <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">
             <p className="text-xs uppercase tracking-widest text-slate-500">Profit Margin</p>
@@ -425,7 +425,7 @@ export default function Expenses() {
           <div className={`rounded-xl border p-4 ${operatingProfit >= 0 ? "border-[#00E096]/15 bg-[#00E096]/[0.05]" : "border-[#FF6B6B]/15 bg-[#FF6B6B]/[0.05]"}`}>
             <p className="text-xs uppercase tracking-widest text-slate-500">Operating Profit</p>
             <p className={`mt-1 font-heading text-xl font-semibold ${operatingProfit >= 0 ? "text-[#00E096]" : "text-[#FF6B6B]"}`}>
-              {operatingProfit >= 0 ? "+" : ""}{money(operatingProfit)}
+              {operatingProfit >= 0 ? "+" : ""}{money2(operatingProfit)}
             </p>
           </div>
         </div>
@@ -449,16 +449,16 @@ export default function Expenses() {
           <div className="mt-3 grid gap-3 sm:grid-cols-3">
             <div>
               <p className="text-xs text-slate-500">Target Revenue</p>
-              <p className="font-heading text-lg text-[#00D4FF]">{targetMargin > 0 ? money(targetRevenue) : "—"}</p>
+              <p className="font-heading text-lg text-[#00D4FF]">{targetMargin > 0 ? money2(targetRevenue) : "—"}</p>
             </div>
             <div>
               <p className="text-xs text-slate-500">Current Revenue</p>
-              <p className="font-heading text-lg text-white">{money(netRevenue)}</p>
+              <p className="font-heading text-lg text-white">{money2(netRevenue)}</p>
             </div>
             <div>
               <p className="text-xs text-slate-500">Remaining to Target</p>
               <p className={`font-heading text-lg ${revenueRemaining <= 0 ? "text-[#00E096]" : "text-[#FFB547]"}`}>
-                {targetMargin > 0 ? money(Math.max(0, revenueRemaining)) : "—"}
+                {targetMargin > 0 ? money2(Math.max(0, revenueRemaining)) : "—"}
               </p>
             </div>
           </div>
@@ -469,7 +469,7 @@ export default function Expenses() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card
           title="Expense Tracker"
-          subtitle={`${filteredExpenses.length} of ${expenses.length} expenses · ${money(operatingExpenses)} total`}
+          subtitle={`${filteredExpenses.length} of ${expenses.length} expenses · ${money2(operatingExpenses)} total`}
           right={
             <button
               onClick={() => setShowForm(!showForm)}
@@ -533,12 +533,12 @@ export default function Expenses() {
           <div className="mb-4 grid grid-cols-2 gap-3">
             <div className="rounded-lg border border-[#00E096]/10 bg-[#00E096]/[0.03] p-3">
               <p className="text-[10px] uppercase tracking-widest text-slate-500">Taxable Expenses</p>
-              <p className="mt-1 font-heading text-lg text-[#00E096]">{money(taxableAmount)}</p>
+              <p className="mt-1 font-heading text-lg text-[#00E096]">{money2(taxableAmount)}</p>
               <p className="text-xs text-slate-500">{taxableExpenses.length} items</p>
             </div>
             <div className="rounded-lg border border-[#FFB547]/10 bg-[#FFB547]/[0.03] p-3">
               <p className="text-[10px] uppercase tracking-widest text-slate-500">Tax-Exempt</p>
-              <p className="mt-1 font-heading text-lg text-[#FFB547]">{money(exemptAmount)}</p>
+              <p className="mt-1 font-heading text-lg text-[#FFB547]">{money2(exemptAmount)}</p>
               <p className="text-xs text-slate-500">{exemptExpenses.length} items</p>
             </div>
           </div>
@@ -574,7 +574,7 @@ export default function Expenses() {
                       >
                         {e.taxable !== false ? "Taxable" : "Exempt"}
                       </button>
-                      <span className="text-sm tabular-nums text-slate-300">{money(e.amount || 0)}</span>
+                      <span className="text-sm tabular-nums text-slate-300">{money2(e.amount || 0)}</span>
                       <select
                         value={e.payment_status || "unpaid"}
                         onChange={(ev) => handleStatusChange(e.id, ev.target.value)}
@@ -596,7 +596,7 @@ export default function Expenses() {
 
         <Card
           title="Payroll Records"
-          subtitle={`${payroll.length} records · ${money(totalPayroll)} total`}
+          subtitle={`${payroll.length} records · ${money2(totalPayroll)} total`}
           right={
             <button
               onClick={() => setShowPayrollForm(!showPayrollForm)}
@@ -645,7 +645,7 @@ export default function Expenses() {
                       <p className="text-xs text-slate-500">{p.department} · {p.pay_type} · {p.hours || 0}h</p>
                     </div>
                     <div className="flex items-center gap-3">
-                      <span className="text-sm tabular-nums text-slate-300">{money(p.total_pay || 0)}</span>
+                      <span className="text-sm tabular-nums text-slate-300">{money2(p.total_pay || 0)}</span>
                       <button onClick={() => handleDeletePayroll(p)} className="text-slate-500 hover:text-[#FF6B6B]">
                         <Trash2 className="h-4 w-4" />
                       </button>

@@ -1,5 +1,5 @@
-const db = globalThis.__B44_DB__ || { auth:{ isAuthenticated: async()=>false, me: async()=>null }, entities:new Proxy({}, { get:()=>({ filter:async()=>[], get:async()=>null, create:async()=>({}), update:async()=>({}), delete:async()=>({}) }) }), integrations:{ Core:{ UploadFile:async()=>({ file_url:'' }) } } };
-
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { secrets } from 'base44:runtime';
 import * as crypto from 'node:crypto';
 
 // ─── Timecard reconciliation (parity with src/lib/timecardCalc.js) ───
@@ -138,37 +138,49 @@ function reconcileTimecards(punches: any[]): any[] {
 //   { propertyId }           — optionally scope the run to a single property
 export default async function runAutoPayroll(req) {
   try {
-    // Scheduled cron runs have no user session and execute as the trusted
-    // service role. Manual invocations (from the Payroll page) must come from
-    // an authenticated owner/admin.
+    const base44 = createClientFromRequest(req);
+
     let user: any = null;
-    const cookieHeader = req.headers.get('cookie') || '';
-    const cookieMatch = cookieHeader.match(/base44_session=([^;]+)/);
-    const token = cookieMatch ? cookieMatch[1] : null;
-    if (token) {
-      const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-      const sessions = await db.asServiceRole.entities.Session.filter({ token_hash: tokenHash }, null, 1, 0);
-      const session = sessions[0];
-      if (session && !session.is_revoked && new Date(session.expires_at) >= new Date()) {
-        user = await db.asServiceRole.entities.User.get(session.user_id);
-      }
+    let isAuthorizedCron = false;
+
+    // Gate 1: Automated Cron Execution
+    const cronSecret = secrets.get('CRON_SECRET');
+    const authHeader = req.headers.get('authorization');
+    const cronKeyHeader = req.headers.get('x-cron-key');
+    
+    if (cronSecret && (authHeader === `Bearer ${cronSecret}` || cronKeyHeader === cronSecret)) {
+      isAuthorizedCron = true;
     }
 
-    if (user) {
+    // Gate 2: Manual UI Execution (if Cron fails)
+    if (!isAuthorizedCron) {
+      const cookieHeader = req.headers.get('cookie') || '';
+      const cookieMatch = cookieHeader.match(/base44_session=([^;]+)/);
+      const token = cookieMatch ? cookieMatch[1] : null;
+      if (!token) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+
+      const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+      const sessions = await base44.asServiceRole.entities.Session.filter({ token_hash: tokenHash }, null, 1, 0);
+      const session = sessions[0];
+      if (!session || session.is_revoked || new Date(session.expires_at) < new Date()) {
+        return Response.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+
+      user = await base44.asServiceRole.entities.User.get(session.user_id);
+      if (!user || !user.is_active || user.is_locked) {
+        return Response.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+
       if (user.role !== 'admin' && user.role !== 'owner') {
         return Response.json({ error: "Forbidden: Only admins or owners can run payroll" }, { status: 403 });
       }
-      if (user.is_active === false) {
-        return Response.json({ error: "Forbidden: Account is suspended" }, { status: 403 });
-      }
+
       const _csrfHeader = req.headers.get('x-csrf-token');
-      const _cookieHeader = req.headers.get('cookie') || '';
-      const _csrfCookieMatch = _cookieHeader.match(/__Host-csrf_token=([^;]+)/);
+      const _csrfCookieMatch = cookieHeader.match(/__Host-csrf_token=([^;]+)/);
       const _csrfCookie = _csrfCookieMatch ? _csrfCookieMatch[1] : null;
       if (!_csrfHeader || !_csrfCookie || _csrfHeader !== _csrfCookie) {
         return Response.json({ error: "Invalid CSRF token" }, { status: 403 });
       }
-
     }
 
     let body: any = {};
@@ -206,7 +218,7 @@ export default async function runAutoPayroll(req) {
     const periodEnd = `${year}-${pad(month + 1)}-${pad(lastDay)}`;
 
     // 1. Load all active staff
-    const staff = await db.entities.Staff.filter({ active: true });
+    const staff = await base44.asServiceRole.entities.Staff.filter({ active: true });
     if (!staff || staff.length === 0) {
       return Response.json({
         status: "ok",
@@ -221,7 +233,7 @@ export default async function runAutoPayroll(req) {
     // 2. Load existing payroll runs for this pay period so we never run twice
     let existing = [];
     try {
-      existing = await db.entities.PayrollRun.filter({ pay_period_end: periodEnd }) || [];
+      existing = await base44.asServiceRole.entities.PayrollRun.filter({ pay_period_end: periodEnd }) || [];
     } catch (err) {
       existing = [];
     }
@@ -239,7 +251,7 @@ export default async function runAutoPayroll(req) {
       // Base44's entity filter takes object equality predicates; range filters
       // aren't reliably supported, so load the punches and scope by period/
       // property in JS (punch volume is bounded — one row per shift).
-      const allPunches = await db.entities.TimecardPunch.filter({}) || [];
+      const allPunches = await base44.asServiceRole.entities.TimecardPunch.filter({}) || [];
       const punches = allPunches.filter(
         (p: any) =>
           (!body.propertyId || p.property_id === body.propertyId) &&
@@ -316,7 +328,7 @@ export default async function runAutoPayroll(req) {
         timecard_derived: !!tc,
       };
 
-      await db.entities.PayrollRun.create(record);
+      await base44.asServiceRole.entities.PayrollRun.create(record);
       created.push(record);
     }
 
@@ -324,20 +336,15 @@ export default async function runAutoPayroll(req) {
     // outcome. Generated runs are intentionally "pending" so a second human
     // approval is required; the audit entry makes the generation traceable in a
     // way the client-side (forgeable) chain cannot guarantee.
-    try {
-      await db.entities.AuditLog.create({
-        user_id: user ? user.id : null,
-        username: (user && (user.username || user.email)) || "system",
-        action: "Payroll Generated",
-        performed_by_id: user ? user.id : null,
-        performed_by: (user && (user.username || user.email)) || "system",
-        result: "success",
-        detail: `Generated ${created.length} pending payroll run(s) for ${periodStart} → ${periodEnd}${body.force ? " (forced)" : ""}${body.propertyId ? ` · property ${body.propertyId}` : ""}`,
-        created_date: new Date().toISOString(),
-      });
-    } catch {
-      // AuditLog entity may not exist on every deployment; never fail the run.
-    }
+    await writeAudit(base44, {
+      userId: user ? user.id : null,
+      username: (user && (user.username || user.email)) || "system",
+      action: "Payroll Generated",
+      performedById: user ? user.id : null,
+      performedBy: (user && (user.username || user.email)) || "system",
+      propertyId: body.propertyId || null,
+      detail: `Generated ${created.length} pending payroll run(s) for ${periodStart} → ${periodEnd}${body.force ? " (forced)" : ""}${body.propertyId ? ` · property ${body.propertyId}` : ""}`,
+    });
 
     return Response.json({
       status: "ok",
@@ -353,4 +360,76 @@ export default async function runAutoPayroll(req) {
     console.error("AutoPayroll error:", error);
     return Response.json({ error: "Internal server error", status: "failed" }, { status: 500 });
   }
+}
+
+// ─── AuditLog chain writer ───
+// This function is a WRITER on the tamper-evident AuditLog chain. The canonical
+// payload below is the contract shared with base44/functions/audit_verify/
+// entry.js; the base44 host permits no module sharing between functions, so it
+// exists here as a copy. Any field added, removed, renamed or re-ordered MUST be
+// mirrored in the verifier and every other writer, or the verifier will misflag
+// every healthy row as tampered. scripts/probe-audit-chain.mjs asserts the
+// AUDIT_CANONICAL_V1 markers and hashed fields agree across all copies.
+async function writeAudit(base44: any, opts: any) {
+  // An audit write must never break the operation it records — the payroll runs
+  // (or the data wipe) have already been committed by the time we get here.
+  try {
+    // FAIL CLOSED, but by SKIPPING the row rather than writing an unsigned one.
+    // audit_verify recomputes the expected hash for every stored row and reports
+    // a hashless row as `tampered`, so emitting one here would make the entire
+    // healthy trail read as forged — strictly worse than a missing row. An
+    // unconfigured deployment is already loud: audit_verify returns
+    // chain_secret_missing and no rows accumulate.
+    const chainSecret = secrets.get('AUDIT_CHAIN_SECRET');
+    if (!chainSecret) throw new Error('AUDIT_CHAIN_SECRET is not configured');
+
+    const lastEntries = await base44.asServiceRole.entities.AuditLog.filter({}, '-created_date', 1, 0);
+    const lastRow = (lastEntries && lastEntries[0]) || null;
+    const previousHash = (lastRow && lastRow.hash) || '0'.repeat(64);
+    const nowIso = monotonicIso(lastRow && lastRow.created_date);
+
+    // `|| null` rather than a bare undefined: JSON.stringify DROPS undefined
+    // keys, so an undefined here would hash a different shape than the verifier
+    // rebuilds from a row the backend stored as null.
+    // AUDIT_CANONICAL_V1 = user_id,action,performed_by_id,performed_by,property_id,result,detail,created_date,previous_hash
+    const canonical = JSON.stringify({
+      user_id: opts.userId || null,
+      action: opts.action,
+      performed_by_id: opts.performedById || null,
+      performed_by: opts.performedBy,
+      property_id: opts.propertyId || null,
+      result: 'success',
+      detail: opts.detail || '',
+      created_date: nowIso,
+      previous_hash: previousHash,
+    });
+    const hash = crypto.createHash('sha256').update(`${chainSecret}:${canonical}`).digest('hex');
+
+    // Written but NOT signed: username. It is forensic context only, exactly as
+    // in audit_log/entry.js — the signed field set must stay identical.
+    await base44.asServiceRole.entities.AuditLog.create({
+      user_id: opts.userId || null,
+      username: opts.username,
+      action: opts.action,
+      performed_by_id: opts.performedById || null,
+      performed_by: opts.performedBy,
+      property_id: opts.propertyId || null,
+      result: 'success',
+      detail: opts.detail || '',
+      created_date: nowIso,
+      hash,
+      previous_hash: previousHash,
+    });
+  } catch (err) {
+    console.error('[autoPayroll] audit write failed:', err);
+  }
+}
+
+// Strictly increasing, because the verifier orders the chain by created_date. A
+// same-millisecond tie could be walked in the opposite order to the one the rows
+// were linked in and reported as a chain break that never happened.
+function monotonicIso(lastIso: any) {
+  const now = Date.now();
+  const last = lastIso ? Date.parse(lastIso) : NaN;
+  return new Date(Number.isFinite(last) && last >= now ? last + 1 : now).toISOString();
 }

@@ -6,10 +6,11 @@ import Card from "@/components/ui-exec/Card";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
-import { downloadCsv, downloadExcel } from "@/lib/hotel";
+import { downloadCsv, downloadExcel, stampFilename } from "@/lib/exportData";
 import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
 import { parseManualEntryCsv, parseManualEntryPaste } from "@/lib/manualEntryImport";
+import { saveManualRows } from "@/lib/manualEntrySave";
 
 // An uploaded file is hostile input. 10MB matches the cap fetchCsvRows enforces on
 // the report-import path, so both importers refuse the same oversized file.
@@ -339,16 +340,44 @@ export default function ManualEntry() {
     applyParsed(parseManualEntryCsv(text, config.fields), "Nothing imported");
   };
 
+  // Export column spec derived from this report's own field config, so the file the
+  // owner opens carries the same headers, in the same order, as the grid they were
+  // just looking at. Nothing to keep in sync: add a field above and it exports.
+  //
+  // THREE DEFECTS THIS REPLACES (fixed 2026-08-20, do not revert):
+  //  1. `out[f.key] = r[f.key] || ""` turned a real 0 into an empty cell. On the
+  //     occupancy report a genuine zero-revenue day exported as blank, which reads
+  //     as "not recorded" rather than "recorded as nothing" — and blanks break SUM
+  //     ranges differently than zeros do in both Excel and Sheets.
+  //  2. Headers were raw column keys (`other_room_revenue`), not the labels the UI
+  //     shows ("Other Rev").
+  //  3. `Date.now()` stamped filenames with an epoch integer. stampFilename writes a
+  //     sortable local timestamp, so a folder of exports sorts chronologically.
+  //
+  // BEST OUTCOME NOTE: routing through @/lib/exportData rather than hotel.js's old
+  // helpers is what makes this page inherit the CSV formula-injection guard and the
+  // numeric-passthrough rule for negative amounts. A second export implementation
+  // would drift from the first; there is now exactly one.
+  const exportColumns = useMemo(
+    () => config.fields.map((f) => ({ key: f.key, label: f.label || f.key })),
+    [config],
+  );
+
   const handleExport = (type = 'csv') => {
-    const exportRows = rows.map((r) => {
-      const out = {};
-      config.fields.forEach((f) => { out[f.key] = r[f.key] || ""; });
-      return out;
-    });
-    if (type === 'excel') {
-      downloadExcel(exportRows, `manual_${reportType}_${Date.now()}.xlsx`);
-    } else {
-      downloadCsv(exportRows, `manual_${reportType}_${Date.now()}.csv`);
+    try {
+      const isExcel = type === 'excel';
+      const n = (isExcel ? downloadExcel : downloadCsv)(rows, {
+        filename: stampFilename(`manual_${reportType}`, isExcel ? 'xlsx' : 'csv'),
+        columns: exportColumns,
+        sheetName: config.label || reportType,
+      });
+      setSaveMsg(`Exported ${n.toLocaleString()} row${n === 1 ? '' : 's'} to ${isExcel ? 'Excel' : 'CSV'}.`);
+      setMsgTone("success");
+    } catch (e) {
+      // A failed export used to be silent: downloadCsv on an empty grid produced a
+      // header-only file and no message at all.
+      setSaveMsg(`Nothing exported — ${e?.message || String(e)}`);
+      setMsgTone("error");
     }
   };
 
@@ -471,18 +500,27 @@ export default function ManualEntry() {
 
     let saved = 0;
     let skipped = 0;
-    for (const { row, record } of prepared) {
-      if (!row._id && existingKeys.has(dedupeKey(record))) {
-        skipped++; // already present via a prior import or manual save
-        continue;
-      }
-      if (row._id) {
-        await db.entities[entityName].update(row._id, record);
-      } else {
-        await db.entities[entityName].create(record);
-      }
-      existingKeys.add(dedupeKey(record));
-      saved++;
+    try {
+      // All rows or none. The old bare loop committed row by row, so a failure
+      // part-way through left a half-entered day in a financial ledger and — with
+      // no catch anywhere in this handler — threw out of an async onClick, leaving
+      // the Save button spinning and the operator unaware anything had been
+      // written. See src/lib/manualEntrySave.js.
+      ({ saved, skipped } = await saveManualRows({
+        entityName,
+        prepared,
+        existingKeys,
+        dedupeKey,
+      }));
+    } catch (e) {
+      setSaveMsg(`Not saved — ${e?.message || String(e)}. No records were written; fix the problem and save again.`);
+      setMsgTone("error");
+      setImportWarnings([e?.message || String(e)]);
+      // The draft stays on disk deliberately: it is the only copy of the typed
+      // rows now that the write was rolled back.
+      setSaving(false);
+      rotateCsrfToken();
+      return;
     }
     qc.invalidateQueries({ queryKey: ["manual-entries"] });
     qc.invalidateQueries({ queryKey: ["occupancy"] });

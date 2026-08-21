@@ -5,15 +5,43 @@
     "buildCommand": "npm run build",
     "serveCommand": "npm run dev",
     "outputDirectory": "./dist",
+    // These headers must stay byte-identical to the ones in vercel.json.
+    //
+    // Both files are live: vercel.json serves the app on Vercel, this block serves
+    // it on base44 hosting. They had drifted in both directions at once, which is
+    // the worst way for a policy to be wrong:
+    //
+    //   · connect-src was `'self' https: wss:` here — any https origin on the
+    //     internet was a legal destination, so an injected script could post the
+    //     whole ledger anywhere. vercel.json pins it to base44.
+    //   · but it omitted `blob:` from connect-src and had no worker-src at all,
+    //     and those two are load-bearing rather than decorative: UploadFile()
+    //     hands the parser a blob: URL that csvParser.js fetches, and the parser
+    //     itself runs in a module Worker created from a blob. See the note above
+    //     CSP_PROD in vite.config.js. A policy that is loose about exfiltration
+    //     and strict about the app's own plumbing manages to be both unsafe and
+    //     broken.
+    //
+    // Keeping four hand-maintained copies in step is what failed here, so
+    // scripts/probe-deploy-config.mjs section 3 now compares this block against
+    // vercel.json key by key and fails on any difference. Change one, change all,
+    // and run that probe.
+    //
+    // X-XSS-Protection is deliberately NOT copied from vercel.json: the XSS
+    // auditor it controlled was removed from every current browser, so it is a
+    // no-op there and adding it here would only widen the surface that has to be
+    // kept identical.
     "headers": [
       {
         "source": "**",
         "headers": [
           { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains; preload" },
-          { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" },
+          { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' blob: https://base44.app https://*.base44.app; worker-src 'self' blob:; manifest-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" },
           { "key": "X-Frame-Options", "value": "DENY" },
           { "key": "X-Content-Type-Options", "value": "nosniff" },
           { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+          { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" },
+          { "key": "Cross-Origin-Resource-Policy", "value": "same-origin" },
           { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=()" }
         ]
       }

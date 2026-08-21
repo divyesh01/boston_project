@@ -2,6 +2,7 @@ import React, { useState, useEffect, lazy, Suspense } from "react";
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Building2, MoreHorizontal, X, ArrowLeft, LogOut, KeyRound } from "lucide-react";
+import { DURATION, EASE_OUT, fadeOnly } from "@/lib/motion";
 const AIAssistant = lazy(() => import("@/components/AIAssistant"));
 import { GlobalFiltersProvider, useGlobalFilters } from "@/lib/useGlobalFilters";
 import GlobalControlBar from "@/components/GlobalControlBar";
@@ -52,12 +53,14 @@ export default function Layout() {
     } catch (e) {}
   }, [pathname]);
 
-  const transitions = reduceMotion
-    ? { duration: 0.1 }
-    : { duration: 0.2, ease: "easeOut" };
-  const initial = reduceMotion ? { opacity: 0 } : { opacity: 0, x: 20 };
-  const animate = reduceMotion ? { opacity: 1 } : { opacity: 1, x: 0 };
-  const exit = reduceMotion ? { opacity: 0 } : { opacity: 0, x: -20 };
+  // Page transitions now come from the shared motion tokens, so navigation uses
+  // the same curve and timing as every card entrance instead of its own numbers.
+  //
+  // The container CROSS-FADES ONLY — the travel belongs to the cards inside it,
+  // which each rise 10px via `.fx-enter`. This used to slide the whole page 20px
+  // horizontally; stacked on top of the card rise that came to 20px+ of combined
+  // travel on two axes, well past the 8-12px the house style allows.
+  const pageMotion = fadeOnly(reduceMotion ? DURATION.fast : DURATION.base);
 
   return (
     <GlobalFiltersProvider>
@@ -150,10 +153,10 @@ export default function Layout() {
             <motion.div
               key={pathname}
               data-page-content
-              initial={initial}
-              animate={animate}
-              exit={exit}
-              transition={transitions}
+              initial={pageMotion.initial}
+              animate={pageMotion.animate}
+              exit={pageMotion.exit}
+              transition={pageMotion.transition}
             >
               <Outlet />
             </motion.div>
@@ -199,15 +202,36 @@ export default function Layout() {
           </button>
         </nav>
 
-        {/* More menu — bottom sheet */}
-        {moreOpen && (
-          <div className="fixed inset-0 z-40 lg:hidden" onClick={() => setMoreOpen(false)}>
-            <div className="absolute inset-0 bg-black/60" />
-            <div
-              className="absolute inset-x-0 bottom-0 rounded-t-3xl border-t border-white/10 bg-[#0F1F35] p-4"
-              style={{ paddingBottom: "calc(1rem + env(safe-area-inset-bottom))" }}
-              onClick={(e) => e.stopPropagation()}
-            >
+        {/* More menu — bottom sheet.
+            The only hand-rolled overlay in the app (the Radix dialogs animate
+            themselves via tailwindcss-animate). It used to pop in and out with
+            no transition at all; AnimatePresence is needed rather than a CSS
+            class because the close is the half that was missing. */}
+        <AnimatePresence>
+          {moreOpen && (
+            /* Keyed explicitly: AnimatePresence identifies children by
+               `child.key || ""`, so a keyless child works only while it is the
+               sole child. A real key keeps that from becoming a trap. */
+            <div key="more-sheet" className="fixed inset-0 z-40 lg:hidden" onClick={() => setMoreOpen(false)}>
+              <motion.div
+                className="absolute inset-0 bg-black/60"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: DURATION.fast / 1000, ease: EASE_OUT }}
+              />
+              <motion.div
+                className="absolute inset-x-0 bottom-0 rounded-t-3xl border-t border-white/10 bg-[#0F1F35] p-4"
+                style={{ paddingBottom: "calc(1rem + env(safe-area-inset-bottom))" }}
+                onClick={(e) => e.stopPropagation()}
+                // A sheet is the one place a longer travel is right — it comes
+                // from off-screen, so it animates its own height rather than a
+                // token distance. Reduced motion drops to a plain cross-fade.
+                initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: "100%" }}
+                animate={reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: "100%" }}
+                transition={{ duration: DURATION.slow / 1000, ease: EASE_OUT }}
+              >
               <div className="mb-4 flex items-center justify-between">
                 <span className="font-heading text-sm font-semibold text-white">More</span>
                 <button onClick={() => setMoreOpen(false)} aria-label="Close menu" className="text-slate-400 hover:text-white">
@@ -235,9 +259,10 @@ export default function Layout() {
                 <Link to="/privacy" onClick={() => setMoreOpen(false)} className="hover:text-white hover:underline">Privacy</Link>
                 <Link to="/terms" onClick={() => setMoreOpen(false)} className="hover:text-white hover:underline">Terms</Link>
               </div>
+              </motion.div>
             </div>
-          </div>
-        )}
+          )}
+        </AnimatePresence>
       </div>
 
       <Suspense fallback={null}>

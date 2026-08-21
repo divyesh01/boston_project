@@ -1,8 +1,13 @@
 import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, it } from "vitest";
 
-globalThis.crypto ??= await import("node:crypto").then((m) => m.webcrypto);
-if (!globalThis.crypto?.subtle) globalThis.crypto = await import("node:crypto").then((m) => m.webcrypto);
+// The shims below are deliberate PARTIAL doubles, so each assignment carries its
+// own `any` cast: Node's WebCrypto stands in for the DOM `Crypto`, a Map stands
+// in for `Storage` (no `length`/`key` — nothing under test reads them), and
+// `screen` only needs width/height. The casts are scoped to these four lines so
+// the rest of the file stays fully type-checked.
+globalThis.crypto ??= /** @type {any} */ (await import("node:crypto").then((m) => m.webcrypto));
+if (!globalThis.crypto?.subtle) globalThis.crypto = /** @type {any} */ (await import("node:crypto").then((m) => m.webcrypto));
 
 const __store = new Map();
 const __storage = {
@@ -11,10 +16,10 @@ const __storage = {
   removeItem: (k) => __store.delete(k),
   clear: () => __store.clear(),
 };
-globalThis.localStorage = __storage;
-globalThis.sessionStorage = __storage;
-globalThis.window = globalThis;
-globalThis.screen = { width: 1920, height: 1080 };
+globalThis.localStorage = /** @type {any} */ (__storage);
+globalThis.sessionStorage = /** @type {any} */ (__storage);
+globalThis.window = /** @type {any} */ (globalThis);
+globalThis.screen = /** @type {any} */ ({ width: 1920, height: 1080 });
 if (globalThis.navigator === undefined) {
   Object.defineProperty(globalThis, "navigator", {
     value: { userAgent: "test-harness", language: "en-US" },

@@ -8,8 +8,9 @@ import Card from "@/components/ui-exec/Card";
 import { useOccupancy, useSources } from "@/lib/useHotelData";
 import { useGlobalFilters, MONTHS_LONG } from "@/lib/useGlobalFilters";
 import { Link } from "react-router-dom";
-import { money, money2, pct, num, inRange, C, occupancyStats, commissionFor } from "@/lib/hotel";
+import { money, money2, pct, num, inRange, C, occupancyStats, commissionFor, formatDayLabel } from "@/lib/hotel";
 import { getRevenueThresholds, getRevenueColor, getRevenueGroup, getRevenueGroupLabel } from "@/lib/revenueThresholds";
+import { getEventsInRange, DEMAND_ORDER, DEMAND_COLORS, peakDemand, distanceColor } from "@/lib/eventSchedule";
 import { ErrorState } from "@/components/ui/status";
 
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -21,6 +22,7 @@ export default function MonthlyCalendar() {
   const { data: occ = [] } = occQ;
   const { data: sources = [] } = sourcesQ;
   const [selectedDay, setSelectedDay] = useState(null);
+  const [eventPopupDay, setEventPopupDay] = useState(null);
   // Read the configured thresholds so the legend cannot drift from the colours.
   const revThresholds = getRevenueThresholds();
 
@@ -48,6 +50,9 @@ export default function MonthlyCalendar() {
     return map;
   }, [sources]);
 
+  // Events for the displayed calendar months. Expanded from the shared schedule
+  // (one-time + recurring), keyed by date so each calendar cell can badge demand.
+
   // Build calendar grids. When the owner picks several months (e.g. Apr–Jul),
   // render one grid per selected month instead of silently clamping to the first.
   const isMultiMonth = period === "monthly" && months.length > 1;
@@ -58,6 +63,21 @@ export default function MonthlyCalendar() {
   }, [isMultiMonth, months, month]);
 
   const calYear = year || new Date().getFullYear();
+  const eventsByDate = useMemo(() => {
+    const map = new Map();
+    getEventsInRange({
+      from: `${calYear}-${String(displayMonths[0] + 1).padStart(2, "0")}-01`,
+      to: `${calYear}-${String(displayMonths[displayMonths.length - 1] + 1).padStart(2, "0")}-${new Date(calYear, displayMonths[displayMonths.length - 1] + 1, 0).getDate()}`,
+    }).forEach((e) => {
+      if (!map.has(e.date)) map.set(e.date, []);
+      map.get(e.date).push(e);
+    });
+    return map;
+  }, [calYear, displayMonths]);
+
+  const selectedEvents = selectedDay ? (eventsByDate.get(selectedDay) || []) : [];
+  const eventPopupEvents = eventPopupDay ? (eventsByDate.get(eventPopupDay) || []) : [];
+
   const grids = useMemo(() => {
     return displayMonths.map((m) => {
       const firstDay = new Date(calYear, m, 1);
@@ -192,6 +212,29 @@ export default function MonthlyCalendar() {
           title={`${MONTHS_LONG[grid.month]} ${calYear} Calendar`}
           subtitle={`Green ≥ ${money(revThresholds.highRevenueThreshold)} · Gray ${money(revThresholds.mediumRevenueThreshold)}–${money(revThresholds.highRevenueThreshold)} · Red < ${money(revThresholds.mediumRevenueThreshold)} (editable in Settings)`}
         >
+          <div className="mb-3 flex flex-wrap items-center gap-3 text-[10px] text-slate-400">
+            <span className="uppercase tracking-wider text-slate-500">Event demand:</span>
+            {Object.entries(DEMAND_COLORS).map(([label, color]) => (
+              <span key={label} className="flex items-center gap-1">
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+                {label}
+              </span>
+            ))}
+            <span className="mx-1 hidden h-3 w-px bg-white/10 sm:block" />
+            <span className="uppercase tracking-wider text-slate-500">Event distance:</span>
+            <span className="flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: distanceColor(0) }} />
+              close
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: distanceColor(20) }} />
+              20 mi
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: distanceColor(40) }} />
+              40+ mi
+            </span>
+          </div>
           <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
             {DOW.map((d) => (
               <div key={d} className="pb-2 text-center text-xs font-medium text-slate-500">{d}</div>
@@ -201,6 +244,11 @@ export default function MonthlyCalendar() {
               const revenue = cell.data?.room_revenue || 0;
               const color = cell.data ? getRevenueColor(revenue) : "transparent";
               const occPct = cell.data?.occupancy ? (cell.data.occupancy > 1 ? cell.data.occupancy : cell.data.occupancy * 100) : 0;
+              const cellEvents = eventsByDate.get(cell.date) || [];
+              const cellDemand = peakDemand(cellEvents);
+              const eventColor = DEMAND_COLORS[cellEvents.find((e) => DEMAND_ORDER[e.demand] === cellDemand)?.demand] || null;
+              const closestDist = cellEvents.length > 0 ? Math.min(...cellEvents.map((e) => e.distance)) : 0;
+              const distColor = distanceColor(closestDist);
               return (
                 <button
                   key={i}
@@ -214,6 +262,23 @@ export default function MonthlyCalendar() {
                     <span className="text-xs font-semibold text-white">{cell.day}</span>
                     {cell.data && <span className="text-[10px] text-slate-400">{occPct.toFixed(0)}%</span>}
                   </div>
+                  {/* One badge for every day that has events. It used to be two
+                      variants: a tappable <button> when the night had imported
+                      revenue, and an inert <div> when it did not — so the Event
+                      Details popup was unreachable on exactly the days where the
+                      events were the only information the cell had to offer. */}
+                  {cellEvents.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setEventPopupDay(cell.date); }}
+                      className="mt-1 flex w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-[9px] font-semibold uppercase tracking-wide transition-all hover:brightness-125"
+                      style={{ backgroundColor: `${eventColor}22`, color: distColor, borderLeft: `2px solid ${eventColor}` }}
+                      title={cellEvents.map((e) => `${e.name} — ${e.demand}`).join(" / ")}
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: distColor }} />
+                      📅 {cellEvents.length} event{cellEvents.length > 1 ? "s" : ""} — tap for details
+                    </button>
+                  )}
                   {cell.data ? (
                     <div className="mt-1 space-y-0.5 text-[10px] text-slate-300">
                       <div className="font-heading font-semibold text-sm tabular-nums text-white">{money(revenue)}</div>
@@ -285,12 +350,50 @@ export default function MonthlyCalendar() {
             >
               <div className="mb-4 flex items-center justify-between">
                 <DialogPrimitive.Title className="font-heading text-xl font-semibold text-white">
-                  {selectedDay && new Date(selectedDay).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+                  {formatDayLabel(selectedDay)}
                 </DialogPrimitive.Title>
                 <DialogPrimitive.Close className="text-slate-400 hover:text-white" aria-label="Close">
                   <X className="h-5 w-5" />
                 </DialogPrimitive.Close>
               </div>
+
+              {/* Events render FIRST, and independently of imported revenue.
+                  This block used to sit inside the selectedData branch below, so
+                  a night with known demand drivers but no OccupancyDay row showed
+                  only "No data imported for this day." — the cell had just badged
+                  "1 EVENT" and the dialog then denied it existed. On a day with
+                  no numbers yet, the events ARE the intelligence. */}
+              {selectedEvents.length > 0 && (
+                <div className="mb-4">
+                  <p className="mb-2 text-xs uppercase tracking-widest text-slate-500">Events Driving Demand</p>
+                  <div className="space-y-2">
+                    {selectedEvents.map((e, i) => {
+                      const col = DEMAND_COLORS[e.demand] || "#94a3b8";
+                      const distCol = distanceColor(e.distance);
+                      return (
+                        <div key={`${e.name}-${i}`} className="rounded-xl border border-white/5 bg-[#0A1628] p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-semibold" style={{ color: distCol }}>{e.name}</p>
+                            <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider" style={{ backgroundColor: `${col}22`, color: col }}>
+                              {e.demand}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-400">
+                            {e.venue}{e.address && e.address !== "Regional" ? ` — ${e.address}` : ""}
+                          </p>
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
+                            {e.time && <span>🕐 {e.time}</span>}
+                            {e.distance > 0 && <span style={{ color: distCol }}>📍 {e.distance} mi away</span>}
+                            {e.priceRange && <span>🎟 {e.priceRange}</span>}
+                            {e.holiday && e.holiday !== "Holiday Season" && <span>🗓 {e.holiday}</span>}
+                          </div>
+                          {e.audience && <p className="mt-1 text-[11px] text-slate-500">👥 {e.audience}</p>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {selectedData ? (
               <div className="space-y-4">
@@ -326,11 +429,81 @@ export default function MonthlyCalendar() {
                 )}
               </div>
             ) : (
-              <div className="py-8 text-center">
-                <p className="text-slate-500">No data imported for this day.</p>
-                <Link to="/upload" className="mt-2 inline-block text-sm text-[#00D4FF] underline">Import reports →</Link>
+              /* Missing revenue is still stated plainly — the events above are not
+                 a substitute for the numbers. When events are present this is a
+                 compact secondary note rather than the whole dialog body. */
+              <div className={selectedEvents.length > 0 ? "rounded-xl border border-white/5 bg-[#0A1628] px-4 py-3 text-center" : "py-8 text-center"}>
+                <p className="text-sm text-slate-500">No revenue data imported for this day.</p>
+                <Link to="/upload" className="mt-1 inline-block text-sm text-[#00D4FF] underline">Import reports →</Link>
               </div>
             )}
+            </div>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
+
+      {/* Event Details Popup — opened from the clickable "event" line on a day cell */}
+      <DialogPrimitive.Root open={!!eventPopupDay} onOpenChange={(open) => !open && setEventPopupDay(null)}>
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Overlay className="fixed inset-0 z-[60] bg-black/70 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+          <DialogPrimitive.Content
+            className="fixed inset-0 z-[60] flex items-end justify-end sm:items-center sm:justify-center outline-none pointer-events-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+            aria-describedby={undefined}
+          >
+            <div
+              className="relative w-full max-w-md rounded-t-3xl border border-white/10 bg-[#0F1F35] p-6 sm:rounded-2xl pointer-events-auto shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+              style={{ maxHeight: "85vh", overflowY: "auto" }}
+            >
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.3em] text-[#FFB547]">Event Details</p>
+                  <DialogPrimitive.Title className="mt-1 font-heading text-xl font-semibold text-white">
+                    {formatDayLabel(eventPopupDay)}
+                  </DialogPrimitive.Title>
+                </div>
+                <DialogPrimitive.Close className="text-slate-400 hover:text-white" aria-label="Close">
+                  <X className="h-5 w-5" />
+                </DialogPrimitive.Close>
+              </div>
+
+              <div className="space-y-3">
+                {eventPopupEvents.length === 0 && (
+                  <p className="text-sm text-slate-500">No events scheduled for this day.</p>
+                )}
+                {eventPopupEvents.map((e, i) => {
+                  const col = DEMAND_COLORS[e.demand] || "#94a3b8";
+                  const distCol = distanceColor(e.distance);
+                  return (
+                    <div key={`${e.name}-${i}`} className="rounded-xl border border-white/5 bg-[#0A1628] p-4">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="font-heading text-base font-semibold" style={{ color: distCol }}>{e.name}</p>
+                        <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider" style={{ backgroundColor: `${col}22`, color: col }}>
+                          {e.demand} Demand
+                        </span>
+                      </div>
+                      {e.type && <p className="mt-1 text-xs text-slate-400">{e.type}</p>}
+
+                      <p className="mt-2 text-sm text-slate-300">{e.venue}</p>
+                      {e.address && e.address !== "Regional" && (
+                        <p className="text-xs text-slate-400">📍 {e.address}</p>
+                      )}
+
+                      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-400">
+                        {e.time && <span>🕐 {e.time}</span>}
+                        {e.distance > 0 && <span style={{ color: distCol }}>🚗 {e.distance} mi from motel</span>}
+                        {e.priceRange && <span>🎟 {e.priceRange}</span>}
+                        {e.holiday && e.holiday !== "Holiday Season" && <span>🗓 {e.holiday}</span>}
+                        {e.recurring && <span>🔁 Recurring</span>}
+                      </div>
+
+                      {e.audience && (
+                        <p className="mt-2 border-t border-white/5 pt-2 text-[11px] text-slate-500">👥 {e.audience}</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </DialogPrimitive.Content>
         </DialogPrimitive.Portal>

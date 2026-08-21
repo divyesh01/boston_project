@@ -7,7 +7,9 @@ import Card from "@/components/ui-exec/Card";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { useHotelMetrics, useMetricDates } from "@/lib/useHotelData";
-import { money, money2, num, C, CHART_COLORS, downloadCsv, downloadExcel } from "@/lib/hotel";
+import { money, money2, num, C, CHART_COLORS } from "@/lib/hotel";
+import { downloadCsv, downloadExcel, stampFilename } from "@/lib/exportData";
+import { toast } from "@/components/ui/use-toast";
 import {
   snapshotDates, snapshotFor, headline, headlineTrends, composition, quality,
   indexSnapshot, metricValue, firstValue, PERIODS, PERIOD_LABEL, HEADLINE,
@@ -62,6 +64,19 @@ function Segmented({ value, onChange, options }) {
   );
 }
 
+// Labels an owner reads, not the column names the PMS importer happened to use.
+// Shared by the CSV and Excel buttons so the two files are identical.
+const STATISTICS_EXPORT_COLUMNS = [
+  { key: "business_date", label: "Business date" },
+  { key: "section", label: "Section" },
+  { key: "metric_name", label: "Metric" },
+  { key: "metric_category", label: "Category" },
+  { key: "period", label: "Period" },
+  { key: "value", label: "Value" },
+  { key: "unit", label: "Unit" },
+  { key: "original_value", label: "As imported" },
+];
+
 export default function Statistics() {
   const { dateRange, property } = useGlobalFilters();
   const [period, setPeriod] = useState("actual_today");
@@ -80,6 +95,29 @@ export default function Statistics() {
   const revenueMix = useMemo(() => composition(snapshot.rows, "Revenue", period).slice(0, 10), [snapshot.rows, period]);
   const paymentMix = useMemo(() => composition(snapshot.rows, "Payments", period), [snapshot.rows, period]);
   const q = useMemo(() => quality(rows), [rows]);
+
+  // One export path for both buttons. It used to be two near-identical inline
+  // projections whose object keys became the headers ("business_date",
+  // "metric_name"), duplicated between the CSV and Excel handlers — so a column
+  // added to one and not the other produced two different files from one screen.
+  const exportSnapshot = (type) => {
+    try {
+      const isExcel = type === "excel";
+      const n = (isExcel ? downloadExcel : downloadCsv)(snapshot.rows, {
+        filename: stampFilename(`statistics-${snapshot.date || "snapshot"}`, isExcel ? "xlsx" : "csv"),
+        columns: STATISTICS_EXPORT_COLUMNS,
+        sheetName: "Statistics",
+      });
+      toast({
+        title: `Exported ${n.toLocaleString()} metric${n === 1 ? "" : "s"}`,
+        description: snapshot.date
+          ? `Snapshot of ${snapshot.date}, every period as imported.`
+          : "Latest snapshot in range, every period as imported.",
+      });
+    } catch (e) {
+      toast({ variant: "destructive", title: "Nothing exported", description: e?.message || String(e) });
+    }
+  };
 
   if (isLoading) return <p className="text-slate-500">Loading hotel statistics…</p>;
 
@@ -363,41 +401,13 @@ export default function Statistics() {
         right={
           <div className="flex gap-2">
             <button
-              onClick={() =>
-                downloadCsv(
-                  snapshot.rows.map((r) => ({
-                    business_date: r.business_date,
-                    section: r.section,
-                    metric: r.metric_name,
-                    category: r.metric_category,
-                    period: r.period,
-                    value: r.value,
-                    unit: r.unit,
-                    original: r.original_value,
-                  })),
-                  `statistics-${snapshot.date || "snapshot"}.csv`
-                )
-              }
+              onClick={() => exportSnapshot("csv")}
               className="flex items-center gap-2 rounded-lg bg-[#6C63FF]/20 px-3 py-1.5 text-xs font-medium text-[#6C63FF] transition-colors hover:bg-[#6C63FF]/35"
             >
               <Download className="h-3.5 w-3.5" /> Export CSV
             </button>
             <button
-              onClick={() =>
-                downloadExcel(
-                  snapshot.rows.map((r) => ({
-                    business_date: r.business_date,
-                    section: r.section,
-                    metric: r.metric_name,
-                    category: r.metric_category,
-                    period: r.period,
-                    value: r.value,
-                    unit: r.unit,
-                    original: r.original_value,
-                  })),
-                  `statistics-${snapshot.date || "snapshot"}.xlsx`
-                )
-              }
+              onClick={() => exportSnapshot("excel")}
               className="flex items-center gap-2 rounded-lg bg-[#107C41]/20 px-3 py-1.5 text-xs font-medium text-[#107C41] transition-colors hover:bg-[#107C41]/35"
             >
               <Download className="h-3.5 w-3.5" /> Export Excel

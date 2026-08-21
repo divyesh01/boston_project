@@ -1,6 +1,34 @@
 import { createClientFromRequest } from "npm:@base44/sdk@^0.8.41";
 import { secrets } from "base44:runtime";
 import crypto from "node:crypto";
+import { z } from "npm:zod";
+
+const UserDataSchema = z.object({
+  username: z.string().optional(),
+  email: z.string().optional(),
+  password: z.string().optional(),
+  full_name: z.string().optional(),
+  role: z.string().optional(),
+  permissions: z.any().optional(),
+  property_access: z.any().optional(),
+  is_active: z.boolean().optional(),
+  is_locked: z.boolean().optional(),
+  must_change_password: z.boolean().optional(),
+}).strict();
+
+const RequestBodySchema = z.object({
+  action: z.string(),
+  id: z.union([z.string(), z.number()]).optional(),
+  data: UserDataSchema.optional(),
+  query: z.string().optional(),
+  status: z.string().optional(),
+  newPassword: z.string().optional(),
+  currentPassword: z.string().optional(),
+  token: z.union([z.string(), z.number()]).optional(),
+  email: z.string().optional(),
+  role: z.string().optional(),
+}).strict();
+
 
 const PBKDF2_ITERATIONS = 300000;
 const SALT_BYTES = 32;
@@ -188,9 +216,49 @@ function hashesEqual(actual, expected) {
   return crypto.timingSafeEqual(a, b);
 }
 
+// The fields a browser may see, as an ALLOWLIST.
+//
+// This used to be a denylist: it destructured the sensitive columns away and
+// spread the rest, which made every column later added to the User entity public
+// by default. That is how `mfa_secret_pending` got out. custom_auth_login writes
+// a live TOTP enrolment seed to that column when it force-enrols an owner or
+// admin, nobody thought to add it here, and so `list`, `search`, `getById`,
+// `update`, `set_status` and the login response itself handed any admin the
+// second-factor seed of every colleague mid-enrolment - with no audit row to
+// show it had been read. An allowlist fails closed instead: a new column is
+// invisible here until someone deliberately names it.
+//
+// Every entry below is either a field the UI provably reads (src/pages/Users.jsx,
+// src/pages/Settings.jsx, src/lib/AuthContext.jsx, src/components/Layout.jsx,
+// src/lib/launchPolicy.js, and mirrorRemoteUserIntoLocal in
+// src/api/base44Client.js) or a non-secret operational field an admin screen
+// needs to explain why an account is in the state it is in.
+//
+// Deliberately absent, and each one for a reason: password_hash and salt (the
+// credential), mfa_secret and mfa_secret_pending (the second factor itself),
+// mfa_last_counter (tells an observer when the factor was last used, and is only
+// ever compared server-side), reset_token_hash and reset_token_expires_at (a
+// live reset capability), session_created and session_expires (session bookkeeping
+// the client already has in its cookie).
+//
+// Kept byte-identical to the copies in the other auth functions. The base44 host
+// gives these functions no shared module they can all import, so
+// scripts/probe-auth-hardening.mjs section 17 asserts the copies never drift
+// and that no sensitive column from base44/entities/User.jsonc is ever named here.
+const PUBLIC_USER_FIELDS = [
+  'id', 'email', 'username', 'full_name', 'display_name', 'role',
+  'property_access', 'permissions', 'is_active', 'is_locked',
+  'must_change_password', 'mfa_enabled', 'email_confirmed',
+  'last_login', 'failed_login_count', 'locked_until',
+  'created_date', 'updated_date',
+];
+
 function publicUser(user) {
   if (!user) return null;
-  const { password_hash, salt, mfa_secret, reset_token_hash, reset_token_expires_at, session_created, session_expires, ...safe } = user;
+  const safe = {};
+  for (const field of PUBLIC_USER_FIELDS) {
+    if (user[field] !== undefined) safe[field] = user[field];
+  }
   return safe;
 }
 
@@ -361,11 +429,36 @@ function isValidEmail(email) {
   return EMAIL_RE.test(email);
 }
 
+// THE PASSWORD POLICY, server side. Kept character-for-character identical to
+// custom_auth_reset_password/entry.js#validatePasswordStrength and to
+// src/lib/security.js#validatePasswordStrength, which is the browser copy.
+//
+// Until 2026-08-20 this read `length < 8` and checked three character classes, so
+// "Abcdefg1" was a perfectly valid password as far as the only gate that cannot
+// be bypassed was concerned — while the UI told every user the minimum was 12
+// characters with a special character and no repeated runs. A rule enforced only
+// in the browser is a suggestion: the client is entirely under the caller's
+// control and every action in this file is reachable with a crafted request. The
+// advertised policy and the enforced policy are now the same policy. Measured
+// before the change: 1078 of 4000 fuzzed inputs were accepted here and refused by
+// the client (scripts/probe-password-policy.mjs section 7).
+//
+// Every caller is a SET-password path (create, reset_password, set_password,
+// change_password) — never a verify path — so raising the bar cannot lock out an
+// existing account. It only requires the next password to be a good one.
+//
+// Returns null when acceptable (callers test truthiness) or the message naming the
+// single rule that was broken. The line-terminator rule is stated explicitly
+// rather than falling out of a `.+$` regex; the long note in src/lib/security.js
+// explains why that regex was not the dead code it appeared to be.
 function validatePasswordStrength(password) {
-  if (!password || password.length < 8) return 'Password must be at least 8 characters.';
-  if (!/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/[0-9]/.test(password)) {
-    return 'Password must contain uppercase, lowercase, and a number.';
-  }
+  if (typeof password !== 'string' || password.length < 12) return 'Password must be at least 12 characters.';
+  if (!/[a-z]/.test(password)) return 'Password must include at least one lowercase letter.';
+  if (!/[A-Z]/.test(password)) return 'Password must include at least one uppercase letter.';
+  if (!/[0-9]/.test(password)) return 'Password must include at least one number.';
+  if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) return 'Password must include at least one special character.';
+  if (/(.)\1{2,}/.test(password)) return 'Password must not contain repeating characters.';
+  if (/[\n\r\u2028\u2029]/.test(password)) return 'Password must not contain line breaks.';
   return null;
 }
 

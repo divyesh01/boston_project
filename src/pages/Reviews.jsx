@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, PieChart, Pie, Cell,
+  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip,
 } from "recharts";
 import Card from "@/components/ui-exec/Card";
+import PieDonut from "@/components/charts/PieDonut";
 import { useReviews } from "@/lib/useHotelData";
 import { num, pct } from "@/lib/hotel";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
@@ -136,46 +137,20 @@ export default function Reviews() {
         </Card>
         <Card title="Sentiment mix">
           {sentData.length ? (
-            <ResponsiveContainer width="100%" height={220}>
-              <PieChart>
-                <Pie 
-                  data={sentData} 
-                  dataKey="value" 
-                  nameKey="name" 
-                  innerRadius="40%" 
-                  outerRadius="55%" 
-                  paddingAngle={3} 
-                  labelLine={true}
-                  label={({ cx, cy, midAngle, outerRadius, percent, payload, value }) => {
-                    if (percent < 0.02) return null;
-                    const RADIAN = Math.PI / 180;
-                    const radius = outerRadius * 1.25;
-                    const x = cx + radius * Math.cos(-midAngle * RADIAN);
-                    const y = cy + radius * Math.sin(-midAngle * RADIAN);
-                    return (
-                      <text x={x} y={y} fill="#94a3b8" textAnchor={x > cx ? 'start' : 'end'} dominantBaseline="central" fontSize={11}>
-                        {`${payload.name} ${value} (${(percent * 100).toFixed(0)}%)`}
-                      </text>
-                    );
-                  }}
-                >
-                  {sentData.map((entry) => <Cell key={entry.name} fill={entry.color} />)}
-                </Pie>
-                <Tooltip contentStyle={{ background: "#0F1F35", border: "1px solid #ffffff22", borderRadius: 8 }} />
-              </PieChart>
-            </ResponsiveContainer>
+            // Shared donut: the label placement engine keeps every slice's
+            // callout readable and non-overlapping. The old inline label put
+            // text at the slice's own angle with no de-collision, and hid any
+            // slice under 2% outright, so a handful of negative reviews could
+            // vanish from the chart entirely.
+            <PieDonut
+              data={sentData}
+              type="donut"
+              height={340}
+              legendColumns={3}
+              formatter={(v) => `${num(v)} ${Number(v) === 1 ? "review" : "reviews"}`}
+            />
           ) : (
             <p className="text-sm text-slate-400">No reviews to chart yet.</p>
-          )}
-          {sentData.length > 0 && (
-            <div className="mt-2 flex flex-wrap justify-center gap-4">
-              {sentData.map((s) => (
-                <span key={s.name} className="flex items-center gap-1.5 text-xs text-slate-400">
-                  <span className="h-2.5 w-2.5 rounded-sm" style={{ background: s.color }} />
-                  {s.name} · {s.value}
-                </span>
-              ))}
-            </div>
           )}
         </Card>
       </div>

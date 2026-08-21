@@ -3,6 +3,7 @@ import { answerQuestion } from '@/lib/aiEngine';
 import { toCents, fromCents } from '@/lib/decimal';
 import { reconcileTimecards } from '@/lib/timecardCalc';
 import { secureStore, secureRetrieve, createAuditEntry, getClientIpHint, getCsrfToken, pinCsrfCookie, verifyAuditChain } from '@/lib/securityUtils';
+import { recordAuditFailure } from '@/lib/auditFailureLog';
 import { hasAllPropertyAccess, allPropertyRequiredError } from '@/lib/launchPolicy';
 import { postSessionRevoked } from '@/lib/sessionChannel';
 import { publishChange } from '@/lib/realtime';
@@ -28,8 +29,85 @@ import * as otplib from 'otplib';
 // call.
 const CSRF_HEADER_TOKEN = getCsrfToken();
 
+// ─── The production tenant ───
+// NOT a development placeholder, despite reading like one. None of
+// .env.development, .env.local or .env.production sets VITE_BASE44_APP_ID, so
+// this literal is the actual configuration of every build this repo produces —
+// deleting it as a "hardcoded value" would break every deployment.
+//
+// It is also not a secret. It ships inside the JS bundle, travels as the
+// X-App-Id header on every request, and is duplicated in base44/.app.jsonc,
+// which is the file the base44 CLI deploys the functions against. The two must
+// stay equal or the client and its own backend address different tenants;
+// scripts/probe-app-config.mjs pins that equality.
+//
+// The environment variable still wins when set, and its absence stays
+// non-fatal on purpose: making an unset variable throw would brick production
+// on the next push, which is a far larger outage than the legibility problem it
+// would fix. The real hazard here is defaulting to the WRONG tenant silently,
+// so .env.example asks every environment to set it explicitly.
+const PRODUCTION_APP_ID = "6a7d6856ee1cc714b1803c0e";
+
+// ─── Refuse a bearer token that arrived in the URL ───
+// createClient() calls getAccessToken() while it is constructing
+// (node_modules/@base44/sdk/dist/client.js: `const accessToken = token ||
+// getAccessToken()`), and getAccessToken (dist/utils/auth-utils.js) reads
+// ?access_token= out of window.location.search, writes the value to
+// localStorage under BOTH 'base44_access_token' and 'token', and then hides the
+// parameter with history.replaceState. That code ships — the built bundle in
+// dist/assets carries four occurrences of 'base44_access_token' — and the call
+// below passes no `token`, so the getAccessToken branch runs on every load.
+//
+// Nothing in this app ever issues or reads a base44 bearer token: every auth
+// call goes through custom_auth_* against an HttpOnly cookie, and
+// auth.setSessionToken below is a no-op for exactly that reason. So a token in
+// that parameter cannot be ours. It is a link the user was sent, and following
+// it banks someone else's credential in their browser, after which the SDK's
+// localStorage fallback keeps handing it over long after the URL is gone.
+//
+// safeReturnTo() in src/lib/authReturnTo.js strips the same parameter, but only
+// out of ?returnTo=, which covers the post-login hop and nothing else — a
+// direct link to any route reaches this module first.
+//
+// The stored keys are cleared as well as the query string. Cleaning only the URL
+// would leave a browser that already followed such a link compromised for as
+// long as the key survives, and the key is the part that persists.
+// scripts/probe-app-config.mjs section 3 runs the real SDK helper against this
+// guard, both with a crafted URL and with a pre-poisoned store.
+function refuseUrlSuppliedAccessToken() {
+  try {
+    if (typeof window === 'undefined' || !window.location) return false;
+    const params = new URLSearchParams(window.location.search || '');
+    const fromUrl = params.has('access_token') || params.has('clear_access_token');
+    if (fromUrl) {
+      params.delete('access_token');
+      params.delete('clear_access_token');
+      const qs = params.toString();
+      const cleaned = `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash || ''}`;
+      const title = typeof document !== 'undefined' ? document.title : '';
+      window.history?.replaceState?.({}, title, cleaned);
+    }
+    // Unconditional, not just when a parameter was present: neither slot has a
+    // legitimate writer in this app, so any value in either one is stale or
+    // injected. Other keys are untouched.
+    let banked = false;
+    for (const key of ['base44_access_token', 'token']) {
+      if (window.localStorage?.getItem?.(key) != null) {
+        window.localStorage.removeItem(key);
+        banked = true;
+      }
+    }
+    return fromUrl || banked;
+  } catch {
+    // A hardening step must never be the reason the app fails to load.
+    return false;
+  }
+}
+
+refuseUrlSuppliedAccessToken();
+
 const realClient = createClient({
-  appId: import.meta.env?.VITE_BASE44_APP_ID || "6a7d6856ee1cc714b1803c0e",
+  appId: import.meta.env?.VITE_BASE44_APP_ID || PRODUCTION_APP_ID,
   serverUrl: import.meta.env?.VITE_BASE44_BACKEND_URL || "",
   headers: {
     "X-CSRF-Token": CSRF_HEADER_TOKEN
@@ -269,6 +347,23 @@ export async function rollbackImportSession(importId) {
 
 export async function listImportSessions() {
   return getImportSessions();
+}
+
+// Erase the whole lifecycle list.
+//
+// Exported because IMPORT_SESSION_KEY is module-private on purpose: this file
+// writes that slot in five places, and a second copy of the literal elsewhere
+// would be one rename away from silently clearing nothing. src/lib/importReset.js
+// calls this so a "clear all imported data" removes the import history the dialog
+// promises to remove — previously the data rows went and the history stayed, so the
+// page kept offering "Undo" for imports whose rows were already gone, and
+// rollbackImportSession reported success for deleting nothing.
+//
+// Returns the number of sessions removed so the caller can report a real figure.
+export async function clearImportSessions() {
+  const removed = (await getImportSessions()).length;
+  await secureStore(IMPORT_SESSION_KEY, []);
+  return removed;
 }
 
 // Add record IDs to the rollback ledger (ImportRecordIds table)
@@ -1112,8 +1207,22 @@ const audit = {
         hash: auditEntry.hash,
         previous_hash: auditEntry.previous_hash,
       });
+      return { ok: true };
     } catch (e) {
       console.error('[audit] failed to write log:', e);
+      // A swallowed audit failure is indistinguishable from "nothing happened",
+      // which is the one thing an append-only trail must never be ambiguous
+      // about: audit_verify only checks that the rows it can see are linked, so a
+      // row that was never written leaves the chain green and the event invisible.
+      // Recorded for the Audit Log page to surface. Not thrown: six callers await
+      // this (Payroll, Settings, the report import path), and none of them should
+      // fail because logging did. See src/lib/auditFailureLog.js.
+      recordAuditFailure(entry?.action, e, {
+        source: 'base44Client.db.audit.log',
+        username: entry?.username,
+        property_id: entry?.property_id,
+      });
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   },
 
@@ -1447,9 +1556,14 @@ function generateLocalId() {
 
 function publicUserLocal(user) {
   if (!user) return null;
-  // Never return credential material to the client/session.
+  // Never return credential material to the client/session. `mfa_secret_pending`
+  // belongs here for the same reason as `mfa_secret`: handleLocalEnableMfa writes
+  // a live TOTP enrolment seed to it a few lines below, and this function is what
+  // the local list/update/login shims return. It was missing, exactly as it was
+  // missing from the three server-side copies of publicUser() — the shared cause
+  // being a denylist, which is public-by-default for every column added later.
   const {
-    password, password_hash, salt, mfa_secret,
+    password, password_hash, salt, mfa_secret, mfa_secret_pending, mfa_last_counter,
     reset_token_hash, reset_token_expires_at,
     ...safe
   } = user;

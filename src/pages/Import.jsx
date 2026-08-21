@@ -10,6 +10,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRef } from "react";
 import { num } from "@/lib/hotel";
 import { REPORT_TYPES, scanReport, importReport } from "@/lib/reportParsers";
+import { clearAllImportedData } from "@/lib/importReset";
 import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
 import { useAuth } from "@/lib/AuthContext";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sha256File } from "@/lib/securityUtils";
@@ -560,8 +561,6 @@ export default function Import() {
     setQueue((prev) => prev.filter((q) => q.key !== key));
   };
 
-  const IMPORT_TABLES = ["OccupancyDay", "SourceDay", "GrossRevenueDay", "PaymentDay", "ClerkShiftRecord", "HotelMetric", "TransactionLine", "AdjustmentRefund", "AnomalyAlert", "UploadedReport", "TimecardPunch"];
-
   const handleClearAll = async () => {
     if (clearing) return;
     // Rate limiting
@@ -578,25 +577,29 @@ export default function Import() {
       return;
     }
     const ok = window.confirm(
-      "Delete ALL imported report data and import history?\n\nThis permanently removes every imported row from this browser (occupancy, sources, gross revenue, payments, clerk records, hotel statistics, transactions). Properties and settings are kept.\n\nThis cannot be undone."
+      "Delete ALL imported report data and import history?\n\nThis permanently removes every imported row from this browser (occupancy, sources, gross revenue, payments, clerk records, hotel statistics, transactions), along with the import history and the undo information for those imports. Properties, staff, payroll and settings are kept.\n\nThis cannot be undone."
     );
     if (!ok) return;
     setClearing(true);
     try {
-      for (const table of IMPORT_TABLES) {
-        await db.entities[table].clear();
-      }
-      // The materialized daily aggregate is derived from the ledgers above, so it
-      // must be wiped too or the Dashboard would keep showing stale pre-summed
-      // numbers after a clear-all. Through db.entities like the others: the proxy's
-      // clear() refuses callers who are not entitled to every property, and a raw
-      // localDb.clear() here bypassed that on the one table the Dashboard trusts most.
-      await db.entities.DailyFinancialAggregate.clear();
+      // Delegated to src/lib/importReset.js, which owns the set of stores an import
+      // writes to and derives the per-report-type ones from reportParsers' own map.
+      // This handler used to keep its own literal array of table names, and that copy
+      // named only the data tables — so a clear-all left the rollback ledger and the
+      // import history behind, and the page went on offering "Undo" for imports whose
+      // rows were gone (scripts/probe-clear-all-rollback.mjs).
+      const removed = await clearAllImportedData();
       queryClientInstance.invalidateQueries({ queryKey: ["daily-aggregates"] });
       setQueue([]);
       setResults([]);
       refetch();
       rotateCsrfToken();
+      // Reported rather than assumed: the counts come back from the clear itself.
+      window.alert(
+        `Removed ${removed.deletedRows.toLocaleString()} imported row${removed.deletedRows === 1 ? "" : "s"}, ` +
+        `${removed.sessions} import${removed.sessions === 1 ? "" : "s"} from the history, ` +
+        `and ${removed.ledgerRows} undo record${removed.ledgerRows === 1 ? "" : "s"}.`
+      );
     } catch (e) {
       console.error("Failed to clear imported data:", e);
       window.alert(`Could not clear data: ${e.message || "unknown error"}`);

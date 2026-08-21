@@ -7,7 +7,6 @@ import { toCents, fromCents, toRate, fromRate, add, subtract, multiply, divide, 
 import { neutralizeFormula } from '@/lib/securityUtils';
 
 // Default property — used as fallback when no Property records exist yet
-import * as XLSX from 'xlsx';
 export const PROPERTY = { name: "Red Roof Inn & Suites Middleborough", code: "RRI1416", rooms: 100 };
 
 export const C = {
@@ -52,6 +51,139 @@ export function inRange(dateStr, from, to) {
   return d >= from && d <= to;
 }
 
+// ─── Total revenue = room ledger + ancillary charges ───────────────────────
+//
+// WHY THIS EXISTS. "Gross revenue" had two different meanings in the codebase.
+// The reconciler (financialReconciliation.js) measures the TOTAL the hotel
+// collected — $1,020,598.17 on the Middleborough export — while the Money Kept
+// widget was computing `sum(occRows, "room_revenue")`, which is ROOM revenue
+// only ($1,011,258.67). The $9,339.50 gap is real ancillary income (pet fees,
+// laundry, smoking, restaurant, property damage, early check-in, misc, AR
+// adjustments): money the owner kept that the widget never counted, so its keep
+// rate and every deduction percentage were measured against the wrong base.
+//
+// THE FIX IS NOT "MAKE OCCUPANCY BIGGER". OccupancyDay is a room ledger; adding
+// pet fees to `room_revenue` would corrupt ADR and RevPAR and is explicitly
+// forbidden by scripts/probe-financial-invariant.mjs. The invariant is a PAIR:
+//     room ($1,011,258.67) + ancillary ($9,339.50) == total ($1,020,598.17)
+// So the total is assembled from the two ledgers that own each half.
+//
+// WHY ROOM COMES FROM THE OCCUPANCY LEG AND NOT FROM `room_rent`. Both carry the
+// same $1,011,258.67 (probe-money-kept-gross asserts the three agree), but the
+// gross rows reaching the UI are not always raw GrossRevenueDay rows. The daily
+// aggregate cache (dailyAggregates.js GROSS_MISC_FIELDS) carries only the MISC
+// charge columns, deliberately — room revenue travels on the occupancy leg as
+// `occ_revenue`. Summing `room_rent` off those rows yields 0, so a total built
+// that way reads $9,339.50 on every screen fed by the cache, which is exactly
+// the regression this comment exists to prevent. Room from the room ledger,
+// ancillary from the charge ledger, and the two shapes behave identically.
+//
+// EXCLUSIONS ARE BY NAME, NOT BY VALUE. `non_revenue` is by definition not
+// revenue, and `advance_deposit` is a liability until the stay is consumed —
+// counting either would overstate what the owner earned. Both are $0.00 in the
+// current export, so this changes no number today; it stops the total from
+// silently inflating the first time a property posts one.
+
+// Ancillary charge columns on a gross row. `room_rent` is deliberately NOT here:
+// it is the room ledger's quantity, added separately, and is absent entirely from
+// aggregate-cache rows. Keep in sync with dailyAggregates.js GROSS_MISC_FIELDS.
+export const GROSS_ANCILLARY_COMPONENTS = Object.freeze([
+  "misc_charge", "system_charge", "food", "event",
+  "bar", "beverage", "laundry", "phone", "other",
+]);
+
+// Present on gross rows but never revenue. Listed so the drift guard in
+// scripts/probe-money-kept-gross.mjs can prove every numeric column is classified.
+export const GROSS_NON_REVENUE_COMPONENTS = Object.freeze([
+  "non_revenue", "advance_deposit",
+]);
+
+/**
+ * Ancillary (non-room) revenue on a single gross row, in integer cents.
+ * @param {Object} row
+ * @returns {number} cents
+ */
+export function rowAncillaryRevenueCents(row) {
+  if (!row) return 0;
+  return sumCents(GROSS_ANCILLARY_COMPONENTS.map((k) => row[k]));
+}
+
+/**
+ * Ancillary revenue across gross rows, in integer cents.
+ * @param {Array<Object>} rows
+ * @returns {number} cents
+ */
+export function ancillaryRevenueCents(rows) {
+  return (rows || []).reduce((acc, r) => acc + rowAncillaryRevenueCents(r), 0);
+}
+
+/**
+ * Total revenue for a period, assembled from both ledgers, with provenance.
+ *
+ * Returns `basis: "total"` when ancillary charges could be included, and
+ * `basis: "room"` when no gross rows cover the period so the figure is room
+ * revenue alone. The basis is returned rather than hidden because the two
+ * measure different quantities: a caller that silently swapped one for the
+ * other is exactly the defect this helper replaces. UI should say which it is.
+ *
+ * @param {{grossRows?: Array<Object>, occRows?: Array<Object>}} params
+ * @returns {{cents: number, dollars: number, basis: "total"|"room", roomCents: number, ancillaryCents: number}}
+ */
+export function grossRevenueForPeriod({ grossRows = [], occRows = [] } = {}) {
+  const gRows = grossRows || [];
+  const oRows = occRows || [];
+
+  // Room revenue from the room ledger. Only when there is no occupancy data at
+  // all does `room_rent` on the gross rows stand in for it — never both, or the
+  // same room night would be counted twice.
+  const roomCents = oRows.length
+    ? sumCents(oRows.map((r) => r.room_revenue))
+    : sumCents(gRows.map((r) => r.room_rent));
+
+  const ancillaryCents = ancillaryRevenueCents(gRows);
+  const cents = roomCents + ancillaryCents;
+  return {
+    cents,
+    dollars: fromCents(cents),
+    basis: gRows.length ? "total" : "room",
+    roomCents,
+    ancillaryCents,
+  };
+}
+
+/**
+ * Format a date-only key ("YYYY-MM-DD") for display — "Thursday, August 6".
+ *
+ * Use this for ANY date that came from a business-date column or an event
+ * schedule key. Do NOT call `new Date(key).toLocaleDateString()` on such a
+ * string: ECMA-262 parses a date-only form as UTC midnight, and
+ * toLocaleDateString then renders it in the host zone. Every US zone is behind
+ * UTC, so the label silently names the PREVIOUS day — the calendar dialog for
+ * 2026-08-06 read "Wednesday, August 5", and the Action Center printed a
+ * mislabeled weekday directly above the correct raw date.
+ *
+ * Building the Date from the parts pins it to LOCAL midnight, so the weekday and
+ * day-of-month can never drift regardless of the operator's timezone or DST.
+ * Returns "" for empty or unparseable input rather than "Invalid Date" — a blank
+ * label is honest, an invented one is not.
+ *
+ * `opts` is annotated because TypeScript widens the default object literal's
+ * "long" to `string`, and Intl.DateTimeFormatOptions only accepts the union
+ * "long" | "short" | "narrow" — so without this the file fails
+ * `npm run typecheck` (TS2769) even though the call is correct at runtime.
+ *
+ * @param {string} dateStr
+ * @param {Intl.DateTimeFormatOptions} [opts]
+ */
+export function formatDayLabel(dateStr, opts = { weekday: "long", month: "long", day: "numeric" }) {
+  if (!dateStr) return "";
+  const [y, m, d] = String(dateStr).slice(0, 10).split("-").map(Number);
+  if (!y || !m || !d) return "";
+  const date = new Date(y, m - 1, d);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-US", opts);
+}
+
 export function aggregate(rows, groupKey, valueKey, agg) {
   const map = new Map();
   (rows || []).forEach((r) => {
@@ -87,23 +219,33 @@ export function toCsv(rows) {
   return [keys.join(","), ...rows.map((r) => keys.map((k) => csvCell(r[k])).join(","))].join("\n");
 }
 
-export function downloadCsv(rows, name = "export.csv") {
-  const blob = new Blob([toCsv(rows)], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-export function downloadExcel(rows, name = "export.xlsx") {
-  if (!rows || rows.length === 0) return;
-  const worksheet = XLSX.utils.json_to_sheet(rows);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
-  XLSX.writeFile(workbook, name);
-}
+// downloadCsv / downloadExcel USED TO LIVE HERE. Removed 2026-08-20 — do not restore.
+//
+// Every export button in the app now calls @/lib/exportData instead: AuditLog,
+// Transactions, Statistics, ManualEntry and ChartBuilder. Once the last of those
+// was migrated these two functions had no callers left, and leaving them in a
+// module that nearly every page imports meant the next export button added would
+// most likely pick up the weaker pair. They differed from exportData in four ways
+// that the owner sees:
+//   - headers were raw column keys (`other_room_revenue`), never display labels;
+//   - `Object.keys(rows[0])` took the columns from the FIRST row, so any field
+//     missing from row 0 was dropped from the whole file;
+//   - an empty selection produced a silent zero-row download instead of throwing,
+//     so a filter that matched nothing looked identical to a blocked download;
+//   - they returned nothing, so no caller could report how much it exported.
+// Deleting downloadExcel also took `import * as XLSX` out of this module. xlsx is
+// the largest dependency in the bundle and hotel.js is imported by nearly every
+// page; it now loads only with the export module that actually uses it.
+//
+// BEST OUTCOME NOTE: one export implementation, in one file, reached by one import
+// path. Two implementations of a download cannot be kept in agreement by review —
+// the CSV guard fix and the Excel column spec would have had to be applied twice.
+//
+// NOTE (unrelated dead code, deliberately left alone): `toCsv` and its private
+// `csvCell` above are no longer used by any page either, but they are still the
+// subject of scripts/verify-harness.mjs §6's formula-injection checks, so they are
+// not mine to delete. exportData.js has its own guard with its own coverage in
+// scripts/probe-export-data.mjs §4/§4b.
 
 // Normalize employee/clerk names — trim, collapse repeated spaces, consistent casing
 export function normalizeName(name) {

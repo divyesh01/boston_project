@@ -15,7 +15,7 @@
  * Used by the password reset flow to create a one-time reset link.
  *
  * @returns {{ token: string, expiresAt: number }}
- *   - token: A 32-character hex string (64 bytes / 256 bits of entropy).
+ *   - token: A 64-character hex string (32 bytes / 256 bits of entropy).
  *   - expiresAt: A JavaScript `Date` object (or timestamp) set to 1 hour from now.
  *
  * ⚠️ ⚠️ ⚠️ SECURITY CONSIDERATION ⚠️ ⚠️ ⚠️
@@ -27,8 +27,17 @@
  *   secure transmission (HTTPS) and single-use semantics.
  */
 function generatePasswordResetToken() {
-  const crypto = require("crypto");
-  const token = crypto.randomBytes(32).toString("hex"); // 32 bytes = 256 bits
+  // Web Crypto, NOT Node's require("crypto"). This module is bundled for the
+  // browser, where `require` does not exist, so the previous line threw
+  // ReferenceError: require is not defined on EVERY call — including inside
+  // its own vitest suite, which runs with environment: "jsdom". The failure was
+  // invisible because `npx vitest` cannot run in the build VM (rollup has no
+  // linux-x64 binary installed), and eslint never inspected src/lib until the
+  // config was widened. globalThis.crypto exists in browsers and in Node 18+,
+  // so a single code path now serves both.
+  const bytes = new Uint8Array(32); // 32 bytes = 256 bits of entropy
+  globalThis.crypto.getRandomValues(bytes);
+  const token = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
   const expiresAt = Date.now() + 60 * 60 * 1000; // 1 hour from now
   return { token, expiresAt };
 }

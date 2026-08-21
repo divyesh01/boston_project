@@ -11,9 +11,10 @@
 //   - channel mix -> OTA leak investigation + direct-book keep-doing quietly fire
 //   - empty/null input -> no exceptions, sane zeros
 //
-// Fixture units follow the real DB: total_revenue in DOLLARS, rooms_sold and
-// down_rooms in ROOM COUNTS, payment fields in dollars with refunds signed
-// negative. (The engine's calculateOccupancyMetrics scales internally.)
+// Fixture units follow the real DB: room_revenue / total_revenue in DOLLARS,
+// rooms_sold and down_rooms in ROOM COUNTS, payment fields in dollars with refunds
+// signed negative. (The engine's calculateOccupancyMetrics scales internally.)
+// See the note on occ() for why room_revenue is the field that matters.
 //
 // Expected numbers are derived by hand, not from the code, so a regression that
 // changes the outputs fails loudly.
@@ -37,11 +38,27 @@ globalThis.document ??= { cookie: "", querySelectorAll: () => [], createElement:
 const { buildActionCenter } = await import("../src/lib/actionCenter.js");
 
 let failures = 0;
+// `cond` may be a boolean OR a thunk. A thunk that throws is recorded as a
+// FAILURE rather than killing the process.
+//
+// WHY: this suite used to dereference `card.impact` straight after checking that
+// `card` existed. When the card was missing (it was — see the occ() note) the
+// TypeError terminated the run at section 3, so sections 4 through 14 never
+// executed and their state was unknown while the summary line never printed. A
+// verification suite that stops at the first surprise hides more than it reports.
 const check = (label, cond, extra = "") => {
-  if (cond) console.log(`  ok   ${label}`);
+  let ok = false;
+  let thrown = "";
+  try {
+    ok = typeof cond === "function" ? !!cond() : !!cond;
+  } catch (err) {
+    ok = false;
+    thrown = ` threw ${err?.name || "Error"}: ${err?.message || err}`;
+  }
+  if (ok) console.log(`  ok   ${label}`);
   else {
     failures++;
-    console.error(`  FAIL ${label} ${extra}`);
+    console.error(`  FAIL ${label} ${extra}${thrown}`);
   }
 };
 
@@ -55,16 +72,34 @@ function dates(count, start = "2025-02-01") {
   return out;
 }
 
-// Occupancy row; sold/down are ROOM COUNTS, total_revenue in dollars. Occupied
-// rooms = sold - down (down rooms are out of service and produce no revenue).
-function occ({ date, sold, down = 0, adr = 100, property_id = "p1" }) {
+// Occupancy row; sold/down are ROOM COUNTS, revenue in dollars. Occupied rooms =
+// sold - down (down rooms are out of service and produce no revenue).
+//
+// FIELD CHOICE — this fixture used to write only `total_revenue`, and the engine
+// reads `room_revenue`, so every revenue-derived assertion in this suite silently
+// measured zero: revenue 0, ADR 0, and therefore no oos card and no direct
+// keep-doing card. Four checks failed and a fifth crashed on `card.impact` of an
+// absent card. The engine is the correct side: src/lib/calculationService.js
+// (calculateOccupancyMetrics, calculatePerPropertyStats) and actionCenter's own
+// weekend/day-rate paths all read `room_revenue`, and the cent-exact revenue
+// invariant in scripts/probe-financial-invariant.mjs pins
+// sum(OccupancyDay.room_revenue) = $1,011,258.67 as the ROOM revenue derivation.
+//
+// Both columns exist in base44/entities/OccupancyDay.jsonc, so both are populated
+// here — with DIFFERENT values on purpose. total_revenue carries an extra
+// `other_room_revenue` per night, so if anyone ever repoints the engine at
+// total_revenue the revenue assertions below fail instead of drifting quietly.
+function occ({ date, sold, down = 0, adr = 100, other = 7, property_id = "p1" }) {
   const occupied = sold - down;
+  const roomRevenue = occupied * adr;
   return {
     property_id,
     date,
     rooms_sold: occupied,
     down_rooms: down,
-    total_revenue: occupied * adr, // dollars
+    room_revenue: roomRevenue,              // what the engine reads
+    other_room_revenue: other,
+    total_revenue: roomRevenue + other,     // deliberately NOT equal to room_revenue
   };
 }
 
@@ -137,7 +172,7 @@ console.log("\n— OOS down rooms produce a red fix with correct math —");
   check("oos fix present", !!card, `keys=${m.buckets.fix.map((a) => a.key)}`);
   const oosLoss = 15 * 28 * 100; // downNights(420) * adr(100)
   check("oosLoss = downNights * ADR", Math.abs(m.premise.oosLoss - oosLoss) < 1, `got ${m.premise.oosLoss}`);
-  check("impact matches oosLoss", Math.abs(card.impact - oosLoss) < 1, `impact=${card.impact}`);
+  check("impact matches oosLoss", () => Math.abs(card.impact - oosLoss) < 1, `impact=${card?.impact}`);
 }
 
 console.log("\n— payroll above guideline -> investigate —");
@@ -229,12 +264,52 @@ console.log("\n— missing/invalid fields (null dates, negative, string amounts)
   check("keepRate finite", Number.isFinite(m.premise.keepRate));
 }
 
-console.log("\n— duplicate rows (double import) still produce finite, non-negative numbers —");
+console.log("\n— duplicate rows (double import) stay finite, and become VISIBLE —");
 {
   const base = occSeries({ count: 28, sold: 80 });
+  const single = buildActionCenter({ occRows: base, roomCounts: ROOMS, dateRange: RANGE });
   const m = buildActionCenter({ occRows: [...base, ...base], roomCounts: ROOMS, dateRange: RANGE });
+  const rate = (x) => Math.round(x * 10000);
+
   check("duplicated revenue is finite", Number.isFinite(m.premise.revenue) && m.premise.revenue > 0);
-  check("occupancy still bounded", m.premise.occupancy >= 0 && m.premise.occupancy <= 1.001, `got ${m.premise.occupancy}`);
+  check(
+    "occupancy is finite and non-negative",
+    Number.isFinite(m.premise.occupancy) && m.premise.occupancy >= 0,
+    `got ${m.premise.occupancy}`,
+  );
+
+  // WHY THIS NO LONGER ASSERTS occupancy <= 1 (changed 2026-08-20)
+  // ───────────────────────────────────────────────────────────────────────────────
+  // It used to, and it passed — but only because the defect it sat next to cancelled
+  // itself out. calculateOccupancyMetrics applied the "this property has 100 rooms"
+  // fallback ONCE PER ROW, so a doubled ledger also bought a doubled month of
+  // inventory: 56 rows x 100 = 5600 room-nights for a 28-day February at a 100-room
+  // hotel. Rooms sold doubled and capacity doubled in lockstep, so occupancy came out
+  // 0.80 — indistinguishable from a clean single import. The old check was asserting
+  // the PRESENCE of the defect, not a property of correct behaviour; note that these
+  // fixture rows carry no total_rooms, and giving them one makes the bound hold for
+  // real reasons (both sides double, 0.80 again).
+  //
+  // Physical inventory belongs to the DAY: 28 days x 100 rooms is 2800 room-nights
+  // however many times the night-audit report was imported. So a doubled ledger now
+  // reads 160% occupancy, which is the honest answer and the only visible evidence
+  // the import ran twice. Silently absorbing duplicates into capacity is worse than
+  // showing an impossible number, because it leaves nothing for anyone to notice.
+  //
+  // BEST OUTCOME NOTE: the two assertions below are strictly STRONGER than the bound
+  // they replace — they pin the exact relationship (double the rows, double the
+  // occupancy, same capacity) instead of a range, so a future change that re-absorbs
+  // duplicates into inventory fails here rather than passing quietly.
+  check(
+    "a double import doubles occupancy instead of hiding inside capacity",
+    rate(m.premise.occupancy) === 2 * rate(single.premise.occupancy) && m.premise.occupancy > 1,
+    `single ${single.premise.occupancy}, doubled ${m.premise.occupancy}`,
+  );
+  check(
+    "capacity is per-day, so it does not grow with row count",
+    m.premise.capacity === single.premise.capacity,
+    `single ${single.premise.capacity}, doubled ${m.premise.capacity}`,
+  );
 }
 
 console.log("\n— actual OTA/CC invoices beat the rate-card estimate (no double charge) —");

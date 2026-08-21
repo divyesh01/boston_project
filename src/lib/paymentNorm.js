@@ -1,6 +1,8 @@
 // Payment method normalization dictionary
 // Maps various source-report spellings to canonical method names
 
+import { fromCents, sumCents } from '@/lib/decimal';
+
 const PAYMENT_NORM = {
   "AMEX": "AMEX",
   "AMERICAN EXPRESS": "AMEX",
@@ -80,16 +82,21 @@ export const CARD_METHODS = ["visa", "master", "amex", "discover"];
 export const REFUND_FIELDS = ["closed_balance_folio", "loyalty_discount"];
 
 // Signed refund value for one row — negative under the convention above.
+//
+// Summed in integer cents (2026-08-20). Refunds are subtracted from revenue on the
+// Dashboard, in Money Kept and in the Action Center, and they are also the
+// denominator adjustment for the keep rate, so a residue here moves three
+// different numbers by different amounts.
 export function refundOf(row) {
-  return REFUND_FIELDS.reduce((total, f) => total + (Number(row?.[f]) || 0), 0);
+  return fromCents(sumCents(REFUND_FIELDS.map((f) => row?.[f])));
 }
 
 // Refund magnitude for a set of payment rows.
 export function refundTotal(rows) {
-  return Math.abs((rows || []).reduce((total, r) => total + refundOf(r), 0));
+  return Math.abs(fromCents(sumCents((rows || []).map(refundOf))));
 }
 
 // Refund magnitude from an already-summed per-method map.
 export function refundTotalFromTotals(methodTotals) {
-  return Math.abs(REFUND_FIELDS.reduce((total, f) => total + (Number(methodTotals?.[f]) || 0), 0));
+  return Math.abs(fromCents(sumCents(REFUND_FIELDS.map((f) => methodTotals?.[f]))));
 }

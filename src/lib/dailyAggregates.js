@@ -14,6 +14,7 @@
 import { db } from '@/api/base44Client';
 import localDb from '@/api/localDb';
 import { CARD_METHODS } from '@/lib/paymentNorm';
+import { toCents, fromCents } from '@/lib/decimal';
 
 const PAYMENT_FIELDS = [
   ...CARD_METHODS, 'cash', 'check', 'direct_bill', 'corpay', 'wire_transfer',
@@ -44,6 +45,43 @@ async function fetchLedger(name, propertyId, from, to) {
   return rows.filter((r) => inRange(r.date || r.business_date || r.expense_date, from, to));
 }
 
+/**
+ * One in-progress day bucket. Every MONEY field holds integer CENTS while it is
+ * being accumulated; counts (`occ_rooms_sold`, `occ_capacity_rooms`, `stays`) hold
+ * plain integers, which are already exact in floating point. `finalizeDay`
+ * converts the money back to dollars once, at the end.
+ *
+ * @typedef {Object} DayAccumulator
+ * @property {string} property_id
+ * @property {string} business_date
+ * @property {number} occ_revenue cents
+ * @property {number} occ_rooms_sold count
+ * @property {number} occ_capacity_rooms count
+ * @property {Record<string, { net: number, stays: number }>} source_net net in cents
+ * @property {number} gross_state_tax cents
+ * @property {number} gross_city_tax cents
+ * @property {number} gross_other_tax cents
+ * @property {Record<string, number>} gross_misc cents
+ * @property {Record<string, number>} payment cents
+ * @property {number} payment_total cents
+ * @property {Record<string, number>} expense_by_category cents
+ */
+
+/**
+ * WHY THIS ACCUMULATES IN CENTS (2026-08-20)
+ * ───────────────────────────────────────────────────────────────────────────────
+ * Every field below used to be `+=` on a dollar value. That is not a rounding
+ * nicety here: getDailyAggregates() below is PREFERRED by the Dashboard over the
+ * live ledgers, and it falls back to the raw rows only when the cache is empty. So
+ * a float residue did not merely make one number slightly wrong — it made the
+ * cached path and the live path return different totals for the SAME period, which
+ * is precisely the invariant CLAUDE.md requires to hold exactly ("must match
+ * across all pages"). Whether the owner happened to look before or after an import
+ * decided which of the two figures they saw, and no row could be blamed for the
+ * difference.
+ *
+ * @returns {DayAccumulator}
+ */
 function newDay(pid, date) {
   return {
     property_id: pid,
@@ -52,6 +90,128 @@ function newDay(pid, date) {
     source_net: {}, gross_state_tax: 0, gross_city_tax: 0, gross_other_tax: 0, gross_misc: {},
     payment: {}, payment_total: 0, expense_by_category: {},
   };
+}
+
+/**
+ * Convert one accumulated day into the record that gets stored — money back to
+ * dollars, counts untouched.
+ *
+ * The stored shape is unchanged (dollars), deliberately: buildSyntheticRows() and
+ * every renderer downstream read these fields as dollars, and rows already sitting
+ * in a user's IndexedDB from a previous build are dollars too. Changing the stored
+ * unit would silently multiply every historical cached day by 100.
+ *
+ * BEST OUTCOME NOTE (2026-08-20): this is built key-by-key rather than by spreading
+ * the accumulator and converting a list of known money keys. The two choices fail
+ * in opposite directions. Key-by-key means a money field added to newDay and
+ * forgotten here is simply ABSENT from the cache — a consumer reads 0 and a probe
+ * that compares cached totals against the live ledger catches it. Spread-and-
+ * convert means a forgotten field is stored in CENTS and rendered as a dollar
+ * figure 100x too large, which looks like real revenue. Preferring the loud
+ * failure is the point.
+ *
+ * @param {DayAccumulator} d
+ */
+function finalizeDay(d) {
+  /** @param {Record<string, number>} obj */
+  const centsToDollars = (obj) => {
+    /** @type {Record<string, number>} */
+    const out = {};
+    for (const [k, v] of Object.entries(obj || {})) out[k] = fromCents(v);
+    return out;
+  };
+  /** @type {Record<string, { net: number, stays: number }>} */
+  const sourceNet = {};
+  for (const [k, v] of Object.entries(d.source_net || {})) {
+    sourceNet[k] = { net: fromCents(v.net), stays: v.stays };
+  }
+  return {
+    property_id: d.property_id,
+    business_date: d.business_date,
+    occ_revenue: fromCents(d.occ_revenue),
+    occ_rooms_sold: d.occ_rooms_sold,
+    occ_capacity_rooms: d.occ_capacity_rooms,
+    source_net: sourceNet,
+    gross_state_tax: fromCents(d.gross_state_tax),
+    gross_city_tax: fromCents(d.gross_city_tax),
+    gross_other_tax: fromCents(d.gross_other_tax),
+    gross_misc: centsToDollars(d.gross_misc),
+    payment: centsToDollars(d.payment),
+    payment_total: fromCents(d.payment_total),
+    expense_by_category: centsToDollars(d.expense_by_category),
+  };
+}
+
+/**
+ * Roll five raw ledgers into finalized (dollars) day records. Pure — no database,
+ * no auth, no clock.
+ *
+ * Exported and kept separate from rebuildDailyAggregates for the same reason
+ * src/lib/auditView.js exists: this is the arithmetic the Dashboard's preferred
+ * read path depends on, and while it lived inside the async DB function the only
+ * way to test it was to stand up fake-indexeddb, seed five entities and read the
+ * cache back — so in practice it was never tested at all. Now
+ * scripts/probe-decimal-integration.mjs can feed it the same rows it feeds
+ * CalculationService and assert the two agree to the cent, which is the invariant
+ * that actually matters.
+ *
+ * @param {{ occ?: any[], src?: any[], gross?: any[], pay?: any[], exp?: any[] }} ledgers
+ */
+export function aggregateDays({ occ = [], src = [], gross = [], pay = [], exp = [] } = {}) {
+  /** @type {Map<string, DayAccumulator>} */
+  const byDay = new Map();
+  const ensure = (pid, date) => {
+    const key = `${pid}|${date}`;
+    let day = byDay.get(key);
+    if (!day) {
+      day = newDay(pid, date);
+      byDay.set(key, day);
+    }
+    return day;
+  };
+
+  for (const r of occ) {
+    const d = ensure(r.property_id, String(r.date).slice(0, 10));
+    d.occ_revenue += toCents(r.room_revenue);
+    d.occ_rooms_sold += Number(r.rooms_sold) || 0;
+    d.occ_capacity_rooms += Number(r.total_rooms) || 0;
+  }
+
+  for (const r of src) {
+    const date = String(r.date).slice(0, 10);
+    const d = ensure(r.property_id, date);
+    const key = r.source || r.code || 'UNKNOWN';
+    const cur = d.source_net[key] || { net: 0, stays: 0 };
+    cur.net += toCents(r.net_revenue);
+    cur.stays += Number(r.stays) || 0;
+    d.source_net[key] = cur;
+  }
+
+  for (const r of gross) {
+    const d = ensure(r.property_id, String(r.date).slice(0, 10));
+    d.gross_state_tax += toCents(r.state_tax);
+    d.gross_city_tax += toCents(r.city_tax);
+    d.gross_other_tax += toCents(r.other_tax);
+    for (const f of GROSS_MISC_FIELDS) {
+      d.gross_misc[f] = (d.gross_misc[f] || 0) + toCents(r[f]);
+    }
+  }
+
+  for (const r of pay) {
+    const d = ensure(r.property_id, String(r.date).slice(0, 10));
+    for (const f of PAYMENT_FIELDS) {
+      d.payment[f] = (d.payment[f] || 0) + toCents(r[f]);
+    }
+    d.payment_total += toCents(r.total);
+  }
+
+  for (const r of exp) {
+    const d = ensure(r.property_id, String(r.expense_date).slice(0, 10));
+    const cat = r.category || 'other';
+    d.expense_by_category[cat] = (d.expense_by_category[cat] || 0) + toCents(r.amount);
+  }
+
+  return [...byDay.values()].map(finalizeDay);
 }
 
 // Recompute every (property_id, business_date) aggregate for the given scope and
@@ -64,57 +224,11 @@ export async function rebuildDailyAggregates({ propertyId = 'all', from = '', to
   const pay = await fetchLedger('PaymentDay', propertyId, from, to);
   const exp = await fetchLedger('Expense', propertyId, from, to);
 
-  const byDay = new Map();
-  const ensure = (pid, date) => {
-    const key = `${pid}|${date}`;
-    if (!byDay.has(key)) byDay.set(key, newDay(pid, date));
-    return byDay.get(key);
-  };
-
-  for (const r of occ) {
-    const d = ensure(r.property_id, String(r.date).slice(0, 10));
-    d.occ_revenue += Number(r.room_revenue) || 0;
-    d.occ_rooms_sold += Number(r.rooms_sold) || 0;
-    d.occ_capacity_rooms += Number(r.total_rooms) || 0;
-  }
-
-  for (const r of src) {
-    const date = String(r.date).slice(0, 10);
-    const d = ensure(r.property_id, date);
-    const key = r.source || r.code || 'UNKNOWN';
-    const cur = d.source_net[key] || { net: 0, stays: 0 };
-    cur.net += Number(r.net_revenue) || 0;
-    cur.stays += Number(r.stays) || 0;
-    d.source_net[key] = cur;
-  }
-
-  for (const r of gross) {
-    const d = ensure(r.property_id, String(r.date).slice(0, 10));
-    d.gross_state_tax += Number(r.state_tax) || 0;
-    d.gross_city_tax += Number(r.city_tax) || 0;
-    d.gross_other_tax += Number(r.other_tax) || 0;
-    for (const f of GROSS_MISC_FIELDS) {
-      d.gross_misc[f] = (d.gross_misc[f] || 0) + (Number(r[f]) || 0);
-    }
-  }
-
-  for (const r of pay) {
-    const d = ensure(r.property_id, String(r.date).slice(0, 10));
-    for (const f of PAYMENT_FIELDS) {
-      d.payment[f] = (d.payment[f] || 0) + (Number(r[f]) || 0);
-    }
-    d.payment_total += Number(r.total) || 0;
-  }
-
-  for (const r of exp) {
-    const d = ensure(r.property_id, String(r.expense_date).slice(0, 10));
-    const cat = r.category || 'other';
-    d.expense_by_category[cat] = (d.expense_by_category[cat] || 0) + (Number(r.amount) || 0);
-  }
+  const days = aggregateDays({ occ, src, gross, pay, exp });
 
   let written = 0;
   await localDb.transaction('rw', localDb.DailyFinancialAggregate, async () => {
-    for (const agg of byDay.values()) {
+    for (const agg of days) {
       const existing = await localDb.DailyFinancialAggregate
         .where('[property_id+business_date]')
         .equals([agg.property_id, agg.business_date])
@@ -128,7 +242,7 @@ export async function rebuildDailyAggregates({ propertyId = 'all', from = '', to
     }
   });
 
-  return { written, days: byDay.size };
+  return { written, days: days.length };
 }
 
 // Read cached aggregates for a date range. Returns [] if the cache is empty

@@ -117,6 +117,15 @@ export function parseAmount(s) {
 
   const n = parseFloat(body);
   if (isNaN(n)) return null;
+  // Non-finite values are rejected the same way garbage is. ADDED 2026-08-20:
+  // parseFloat("Infinity") is Infinity and parseFloat("1e999") overflows to it, so
+  // both used to be returned as if they were money. There is no infinite dollar
+  // amount, and Infinity is the one bad value that cannot be traced afterwards:
+  // Infinity - Infinity is NaN, so a single poisoned cell takes the whole period's
+  // total with it and no later check can point at which cell did it. Returning null
+  // routes it through the normal path — logged as an `unparseable` coercion by
+  // importValidation.js#recordCoercion, stored as 0, visible in the scan preview.
+  if (!Number.isFinite(n)) return null;
   return negative ? -n : n;
 }
 
@@ -185,14 +194,35 @@ export function rowsToObjects(rawRows) {
     .slice(1)
     .filter((r) => r.length > 0 && r.some((c) => c !== ""))
     .map((row) => {
-      const obj = {};
+      // NULL PROTOTYPE, deliberately. With a plain `{}`, a column literally named
+      // `__proto__` is not a data key — `obj["__proto__"] = "500.00"` sets the
+      // object's prototype instead of storing a value, and because the value is a
+      // string the assignment is silently ignored. Measured before this change:
+      //
+      //   rowsToObjects([['Date','__proto__','Amount'],
+      //                  ['2026-01-01','SILENTLY_LOST','42']])
+      //     -> {"Date":"2026-01-01","Amount":"42"}      // the cell is GONE
+      //   two `__proto__` columns  -> {}                 // BOTH cells gone
+      //
+      // No key, no value, no error — exactly the silent import data loss this
+      // project forbids, on input the directives class as hostile. A null
+      // prototype makes every header an ordinary own property, so nothing is lost
+      // and nothing has to be renamed or rejected. It also removes prototype
+      // pollution as a category rather than blocklisting one key.
+      const obj = Object.create(null);
       headers.forEach((h, i) => {
-        if (obj.hasOwnProperty(h)) {
+        // Object.prototype.hasOwnProperty.call, not obj.hasOwnProperty: `obj` has
+        // no prototype now, so the method form would throw.
+        if (Object.prototype.hasOwnProperty.call(obj, h)) {
+          // Duplicate header. Suffix with the 1-BASED COLUMN NUMBER, so the key
+          // says where the value came from and two duplicates can never collide.
           obj[h + "_" + (i + 1)] = row[i] || "";
         } else {
           obj[h] = row[i] || "";
         }
       });
+      // Cells past the end of the header row. Real PMS exports emit these; naive
+      // header-driven mapping drops them.
       for (let i = headers.length; i < row.length; i++) {
         obj["_extra_" + (i + 1)] = row[i] || "";
       }

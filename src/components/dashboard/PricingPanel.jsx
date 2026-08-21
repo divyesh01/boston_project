@@ -7,6 +7,7 @@ import { usePricingForecast } from "@/lib/usePricing";
 import { useRealtimeInvalidation } from "@/lib/realtime";
 import { ErrorState } from "@/components/ui/status";
 import { money2 } from "@/lib/hotel";
+import { fromCents } from "@/lib/decimal";
 
 // Compact dynamic-pricing widget for the Executive Dashboard.
 // Shows the enabled state, today's recommended ADR vs base, the revenue uplift
@@ -18,26 +19,38 @@ export default function PricingPanel() {
   const { forecast, config, enabled, isError, error, refetch } = usePricingForecast(14);
 
   const today = forecast[0] || null;
-  const baseAdr = today
+  const baseAdrCents = today
     ? Math.round(
         Object.values(today.types).reduce((s, t) => s + t.baseCents, 0) /
           Math.max(1, Object.values(today.types).filter((t) => t.baseCents > 0).length)
       )
     : 0;
-  const recAdr = today ? today.adrCents : 0;
-  const delta = recAdr - baseAdr;
+  // Every figure this panel derives is integer cents, because that is all the
+  // pricing engine emits. The names carry the unit so the guard in
+  // scripts/probe-cents-unit-mismatch.mjs can see them: these were `recAdr`,
+  // `delta`, `projectedRev` and `revUplift`, handed straight to money2(), which
+  // takes DOLLARS — so a $149.00 recommended rate was advertised on the owner's
+  // dashboard as "$14,900.00".
+  const recAdrCents = today ? today.adrCents : 0;
+  const deltaCents = recAdrCents - baseAdrCents;
   const occ = today ? today.occupancy : 0;
 
   // Owner KPI: projected revenue uplift vs keeping flat base rates over the
   // 7-day window. This is the dollar value the engine is fighting for.
   const periodSlices = forecast.slice(0, 7);
-  const projectedRev = periodSlices.reduce((s, d) => s + d.projectedRevenueCents, 0);
-  const baseRev = periodSlices.reduce((s, d) => {
-    const b = Object.values(d.types).reduce((a, t) => a + t.baseCents, 0) / Math.max(1, Object.values(d.types).filter((t) => t.baseCents > 0).length);
-    return s + Math.round(d.occupancy * Math.round(d.occupancy * 100)) * b;
-  }, 0);
-  const revUplift = projectedRev - baseRev;
-  const chartData = forecast.map((d) => ({ day: String(d.date).slice(5), adr: d.adrCents }));
+  const projectedRevCents = periodSlices.reduce((s, d) => s + d.projectedRevenueCents, 0);
+  // The base leg comes from buildPricingForecast so that both legs value the SAME
+  // room nights. It used to be rebuilt here as
+  //   Math.round(d.occupancy * Math.round(d.occupancy * 100)) * meanBaseCents
+  // which squares occupancy against a hardcoded 100 rooms — this panel has no room
+  // register to read. Measured at 85% occupancy against a 20-room register
+  // (probe-cents-unit-mismatch.mjs section 7) that formula valued 72 room nights
+  // where 17 were sold, so the "vs base rates" figure below was arithmetic on a
+  // hotel that does not exist.
+  const baseRevCents = periodSlices.reduce((s, d) => s + (d.projectedBaseRevenueCents || 0), 0);
+  const revUpliftCents = projectedRevCents - baseRevCents;
+  // Charted in dollars, so the tooltip formats the same unit the axis plots.
+  const chartData = forecast.map((d) => ({ day: String(d.date).slice(5), adr: fromCents(d.adrCents) }));
 
   return (
     <Card
@@ -73,10 +86,10 @@ export default function PricingPanel() {
           <div className="grid gap-3 sm:grid-cols-4">
             <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
               <p className="text-[10px] uppercase tracking-widest text-slate-500">Today&rsquo;s Rate</p>
-              <p className="mt-1 font-heading text-2xl font-semibold text-white">{money2(recAdr)}</p>
+              <p className="mt-1 font-heading text-2xl font-semibold text-white">{money2(fromCents(recAdrCents))}</p>
               <div className="mt-0.5 flex items-center gap-1 text-xs">
-                {delta >= 0 ? <TrendingUp className="h-3 w-3 text-[#00E096]" /> : <TrendingDown className="h-3 w-3 text-[#FF6B6B]" />}
-                <span className={delta >= 0 ? "text-[#00E096]" : "text-[#FF6B6B]"}>{delta >= 0 ? "+" : ""}{money2(delta)} vs base</span>
+                {deltaCents >= 0 ? <TrendingUp className="h-3 w-3 text-[#00E096]" /> : <TrendingDown className="h-3 w-3 text-[#FF6B6B]" />}
+                <span className={deltaCents >= 0 ? "text-[#00E096]" : "text-[#FF6B6B]"}>{deltaCents >= 0 ? "+" : ""}{money2(fromCents(deltaCents))} vs base</span>
               </div>
             </div>
             <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
@@ -86,8 +99,8 @@ export default function PricingPanel() {
             </div>
             <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
               <p className="text-[10px] uppercase tracking-widest text-slate-500">7-Day Revenue</p>
-              <p className="mt-1 font-heading text-2xl font-semibold text-white">{money2(projectedRev)}</p>
-              <p className={`mt-0.5 text-xs ${revUplift >= 0 ? "text-[#00E096]" : "text-[#FF6B6B]"}`}>{revUplift >= 0 ? "+" : ""}{money2(revUplift)} vs base rates</p>
+              <p className="mt-1 font-heading text-2xl font-semibold text-white">{money2(fromCents(projectedRevCents))}</p>
+              <p className={`mt-0.5 text-xs ${revUpliftCents >= 0 ? "text-[#00E096]" : "text-[#FF6B6B]"}`}>{revUpliftCents >= 0 ? "+" : ""}{money2(fromCents(revUpliftCents))} vs base rates</p>
             </div>
             <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
               <p className="text-[10px] uppercase tracking-widest text-slate-500">Sensitivity</p>

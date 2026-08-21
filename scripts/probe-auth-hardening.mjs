@@ -391,12 +391,34 @@ section("6. Changing a credential revokes the sessions it opened");
   T("set_password evicts the account's sessions", live(tables, "u_target").length === 0);
 
   // set_password used to accept any 8 characters while createUser and
-  // reset_password both required mixed case and a digit.
-  tables = adminWorld();
-  res = await admin({ action: "set_password", id: "u_target", newPassword: "password" });
-  T("set_password enforces the same strength rule as every other writer",
-    res.status >= 400 && /uppercase|lowercase|number/i.test(res.body?.error || ""),
-    `status=${res.status} body=${JSON.stringify(res.body)}`);
+  // reset_password both required mixed case and a digit. Since 2026-08-20 every
+  // writer enforces the full advertised policy — 12 characters, four character
+  // classes, no character three times running, no line terminators — so this walks
+  // the whole rule set instead of pinning one message. Each entry must be refused
+  // WITH A REASON: a 400 carrying an empty error would satisfy a bare status check
+  // while telling the administrator nothing they can act on.
+  //
+  // "Abcdefg1" is the case that matters. It satisfied the old server rule exactly,
+  // so until the policy was unified it was a password an admin could set here and
+  // use to sign in everywhere, while the UI insisted the minimum was 12 characters
+  // with a special character.
+  for (const [why, weak] of [
+    ["a single character class", "password"],
+    ["the old 8-character rule's best case", "Abcdefg1"],
+    ["11 characters, otherwise perfect", "Ab1!cdefghi"],
+    ["no special character", "Abcdefghijk1"],
+    ["a character three times running", "Ab1!cdeffffgh"],
+    ["a pasted trailing newline", "Ab1!cdefghij\n"],
+  ]) {
+    tables = adminWorld();
+    res = await admin({ action: "set_password", id: "u_target", newPassword: weak });
+    T(`set_password refuses ${why}, with a stated reason`,
+      res.status >= 400 && /^Password must /.test(res.body?.error || ""),
+      `status=${res.status} body=${JSON.stringify(res.body)}`);
+    T(`a refused password leaves ${why}'s target account untouched`,
+      live(tables, "u_target").length > 0,
+      "a rejected password must not evict sessions — side effects would mean the write ran first");
+  }
 }
 
 section("7. Changing your own password keeps you signed in and drops the rest");
@@ -780,6 +802,222 @@ section("16. The UI supplies the step-up password the server now demands");
   T("Users.jsx shows the one-time enrolment secret instead of discarding it",
     /setMfaHandoff\(\{[\s\S]{0,200}secret/.test(users) && /mfaHandoff\.secret/.test(users),
     "src/pages/Users.jsx");
+}
+
+section("17. The TOTP seed never leaves the server except once, for enrolment");
+{
+  // WHY THIS SECTION EXISTS. Launch item #5 alleged "MFA seed stored in
+  // plaintext and TOTP verified client-side". For production that is false, and
+  // the evidence is mechanical: src/api/base44Client.js returns
+  // invokeBackend(functionName, params) at the top of the local-auth block when
+  // VITE_USE_LOCAL_AUTH is not 'true', and it is 'false' in .env.production and
+  // .env.local — so every browser-side MFA branch the item points at is dev-only
+  // dead weight in a shipped build. Verification is verifyTotpToken() in
+  // custom_user_admin/entry.js: HMAC-SHA1 over a server-held seed, a ±1 window,
+  // timingSafeEqual, and a spent-counter lower bound. Sections 3, 4 and 8 cover
+  // it.
+  //
+  // What WAS missing is any assertion about the seed on the way OUT. publicUser()
+  // is a DENYLIST — it destructures the fields it wants gone and spreads the
+  // rest — so every column added to the User entity afterwards is public by
+  // default until somebody remembers to name it. That is exactly what happened:
+  // custom_auth_login writes a live enrolment seed to `mfa_secret_pending` when
+  // it force-enrols an owner or admin, and no copy of publicUser() strips it. An
+  // admin opening the user list therefore received the live second-factor seed of
+  // every colleague mid-enrolment, with no audit row to show it happened.
+  //
+  // These assertions drive the real actions and read what comes back, so they
+  // pin the outcome rather than the implementation.
+
+  const RESET_TOKEN_HASH = th("probe-reset-token");
+  const PENDING_SEED = "PENDINGSEEDPENDINGSEEDPENDINGSEED";
+  // Field names that must never appear in a response body.
+  const SECRET_KEYS = [
+    "password_hash", "salt", "mfa_secret", "mfa_secret_pending",
+    "mfa_last_counter", "reset_token_hash", "reset_token_expires_at",
+    "session_created", "session_expires",
+  ];
+  // Values that must never appear either — this is what catches the same secret
+  // copied out under an innocent name, e.g. `totp: user.mfa_secret`. A key check
+  // alone misses that; a value check alone misses an empty-but-present field.
+  const SECRET_VALUES = [HASH, SALT, MFA_SECRET, PENDING_SEED, RESET_TOKEN_HASH];
+
+  const leaks = (node, path = "$") => {
+    if (node === null || node === undefined) return [];
+    if (Array.isArray(node)) return node.flatMap((v, i) => leaks(v, `${path}[${i}]`));
+    if (typeof node === "object") {
+      return Object.entries(node).flatMap(([k, v]) =>
+        SECRET_KEYS.includes(k) ? [`${path}.${k}`] : leaks(v, `${path}.${k}`));
+    }
+    return SECRET_VALUES.includes(node) ? [`${path}=<stored secret>`] : [];
+  };
+
+  // Sanity check on the detector itself: a probe that cannot see a leak would
+  // report a clean bill of health for a function that returns the whole row.
+  T("the leak detector finds a seed that IS present",
+    leaks({ user: { id: "x", mfa_secret_pending: PENDING_SEED } }).length === 1,
+    JSON.stringify(leaks({ user: { id: "x", mfa_secret_pending: PENDING_SEED } })));
+  T("the leak detector finds a seed renamed to an innocent key",
+    leaks({ user: { id: "x", totp: MFA_SECRET } }).length === 1,
+    JSON.stringify(leaks({ user: { id: "x", totp: MFA_SECRET } })));
+  T("and reports nothing for a clean payload",
+    leaks({ users: [{ id: "x", username: "clerk1", role: "owner" }] }).length === 0);
+
+  // A user carrying every kind of credential material at once: enrolled factor,
+  // a pending enrolment seed, a live reset token, and a spent counter.
+  const loaded = () => mkUser({
+    mfa_enabled: true, mfa_secret: MFA_SECRET, mfa_secret_pending: PENDING_SEED,
+    mfa_last_counter: nowCounter() - 5, reset_token_hash: RESET_TOKEN_HASH,
+    reset_token_expires_at: new Date(Date.now() + 3600e3).toISOString(),
+    failed_login_count: 2, locked_until: null,
+  });
+
+  for (const [label, body] of [
+    ["list", { action: "list" }],
+    ["search", { action: "search", query: "clerk" }],
+    ["getById", { action: "getById", id: "u_target" }],
+    ["update", { action: "update", id: "u_target", data: { full_name: "Clerk One" } }],
+    ["set_status", { action: "set_status", id: "u_target", status: "unlocked" }],
+    ["create", { action: "create", data: { username: "newclerk", email: "new@example.com", role: "read_only", password: PASSWORD } }],
+    ["invite", { action: "invite", email: "invitee@example.com", role: "read_only" }],
+  ]) {
+    adminWorld({ target: loaded() });
+    const res = await admin(body);
+    const found = leaks(res.body);
+    T(`${label} returns no credential material`,
+      res.status === 200 && found.length === 0,
+      `status=${res.status} leaked=[${found.join(", ")}]`);
+  }
+
+  // The same denylist is copied into custom_auth_login and custom_auth_register,
+  // so the login and registration bodies need the same check.
+  {
+    world({ users: [loaded({})], sessions: [mkSession("s_x", "u_target", "tok_x")] });
+    const li = await signIn({ username: "clerk1", password: PASSWORD, mfa_token: totpCode(MFA_SECRET, nowCounter()) });
+    T("a successful login returns no credential material",
+      li.status === 200 && leaks(li.body).length === 0,
+      `status=${li.status} leaked=[${leaks(li.body).join(", ")}]`);
+
+    const m = await me("tok_x");
+    T("custom_auth_me returns no credential material",
+      m.status === 200 && leaks(m.body).length === 0,
+      `status=${m.status} leaked=[${leaks(m.body).join(", ")}]`);
+  }
+
+  // The refusals matter too: an error path that echoes the row back would leak
+  // just as thoroughly as a success.
+  {
+    adminWorld({ target: loaded() });
+    const denied = await admin({ action: "enable_mfa", id: "u_target" });
+    T("a refused MFA rotation returns neither a secret nor the stored one",
+      denied.status >= 400 && denied.body?.secret === undefined && leaks(denied.body).length === 0,
+      `status=${denied.status} body=${JSON.stringify(denied.body).slice(0, 160)}`);
+  }
+
+  // enable_mfa is the ONE deliberate exception. TOTP cannot be enrolled without
+  // handing the enrolling client the shared secret once, so the contract to pin
+  // is narrower: what comes back is a NEWLY generated seed, never the one already
+  // stored, and it is what the row now holds.
+  {
+    const rot = adminWorld({ target: loaded() });
+    const res = await admin({ action: "enable_mfa", id: "u_target", currentPassword: PASSWORD });
+    T("enable_mfa hands back a freshly generated seed, not the stored one",
+      res.status === 200 && typeof res.body?.secret === "string" &&
+        res.body.secret.length >= 16 && res.body.secret !== MFA_SECRET,
+      `status=${res.status} secret=${String(res.body?.secret).slice(0, 8)}…`);
+    T("the row now holds exactly the seed that was returned",
+      row(rot, "u_target").mfa_secret === res.body?.secret);
+    T("and the superseded pending seed was cleared, not left readable",
+      row(rot, "u_target").mfa_secret_pending === null,
+      String(row(rot, "u_target").mfa_secret_pending));
+    // The URI is the same secret in another encoding; it is part of the same
+    // one-time handover, so it may carry it — but it must carry THAT one.
+    T("the enrolment URI carries the new seed and not the old",
+      String(res.body?.uri || "").includes(res.body.secret) &&
+        !String(res.body?.uri || "").includes(MFA_SECRET),
+      String(res.body?.uri).slice(0, 80));
+  }
+
+  // Structural guard. The live checks above only drive the actions that exist
+  // today; a new action returning a raw row would leak everything while they all
+  // stayed green. Two properties are read straight out of the source instead.
+  {
+    const files = [
+      "base44/functions/custom_user_admin/entry.js",
+      "base44/functions/custom_auth_login/entry.js",
+      "base44/functions/custom_auth_register/entry.js",
+    ];
+    const sources = files.map(read);
+
+    for (const [i, src] of sources.entries()) {
+      const responses = [...src.matchAll(/Response\.json\(\s*\{[^{}]*\busers?:[^{}]*\}/g)].map((m) => m[0]);
+      // `publicUser` without a paren: `users.map(publicUser)` passes it by
+      // reference, and requiring the call form reported the two list actions as
+      // offenders when they were the sanitized ones.
+      const raw = responses.filter((s) => !/publicUser/.test(s));
+      T(`${files[i].split("/")[2]} routes every user-bearing response through publicUser()`,
+        responses.length >= 1 && raw.length === 0,
+        `${responses.length} response(s); offenders: ${raw.join(" | ") || "none"}`);
+    }
+
+    // publicUser must be an ALLOWLIST. A denylist is how the pending seed got out
+    // in the first place: it is public-by-default, so the next sensitive column
+    // added to the User entity leaks until someone edits three files. An
+    // allowlist fails closed — a new column is invisible until deliberately
+    // named.
+    const bodies = sources.map((src) => {
+      const at = src.indexOf("function publicUser");
+      return src.slice(at, src.indexOf("\n}", at) + 2);
+    });
+    for (const [i, body] of bodies.entries()) {
+      T(`${files[i].split("/")[2]}'s publicUser is an allowlist, not a denylist`,
+        /PUBLIC_USER_FIELDS/.test(body) && !/\.\.\.safe/.test(body),
+        body.replace(/\s+/g, " ").slice(0, 140));
+    }
+    // Three copies exist because the base44 host gives these functions no shared
+    // module they can all import (only aiAssistant/entry.ts reaches outside its
+    // own directory, and breaking login to find out whether .js functions may do
+    // the same is not a trade worth making). Copies drift; this is the assertion
+    // that stops them.
+    T("all three copies of publicUser are byte-identical",
+      new Set(bodies.map((b) => b.replace(/\r\n/g, "\n"))).size === 1,
+      bodies.map((b, i) => `${files[i].split("/")[2]}:${b.length}b`).join(" "));
+
+    // Every sensitive column in the entity schema must be absent from the
+    // allowlist. This is the check that would have caught mfa_secret_pending on
+    // the day it was added, without anyone having to think of it.
+    const schema = read("base44/entities/User.jsonc");
+    const declared = [...schema.matchAll(/^    "([a-z_]+)": \{/gm)].map((m) => m[1]);
+    // `must_change_password` matches the word "password" but is a boolean flag,
+    // not credential material — the UI needs it to force the change-password
+    // screen, so it is public on purpose. Named explicitly rather than tightened
+    // out of the pattern, because the pattern erring toward "sensitive" is the
+    // behaviour worth keeping.
+    const PUBLIC_BY_DESIGN = new Set(["must_change_password"]);
+    const sensitive = declared.filter((f) =>
+      !PUBLIC_BY_DESIGN.has(f) && /password|salt|secret|token|counter|session_(created|expires)/.test(f));
+    T("the schema's sensitive columns are the ones this section knows about",
+      sensitive.length >= 8 && sensitive.every((f) => SECRET_KEYS.includes(f)),
+      `schema=[${sensitive.join(", ")}] unknown=[${sensitive.filter((f) => !SECRET_KEYS.includes(f)).join(", ")}]`);
+    T("no copy of publicUser names a sensitive column as public",
+      bodies.every((b) => !sensitive.some((f) => new RegExp(`'${f}'|"${f}"`).test(b))),
+      sensitive.filter((f) => bodies.some((b) => new RegExp(`'${f}'|"${f}"`).test(b))).join(", ") || "none");
+
+    // The offline shim in base44Client.js has a fourth copy of this sanitizer,
+    // publicUserLocal, and it had the same hole. It only ever answers the browser
+    // that owns the account, so the exposure is far narrower than the server's —
+    // but handleLocalEnableMfa writes a real seed to mfa_secret_pending, and a
+    // developer's machine is still a place a seed can be read out of a devtools
+    // network tab. Static, because the shim needs a browser to run.
+    const shim = read("src/api/base44Client.js");
+    const localBody = shim.slice(
+      shim.indexOf("function publicUserLocal"),
+      shim.indexOf("\n}", shim.indexOf("function publicUserLocal")) + 2);
+    T("the offline shim's publicUserLocal strips the same credential columns",
+      ["password_hash", "salt", "mfa_secret", "mfa_secret_pending", "reset_token_hash"]
+        .every((f) => new RegExp(`\\b${f}\\b`).test(localBody)),
+      localBody.replace(/\s+/g, " ").slice(0, 160));
+  }
 }
 
 console.log(`\n${"─".repeat(60)}`);

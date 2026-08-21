@@ -4,20 +4,22 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   AreaChart, Area, Line,
 } from "recharts";
-import { FinancialBarChart } from '@/components/charts/FinancialBarChart';
+import PieDonut from '@/components/charts/PieDonut';
 import { X, Wallet } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { usePaymentData } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
-import { money, money2, pct, sum, inRange, C, CHART_COLORS, commissionFor } from "@/lib/hotel";
+import { money, money2, pct, sum, inRange, C, CHART_COLORS, commissionFor, grossRevenueForPeriod, rowAncillaryRevenueCents } from "@/lib/hotel";
+import { fromCents, toCents } from "@/lib/decimal";
 import { getCcFeeRate, getCcFeeOnRefunds } from "@/lib/commissionRates";
 import { getTaxConfig } from "@/lib/taxConfig";
 import { getEffectiveTaxRates, getTaxSettings } from "@/lib/taxSettings";
-import { expenseLabel, STANDARD_CATEGORY_KEYS } from "@/lib/expenseCategories";
+import { expenseLabel, STANDARD_CATEGORY_KEYS, expenseBucket, chooseActualOrEstimate, DERIVED_COST_BUCKETS } from "@/lib/expenseCategories";
 import { buildTaxObject } from "@/lib/taxLiability";
 import { CARD_METHODS, refundOf } from "@/lib/paymentNorm";
 import { filterCommittedPay } from "@/lib/payrollCalc";
 import { useSettingsVersion } from "@/hooks/useSettingsVersion";
+import { CountUp } from "@/lib/useCountUp";
 
 const tip = { background: "#0A1628", border: "1px solid #ffffff14", borderRadius: 12, color: "#e2e8f0" };
 const axis = { fill: "#64748b", fontSize: 10 };
@@ -30,8 +32,11 @@ const TREND_MODES = [
   ["year", "Year"],
 ];
 
-// Tax buckets for manual expense entries that feed the liability display
-const TAX_EXPENSE_CATS = ["state_taxes", "city_taxes"];
+// The tax/OTA/payroll bucket vocabulary now lives in src/lib/expenseCategories.js
+// (TAX_EXPENSE_CATEGORIES, DERIVED_COST_BUCKETS, expenseBucket) because
+// src/lib/calculationService.js needs exactly the same rule and its copy had
+// drifted. Nothing local to replace it — a second definition here is how the two
+// diverged.
 
 // Bucket a booking source into its configured tax class.
 function classifyTaxSource(r) {
@@ -149,7 +154,19 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     );
     const grossInPeriod = (grossRows || []).filter((r) => inRange(r.date, from, to));
 
-    const gross = sum(occRows, "room_revenue");
+    // Gross is the TOTAL the hotel collected, not room revenue alone. This used
+    // to read `sum(occRows, "room_revenue")`, which silently excluded $9,339.50
+    // of ancillary income (pet fees, laundry, restaurant, property damage, early
+    // check-in, misc, AR adjustments) — money the owner kept, measured against a
+    // base that pretended it did not exist, so the keep rate and every deduction
+    // percentage below were computed against the wrong denominator.
+    //
+    // `grossRevenueForPeriod` reports which ledger it used. When the Gross
+    // Revenue Report has no rows for the period it falls back to the occupancy
+    // room ledger — the exact previous behaviour — and says so via `.basis` so
+    // the UI can label a room-only figure honestly instead of overstating it.
+    const grossBasis = grossRevenueForPeriod({ grossRows: grossInPeriod, occRows });
+    const gross = grossBasis.dollars;
 
     // ── Imported PMS tax lines per day (state / city / other) ──
     const taxImp = new Map();
@@ -170,7 +187,14 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       cur[key] += v;
       dayMap.set(date, cur);
     };
+    // The day ledger must sum to the SAME figure as the headline gross:
+    // `sumDay("gross")` is the denominator that allocates lump expenses and
+    // payroll across days, so a day series summing to room revenue while the
+    // headline reads total revenue would mis-allocate every lump deduction.
+    // Room from the occupancy leg, ancillary from the charge ledger — the same
+    // two halves grossRevenueForPeriod adds up.
     occRows.forEach((r) => bump(String(r.date).slice(0, 10), "gross", Number(r.room_revenue) || 0));
+    grossInPeriod.forEach((r) => bump(String(r.date).slice(0, 10), "gross", fromCents(rowAncillaryRevenueCents(r))));
     srcRows.forEach((r) => {
       const rev = Number(r.net_revenue) || 0;
       const stays = Number(r.stays) || 0;
@@ -292,28 +316,27 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     // existed, which moved it off the OTA line but left it in the total, and
     // `credit_card_fees` fell through to its own bucket and was pushed by the
     // generic category loop alongside the derived fee. Both double-counted.
-    const bucketOf = (cat) => {
-      if (cat === "ota_commission") return "ota";
-      if (cat === "payroll") return "payroll";
-      if (TAX_EXPENSE_CATS.includes(cat)) return "taxes";
-      return cat || "other";
-    };
+    //
+    // `expenseBucket` is the shared implementation (src/lib/expenseCategories.js);
+    // it is behaviour-identical to the local `bucketOf` this replaced, plus it
+    // trims and lower-cases the key so a category that escaped slugifyCategory
+    // buckets the same way a well-formed one does.
     const expGroups = {};
     expInPeriod.forEach((e) => {
-      const b = bucketOf(e.category);
+      const b = expenseBucket(e.category);
       (expGroups[b] = expGroups[b] || []).push(e);
     });
     const expRows = (b) => (expGroups[b] || []);
     const expAmt = (b) => expRows(b).reduce((a, e) => a + (Number(e.amount) || 0), 0);
-    
+
     // Add recurring expenses (memoized above)
     recurringExtras.forEach((e) => {
-      const b = bucketOf(e.category);
+      const b = expenseBucket(e.category);
       (expGroups[b] = expGroups[b] || []).push(e);
     });
 
     // Manual tax expense entries (real business tax outflows).
-    // These read the "taxes" bucket that `bucketOf` actually writes — the
+    // These read the "taxes" bucket that `expenseBucket` actually writes — the
     // previous code asked for `expRows("tax")` (singular), a bucket nothing ever
     // creates, so every manually entered state/city/other tax expense silently
     // evaluated to 0 and was dropped from both the deduction total and the
@@ -383,21 +406,40 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     };
 
     // OTA commission — actual invoices beat the rate-card estimate.
+    //
+    // The branch decision comes from the shared `chooseActualOrEstimate`
+    // (src/lib/expenseCategories.js) so this widget and
+    // calculationService.js#calculateMoneyKept cannot disagree about which side
+    // wins. It decides in integer cents, which is the same threshold the old
+    // `> 0.004` dollar comparison expressed; the amounts pushed below stay in the
+    // dollars this component displays.
     const otaActual = expAmt("ota");
     const otaEstimated = otaRecords.reduce((a, x) => a + x.amount, 0);
-    if (otaActual > 0.004) {
+    const otaLeg = chooseActualOrEstimate({
+      actualCents: toCents(otaActual),
+      estimateCents: toCents(otaEstimated),
+      // No SourceDay rows means no rate card to estimate from.
+      estimateApplies: !!otaFromSources,
+    });
+    if (otaLeg.basis === "actual") {
       pushItem("ota", "OTA Commissions (actual)", otaActual, expRows("ota").map(expRecord));
-    } else if (otaFromSources) {
+    } else if (otaLeg.basis === "estimated") {
       pushItem("ota", "OTA Commissions (estimated)", otaEstimated, otaRecords);
     }
 
     // Card processing fees — a real merchant statement beats the derived fee.
     const ccActual = expAmt("credit_card_fees");
     const ccTotal = ccRecords.reduce((a, x) => a + x.amount, 0);
-    if (ccActual > 0.004) {
+    const ccLeg = chooseActualOrEstimate({
+      actualCents: toCents(ccActual),
+      estimateCents: toCents(ccTotal),
+    });
+    if (ccLeg.basis === "actual") {
       pushItem("credit_card_fees", "Credit Card Processing Fees (actual)", ccActual, expRows("credit_card_fees").map(expRecord));
     } else {
       pushItem("cc", "Credit Card Processing Fees (estimated)", ccTotal, ccRecords);
+      // The statement already contains what the processor charged on refunds, so
+      // the derived refund fee rides with the estimate only.
       if (ccFeeRefunds) {
         pushItem("refund_fee", "CC Fee on Refunds", refundFeeRecords.reduce((a, x) => a + x.amount, 0), refundFeeRecords);
       }
@@ -408,7 +450,11 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     // estimate derived from configured rates.
     const estimatedTaxFromRates = dayTotals.reduce((a, d) => a + d.deductTax, 0);
     const estimatedTaxBase = dayTotals.reduce((a, d) => a + (d.taxBase || 0), 0);
-    const taxIsActual = manualTaxAmt > 0.004;
+    const taxLeg = chooseActualOrEstimate({
+      actualCents: toCents(manualTaxAmt),
+      estimateCents: toCents(estimatedTaxFromRates),
+    });
+    const taxIsActual = taxLeg.basis === "actual";
     const taxTotal = taxIsActual ? manualTaxAmt : estimatedTaxFromRates;
     const effectiveTaxRate = !taxIsActual && estimatedTaxBase > 0 ? estimatedTaxFromRates / estimatedTaxBase : undefined;
     const estimatedTaxRecords = taxIsActual
@@ -430,14 +476,14 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     ].filter((x) => x.amount > 0));
 
     // Buckets already emitted above with their own actual-vs-estimate handling.
-    // `credit_card_fees` MUST be here: it is a standard category, so without it
-    // the generic loop below would push the merchant statement a second time on
-    // top of the line already emitted above.
-    const specialBuckets = new Set(["ota", "payroll", "taxes", "credit_card_fees"]);
+    // `credit_card_fees` MUST be among them: it is a standard category, so without
+    // it the generic loop below would push the merchant statement a second time on
+    // top of the line already emitted above. The set is DERIVED_COST_BUCKETS in
+    // src/lib/expenseCategories.js, shared with calculationService.js.
     const customKeys = Object.keys(expGroups)
-      .filter((b) => !specialBuckets.has(b) && !STANDARD_CATEGORY_KEYS.includes(b))
+      .filter((b) => !DERIVED_COST_BUCKETS.includes(b) && !STANDARD_CATEGORY_KEYS.includes(b))
       .sort((a, b) => expAmt(b) - expAmt(a));
-    [...STANDARD_CATEGORY_KEYS.filter((k) => expGroups[k] && !specialBuckets.has(k) && k !== "other"), ...customKeys].forEach((b) => {
+    [...STANDARD_CATEGORY_KEYS.filter((k) => expGroups[k] && !DERIVED_COST_BUCKETS.includes(k) && k !== "other"), ...customKeys].forEach((b) => {
       pushItem(b, expenseLabel(b), expAmt(b), expRows(b).map(expRecord));
     });
     pushItem("other", "Other Expenses", expAmt("other"), expRows("other").map(expRecord));
@@ -501,6 +547,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
 
     return {
       gross,
+      grossBasis,
       items,
       totalDeductions,
       kept,
@@ -515,11 +562,17 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       liabOther,
       dayTotals,
     };
-  }, [occRows, srcRows, grossRows, payRecords, payroll, from, to, property, ccFee, ccFeeRefunds, settingsVersion, aggPayRows, aggExpenses, recurringExtras]);
+    // `expenses` is listed because line 146 reads it directly on the fallback path
+    // (no aggregate cache). It was previously omitted and the memo still refreshed,
+    // but only by accident: `recurringExtras` depends on `expenses` and returns a
+    // fresh array identity, so it was standing in as a proxy dependency. That is a
+    // load-bearing coincidence — anyone memoizing recurringExtras harder would have
+    // frozen the owner's headline number at whatever the first render computed.
+  }, [occRows, srcRows, grossRows, payRecords, expenses, payroll, from, to, property, ccFee, ccFeeRefunds, settingsVersion, aggPayRows, aggExpenses, recurringExtras]);
 
   // 3. Final data and charts: depends on baseData and trendMode
   const data = useMemo(() => {
-    const { gross, items, totalDeductions, kept, from: baseFrom, to: baseTo, tax, refundsTotal, passThrough, dayTotals } = baseData;
+    const { gross, grossBasis, items, totalDeductions, kept, from: baseFrom, to: baseTo, tax, refundsTotal, passThrough, dayTotals } = baseData;
     
     // ── Trend: allocate lump expenses/payroll across days by revenue share ──
     const sumDay = (k) => sum(dayTotals, k);
@@ -546,22 +599,68 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       .map((t) => ({ ...t, gross: Math.round(t.gross * 100) / 100, kept: Math.round(t.kept * 100) / 100 }))
       .sort((a, b) => a.label.localeCompare(b.label));
 
-    const pieData = items
-      .map((i, idx) => ({ name: i.label, value: Math.max(0, Math.round(i.amount * 100) / 100), color: CHART_COLORS[idx % CHART_COLORS.length] }))
-      .concat(kept > 0 ? [{ name: "Money Kept", value: Math.round(kept * 100) / 100, color: C.green }] : []);
+    // One colour per deduction, shared by the pie slice AND the dot in the list
+    // on the left, so the two panels always read as the same thing. (They used
+    // to be coloured independently — the list from CHART_COLORS by row index,
+    // the pie from a mix of fixed hues and a separate index — so a purple dot
+    // in the list could sit next to an orange slice for the same deduction.)
+    const FIXED_COLORS = { taxes: "#8b5cf6", credit_card_fees: "#f59e0b", cc: "#f59e0b", ota: "#ef4444" };
+    const PRIORITY_KEYS = ["taxes", "cc", "credit_card_fees", "ota"];
+    const colorByKey = new Map();
+    let paletteAt = 0;
+    items.forEach((i) => {
+      colorByKey.set(i.key, FIXED_COLORS[i.key] || CHART_COLORS[paletteAt++ % CHART_COLORS.length]);
+    });
+
+    // Pie slices follow the natural revenue narrative, clockwise from the top:
+    // Business Taxes → Credit Card Processing Fees → OTA Commissions →
+    // any remaining deductions → Estimated Money Kept (the bottom line, last).
+    const pieDeduction = (key, label) => {
+      const amt = items.find((i) => i.key === key)?.amount;
+      return amt && amt > 0.004
+        ? { name: label, value: Math.round(amt * 100) / 100, color: colorByKey.get(key) }
+        : null;
+    };
+    const orderedPie = [
+      pieDeduction("taxes", "Business Taxes"),
+      pieDeduction("credit_card_fees", "Credit Card Processing Fees") ||
+        pieDeduction("cc", "Credit Card Processing Fees"),
+      pieDeduction("ota", "OTA Commissions"),
+    ].filter(Boolean);
+
+    const otherPie = items
+      .filter((i) => !PRIORITY_KEYS.includes(i.key) && i.amount > 0.004)
+      .map((i) => ({ name: i.label, value: Math.round(i.amount * 100) / 100, color: colorByKey.get(i.key) }));
+
+    // The pie answers "where did every gross dollar go?", so its slices must
+    // total gross: all deductions plus whatever is kept. If deductions exceed
+    // gross there is no positive wedge left to draw, and the remaining slices
+    // would silently rebase to 100% OF DEDUCTIONS while still looking like a
+    // share of gross. That case is flagged so the chart can say so out loud
+    // instead of quietly reporting different percentages than the list.
+    const keptSlice = Math.round(kept * 100) / 100;
+    const pieData = [
+      ...orderedPie,
+      ...otherPie,
+      ...(keptSlice > 0 ? [{ name: "Estimated Money Kept", value: keptSlice, color: C.green }] : []),
+    ];
+    const pieIsGrossShare = keptSlice > 0;
 
     const barData = [
-      { name: "Gross Revenue", value: Math.round(gross * 100) / 100, color: C.purple },
+      { name: grossBasis?.basis === "room" ? "Room Revenue" : "Total Revenue", value: Math.round(gross * 100) / 100, color: C.purple },
       { name: "Estimated Money Kept", value: Math.max(0, Math.round(kept * 100) / 100), color: C.green },
     ];
 
     return {
-      gross, items, totalDeductions, kept, pieData, barData, trendData, from: baseFrom, to: baseTo,
-      refundsTotal, passThrough, tax
+      gross, grossBasis, items, totalDeductions, kept, pieData, barData, trendData, from: baseFrom, to: baseTo,
+      refundsTotal, passThrough, tax, colorByKey, pieIsGrossShare
     };
   }, [baseData, trendMode]);
 
-  const { gross, items, totalDeductions, kept, pieData, barData, trendData, tax, refundsTotal, passThrough } = data;
+  const {
+    gross, grossBasis, items, totalDeductions, kept, pieData, barData, trendData, tax,
+    refundsTotal, passThrough, colorByKey, pieIsGrossShare,
+  } = data;
   // Keep rate = money kept against the *net-revenue base*, not raw gross.
   // Refunds (returned to guest) and pass-through taxes (collected on behalf of
   // the government, never the owner's to keep) are removed from the denominator
@@ -571,6 +670,17 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
   const keepRate = netRevenueBase > 0 ? kept / netRevenueBase : (gross > 0 ? kept / gross : 0);
   const periodLabel = `${from || "—"} → ${to || "—"}`;
   const taxTotal = tax.state + tax.city + tax.other;
+
+  // Say which ledger the gross came from. A room-only figure and a total-revenue
+  // figure differ by every ancillary charge the hotel posted, so labelling both
+  // "Imported occupancy revenue" (as this card used to) told the operator the
+  // wrong thing in one of the two cases. Rendered with cents because this is the
+  // number that must reconcile against the night-audit export exactly.
+  const grossIsRoomOnly = grossBasis?.basis === "room";
+  const grossTitle = grossIsRoomOnly ? "Room Revenue" : "Total Revenue";
+  const grossSource = grossIsRoomOnly
+    ? "Imported occupancy revenue (room only — no gross revenue report for this period)"
+    : "Imported gross revenue report · room + ancillary charges";
 
   const open = (label, rows) => setActive({ label, rows: rows || [] });
 
@@ -584,7 +694,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
         {label}
         {amount > 0 && <span className="text-[10px] text-slate-500">({pct(amount / (gross || 1))})</span>}
       </span>
-      <span className="text-sm tabular-nums text-slate-200">{money(amount)}</span>
+      <span className="text-sm tabular-nums text-slate-200">{money2(amount)}</span>
     </button>
   );
 
@@ -604,24 +714,32 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
         <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <div className="sm:col-span-2">
             <p className="text-[10px] uppercase tracking-widest text-slate-500" title="Estimated Money Kept = Gross Revenue - all commissions, fees, taxes, payroll, expenses and refunds">Estimated Money Kept</p>
-            <p className={`mt-1 font-heading text-4xl font-semibold tabular-nums ${kept >= 0 ? "text-[#00E096]" : "text-[#FF6B6B]"}`}>
-              {kept >= 0 ? "" : "-"}{money(Math.abs(kept))}
-            </p>
+            {/* The three headline figures roll up to their value, and re-roll
+                whenever the date range, the fee rate or a settings change moves
+                them — so a settings change is visible as money moving rather
+                than as one string quietly replacing another. CountUp settles on
+                the exact formatted string it was handed, so these stay
+                reconciled to the cent. */}
+            <CountUp
+              as="p"
+              value={`${kept >= 0 ? "" : "-"}${money2(Math.abs(kept))}`}
+              className={`mt-1 font-heading text-4xl font-semibold ${kept >= 0 ? "text-[#00E096]" : "text-[#FF6B6B]"}`}
+            />
             <p className="mt-1 text-xs text-slate-500">
-              {gross > 0 ? `${money(gross)} gross · keep rate ${pct(keepRate)}` : "No revenue in selected period"}
+              {gross > 0 ? `${money2(gross)} ${grossIsRoomOnly ? "room revenue" : "total revenue"} · keep rate ${pct(keepRate)}` : "No revenue in selected period"}
             </p>
             <p className="mt-0.5 text-[10px] text-slate-600">
-              {netRevenueBase > 0 ? `rate measured on net base ${money(netRevenueBase)} = gross − refunds − pass-through tax` : ""}
+              {netRevenueBase > 0 ? `rate measured on net base ${money2(netRevenueBase)} = gross − refunds − pass-through tax` : ""}
             </p>
           </div>
           <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">
-            <p className="text-[10px] uppercase tracking-widest text-slate-500" title="Imported occupancy revenue">Gross Revenue</p>
-            <p className="mt-1 font-heading text-2xl font-semibold tabular-nums text-white">{money(gross)}</p>
-            <p className="mt-1 text-xs text-slate-500">Imported occupancy revenue</p>
+            <p className="text-[10px] uppercase tracking-widest text-slate-500" title={grossSource}>{grossTitle}</p>
+            <CountUp as="p" value={money2(gross)} className="mt-1 font-heading text-2xl font-semibold text-white" />
+            <p className="mt-1 text-xs text-slate-500">{grossSource}</p>
           </div>
           <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">
             <p className="text-[10px] uppercase tracking-widest text-slate-500" title="Sum of every deduction category shown below">Total Deductions</p>
-            <p className="mt-1 font-heading text-2xl font-semibold tabular-nums text-[#FFB547]">-{money(totalDeductions)}</p>
+            <CountUp as="p" value={`-${money2(totalDeductions)}`} className="mt-1 font-heading text-2xl font-semibold text-[#FFB547]" />
             <p className="mt-1 text-xs text-slate-500">{gross > 0 ? `${pct(totalDeductions / gross)} of revenue` : "No deductions"} · {items.length} categories</p>
           </div>
         </div>
@@ -629,21 +747,21 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
 
       {/* ── Profit breakdown + pie ── */}
       <Card title="Profit Breakdown" subtitle={`Where every dollar goes · click any line to see the underlying transactions (${periodLabel})`}>
-        <div className="grid gap-6 lg:grid-cols-2">
-          <div className="space-y-1">
+        <div className="grid gap-6 lg:grid-cols-5">
+          <div className="space-y-1 lg:col-span-2">
             <button
-              onClick={() => open("Gross Revenue", [{ name: "Gross Revenue", detail: "Imported occupancy reports", amount: gross }])}
+              onClick={() => open(grossTitle, [{ name: grossTitle, detail: grossSource, amount: gross }])}
               className="flex w-full items-center justify-between rounded-lg px-3 py-2 transition-colors hover:bg-white/[0.04]"
             >
-              <span className="text-sm font-medium text-slate-200">Gross Revenue</span>
+              <span className="text-sm font-medium text-slate-200">{grossTitle}</span>
               <span className="font-heading text-sm tabular-nums text-white">
-                {money(gross)}
+                {money2(gross)}
                 <span className="ml-1.5 text-xs text-slate-500">(100%)</span>
               </span>
             </button>
 
             {items.map((i, idx) => {
-              const color = CHART_COLORS[idx % CHART_COLORS.length];
+              const color = colorByKey.get(i.key) || CHART_COLORS[idx % CHART_COLORS.length];
               return (
                 <button
                   key={i.key}
@@ -656,8 +774,18 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
                     {i.label}
                   </span>
                   <span className="text-sm tabular-nums text-slate-200">
-                    -{money(i.amount)}
-                    <span className="ml-1.5 text-xs text-slate-500">({i.rate !== undefined ? pct(i.rate, 2) : pct(i.amount / (gross || 1))})</span>
+                    -{money2(i.amount)}
+                    {/* Always share OF GROSS, so every row in this column and
+                        every slice in the pie are measuring the same thing. The
+                        configured rate (e.g. a 11.70% tax rate) is a different
+                        quantity against a different base, so it is shown
+                        separately and labelled — it used to be printed in this
+                        slot, which made the list and the pie disagree on the
+                        same dollar figure. */}
+                    <span className="ml-1.5 text-xs text-slate-500">({pct(i.amount / (gross || 1))})</span>
+                    {i.rate !== undefined && (
+                      <span className="ml-1 text-xs text-slate-600">· {pct(i.rate, 2)} rate</span>
+                    )}
                   </span>
                 </button>
               );
@@ -676,7 +804,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
                 Estimated Money Kept
               </span>
               <span className="font-heading text-base font-semibold tabular-nums text-[#00E096]">
-                {kept >= 0 ? "" : "-"}{money(Math.abs(kept))}
+                {kept >= 0 ? "" : "-"}{money2(Math.abs(kept))}
                 <span className="ml-1.5 text-xs font-normal text-slate-400">
                   {gross > 0 ? `(${pct(keepRate)})` : "(—)"}
                 </span>
@@ -684,18 +812,22 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
             </div>
           </div>
 
-          {/* Bar chart */}
-          <div className="w-full">
-            <FinancialBarChart
-              data={[
-                { name: 'Money Kept', value: Math.round(kept * 100) / 100, color: '#10b981' },
-                { name: 'OTA Commissions', value: Math.round(items.find(i => i.key === 'ota')?.amount * 100) / 100 || 0, color: '#ef4444' },
-                { name: 'Processing Fees', value: Math.round(items.find(i => i.key === 'cc' || i.key === 'credit_card_fees')?.amount * 100) / 100 || 0, color: '#f59e0b' },
-                { name: 'Business Taxes', value: Math.round(items.find(i => i.key === 'taxes')?.amount * 100) / 100 || 0, color: '#8b5cf6' }
-              ]}
-              title="Money Kept Breakdown"
-              totalLabel="NET REVENUE"
+          {/* Pie chart */}
+          <div className="w-full lg:col-span-3">
+            <PieDonut
+              data={pieData}
+              type="donut"
+              height={480}
+              showLegend={false}
+              startAngle={90}
+              endAngle={-270}
             />
+            {!pieIsGrossShare && (
+              <p className="mt-1 text-center text-xs text-amber-300/80">
+                Deductions exceed gross revenue this period, so there is no “money kept”
+                wedge — these shares are of total deductions, not of gross.
+              </p>
+            )}
           </div>
         </div>
       </Card>
@@ -717,14 +849,14 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
                   <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: C.amber }} />
                   Total Tax Liability
                 </span>
-                <span className="font-heading text-base font-semibold tabular-nums text-[#FFB547]">{money(taxTotal)}</span>
+                <span className="font-heading text-base font-semibold tabular-nums text-[#FFB547]">{money2(taxTotal)}</span>
               </div>
               <p className="px-3 pt-2 text-xs text-slate-500">
                 {tax.passThrough > 0.004 && (
-                  <span className="block">Pass-through (imported from PMS): <span className="text-[#00E096]">{money(tax.passThrough)}</span> — collected from the guest, remitted to government, does not reduce money kept.</span>
+                  <span className="block">Pass-through (imported from PMS): <span className="text-[#00E096]">{money2(tax.passThrough)}</span> — collected from the guest, remitted to government, does not reduce money kept.</span>
                 )}
                 {tax.estimated > 0.004 && (
-                  <span className="block">Estimated at configured rates{tax.effectiveRate > 0 ? ` — combined ${pct(tax.effectiveRate, 2)}` : ""}: <span className="text-[#FFB547]">{money(tax.estimated)}</span> — treated as a business cost since reports didn't include tax lines.</span>
+                  <span className="block">Estimated at configured rates{tax.effectiveRate > 0 ? ` — combined ${pct(tax.effectiveRate, 2)}` : ""}: <span className="text-[#FFB547]">{money2(tax.estimated)}</span> — treated as a business cost since reports didn't include tax lines.</span>
                 )}
               </p>
             </div>
@@ -738,14 +870,14 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
 
       {/* ── Visual breakdown: bar + trend ── */}
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Gross Revenue vs Money Kept" subtitle="Every dollar of revenue vs what you keep after all deductions">
+        <Card title={`${grossTitle} vs Money Kept`} subtitle="Every dollar of revenue vs what you keep after all deductions">
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={barData} layout="vertical" margin={{ left: 40, right: 16 }}>
                 <CartesianGrid stroke="#ffffff0a" horizontal={false} />
                 <XAxis type="number" tick={axis} tickFormatter={(v) => money(v)} stroke="#ffffff10" />
                 <YAxis type="category" dataKey="name" tick={axis} width={150} stroke="#ffffff10" />
-                <Tooltip contentStyle={tip} formatter={(v) => money(v)} />
+                <Tooltip contentStyle={tip} formatter={(v) => money2(v)} />
                 <Bar dataKey="value" radius={[0, 6, 6, 0]}>
                   {barData.map((b, i) => (
                     <Cell key={i} fill={b.color} />
@@ -790,7 +922,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
                   <YAxis tick={axis} stroke="#ffffff10" tickFormatter={(v) => `${Math.round(v / 1000)}k`} width={54} />
                   <Tooltip
                     contentStyle={tip}
-                    formatter={(v, name) => [money(v), name === "gross" ? "Gross Revenue" : "Estimated Money Kept"]}
+                    formatter={(v, name) => [money2(v), name === "gross" ? grossTitle : "Estimated Money Kept"]}
                   />
                   <Area type="monotone" dataKey="kept" stroke={C.green} strokeWidth={2} fill="url(#keptGrad)" />
                   <Line type="monotone" dataKey="gross" stroke={C.purple} strokeWidth={1.5} strokeDasharray="4 4" dot={false} />
@@ -826,7 +958,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
                     <p className="text-sm text-slate-200">{r.name}</p>
                     {r.detail && <p className="text-[11px] text-slate-500">{r.detail}</p>}
                   </div>
-                  <span className="font-heading text-sm tabular-nums text-[#FFB547]">-{money(r.amount)}</span>
+                  <span className="font-heading text-sm tabular-nums text-[#FFB547]">-{money2(r.amount)}</span>
                 </div>
               ))}
               {active.rows.length === 0 && <p className="py-6 text-center text-sm text-slate-500">No underlying transactions recorded.</p>}
@@ -834,7 +966,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
             <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-3">
               <span className="text-sm text-slate-400">Total</span>
               <span className="font-heading text-lg tabular-nums text-[#FFB547]">
-                -{money(active.rows.reduce((a, r) => a + (Number(r.amount) || 0), 0))}
+                -{money2(active.rows.reduce((a, r) => a + (Number(r.amount) || 0), 0))}
               </span>
             </div>
           </div>

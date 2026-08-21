@@ -4,7 +4,7 @@ import { useLocation } from 'react-router-dom';
 
 import { useQuery } from '@tanstack/react-query';
 
-export default function PageNotFound({}) {
+export default function PageNotFound() {
     const location = useLocation();
     const pageName = location.pathname.substring(1);
 

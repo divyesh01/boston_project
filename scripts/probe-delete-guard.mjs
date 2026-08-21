@@ -151,8 +151,99 @@ section('6. Confirmation message');
   check('no undefined leaks into the dialog', !/undefined|null|NaN/.test(sparse), sparse);
 }
 
-// ── 7. Static wiring: every destructive call site is guarded ────────────────
-section('7. Static wiring in src/pages');
+// ── 7. Referential advisory ─────────────────────────────────────────────────
+// Before this, the Staff dialog asserted in prose that "payroll runs are kept".
+// True, but the operator could not tell whether that meant one run or forty, and
+// nothing kept the prose honest if the schema gained a real link. `dependents`
+// makes the count part of the question. Two behaviours are load-bearing: a zero
+// count must vanish (or every dialog grows a line that says nothing), and the
+// advisory must never change the decision — disclosure only, never a veto.
+section('7. Referential advisory (dependents)');
+
+function messageFrom(deps) {
+  const m = deps.calls.find((c) => c.startsWith('message:'));
+  return m ? m.slice('message:'.length) : '';
+}
+
+{
+  // Omitted entirely — nothing about the dialog may change.
+  const deps = makeDeps();
+  const gate = guardDestructiveAction({ ...ACTION, ...deps });
+  check('no dependents key still allows', gate.ok === true, `got ${gate.reason}`);
+  check('no dependents adds no advisory section', !/stay behind/i.test(messageFrom(deps)), messageFrom(deps));
+}
+{
+  // A zero count is the normal case for a fresh hire. It must not be printed.
+  const deps = makeDeps();
+  const gate = guardDestructiveAction({
+    ...ACTION,
+    ...deps,
+    dependents: [{ label: 'payroll runs', count: 0, detail: '$0.00 already recorded' }],
+  });
+  const msg = messageFrom(deps);
+  check('zero count is still allowed', gate.ok === true, `got ${gate.reason}`);
+  check('zero count prints no advisory line', !/payroll runs/.test(msg), msg);
+  check('zero count prints no advisory header', !/stay behind/i.test(msg), msg);
+}
+{
+  // A real count reaches the operator, with its money detail.
+  const deps = makeDeps();
+  const gate = guardDestructiveAction({
+    ...ACTION,
+    ...deps,
+    dependents: [{ label: 'payroll runs', count: 3, detail: '$4,200.00 already recorded' }],
+  });
+  const msg = messageFrom(deps);
+  check('advisory does not block the delete', gate.ok === true, `got ${gate.reason}`);
+  check('advisory states the count', /3 payroll runs/.test(msg), msg);
+  check('advisory carries the money detail', msg.includes('$4,200.00'), msg);
+  check('advisory says the records survive', /NOT deleted/.test(msg), msg);
+  check('advisory keeps the caller lines', msg.includes('$1,200.00'), msg);
+}
+{
+  // Several dependents stay one block: a blank line between each would push the
+  // title off a short confirm dialog.
+  const deps = makeDeps();
+  guardDestructiveAction({
+    ...ACTION,
+    ...deps,
+    dependents: [
+      { label: 'payroll runs', count: 3 },
+      { label: 'timecard punches', count: 12 },
+    ],
+  });
+  const msg = messageFrom(deps);
+  check('multiple dependents render as one block', /3 payroll runs\n. 12 timecard punches/.test(msg), JSON.stringify(msg));
+}
+{
+  // An unknown key is ignored, not honoured. There is no veto path by design:
+  // a caller cannot accidentally invent one and have the guard start refusing.
+  const deps = makeDeps();
+  const gate = guardDestructiveAction({
+    ...ACTION,
+    ...deps,
+    dependents: [{ label: 'posted payroll runs', count: 2, blocking: true }],
+  });
+  check('advisory never vetoes the delete', gate.ok === true, `got ${gate.reason}`);
+  check('advisory still opens the dialog', deps.calls.includes('confirm'), deps.calls.join(','));
+  check('advisory reports the count', /2 posted payroll runs/.test(messageFrom(deps)), messageFrom(deps));
+}
+{
+  // Junk in must not reach the operator as "undefined" or "NaN".
+  const deps = makeDeps();
+  const gate = guardDestructiveAction({
+    ...ACTION,
+    ...deps,
+    dependents: [null, undefined, {}, { label: '  ', count: 5 }, { label: 'runs', count: 'abc' }, { label: 'runs', count: -2 }],
+  });
+  const msg = messageFrom(deps);
+  check('malformed dependents are dropped', gate.ok === true, `got ${gate.reason}`);
+  check('no undefined/NaN leaks from dependents', !/undefined|NaN|null/.test(msg), msg);
+  check('malformed dependents add no header', !/stay behind/i.test(msg), msg);
+}
+
+// ── 8. Static wiring: every destructive call site is guarded ────────────────
+section('8. Static wiring in src/pages');
 
 const PAGES_DIR = path.join(ROOT, 'src/pages');
 const pageFiles = readdirSync(PAGES_DIR).filter((f) => f.endsWith('.jsx'));
@@ -224,7 +315,7 @@ check('found the destructive call sites (>= 8)', siteCount >= 8, `found ${siteCo
 
 // The dialog has to name the record, not just the noun — "Delete this payroll
 // run?" gives an operator no way to notice they clicked the wrong row.
-section('8. Confirmations name the record');
+section('9. Confirmations name the record');
 for (const file of ['Payroll.jsx', 'Expenses.jsx']) {
   const src = readFileSync(path.join(PAGES_DIR, file), 'utf8');
   const guards = src.match(/guardDestructiveAction\(\{[\s\S]{0,1200}?\}\s*\)/g) || [];

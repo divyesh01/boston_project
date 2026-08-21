@@ -1,7 +1,6 @@
-const db = globalThis.__B44_DB__ || { auth:{ isAuthenticated: async()=>false, me: async()=>null }, entities:new Proxy({}, { get:()=>({ filter:async()=>[], get:async()=>null, create:async()=>({}), update:async()=>({}), delete:async()=>({}) }) }), integrations:{ Core:{ UploadFile:async()=>({ file_url:'' }) } } };
-
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import * as crypto from 'node:crypto';
+import { z } from 'npm:zod';
 
 export default async function(req) {
   try {
@@ -29,10 +28,29 @@ export default async function(req) {
       return Response.json({ error: "Invalid CSRF token" }, { status: 403 });
     }
 
-    const body = await req.json();
+    let rawBody;
+    try {
+      rawBody = await req.json();
+    } catch (e) {
+      return Response.json({ error: "Invalid JSON payload" }, { status: 400 });
+    }
+
+    const ImportSchema = z.object({
+      fileId: z.string().min(1, "fileId is required"),
+      fileName: z.string().optional(),
+      uploadedReportId: z.union([z.string(), z.number()]).optional(),
+      propertyId: z.union([z.string(), z.number()]).optional(),
+    }).strict();
+
+    const parseResult = ImportSchema.safeParse(rawBody);
+    if (!parseResult.success) {
+      const details = parseResult.error.errors.map(err => ({ field: err.path.join('.'), issue: err.message }));
+      return Response.json({ error: "Validation failed", details }, { status: 400 });
+    }
+    const body = parseResult.data;
+
     const fileId = body.fileId;
     const fileName = body.fileName || fileId;
-    if (!fileId) return Response.json({ error: 'fileId required' }, { status: 400 });
 
     // IDOR mitigation: the caller may only import a Drive file they are
     // authorized for. Prefer an explicit UploadedReport linkage (verified to
@@ -65,7 +83,7 @@ export default async function(req) {
       );
     }
 
-    const { accessToken } = await db.asServiceRole.connectors.getConnection("googledrive");
+    const { accessToken } = await base44.asServiceRole.connectors.getConnection("googledrive");
 
     const driveRes = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`, {
       headers: { Authorization: `Bearer ${accessToken}` }
@@ -77,11 +95,44 @@ export default async function(req) {
     }
 
     const blob = await driveRes.blob();
-    const contentType = driveRes.headers.get("content-type") || "application/octet-stream";
-    const file = new File([blob], fileName, { type: contentType });
-    const { file_url } = await db.integrations.Core.UploadFile({ file });
 
-    return Response.json({ file_url, fileName });
+    if (blob.size > 25 * 1024 * 1024) {
+      return Response.json({ error: "File exceeds maximum allowed size of 25MB" }, { status: 413 });
+    }
+
+    const contentType = driveRes.headers.get("content-type") || "application/octet-stream";
+    const allowedMimeTypes = [
+      'text/csv',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/pdf',
+      'text/plain',
+      'image/jpeg',
+      'image/png',
+      'image/webp'
+    ];
+
+    if (!allowedMimeTypes.includes(contentType)) {
+      return Response.json({ error: "Unsupported file type" }, { status: 415 });
+    }
+
+    const extensionMap = {
+      'text/csv': '.csv',
+      'application/vnd.ms-excel': '.xls',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+      'application/pdf': '.pdf',
+      'text/plain': '.txt',
+      'image/jpeg': '.jpg',
+      'image/png': '.png',
+      'image/webp': '.webp'
+    };
+    const extension = extensionMap[contentType] || '';
+    const safeFileName = `${crypto.randomUUID()}${extension}`;
+
+    const file = new File([blob], safeFileName, { type: contentType });
+    const { file_url } = await base44.integrations.Core.UploadFile({ file });
+
+    return Response.json({ file_url, fileName: safeFileName, originalName: fileName });
   } catch (error) {
     console.error("Import Drive file error:", error);
     return Response.json({ error: "Internal server error" }, { status: 500 });

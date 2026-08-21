@@ -241,13 +241,31 @@ export function validateTypes({ coercions = [], dateFailures = 0, totalRows = 0 
     const truncating = list.filter((c) => c.kind === "truncated");
     const blanked = list.filter((c) => c.kind === "unparseable");
 
+    // Both branches below are the same defect — the file stated a number the
+    // parser could not read — so both block. They used to disagree: a partial
+    // parse was an error while a total failure was only a warning, which had the
+    // severity exactly backwards. A fabricated 0 is the harder of the two to ever
+    // catch again, because 0 is a legal value for every money and count field in
+    // this app (a real $0.00 posting is ordinary, see FIELD_RANGES and
+    // NEGATIVE_OK), so no later layer and no human reading a report can tell it
+    // from a figure the hotel actually earned. "12abc" → 12 at least keeps a
+    // magnitude that a range check might still challenge.
+    //
+    // This is also the only defence some files have. A transactions export
+    // carries its own trailer total, so a blanked amount usually trips
+    // checksum_mismatch as a side effect; Hotel Statistics and the summary
+    // reports carry no total, so nothing else would notice.
+    //
+    // Blocking is not refusing: importReport still honours forceImport, so an
+    // operator who reads the finding and knows the cell is genuinely nothing can
+    // put the file through. Measured before promoting this: all 19 real exports in
+    // scripts/data contain no unreadable numeric cell, so no real file is blocked
+    // by the change.
     if (blanked.length) {
-      out.push(finding("type", SEVERITY.WARNING, "unparseable_numbers",
+      out.push(finding("type", SEVERITY.ERROR, "unparseable_numbers",
         `"${field}": ${blanked.length} value(s) could not be read as a number and were treated as 0 — e.g. ${samples.map((s) => JSON.stringify(s)).join(", ")}.`,
         { field, count: blanked.length, samples }));
     }
-    // Partial parses are more dangerous than total failures: "12abc" becomes 12,
-    // a number that looks entirely legitimate downstream.
     if (truncating.length) {
       out.push(finding("type", SEVERITY.ERROR, "truncated_numbers",
         `"${field}": ${truncating.length} value(s) were only partly numeric and were silently truncated — e.g. ${truncating.slice(0, 5).map((c) => `${JSON.stringify(c.raw)}→${c.parsed}`).join(", ")}.`,

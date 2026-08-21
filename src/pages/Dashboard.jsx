@@ -16,7 +16,8 @@ const MoneyKept = lazy(() => import("@/components/dashboard/MoneyKept"));
 import { useOccupancy, useSources, useClerkRecords, useGrossRevenue, usePaymentData, useDailyFinancialAggregates, filterByMonths } from "@/lib/useHotelData";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { exportToPdf } from "@/lib/pdfExport";
-import { money, money2, num, pct, sum, inRange, C, getOccThreshold } from "@/lib/hotel";
+import { money2, num, pct, sum, inRange, C, getOccThreshold, grossRevenueForPeriod } from "@/lib/hotel";
+import { fromCents } from "@/lib/decimal";
 import { getAlertThresholds } from "@/lib/alertThresholds";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { CalculationService } from "@/lib/calculationService";
@@ -154,6 +155,14 @@ export default function Dashboard() {
   const { revenue, roomsSold, capacity, occupancy, adr, revpar } = currentStats;
   const uniqueDays = new Set(occRows.map((r) => String(r.date).slice(0, 10))).size;
 
+  // `revenue` above is ROOM revenue — it is the numerator for ADR and RevPAR and
+  // must stay room-only. The card labelled "Total Revenue" needs the actual
+  // total, so it comes from the shared helper instead: room ledger + ancillary
+  // charges. The two used to be the same value, which meant this card read
+  // $1,011,258.67 under a "Total Revenue" label while the Money Kept widget on
+  // the same screen reported a different total for the same period.
+  const totalRev = useMemo(() => grossRevenueForPeriod({ grossRows, occRows }), [grossRows, occRows]);
+
   useEffect(() => {
     if (revenue > 50000) {
       confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
@@ -183,7 +192,7 @@ export default function Dashboard() {
     if (prevRev > 0) {
       const ch = (revenue - prevRev) / prevRev;
       if (ch <= -thresholds.revenueDecreasePct)
-        out.push({ metric: "Revenue", current: revenue, previous: prevRev, pct: ch, sev: Math.abs(ch) >= 0.2 ? "Critical" : "Warning", fmt: money });
+        out.push({ metric: "Revenue", current: revenue, previous: prevRev, pct: ch, sev: Math.abs(ch) >= 0.2 ? "Critical" : "Warning", fmt: money2 });
     }
     if (prevOccVal > 0) {
       const ch = occupancy - prevOccVal;
@@ -281,7 +290,15 @@ export default function Dashboard() {
 
       <div ref={contentRef} className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <KpiCard label="Total Revenue" value={money(revenue)} sub={`${uniqueDays} unique days`} accent={C.purple} icon={DollarSign} />
+          <KpiCard
+            label="Total Revenue"
+            value={money2(totalRev.dollars)}
+            sub={totalRev.ancillaryCents > 0
+              ? `${uniqueDays} days · room ${money2(fromCents(totalRev.roomCents))} + ancillary ${money2(fromCents(totalRev.ancillaryCents))}`
+              : `${uniqueDays} unique days`}
+            accent={C.purple}
+            icon={DollarSign}
+          />
           <KpiCard label="Rooms Sold" value={num(roomsSold)} sub={`of ${num(capacity)} available`} accent={C.cyan} icon={BedDouble} />
           <KpiCard label="Occupancy" value={pct(occupancy)} sub={`Avg ${num(Math.round(roomsSold / (occRows.length || 1)))} rooms/night`} accent={C.green} icon={Percent} />
           <KpiCard label="ADR / RevPAR" value={money2(adr)} sub={`RevPAR ${money2(revpar)}`} accent={C.amber} icon={Gauge} />
@@ -294,7 +311,7 @@ export default function Dashboard() {
             </p>
             <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               {[
-                { label: "Revenue", cur: revenue, prev: prevStats.revenue, fmt: money },
+                { label: "Revenue", cur: revenue, prev: prevStats.revenue, fmt: money2 },
                 { label: "Rooms Sold", cur: roomsSold, prev: prevStats.roomsSold, fmt: num },
                 { label: "Occupancy", cur: occupancy, prev: prevStats.occupancy, fmt: pct },
                 { label: "ADR", cur: adr, prev: prevStats.adr, fmt: money2 },
@@ -472,7 +489,7 @@ export default function Dashboard() {
                     <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/5">
                       <div className="h-full rounded-full bg-[#FFB547]" style={{ width: `${(c.value / maxVal) * 100}%` }} />
                     </div>
-                    <span className="w-24 text-right text-sm tabular-nums text-slate-400">{money(c.value)}</span>
+                    <span className="w-24 text-right text-sm tabular-nums text-slate-400">{money2(c.value)}</span>
                   </div>
                 );
               })}

@@ -7,48 +7,48 @@ These files are imported the most across the codebase. Editing them has a massiv
 
 ```mermaid
 graph TD
-  utils[utils<br/>(47 imports)]
-  hotel[hotel<br/>(46 imports)]
-  base44Client[base44Client<br/>(39 imports)]
+  utils[utils<br/>(50 imports)]
+  hotel[hotel<br/>(45 imports)]
+  base44Client[base44Client<br/>(40 imports)]
   Card[Card<br/>(39 imports)]
   useGlobalFilters[useGlobalFilters<br/>(29 imports)]
   useHotelData[useHotelData<br/>(25 imports)]
-  securityUtils[securityUtils<br/>(23 imports)]
+  securityUtils[securityUtils<br/>(24 imports)]
   status[status<br/>(22 imports)]
+  decimal[decimal<br/>(22 imports)]
   button[button<br/>(16 imports)]
-  decimal[decimal<br/>(14 imports)]
   KpiCard[KpiCard<br/>(13 imports)]
   input[input<br/>(12 imports)]
   AuthContext[AuthContext<br/>(11 imports)]
+  usetoast[use-toast<br/>(11 imports)]
   label[label<br/>(10 imports)]
   payrollCalc[payrollCalc<br/>(9 imports)]
+  localDb[localDb<br/>(8 imports)]
   commissionRates[commissionRates<br/>(8 imports)]
   paymentNorm[paymentNorm<br/>(8 imports)]
-  usetoast[use-toast<br/>(8 imports)]
-  localDb[localDb<br/>(7 imports)]
   realtime[realtime<br/>(7 imports)]
 ```
 
 ### Top Danger Zones
 | File Base Name | Import Count | Danger Level |
 |----------------|--------------|--------------|
-| utils | 47 | [CRITICAL] |
-| hotel | 46 | [CRITICAL] |
-| base44Client | 39 | [CRITICAL] |
+| utils | 50 | [CRITICAL] |
+| hotel | 45 | [CRITICAL] |
+| base44Client | 40 | [CRITICAL] |
 | Card | 39 | [CRITICAL] |
 | useGlobalFilters | 29 | [CRITICAL] |
 | useHotelData | 25 | [CRITICAL] |
-| securityUtils | 23 | [CRITICAL] |
+| securityUtils | 24 | [CRITICAL] |
 | status | 22 | [CRITICAL] |
+| decimal | 22 | [CRITICAL] |
 | button | 16 | [CRITICAL] |
-| decimal | 14 | [HIGH] |
 | KpiCard | 13 | [HIGH] |
 | input | 12 | [HIGH] |
 | AuthContext | 11 | [HIGH] |
+| use-toast | 11 | [HIGH] |
 | label | 10 | [HIGH] |
 | payrollCalc | 9 | [HIGH] |
+| localDb | 8 | [HIGH] |
 | commissionRates | 8 | [HIGH] |
 | paymentNorm | 8 | [HIGH] |
-| use-toast | 8 | [HIGH] |
-| localDb | 7 | [HIGH] |
 | realtime | 7 | [HIGH] |

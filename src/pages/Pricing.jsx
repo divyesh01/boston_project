@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import { Settings2, RefreshCw, ArrowUpRight, CheckCircle, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
@@ -7,11 +7,11 @@ import { db } from "@/api/base44Client";
 import { usePricingForecast } from "@/lib/usePricing";
 import { getPricingConfig, savePricingConfig, DEFAULT_PRICING_CONFIG, ROOM_TYPES } from "@/lib/pricingSettings";
 import { money2 } from "@/lib/hotel";
+import { fromCents } from "@/lib/decimal";
 import { useRealtimeInvalidation } from "@/lib/realtime";
 import { applyDynamicRateOverride } from "@/lib/pricingOverride";
 import { ErrorState } from "@/components/ui/status";
 
-const toDollars = (cents) => Math.round((Number(cents) || 0) / 100);
 const toCentsFromDollars = (d) => Math.round((Number(d) || 0) * 100);
 
 const PRESETS = {
@@ -53,14 +53,12 @@ export default function Pricing() {
     : 0;
   const occ = today ? today.occupancy : 0;
 
+  // Both legs come from buildPricingForecast, so they value the SAME room nights.
+  // This used to rebuild the base case here from `rooms.length` and an unweighted
+  // mean of base rates, which is not the per-type inventory split the engine uses
+  // to project revenue, so the uplift compared two different room counts.
   const projectedPeriodRev = forecast.reduce((s, d) => s + d.projectedRevenueCents, 0);
-  const basePeriodRev = useMemo(
-    () => forecast.reduce((s, d) => {
-      const baseAdr = Object.values(d.types).reduce((a, t) => a + t.baseCents, 0) / Math.max(1, Object.values(d.types).filter((t) => t.baseCents > 0).length);
-      return s + Math.round(d.occupancy * (rooms.length || 0)) * baseAdr;
-    }, 0),
-    [forecast, rooms.length]
-  );
+  const basePeriodRev = forecast.reduce((s, d) => s + (d.projectedBaseRevenueCents || 0), 0);
   const upliftCents = projectedPeriodRev - basePeriodRev;
   const upliftPct = basePeriodRev > 0 ? Math.round((upliftCents / basePeriodRev) * 1000) / 10 : 0;
 
@@ -79,7 +77,7 @@ export default function Pricing() {
     try {
       const rateMap = {};
       for (const type of ROOM_TYPES) {
-        if (today.types && today.types[type]) rateMap[type] = money2(today.types[type].recommendedCents);
+        if (today.types && today.types[type]) rateMap[type] = fromCents(today.types[type].recommendedCents);
       }
       await db.integrations.ChannelManager.PushInventory(singlePropertyId, rateMap);
       // Audit each applied rate override (best-effort — never blocks the push).
@@ -89,7 +87,7 @@ export default function Pricing() {
           try {
             await applyDynamicRateOverride({
               propertyId: singlePropertyId,
-              newRate: toDollars(rec),
+              newRate: fromCents(rec),
               roomType: type,
               justification: `Yield push to ${propName}`,
               user: null,
@@ -150,9 +148,9 @@ export default function Pricing() {
           <>
             <div className="rounded-2xl border border-white/5 bg-[#0A1628]/60 p-4">
               <p className="text-[11px] uppercase tracking-widest text-slate-500">Tonight's Recommended Rate</p>
-              <p className="mt-2 font-heading text-2xl font-semibold text-white">{money2(avgRecCents)}</p>
+              <p className="mt-2 font-heading text-2xl font-semibold text-white">{money2(fromCents(avgRecCents))}</p>
               <p className={`mt-0.5 text-xs ${avgRecCents >= avgBaseCents ? "text-[#00E096]" : "text-[#FF6B6B]"}`}>
-                {avgRecCents >= avgBaseCents ? "+" : ""}{money2(avgRecCents - avgBaseCents)} vs base {money2(avgBaseCents)}
+                {avgRecCents >= avgBaseCents ? "+" : ""}{money2(fromCents(avgRecCents - avgBaseCents))} vs base {money2(fromCents(avgBaseCents))}
               </p>
             </div>
             <div className="rounded-2xl border border-white/5 bg-[#0A1628]/60 p-4">
@@ -162,7 +160,7 @@ export default function Pricing() {
             </div>
             <div className="rounded-2xl border border-white/5 bg-[#0A1628]/60 p-4">
               <p className="text-[11px] uppercase tracking-widest text-slate-500">{`${horizon}d Revenue Opportunity`}</p>
-              <p className="mt-2 font-heading text-2xl font-semibold text-white">{money2(upliftCents)}</p>
+              <p className="mt-2 font-heading text-2xl font-semibold text-white">{money2(fromCents(upliftCents))}</p>
               <p className={`mt-0.5 text-xs ${upliftPct >= 0 ? "text-[#00E096]" : "text-[#FF6B6B]"}`}>{upliftPct >= 0 ? "+" : ""}{upliftPct}% vs base rates</p>
             </div>
           </>
@@ -196,12 +194,12 @@ export default function Pricing() {
 
         <Card title="Competitive Set" subtitle="Your position vs the market benchmark">
           <div className="space-y-2 text-xs">
-            <div className="flex items-center justify-between rounded-lg bg-[#0A1628]/40 px-3 py-2"><span className="text-slate-400">Your recommended ADR</span><span className="font-medium text-white">{money2(avgRecCents)}</span></div>
-            <div className="flex items-center justify-between rounded-lg bg-[#0A1628]/40 px-3 py-2"><span className="text-slate-400">Comp set rate</span><span className="font-medium text-slate-300">{money2(cfg.competitorRateCents)}</span></div>
+            <div className="flex items-center justify-between rounded-lg bg-[#0A1628]/40 px-3 py-2"><span className="text-slate-400">Your recommended ADR</span><span className="font-medium text-white">{money2(fromCents(avgRecCents))}</span></div>
+            <div className="flex items-center justify-between rounded-lg bg-[#0A1628]/40 px-3 py-2"><span className="text-slate-400">Comp set rate</span><span className="font-medium text-slate-300">{money2(fromCents(cfg.competitorRateCents))}</span></div>
             <div className="flex items-center justify-between rounded-lg bg-[#0A1628]/40 px-3 py-2">
               <span className="text-slate-400">Position</span>
               <span className={`font-medium ${avgRecCents > cfg.competitorRateCents ? "text-[#FF6B6B]" : avgRecCents < cfg.competitorRateCents ? "text-[#00E096]" : "text-slate-300"}`}>
-                {avgRecCents > cfg.competitorRateCents ? `Premium (${money2(avgRecCents - cfg.competitorRateCents)})` : avgRecCents < cfg.competitorRateCents ? `Discounted (${money2(cfg.competitorRateCents - avgRecCents)})` : "Parity"}
+                {avgRecCents > cfg.competitorRateCents ? `Premium (${money2(fromCents(avgRecCents - cfg.competitorRateCents))})` : avgRecCents < cfg.competitorRateCents ? `Discounted (${money2(fromCents(cfg.competitorRateCents - avgRecCents))})` : "Parity"}
               </span>
             </div>
           </div>
@@ -212,7 +210,7 @@ export default function Pricing() {
           <div className="mt-3 space-y-2">
             {ROOM_TYPES.map((type) => {
               const rec = today?.types?.[type]?.recommendedCents;
-              return (<div key={type} className="flex items-center justify-between text-xs"><span className="text-slate-400">{type}</span><span className="font-medium text-white">{rec ? money2(rec) : "—"}</span></div>);
+              return (<div key={type} className="flex items-center justify-between text-xs"><span className="text-slate-400">{type}</span><span className="font-medium text-white">{rec ? money2(fromCents(rec)) : "—"}</span></div>);
             })}
           </div>
           <button onClick={handlePush} disabled={pushing || isPortfolio || !enabled || !today} className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-[#6C63FF] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#5b52e8] disabled:opacity-50">
@@ -237,7 +235,7 @@ export default function Pricing() {
             {[7, 14, 30, 90].map((d) => {
               const slice = forecast.slice(0, d);
               const rev = slice.reduce((s, x) => s + x.projectedRevenueCents, 0);
-              return (<div key={d} className="rounded-xl border border-white/5 bg-[#0A1628]/50 p-3"><p className="text-xs text-slate-400">{d}-day</p><p className="font-heading text-lg font-semibold text-white">{money2(rev)}</p><p className="text-[10px] text-slate-500">projected revenue</p></div>);
+              return (<div key={d} className="rounded-xl border border-white/5 bg-[#0A1628]/50 p-3"><p className="text-xs text-slate-400">{d}-day</p><p className="font-heading text-lg font-semibold text-white">{money2(fromCents(rev))}</p><p className="text-[10px] text-slate-500">projected revenue</p></div>);
             })}
           </div>
         )}
@@ -264,12 +262,12 @@ export default function Pricing() {
                       const delta = r.recommendedCents - r.baseCents;
                       return (
                         <td key={t} className="px-2 py-2 text-right">
-                          <span className="text-white">{money2(r.recommendedCents)}</span>
+                          <span className="text-white">{money2(fromCents(r.recommendedCents))}</span>
                           {delta !== 0 && <span className={`ml-1 inline-flex items-center text-[10px] ${delta > 0 ? "text-[#00E096]" : "text-[#FF6B6B]"}`}>{delta > 0 ? <ArrowUpRight className="h-3 w-3" /> : "↓"}<span className="text-slate-500">{(Math.abs(delta) / 100).toFixed(0)}</span></span>}
                         </td>
                       );
                     })}
-                    <td className="px-2 py-2 text-right font-medium text-slate-300">{money2(day.projectedRevenueCents)}</td>
+                    <td className="px-2 py-2 text-right font-medium text-slate-300">{money2(fromCents(day.projectedRevenueCents))}</td>
                   </tr>
                 ))}
               </tbody>

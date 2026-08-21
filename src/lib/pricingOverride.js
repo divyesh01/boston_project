@@ -1,5 +1,6 @@
 import { sanitizeText as sanitizeInput } from './securityUtils';
 import { db } from '../api/base44Client';
+import { recordAuditFailure } from './auditFailureLog';
 
 /**
  * Applies an approved dynamic room rate recommendation to a property.
@@ -47,7 +48,18 @@ export async function applyDynamicRateOverride({
       result: 'success'
     });
   } catch (err) {
-    console.warn('Audit logging deferred:', err.message);
+    // This used to read "Audit logging deferred", which was not true: nothing was
+    // deferred and nothing retried — the rate change stayed applied and the record
+    // of who changed it was dropped. Rate overrides are exactly the kind of
+    // privileged, money-moving change the trail exists to attribute, so the loss
+    // is now recorded and surfaced on the Audit Log page instead of being renamed
+    // into something harmless-sounding.
+    console.error('[pricingOverride] audit write failed; the rate change is applied but unrecorded:', err);
+    recordAuditFailure('RATE_OVERRIDE_APPLIED', err, {
+      source: 'pricingOverride.applyDynamicRateOverride',
+      username: user?.username,
+      property_id: propertyId,
+    });
   }
 
   return updatePayload;

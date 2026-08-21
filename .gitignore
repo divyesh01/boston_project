@@ -1,6 +1,11 @@
 #env
 .env
 .env.*
+# ...but the TEMPLATE must be committed — it is the only place the required
+# variable names are written down. Without this negation `.env.*` above swallows
+# it and a new deploy has nothing to copy. Verify with:
+#   git check-ignore -v .env.example   ->  must print nothing
+!.env.example
 
 # Logs
 /logs
@@ -80,3 +85,9 @@ line_patch.py
 patch_*.py
 fix_user.py
 
+
+# Vendored third-party design-intelligence skill (MIT, NextLevelBuilder v2.13.0).
+# Local dev aid only — not part of the app build. Reinstall: see BRAIN.md / drop the
+# repo zip and copy .claude/skills/ui-ux-pro-max into place.
+/ui-ux-pro-max-skill-main/
+/.claude/skills/ui-ux-pro-max/

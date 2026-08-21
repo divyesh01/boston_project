@@ -6,7 +6,9 @@ import Card from "@/components/ui-exec/Card";
 import UniversalChart from "@/components/charts/UniversalChart";
 import ChartToolbar from "@/components/charts/ChartToolbar";
 import { useOccupancy, useSources, useGrossRevenue, useUploads } from "@/lib/useHotelData";
-import { aggregate, downloadCsv, downloadExcel, num, inRange } from "@/lib/hotel";
+import { aggregate, num, inRange } from "@/lib/hotel";
+import { downloadCsv, downloadExcel, stampFilename } from "@/lib/exportData";
+import { toast } from "@/components/ui/use-toast";
 import { formatNumber } from "@/lib/decimal";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { ErrorState } from "@/components/ui/status";
@@ -76,6 +78,46 @@ export default function ChartBuilder() {
 
   const chartTitle = `${agg.toUpperCase()} of ${v} by ${g}`;
 
+  // The two export buttons used to pass hotel.js's raw `{name, value}` rows straight
+  // out, which produced a file headed `name,value` — the owner then had to remember
+  // which grouping and which aggregation those two anonymous columns represented.
+  // The spec below reuses the exact strings rendered in the Summary Table header, so
+  // the file is self-describing: `Rate Plan`, `sum (room_revenue)`.
+  //
+  // Routing through @/lib/exportData also brings the formula-injection guard to this
+  // page. It matters more here than anywhere else in the app: `g` can be ANY column,
+  // including free-text guest names and rate-plan descriptions that came from an
+  // imported CSV, and those group labels land in the first column of the export.
+  //
+  // BEST OUTCOME NOTE: derive export headers from the same expressions the table
+  // renders (`{g}`, `` `${agg} (${v})` ``) rather than re-deriving them. A copy would
+  // drift the moment either label changes.
+  const exportChart = (fmt) => {
+    try {
+      const isExcel = fmt === "excel";
+      const n = (isExcel ? downloadExcel : downloadCsv)(data, {
+        filename: stampFilename(`chart_${agg}_${v}_by_${g}`, isExcel ? "xlsx" : "csv"),
+        columns: [
+          { key: "name", label: g || "Group" },
+          { key: "value", label: `${agg} (${v || "value"})` },
+        ],
+        sheetName: chartTitle,
+      });
+      toast({
+        title: `Exported ${n.toLocaleString()} group${n === 1 ? "" : "s"}`,
+        description: `${chartTitle} · ${dateRangeText}`,
+      });
+    } catch (e) {
+      // Previously a click with no groups downloaded a header-only file and said
+      // nothing, which is indistinguishable from a browser that blocked the download.
+      toast({
+        variant: "destructive",
+        title: "Nothing exported",
+        description: e?.message || String(e),
+      });
+    }
+  };
+
   return (
     <div className="space-y-6">
       <header>
@@ -135,13 +177,13 @@ export default function ChartBuilder() {
         right={
           <div className="flex gap-2">
             <button
-              onClick={() => downloadCsv(data, `${g}_${v}_${agg}.csv`)}
+              onClick={() => exportChart("csv")}
               className="flex items-center gap-2 rounded-lg bg-[#6C63FF] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[#5b52e8]"
             >
               <Download className="h-3.5 w-3.5" /> Export CSV
             </button>
             <button
-              onClick={() => downloadExcel(data, `${g}_${v}_${agg}.xlsx`)}
+              onClick={() => exportChart("excel")}
               className="flex items-center gap-2 rounded-lg bg-[#107C41] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[#0e6b38]"
             >
               <Download className="h-3.5 w-3.5" /> Export Excel

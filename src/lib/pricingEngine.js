@@ -270,6 +270,8 @@ export function buildPricingForecast({ rooms, reservations, weatherByDate = {}, 
     let adrNum = 0;
     let adrDen = 0;
     let projectedRevenue = 0;
+    let projectedBaseRevenue = 0;
+    let projectedRoomNights = 0;
     for (const type of presentTypes) {
       const base = cfg.baseRates[type] || 0;
       const rec = recommendRate({ baseCents: base, occupancy, isWeekend: weekend, weatherCondition: condition, config: cfg });
@@ -282,7 +284,26 @@ export function buildPricingForecast({ rooms, reservations, weatherByDate = {}, 
       // per-type inventory share (equal split across present types).
       const typeRooms = Math.max(1, Math.round((rooms ? rooms.length : 0) / presentTypes.length));
       const sold = Math.round(occupancy * typeRooms);
+      projectedRoomNights += sold;
       projectedRevenue += sold * rec.recommendedCents;
+      // The same room nights valued at the RACK rate. Emitted here, next to the
+      // recommendation, because this is the only place `sold` exists.
+      //
+      // ADDED 2026-08-20. Both consumers were reconstructing this figure and both
+      // got it wrong, because neither had the per-type inventory split this loop
+      // uses. Pricing.jsx multiplied `occupancy * rooms.length` by an unweighted
+      // mean of base rates — a different room count from the one above — and
+      // PricingPanel.jsx, which has no room list at all, wrote
+      // `Math.round(d.occupancy * Math.round(d.occupancy * 100))`, squaring
+      // occupancy against a hardcoded 100 rooms. Measured against a 20-room
+      // register at 85% occupancy (probe-cents-unit-mismatch.mjs section 7) that
+      // formula valued 72 room nights where 17 were sold — so the base case, and
+      // therefore the "uplift vs base rates" the panel advertised, bore no fixed
+      // relation to the truth: it overstates the base case for any property under
+      // 100 rooms and understates it above. A derived figure whose inputs are
+      // private to this function must be returned by it, not guessed at by every
+      // caller.
+      projectedBaseRevenue += sold * base;
     }
     out.push({
       date,
@@ -291,7 +312,9 @@ export function buildPricingForecast({ rooms, reservations, weatherByDate = {}, 
       weatherCondition: condition,
       types,
       adrCents: adrDen ? Math.round(adrNum / adrDen) : 0,
+      projectedRoomNights,
       projectedRevenueCents: projectedRevenue,
+      projectedBaseRevenueCents: projectedBaseRevenue,
     });
   }
   return out;

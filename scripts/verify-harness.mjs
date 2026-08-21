@@ -3,7 +3,6 @@
 // the same code the app runs (no re-implementations).
 // Usage: node scripts/verify-harness.mjs
 
-import { createServer } from 'vite';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -51,6 +50,31 @@ function test(name, fn) {
     failed++; failures.push(`${name} → threw: ${e.message}`);
     console.log(`  FAIL  ${name} → threw: ${e.message}`);
   }
+}
+
+// Vite is imported dynamically so the "cannot run here" case is a clean SKIP
+// rather than an import-time crash.
+//
+// node_modules in this repository was installed on Windows. Rollup loads a
+// platform-specific native binding, so on any other platform `import('vite')`
+// dies with "Cannot find module .../rollup/dist/native.js" BEFORE a single line
+// of this file executes — and a suite that cannot start reports nothing at all.
+// It used to be counted as BROKEN on every run, which is indistinguishable from
+// a real regression and trains the reader to ignore it.
+//
+// scripts/verify-all.mjs treats a line beginning "SKIP:" plus exit 0 as skipped
+// and prints it in the summary even when the run is green, so the missing
+// coverage stays visible instead of being laundered into a pass. This suite runs
+// normally wherever node_modules matches the platform (the owner's Windows
+// machine, CI on Linux after its own npm install).
+let createServer;
+try {
+  ({ createServer } = await import('vite'));
+} catch (e) {
+  console.log(`SKIP: vite is unavailable in this environment (${e?.message?.split('\n')[0] || e}).`);
+  console.log('      This harness loads the real calculation modules through Vite SSR; it needs a');
+  console.log('      node_modules built for this platform. Run it where `npm install` was run.');
+  process.exit(0);
 }
 
 const server = await createServer({

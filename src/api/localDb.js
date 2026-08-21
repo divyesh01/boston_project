@@ -32,6 +32,7 @@ import Dexie from 'dexie';
  *   TimecardPunch: import('dexie').Table<any, number>;
  *   DailyFinancialAggregate: import('dexie').Table<any, number>;
  *   LocalSession: import('dexie').Table<any, number>;
+ *   IdSequence: import('dexie').Table<any, string>;
  * }} */
 // @ts-ignore — augment the non-generic Dexie interface with the app's tables.
 const localDb = new Dexie('RedRoofIntelligence');
@@ -266,6 +267,27 @@ localDb.version(21).stores({
 // v22 — add strict uniqueness constraint to Property code (&code) to prevent duplicates
 localDb.version(22).stores({
   Property: '++id, &code, name, active, created_date',
+});
+
+// v23 — monotonic id sequences (see src/lib/employeeId.js).
+//
+// One row per employee-id prefix holding the highest suffix ever ISSUED under it,
+// which is not the same thing as the highest suffix currently in use. The staff
+// list cannot answer that question: hard-deleting the highest-numbered person
+// under a prefix removes the id from the list, and a generator that reads only
+// the list rewinds onto it. That mattered because `employee_id` is a real join
+// key — Payroll.jsx de-duplicates historical runs on (employee_id, period_end)
+// and timecardCalc groups punches by it — so a reissued id silently merged a new
+// hire with a departed employee's payroll history.
+//
+// Primary key is the prefix itself (inbound, not auto-increment) so a reservation
+// is a single `put` inside one rw transaction, which is what serialises two
+// simultaneous adds (double-click, two tabs) onto different numbers.
+//
+// Deliberately NOT property-scoped: the payroll de-dupe key carries no
+// property_id, so an id must be unique across the whole account, not per hotel.
+localDb.version(23).stores({
+  IdSequence: 'prefix, last_seq, updated_date',
 });
 
 // Guard: a table whose name collides with a Dexie instance property is created

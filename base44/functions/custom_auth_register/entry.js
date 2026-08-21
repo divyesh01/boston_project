@@ -1,5 +1,6 @@
 import { createClientFromRequest } from "npm:@base44/sdk@^0.8.41";
 import crypto from "node:crypto";
+import { z } from "npm:zod";
 
 const ALLOWED_ROLES = ['owner', 'admin', 'manager', 'front_desk', 'accountant', 'read_only', 'user'];
 
@@ -105,9 +106,49 @@ const ROLE_DEFAULTS = {
 const defaultPermissionsForRole = (role) => ({ ...(ROLE_DEFAULTS[role] || ROLE_DEFAULTS.read_only) });
 
 
+// The fields a browser may see, as an ALLOWLIST.
+//
+// This used to be a denylist: it destructured the sensitive columns away and
+// spread the rest, which made every column later added to the User entity public
+// by default. That is how `mfa_secret_pending` got out. custom_auth_login writes
+// a live TOTP enrolment seed to that column when it force-enrols an owner or
+// admin, nobody thought to add it here, and so `list`, `search`, `getById`,
+// `update`, `set_status` and the login response itself handed any admin the
+// second-factor seed of every colleague mid-enrolment - with no audit row to
+// show it had been read. An allowlist fails closed instead: a new column is
+// invisible here until someone deliberately names it.
+//
+// Every entry below is either a field the UI provably reads (src/pages/Users.jsx,
+// src/pages/Settings.jsx, src/lib/AuthContext.jsx, src/components/Layout.jsx,
+// src/lib/launchPolicy.js, and mirrorRemoteUserIntoLocal in
+// src/api/base44Client.js) or a non-secret operational field an admin screen
+// needs to explain why an account is in the state it is in.
+//
+// Deliberately absent, and each one for a reason: password_hash and salt (the
+// credential), mfa_secret and mfa_secret_pending (the second factor itself),
+// mfa_last_counter (tells an observer when the factor was last used, and is only
+// ever compared server-side), reset_token_hash and reset_token_expires_at (a
+// live reset capability), session_created and session_expires (session bookkeeping
+// the client already has in its cookie).
+//
+// Kept byte-identical to the copies in the other auth functions. The base44 host
+// gives these functions no shared module they can all import, so
+// scripts/probe-auth-hardening.mjs section 17 asserts the copies never drift
+// and that no sensitive column from base44/entities/User.jsonc is ever named here.
+const PUBLIC_USER_FIELDS = [
+  'id', 'email', 'username', 'full_name', 'display_name', 'role',
+  'property_access', 'permissions', 'is_active', 'is_locked',
+  'must_change_password', 'mfa_enabled', 'email_confirmed',
+  'last_login', 'failed_login_count', 'locked_until',
+  'created_date', 'updated_date',
+];
+
 export function publicUser(user) {
   if (!user) return null;
-  const { password_hash, salt, mfa_secret, reset_token_hash, reset_token_expires_at, session_created, session_expires, ...safe } = user;
+  const safe = {};
+  for (const field of PUBLIC_USER_FIELDS) {
+    if (user[field] !== undefined) safe[field] = user[field];
+  }
   return safe;
 }
 
@@ -135,22 +176,44 @@ export default async function (req) {
   }
 
     const base44 = createClientFromRequest(req);
-    const body = await req.json();
-    const { userData } = body;
+    let body;
+    try {
+      body = await req.json();
+    } catch (e) {
+      return Response.json({ error: "Invalid JSON payload" }, { status: 400 });
+    }
+
+    const UserDataSchema = z.object({
+      username: z.string().regex(/^[a-zA-Z0-9_-]+$/, "Username can only contain alphanumeric characters, underscores, and dashes").min(3).max(30),
+      email: z.string().email().max(100),
+      password: z.string().min(12).max(128),
+      role: z.enum(['owner', 'admin', 'manager', 'front_desk', 'accountant', 'read_only', 'user']).default('read_only'),
+      assigned_property_ids: z.array(z.union([z.string(), z.number()])).default([]),
+      property_access: z.union([z.string(), z.array(z.union([z.string(), z.number()]))]).optional(),
+      full_name: z.string().max(100).default(''),
+      must_change_password: z.boolean().default(true),
+    }).strict();
+
+    const BodySchema = z.object({
+      userData: UserDataSchema
+    }).strict();
+
+    const parseResult = BodySchema.safeParse(body);
+    if (!parseResult.success) {
+      const details = parseResult.error.errors.map(err => ({ field: err.path.join('.'), issue: err.message }));
+      return Response.json({ error: "Validation failed", details }, { status: 400 });
+    }
+
     const {
       username,
       email,
       password,
-      role = 'read_only',
-      assigned_property_ids = [],
+      role,
+      assigned_property_ids,
       property_access,
-      full_name = '',
-      must_change_password = true,
-    } = userData || {};
-
-    if (!username || !email || !password) {
-      return Response.json({ error: "Username, email, and password are required" }, { status: 400 });
-    }
+      full_name,
+      must_change_password,
+    } = parseResult.data.userData;
 
     const actor = await currentSessionUser(base44, req);
     const isAdminCaller = actor && (actor.role === 'owner' || actor.role === 'admin');
@@ -159,7 +222,7 @@ export default async function (req) {
       // Bootstrap: the very first owner may be created before any session exists.
       const owners = await base44.asServiceRole.entities.User.filter({ role: 'owner' }, null, 1, 0);
       if (owners.length > 0) {
-        return Response.json({ error: "Unauthorized" }, { status: 401 });
+        return Response.json({ error: "Unauthorized" }, { status: 403 });
       }
       if (role !== 'owner') {
         return Response.json({ error: "The first account must be the Owner" }, { status: 400 });

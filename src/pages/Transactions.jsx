@@ -7,7 +7,9 @@ import Card from "@/components/ui-exec/Card";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { useTransactions, useSources } from "@/lib/useHotelData";
-import { money, money2, num, pct, C, CHART_COLORS, downloadCsv, downloadExcel, inRange } from "@/lib/hotel";
+import { money, money2, num, pct, C, CHART_COLORS, inRange } from "@/lib/hotel";
+import { downloadCsv, downloadExcel, stampFilename, describeRange } from "@/lib/exportData";
+import { toast } from "@/components/ui/use-toast";
 import {
   summarize, seriesByGrain, revenueMix, paymentMix, employeeStats, monthlyBreakdown, GRAINS,
 } from "@/lib/transactionAnalytics";
@@ -26,6 +28,30 @@ const TABS = [
   ["compare", "Head to head"],
   ["commissions", "Commissions"],
   ["ledger", "Ledger"],
+];
+
+// The ledger export, as ONE declaration used by both the CSV and the Excel button.
+//
+// It replaces a hand-written `visible.map(r => ({ date: r.date, ... }))` projection
+// whose object keys became the file's headers: "guest", "folio", "posted_by". A
+// column spec keeps the owner-facing label next to the field it reads, so the two
+// buttons cannot drift and a renamed column cannot silently blank a cell — a key
+// that does not exist on any row exports as empty rather than throwing, and a key
+// that exists on SOME rows is no longer dropped because row 0 lacked it.
+const TRANSACTION_EXPORT_COLUMNS = [
+  { key: "date", label: "Date" },
+  { key: "time", label: "Time" },
+  { key: "guest_name", label: "Guest" },
+  { key: "room_number", label: "Room" },
+  { key: "folio_number", label: "Folio" },
+  { key: "confirmation_number", label: "Confirmation" },
+  { key: "transaction_code", label: "Code" },
+  { key: "transaction_description", label: "Description" },
+  { key: "ledger_side", label: "Side" },
+  { key: "charge_category", label: "Category" },
+  { key: "payment_method", label: "Method" },
+  { key: "amount", label: "Amount" },
+  { key: "username", label: "Posted by" },
 ];
 
 function Segmented({ value, onChange, options }) {
@@ -142,8 +168,8 @@ export default function Transactions() {
       {tab === "overview" && (
         <>
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <KpiCard label="Revenue" value={money(stats.revenue)} sub={`${money(stats.avgPerDay)} per trading day`} accent={C.purple} icon={DollarSign} />
-            <KpiCard label="Settlements" value={money(stats.collected)} sub={`${num(stats.paymentCount)} payments taken`} accent={C.cyan} icon={Wallet} />
+            <KpiCard label="Revenue" value={money2(stats.revenue)} sub={`${money(stats.avgPerDay)} per trading day`} accent={C.purple} icon={DollarSign} />
+            <KpiCard label="Settlements" value={money2(stats.collected)} sub={`${num(stats.paymentCount)} payments taken`} accent={C.cyan} icon={Wallet} />
             <KpiCard label="Charges posted" value={num(stats.chargeCount)} sub={`${money2(stats.avgTicket)} average`} accent={C.green} icon={Receipt} />
             <KpiCard label="Folios touched" value={num(stats.folios)} sub={`${num(stats.guests)} reservations`} accent={C.amber} icon={Users2} />
           </div>
@@ -194,7 +220,7 @@ export default function Transactions() {
                     <div key={c.name}>
                       <div className="flex items-baseline justify-between">
                         <span className="text-sm text-slate-300">{c.name}</span>
-                        <span className="text-sm tabular-nums text-white">{money(c.value)}</span>
+                        <span className="text-sm tabular-nums text-white">{money2(c.value)}</span>
                       </div>
                       <div className="mt-1.5 flex items-center gap-2">
                         <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#0A1628]">
@@ -251,8 +277,8 @@ export default function Transactions() {
                       return (
                         <tr key={m.bucket} className="border-b border-white/5 last:border-0">
                           <td className="py-2.5 text-slate-300">{m.name}</td>
-                          <td className="py-2.5 text-right font-medium tabular-nums text-white">{money(m.revenue)}</td>
-                          <td className="py-2.5 text-right tabular-nums text-slate-400">{money(m.collected)}</td>
+                          <td className="py-2.5 text-right font-medium tabular-nums text-white">{money2(m.revenue)}</td>
+                          <td className="py-2.5 text-right tabular-nums text-slate-400">{money2(m.collected)}</td>
                           <td className="py-2.5 text-right tabular-nums text-slate-400">{num(m.txns)}</td>
                           <td className="py-2.5 text-right tabular-nums text-slate-400">{money2(m.avgTicket)}</td>
                           <td className="py-2.5 text-right tabular-nums" style={{ color: delta === null ? "#64748b" : delta >= 0 ? C.green : C.coral }}>
@@ -272,10 +298,10 @@ export default function Transactions() {
       {tab === "employees" && (
         <>
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <KpiCard label="Written by people" value={money(humanRevenue)} sub={`${pct(stats.revenue ? humanRevenue / stats.revenue : 0)} of revenue`} accent={C.green} icon={Users2} />
-            <KpiCard label="Written by automation" value={money(automatedRevenue)} sub={`${pct(stats.revenue ? automatedRevenue / stats.revenue : 0)} of revenue`} accent={C.amber} icon={TrendingUp} />
+            <KpiCard label="Written by people" value={money2(humanRevenue)} sub={`${pct(stats.revenue ? humanRevenue / stats.revenue : 0)} of revenue`} accent={C.green} icon={Users2} />
+            <KpiCard label="Written by automation" value={money2(automatedRevenue)} sub={`${pct(stats.revenue ? automatedRevenue / stats.revenue : 0)} of revenue`} accent={C.amber} icon={TrendingUp} />
             <KpiCard label="Active accounts" value={num(people.length)} sub={includeSystem ? "Including automation" : "People only"} accent={C.purple} />
-            <KpiCard label="Top producer" value={people[0] ? money(people[0].revenue) : "—"} sub={people[0]?.label || "—"} accent={C.cyan} />
+            <KpiCard label="Top producer" value={people[0] ? money2(people[0].revenue) : "—"} sub={people[0]?.label || "—"} accent={C.cyan} />
           </div>
 
           <Card
@@ -338,8 +364,8 @@ export default function Transactions() {
                           </span>
                         )}
                       </td>
-                      <td className="py-2.5 text-right font-medium tabular-nums text-white">{money(p.revenue)}</td>
-                      <td className="py-2.5 text-right tabular-nums text-slate-400">{money(p.collected)}</td>
+                      <td className="py-2.5 text-right font-medium tabular-nums text-white">{money2(p.revenue)}</td>
+                      <td className="py-2.5 text-right tabular-nums text-slate-400">{money2(p.collected)}</td>
                       <td className="py-2.5 text-right tabular-nums text-slate-400">{num(p.chargeCount)}</td>
                       <td className="py-2.5 text-right tabular-nums text-slate-400">{money2(p.avgTicket)}</td>
                       <td className="py-2.5 text-right tabular-nums text-slate-400">{num(p.days)}</td>
@@ -376,18 +402,34 @@ export default function Transactions() {
           <LedgerTable
             rows={scoped}
             onExport={(visible, type) => {
-              const exportData = visible.map((r) => ({
-                date: r.date, time: r.time, guest: r.guest_name, room: r.room_number,
-                folio: r.folio_number, confirmation: r.confirmation_number,
-                code: r.transaction_code, description: r.transaction_description,
-                side: r.ledger_side, category: r.charge_category, method: r.payment_method,
-                amount: r.amount, posted_by: r.username,
-              }));
-              const filename = `transactions_${dateRange.from || "all"}_${dateRange.to || "all"}`;
-              if (type === 'excel') {
-                downloadExcel(exportData, `${filename}.xlsx`);
-              } else {
-                downloadCsv(exportData, `${filename}.csv`);
+              // Exports exactly the rows the table is showing, and says how many.
+              // The old path called hotel.js#downloadCsv, which returns nothing and
+              // writes a header-only file when `visible` is empty — a click that
+              // looked broken. downloadCsv/downloadExcel here throw on an empty set
+              // and return a row count on success, so the owner always gets an
+              // answer.
+              try {
+                const isExcel = type === "excel";
+                const n = (isExcel ? downloadExcel : downloadCsv)(visible, {
+                  filename: stampFilename(
+                    `transactions_${dateRange.from || "all"}_${dateRange.to || "all"}`,
+                    isExcel ? "xlsx" : "csv",
+                  ),
+                  columns: TRANSACTION_EXPORT_COLUMNS,
+                  sheetName: "Transactions",
+                });
+                toast({
+                  title: `Exported ${n.toLocaleString()} line${n === 1 ? "" : "s"}`,
+                  description: describeRange(dateRange.from, dateRange.to)
+                    ? `${describeRange(dateRange.from, dateRange.to)} — as filtered and sorted on screen.`
+                    : "As filtered and sorted on screen.",
+                });
+              } catch (e) {
+                toast({
+                  variant: "destructive",
+                  title: "Nothing exported",
+                  description: e?.message || String(e),
+                });
               }
             }}
           />

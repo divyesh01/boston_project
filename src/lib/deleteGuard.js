@@ -13,6 +13,12 @@
 // comes FIRST. `sensitiveActionRateLimiter.check()` consumes budget every time
 // it is called, so checking it before the dialog would let a few cancelled
 // mis-clicks lock the operator out of a delete they actually want.
+//
+// The referential advisory (`dependents`) is folded in before the dialog because
+// it is part of what the dialog says. The operator's real question when removing
+// a person or a record is "does this erase the history too?", and the prose that
+// used to answer it ("runs are kept") could not say whether that meant one run
+// or forty.
 
 import {
   getCsrfToken,
@@ -34,6 +40,41 @@ import {
 export function buildDestructiveMessage({ title, lines = [] }) {
   const detail = (lines || []).filter((l) => typeof l === 'string' && l.trim());
   return [String(title || 'Delete this record?'), ...detail, 'This cannot be undone.'].join('\n\n');
+}
+
+/**
+ * A record that points at the thing being deleted.
+ *
+ * A `count` of 0 is not an omission. A caller usually cannot know a count is
+ * zero until it has already queried, so it passes the whole list every time and
+ * the guard drops the empty entries — otherwise a dialog would read "0 payroll
+ * runs" and teach the operator to ignore the section.
+ *
+ * These are advisory by design. No entity in this schema links to another by id
+ * (PayrollRun stores employee_name, not a staff id), so no delete here is
+ * refusable on referential grounds — the purpose is disclosure, not veto. If a
+ * real foreign key ever appears, that is the moment to add a refusing branch,
+ * with a caller to justify it.
+ *
+ * @typedef {{label: string, count: number, detail?: string}} Dependent
+ */
+
+/** Drop dependents that say nothing: no label, or a count that is not a real number above zero. */
+function activeDependents(dependents) {
+  return (dependents || []).filter((d) => {
+    if (!d || typeof d.label !== 'string' || !d.label.trim()) return false;
+    const n = Number(d.count);
+    return Number.isFinite(n) && n > 0;
+  });
+}
+
+/** One line per dependent, count first so the numbers align when skimmed. */
+function dependentLines(dependents) {
+  return dependents.map((d) => {
+    const head = `• ${Number(d.count)} ${String(d.label).trim()}`;
+    const detail = typeof d.detail === 'string' && d.detail.trim() ? ` — ${d.detail.trim()}` : '';
+    return head + detail;
+  });
 }
 
 function waitPhrase(retryAfterSeconds) {
@@ -65,6 +106,7 @@ function waitPhrase(retryAfterSeconds) {
  * @param {{
  *   title: string,
  *   lines?: Array<string|null|undefined|false>,
+ *   dependents?: Array<Dependent|null|undefined>,
  *   confirm?: (message: string) => boolean,
  *   rateLimiter?: {check: () => {allowed: boolean, retryAfter?: number}},
  *   csrf?: {get: () => string, validate: (t: string) => boolean, rotate: () => void},
@@ -75,6 +117,7 @@ function waitPhrase(retryAfterSeconds) {
 export function guardDestructiveAction({
   title,
   lines = [],
+  dependents = [],
   confirm,
   rateLimiter = sensitiveActionRateLimiter,
   csrf,
@@ -89,7 +132,16 @@ export function guardDestructiveAction({
 
   const tokens = csrf || { get: getCsrfToken, validate: validateCsrfToken, rotate: rotateCsrfToken };
 
-  if (!ask(buildDestructiveMessage({ title, lines }))) {
+  // Referential reality, ahead of the dialog — see the header note.
+  const linked = activeDependents(dependents);
+
+  // Folded in as ONE paragraph with internal newlines: buildDestructiveMessage
+  // joins with blank lines, which would otherwise scatter the list down the page.
+  const advisory = linked.length
+    ? [['Related records that stay behind (these are NOT deleted):', ...dependentLines(linked)].join('\n')]
+    : [];
+
+  if (!ask(buildDestructiveMessage({ title, lines: [...lines, ...advisory] }))) {
     // A cancelled dialog is not an error — nothing to tell the user.
     return { ok: false, reason: 'cancelled', message: '' };
   }

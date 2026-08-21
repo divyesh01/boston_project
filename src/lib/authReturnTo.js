@@ -14,13 +14,29 @@ export function safeReturnTo() {
   try {
     const url = new URL(raw, window.location.origin);
     if (url.origin !== window.location.origin) return "/";
-    // Strip app-bootstrap params: app-params.js persists these from the URL into
-    // localStorage before the SDK initializes, so a crafted returnTo could
-    // otherwise poison the freshly issued session — repointing the app at an
-    // attacker's backend (app_base_url/app_id/functions_version) or overwriting
-    // the token. Normal app-flow params (e.g. the OAuth consent ctx) are kept.
-    // The full app-params.js bootstrap set (src/lib/app-params.js) — any of
-    // these in a crafted returnTo would be persisted at next load.
+    // Strip the app-bootstrap params, so a crafted returnTo cannot poison the
+    // session that is about to be issued. Normal app-flow params (e.g. the OAuth
+    // consent ctx) are kept.
+    //
+    // access_token is the live one, and the mechanism is in the SDK, not in this
+    // repo: createClient() calls getAccessToken() while constructing
+    // (node_modules/@base44/sdk/dist/client.js), and that helper
+    // (dist/utils/auth-utils.js) reads ?access_token= from the URL, writes it to
+    // localStorage under both 'base44_access_token' and 'token', then hides the
+    // parameter with history.replaceState. Nothing in this app issues a base44
+    // bearer token, so a value there is always someone else's.
+    //
+    // src/api/base44Client.js#refuseUrlSuppliedAccessToken now drops that
+    // parameter before the SDK is constructed, which covers the direct-link case
+    // this function cannot see. This list stays as the second layer on the
+    // post-login hop, and it is deliberately wider than that one parameter:
+    // app_id, app_base_url, functions_version and from_url are the bootstrap set
+    // read by src/lib/app-params.js, whose getAppParamValue() prefers a URL
+    // parameter over the configured value and persists it with no validation on
+    // app_id or functions_version. That module has no importer today, so it is
+    // tree-shaken out and cannot run — but it is one `import` away from being a
+    // repoint-the-client vulnerability, and stripping the params costs nothing.
+    // scripts/probe-app-config.mjs fails if anything starts importing it.
     for (const p of ["access_token", "clear_access_token", "app_id", "app_base_url", "functions_version", "from_url"]) {
       url.searchParams.delete(p);
     }

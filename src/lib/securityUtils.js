@@ -238,6 +238,63 @@ function safeSessionStorage() {
   }
 }
 
+/**
+ * Page-lifetime fallback holding the token this page was issued.
+ *
+ * sessionStorage is not always available: Safari's private/Lockdown modes, an
+ * embedded webview with storage partitioned off, and any browser configured to
+ * refuse site data all make safeSessionStorage() return null. Before this
+ * existed, getCsrfToken() generated a NEW token on every call in that state and
+ * persisted none of them, so no two calls agreed and validateCsrfToken() had
+ * nothing to compare against.
+ *
+ * That is the whole reason the validator used to `return true` when storage was
+ * missing. The comment there called it lockout prevention, and it was — but it
+ * bought that by disabling the check for precisely the users whose browsers are
+ * configured most defensively, and it did so silently, because a bypass and a
+ * genuine match both return true.
+ *
+ * Giving the token a store that cannot be refused removes the reason to fail
+ * open. It is weaker than sessionStorage in one respect only: it does not
+ * survive a reload. That is correct rather than unfortunate — a reload
+ * reconstructs the base44 client, which re-issues the header token anyway (see
+ * CSRF_HEADER_TOKEN in src/api/base44Client.js).
+ */
+let memoryCsrfToken = null;
+
+/** The token currently issued to this page, from whichever store holds it. */
+function readStoredCsrfToken() {
+  const ss = safeSessionStorage();
+  if (ss) {
+    const stored = ss.getItem(CSRF_TOKEN_KEY);
+    if (stored) return stored;
+  }
+  return memoryCsrfToken;
+}
+
+/**
+ * Record the issued token in every store that will accept it.
+ *
+ * The memory copy is assigned first and unconditionally, so a setItem that
+ * throws after safeSessionStorage() probed the store as writable (quota
+ * exhaustion, or an extension revoking access between the probe and the write)
+ * cannot leave a token issued-but-unstored. With a default-closed validator any
+ * such gap becomes a refused save, so the write that must not be skipped is the
+ * one that cannot fail.
+ */
+function persistCsrfToken(token) {
+  memoryCsrfToken = token;
+  const ss = safeSessionStorage();
+  if (ss) {
+    try {
+      ss.setItem(CSRF_TOKEN_KEY, token);
+    } catch {
+      // The memory copy above stands in for the rest of the page's life.
+    }
+  }
+  return token;
+}
+
 // ─── CSRF Token ───
 // Added security helpers for file upload
 
@@ -279,14 +336,8 @@ function writeCsrfCookie(token) {
 let csrfHeaderToken = null;
 
 export function getCsrfToken() {
-  const ss = safeSessionStorage();
-  let token = ss ? ss.getItem(CSRF_TOKEN_KEY) : null;
-  if (!token) {
-    token = generateCsrfToken();
-    if (ss) {
-      try { ss.setItem(CSRF_TOKEN_KEY, token); } catch {}
-    }
-  }
+  let token = readStoredCsrfToken();
+  if (!token) token = persistCsrfToken(generateCsrfToken());
   if (csrfHeaderToken === null) csrfHeaderToken = token;
   return writeCsrfCookie(token);
 }
@@ -310,22 +361,48 @@ export function pinCsrfCookie() {
   return writeCsrfCookie(csrfHeaderToken);
 }
 
+/**
+ * Issue a fresh token for the in-page check.
+ *
+ * WHAT ROTATION DOES AND DOES NOT REACH, because this has been "fixed" the
+ * wrong way once already. It replaces the stored token and the cookie. It does
+ * NOT change the X-CSRF-Token header: the base44 SDK copies its headers object
+ * once, at construction, into axios defaults, so the header value is frozen for
+ * the life of the page and there is no supported way to vary it per request.
+ * pinCsrfCookie() therefore restores the cookie to the frozen header value
+ * before each backend invoke, and the pair the SERVER compares is deliberately
+ * stable for the page's lifetime.
+ *
+ * That stability is not the weakness it looks like. Double-submit works because
+ * a cross-site attacker can neither read the cookie nor set the header; a token
+ * minted per page load already denies both. Rotating within a page would only
+ * help against replay of a token the attacker has already captured, and
+ * capturing it requires script execution on this origin, which defeats any CSRF
+ * token regardless of how often it turns over. Meanwhile the last attempt to
+ * make rotation reach the server left the cookie and the frozen header
+ * mismatched, and every mutating call answered 403 "Invalid CSRF token" until
+ * the tab was reloaded. Rotation is scoped to the client-side check on purpose.
+ */
 export function rotateCsrfToken() {
-  const token = generateCsrfToken();
-  const ss = safeSessionStorage();
-  if (ss) {
-    try {
-      ss.setItem(CSRF_TOKEN_KEY, token);
-    } catch {}
-  }
-  return writeCsrfCookie(token);
+  return writeCsrfCookie(persistCsrfToken(generateCsrfToken()));
 }
 
+/**
+ * Default closed: no issued token means no pass.
+ *
+ * This used to `return true` when sessionStorage was unavailable. See
+ * memoryCsrfToken above for why that was load-bearing and why it no longer is —
+ * readStoredCsrfToken() always has the page's token, so refusing an unmatched
+ * call can no longer lock anyone out of a save.
+ */
 export function validateCsrfToken(token) {
-  const ss = safeSessionStorage();
-  if (!ss) return true; // If no sessionStorage, bypass client validation to prevent lockout
-  const stored = ss.getItem(CSRF_TOKEN_KEY);
-  return stored && stored === token;
+  if (typeof token !== 'string' || token === '') return false;
+  const stored = readStoredCsrfToken();
+  if (typeof stored !== 'string' || stored === '') return false;
+  // constantTimeEqual returns a strict boolean. The old `stored && stored ===
+  // token` returned '' or null on its miss paths, so a caller written as
+  // `if (validateCsrfToken(t) === false)` read a falsy non-false value as a pass.
+  return constantTimeEqual(stored, token);
 }
 
 // ─── 10x Better Secure Storage Helpers (Web Crypto + IndexedDB) ───

@@ -119,7 +119,11 @@ T("the admin action was recorded", rows.length === 2, `rows=${rows.length}`);
 T("the admin row carries a hash", !!rows[1]?.hash, JSON.stringify(rows[1] || null));
 T("the admin row links to the row before it", rows[1]?.previous_hash === rows[0]?.hash,
   `previous_hash=${rows[1]?.previous_hash} expected=${rows[0]?.hash}`);
-T("created_date is strictly increasing (no tie for the verifier to mis-order)",
+// Sequential writes must not tie on created_date. This is now a DISPLAY-ordering
+// guarantee only: since 2026-08-19 the verifier treats the chain as a DAG and does
+// not depend on row order at all (see audit_verify's algorithm note). Concurrent
+// writers can and do tie — scripts/probe-audit-chain-race.mjs covers that case.
+T("created_date is strictly increasing across sequential writes",
   rows[1]?.created_date > rows[0]?.created_date,
   `${rows[0]?.created_date} -> ${rows[1]?.created_date}`);
 verified = await call(auditVerify, {});
@@ -193,6 +197,11 @@ const FILES = [
   "../base44/functions/custom_user_admin/entry.js",
   "../base44/functions/custom_auth_login/entry.js",
   "../base44/functions/custom_auth_reset_password/entry.js",
+  // Wired to the real SDK client on 2026-08-19; before that both wrote through a
+  // fake `db` shim that discarded the row entirely. They are writers now, so they
+  // are held to the same field list as every other copy.
+  "../base44/functions/autoPayroll/entry.ts",
+  "../base44/functions/deleteAccount/entry.ts",
   "../base44/functions/audit_verify/entry.js",
 ];
 const MARKER = /AUDIT_CANONICAL_V1 = ([a-z_,]+)/;

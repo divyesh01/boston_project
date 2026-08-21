@@ -9,10 +9,13 @@ class ResizeObserverStub {
 }
 globalThis.ResizeObserver = globalThis.ResizeObserver || ResizeObserverStub;
 
-// Polyfill WebCrypto and localStorage for Node/JSDOM test environments
+// Polyfill WebCrypto and localStorage for Node/JSDOM test environments.
+// Both are deliberate PARTIAL doubles, so each assignment carries its own `any`
+// cast: Node's WebCrypto stands in for the DOM `Crypto`, and a Map stands in for
+// `Storage` (no `length`/`key` — no test reads them).
 if (!globalThis.crypto?.subtle) {
   import("node:crypto").then((m) => {
-    globalThis.crypto = m.webcrypto;
+    globalThis.crypto = /** @type {any} */ (m.webcrypto);
   });
 }
 
@@ -24,6 +27,6 @@ if (!globalThis.localStorage) {
     removeItem: (k) => __store.delete(k),
     clear: () => __store.clear(),
   };
-  globalThis.localStorage = __storage;
-  globalThis.sessionStorage = __storage;
+  globalThis.localStorage = /** @type {any} */ (__storage);
+  globalThis.sessionStorage = /** @type {any} */ (__storage);
 }

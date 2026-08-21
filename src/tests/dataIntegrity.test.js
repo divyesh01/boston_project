@@ -16,9 +16,9 @@ describe('Data Integrity & Group 2', () => {
       permissions: "all",
       property_access: "all",
       is_active: true,
-      password: "Password1!",
+      password: "MockSecurePass#2026",
     });
-    await db.auth.login("owner@test.local", "Password1!", true);
+    await db.auth.login("owner@test.local", "MockSecurePass#2026", true);
   });
 
   it('15. Property uniqueness constraint: should reject duplicate property codes', async () => {

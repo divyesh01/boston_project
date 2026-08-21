@@ -18,14 +18,25 @@ async function hashPasswordScrypt(password, saltHex) {
  * path an unauthenticated caller can reach was also the only one that would
  * accept "abc" — and a password set here is a password that signs in everywhere.
  * Copied rather than imported because the base44 host resolves only npm:, node:
- * and base44:runtime specifiers; kept identical to
- * custom_user_admin/entry.js#validatePasswordStrength.
+ * and base44:runtime specifiers; kept character-for-character identical to
+ * custom_user_admin/entry.js#validatePasswordStrength, which carries the long
+ * note on why the policy is what it is.
+ *
+ * Raised from 8 characters and three classes to the full advertised policy on
+ * 2026-08-20. This is the path that matters most for that: the caller holds a
+ * reset token and no session, so nothing upstream of here has applied any rule at
+ * all. scripts/probe-password-policy.mjs section 7 fails if this copy and the
+ * admin copy ever decide an input differently, or if either disagrees with
+ * src/lib/security.js.
  */
 function validatePasswordStrength(password) {
-  if (!password || password.length < 8) return 'Password must be at least 8 characters.';
-  if (!/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/[0-9]/.test(password)) {
-    return 'Password must contain uppercase, lowercase, and a number.';
-  }
+  if (typeof password !== 'string' || password.length < 12) return 'Password must be at least 12 characters.';
+  if (!/[a-z]/.test(password)) return 'Password must include at least one lowercase letter.';
+  if (!/[A-Z]/.test(password)) return 'Password must include at least one uppercase letter.';
+  if (!/[0-9]/.test(password)) return 'Password must include at least one number.';
+  if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) return 'Password must include at least one special character.';
+  if (/(.)\1{2,}/.test(password)) return 'Password must not contain repeating characters.';
+  if (/[\n\r\u2028\u2029]/.test(password)) return 'Password must not contain line breaks.';
   return null;
 }
 

@@ -102,8 +102,10 @@ export default function ChannelRevenue({ rows, dateRange }) {
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <div className="mt-4 h-64">
-            <UniversalChart type="donut" data={chartData} />
+          {/* h-full so the donut fills exactly this box — it used to force its
+              own h-96 inside an h-64 wrapper and spill over the bar chart. */}
+          <div className="mt-4 h-[420px]">
+            <UniversalChart type="donut" data={chartData} heightClass="h-full" />
           </div>
         </div>
       </Card>

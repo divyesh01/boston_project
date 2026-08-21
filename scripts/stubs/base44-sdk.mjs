@@ -20,6 +20,26 @@
 
 let installed = null;
 
+// Query-value matching. Scalars compare as strings (the hosted API is loose about
+// number-vs-string ids); `{ $in: [...] }` is the multi-value operator the real
+// backend supports and that base44/functions/aiAssistant/entry.ts and
+// base44/functions/audit_list/entry.js both build for multi-property scoping.
+//
+// Added 2026-08-20. Without $in here, a handler that correctly scopes a
+// two-property actor to { $in: ["prop_1", "prop_3"] } matched ZERO rows in the
+// stub, so a probe asserting "no unauthorized row is returned" passed on an empty
+// result and proved nothing. A test double that cannot express the query under
+// test converts a real assertion into a vacuous one.
+function matches(cell, expected) {
+  if (expected && typeof expected === "object" && !Array.isArray(expected)) {
+    if (Array.isArray(expected.$in)) return expected.$in.some((v) => String(cell) === String(v));
+    throw new Error(
+      `base44 sdk stub: unsupported query operator ${JSON.stringify(Object.keys(expected))}`,
+    );
+  }
+  return String(cell) === String(expected);
+}
+
 export function createClientFromRequest(_req) {
   if (!installed) throw new Error("base44 sdk stub: call __installBackend() first");
   return installed.client;
@@ -43,9 +63,7 @@ function makeTable(name, seed = []) {
   return {
     // ── SDK surface used by the functions ──
     async filter(query = {}, sort = null, limit = null, offset = 0) {
-      let out = rows.filter((r) =>
-        Object.entries(query || {}).every(([k, v]) => String(r[k]) === String(v)),
-      );
+      let out = rows.filter((r) => Object.entries(query || {}).every(([k, v]) => matches(r[k], v)));
       if (sort) {
         const desc = sort.startsWith("-");
         const key = desc ? sort.slice(1) : sort;

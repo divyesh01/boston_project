@@ -1,20 +1,26 @@
-// Probe: OwnerIntelligenceService.detectProfitLeakage counts money it must not.
+// Regression guard: OwnerIntelligenceService.detectProfitLeakage must not count money
+// it has no right to count.
 //
 // The "High Expense Ratio" leak is rendered on the Dashboard as a headline dollar
-// figure (Dashboard.jsx:395 -> generateExecutiveInsights -> money(totalLeakage)).
-// Two independent defects inflate it:
+// figure (Dashboard.jsx -> generateExecutiveInsights -> money(totalLeakage)). Two
+// defects once inflated it, and this probe now holds both closed:
 //
-//   1. NO COMMITTED FILTER. ownerIntelligence.js:224 sums every PayrollRun,
-//      including `draft`. payrollCalc.js:176-186 states the contract explicitly:
-//      "Every consumer that deducts payroll from revenue MUST filter through
-//      filterCommittedPay/sumCommittedPay". Six consumers do. This one does not,
-//      so a half-typed draft run silently moves an owner-facing profit number.
+//   1. NO COMMITTED FILTER. It used to sum every PayrollRun, including `draft`.
+//      payrollCalc.js states the contract explicitly: "Every consumer that deducts
+//      payroll from revenue MUST filter through filterCommittedPay/sumCommittedPay".
+//      A half-typed draft run silently moved an owner-facing profit number.
+//      FIXED — ownerIntelligence.js now calls filterCommittedPay.
 //
-//   2. NO DATE SCOPE. detectProfitLeakage takes no dateRange, so payroll and
-//      expenses are summed over ALL TIME while grossRevenue comes from the
-//      period-scoped occRows. Dashboard.jsx:70-73 fetches PayrollRun with no date
-//      filter and a limit of 100000, so with a year of payroll on file and a
-//      narrow filter the ratio and its dollar amount are fabricated.
+//   2. NO DATE SCOPE. detectProfitLeakage took no dateRange, so payroll and expenses
+//      were summed over ALL TIME while grossRevenue came from period-scoped occRows.
+//      Dashboard.jsx fetches PayrollRun with no date filter and a limit of 100000, so
+//      with a year of payroll on file a narrow filter fabricated both the ratio and
+//      its dollar amount. FIXED — the function takes `dateRange` and scopes both
+//      cost arrays through inRange.
+//
+// Both are now asserted below rather than merely described, so a regression fails here
+// instead of reaching an owner. Section 6 additionally pins integer-cent exactness, so
+// float drift in the reported overage also fails here.
 //
 // Run: node --import ./scripts/_loader-boot.mjs scripts/probe-profit-leakage.mjs
 
@@ -30,9 +36,17 @@ const { sumCommittedPay } = await import("@/lib/payrollCalc");
 const RANGE = { from: "2026-03-01", to: "2026-03-31" };
 
 // $100,000 of revenue inside the period.
+//
+// The revenue field is `room_revenue`, NOT `total_revenue`. Known problem #3 was
+// exactly this typo in product code ("Money Kept shows $0"), and this fixture kept
+// the pre-fix spelling long after `detectProfitLeakage` was corrected to read
+// `room_revenue`. The effect was a probe that reported a product defect that did not
+// exist: gross came out 0, so the expense-ratio branch could never fire and 10 of 14
+// assertions failed with `NaN%` / `amount=undefined`. Keep this spelling aligned with
+// src/lib/ownerIntelligence.js:250 (`sumCents(occRows.map(r => r.room_revenue))`).
 const occRows = [
-  { property_id: "P1", date: "2026-03-10", total_revenue: 50000, rooms_sold: 100, occupancy: 0.8 },
-  { property_id: "P1", date: "2026-03-20", total_revenue: 50000, rooms_sold: 100, occupancy: 0.8 },
+  { property_id: "P1", date: "2026-03-10", room_revenue: 50000, rooms_sold: 100, occupancy: 0.8 },
+  { property_id: "P1", date: "2026-03-20", room_revenue: 50000, rooms_sold: 100, occupancy: 0.8 },
 ];
 
 // Payment rows that collect exactly the revenue, so the unrelated "Payment

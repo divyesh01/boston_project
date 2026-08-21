@@ -173,32 +173,121 @@ import { revenueReconciliation } from './RevenueReconciliation.js';
 
 // Production analytics layers
 import { summarize } from './transactionAnalytics.js';
-import { composition } from './statisticsAnalytics.js';
+import { revenueSplit, PERIODS, PERIOD_LABEL } from './statisticsAnalytics.js';
 
-export async function enforceFinancialInvariant(dateRange, transactionRows = [], statisticsRows = [], occupancyRows = []) {
-  // In production, we derive the revenue from the actual analytic functions and DB layers
+/**
+ * Cross-check the revenue derivations for a period and return a traceable gross
+ * revenue figure.
+ *
+ * FIXED 2026-08-19 — two defects, both of which produced a wrong number silently:
+ *
+ *   1. It passed the section name as lowercase `'revenue'`. Section matching was
+ *      exact, the vendor export ships `'Revenue'`, so the filter matched NOTHING
+ *      and the entire statistics leg evaluated to $0.00. Because the old
+ *      reconciler AVERAGED the three paths, that zero did not raise an error — it
+ *      dragged gross revenue down by roughly a third and returned it as fact
+ *      ($677,285.61 against a true $1,020,598.17 on the Middleborough export).
+ *      Now uses the STAT_SECTIONS constant via revenueSplit(), so a typo is a
+ *      build-time reference error rather than a runtime $0. statisticsAnalytics
+ *      also matches sections case-insensitively now, closing the same trap for
+ *      any future caller.
+ *
+ *   2. It compared room revenue against total revenue. OccupancyDay.room_revenue
+ *      excludes ancillary lines, so the ~$9,339.50 of pet fees, laundry and
+ *      restaurant charges was reported as "drift" on every single run. Now the
+ *      statistics ROOM subtotal is handed to the reconciler as the baseline for
+ *      the occupancy leg, so each path is compared with something measuring the
+ *      same quantity.
+ *
+ * Returns the full reconciliation alongside the figure: a caller that only gets a
+ * number back cannot tell whether it came from the night-audit export or from a
+ * fallback, and that provenance is the whole point of reconciling.
+ *
+ * @param {string} dateRange free-form label recorded with the result, e.g. "2026 YTD"
+ * @param {Array<Object>} [transactionRows]
+ * @param {Array<Object>} [statisticsRows]
+ * @param {Array<Object>} [occupancyRows]
+ * @param {{statisticsPeriod?: string}} [options] which statistics column to read
+ * @returns {Promise<number>} gross revenue (also see .reconciliation on the result of
+ *          reconcileRevenuePaths if you need provenance)
+ */
+export async function enforceFinancialInvariant(dateRange, transactionRows = [], statisticsRows = [], occupancyRows = [], options = {}) {
+  return (await reconcileRevenuePaths(dateRange, transactionRows, statisticsRows, occupancyRows, options)).grossRevenue;
+}
+
+/**
+ * The same cross-check, but returning provenance as well as the figure.
+ *
+ * @param {string} dateRange free-form label recorded with the result
+ * @param {Array<Object>} [transactionRows]
+ * @param {Array<Object>} [statisticsRows]
+ * @param {Array<Object>} [occupancyRows]
+ * @param {{statisticsPeriod?: string}} [options]
+ * @returns {Promise<{grossRevenue: number, reconciliation: Object}>}
+ */
+export async function reconcileRevenuePaths(dateRange, transactionRows = [], statisticsRows = [], occupancyRows = [], { statisticsPeriod = 'ytd' } = {}) {
   const transactionRevenue = summarize(transactionRows).revenue;
-  const statisticsRevenue = composition(statisticsRows, 'revenue', 'ytd').reduce((sum, item) => sum + item.value, 0);
-  
-  // Occupancy aggregate is pre-calculated locally 
-  const occupancyRevenue = occupancyRows.reduce((sum, r) => sum + (Number(r.room_revenue) || 0), 0);
 
-  // RECONCILE: Compare all three paths
+  // ── Which statistics window is being compared, and why it is a parameter ────
+  //
+  // FIXED 2026-08-20. This read `revenueSplit(statisticsRows, 'ytd')` — a literal
+  // — while the transaction and occupancy legs measure whatever ROWS the caller
+  // handed in. The two legs are scoped by different mechanisms: a statistics
+  // snapshot carries no date column at all (one business date, five period
+  // columns), so its window is chosen by which COLUMN you read, whereas the other
+  // two legs are already filtered by the caller. Reconciling a March transaction
+  // ledger against the year-to-date column compares two different quantities and
+  // reports the difference as "drift" — the exact failure mode the two fixes
+  // above removed, arriving by a third route.
+  //
+  // This module cannot detect the mismatch on its own: nothing in the snapshot
+  // says what window the caller's rows cover. So the window is now an explicit
+  // parameter, it is recorded in the returned reconciliation, and an unrecognised
+  // value throws instead of quietly falling back to year-to-date. A silent
+  // fallback here is what turned a typo into a $343,312.56 error once already.
+  const validPeriods = PERIODS.map(([key]) => key);
+  if (!validPeriods.includes(statisticsPeriod)) {
+    throw new Error(
+      `[FinancialReconciliation] Unknown statisticsPeriod "${statisticsPeriod}". ` +
+      `Expected one of: ${validPeriods.join(', ')}. The statistics leg is scoped by ` +
+      `which period column is read, so an unrecognised value cannot be guessed.`
+    );
+  }
+
+  // The Revenue section split into its room and ancillary halves. `total` is
+  // comparable to the transaction ledger; `room` is comparable to OccupancyDay.
+  const split = revenueSplit(statisticsRows, statisticsPeriod);
+
+  // A statistics leg of exactly 0 from an EMPTY input is "not available", not
+  // "zero revenue" — pass null so the reconciler excludes it instead of treating
+  // it as a real figure that disagrees with everything else.
+  const hasStatistics = Array.isArray(statisticsRows) && statisticsRows.length > 0;
+  const statisticsRevenue = hasStatistics ? split.total : null;
+  const statisticsRoomRevenue = hasStatistics ? split.room : null;
+
+  const occupancyRevenue = Array.isArray(occupancyRows) && occupancyRows.length > 0
+    ? fromCents(sumCents(occupancyRows.map((r) => r.room_revenue)))
+    : null;
+
   const reconciliation = revenueReconciliation.reconcile(
     statisticsRevenue,
     transactionRevenue,
     occupancyRevenue,
-    dateRange
+    dateRange,
+    { statisticsRoomRevenue },
   );
 
-  // Use reconciled value as authoritative
-  const grossRevenue = reconciliation.authoritative_revenue;
-
-  // If drift detected, log it for auditing
   if (reconciliation.drift_detected) {
     console.warn(`[FinancialReconciliation] Revenue drift detected: ${reconciliation.drift_details}`);
   }
 
-  return grossRevenue;
+  return {
+    grossRevenue: reconciliation.authoritative_revenue,
+    // The statistics window is recorded alongside the result because it is not
+    // recoverable from the figure: two runs over the same snapshot can differ
+    // solely by which period column was read, and a reader comparing them needs
+    // to see that rather than infer drift.
+    reconciliation: { ...reconciliation, statistics_period: statisticsPeriod, statistics_period_label: PERIOD_LABEL[statisticsPeriod] || statisticsPeriod },
+  };
 }
 

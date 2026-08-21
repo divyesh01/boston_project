@@ -213,23 +213,157 @@ T("a restricted account cannot rename another property",
 T("a restricted account cannot delete another property",
   (await threw(() => db.entities.Property.delete(B))) !== null);
 
-// ── 4. B4: tables that carry property_id but were never enrolled ─────────────
+// ── 4. B4: every table that carries property_id, derived not enumerated ──────
 // Re-seed first. The three mutation checks above are destructive when they fail:
 // Property.delete() cascades into every enrolled table, so prop_b's ledger rows
 // disappear and every later section would compare against a fixture that no
 // longer has a second property in it — reporting isolation that is really just
 // an empty database.
+//
+// This section used to name the six tables that leaked on 2026-08-15
+// (DailyFinancialAggregate, ScanResult, TimecardPunch, Reservation, RoomType,
+// ChannelMap). A hand-written list only ever tests the tables somebody remembered
+// to add to it, which is the same failure that produced those six: the rule
+// "if the schema line contains property_id, enrol it" was written down in
+// base44Client.js and then not applied to the next table anyone created.
+//
+// So the list is derived from Dexie's LIVE schema instead — localDb.tables, with
+// each table's real index metadata — and every table it yields is exercised
+// against a two-property fixture. A table added to localDb.js next year is
+// covered the day it appears, with no edit here.
+//
+// Deriving from the live schema rather than parsing PROPERTY_TABLES out of the
+// source is deliberate twice over. It cannot be fooled by that set being renamed
+// or moved, and it tests the observable behaviour (does this clerk see prop_b's
+// rows?) rather than set membership, which is the thing that actually matters.
 console.log("\n=== 4. Tables missing from PROPERTY_TABLES (B4) ===");
 await seed();
-await sessionAs("u_clerk_a", "clerk_a");
-for (const name of ["DailyFinancialAggregate", "ScanResult", "TimecardPunch", "Reservation", "RoomType", "ChannelMap"]) {
-  rows = await db.entities[name].filter({});
-  T(`${name} is scoped to the clerk's property`, ids(rows) === A, ids(rows));
+
+// A table is in scope for this check when Dexie indexes property_id on it,
+// either directly or as part of a compound index.
+const indexesPropertyId = (table) =>
+  table.schema.indexes.some((idx) =>
+    Array.isArray(idx.keyPath) ? idx.keyPath.includes("property_id") : idx.keyPath === "property_id",
+  );
+
+// The one documented exemption. ImportRecordIds carries property_id, but it is
+// the rollback ledger — a list of Dexie primary keys per import — and it is
+// reached exclusively through `localDb.ImportRecordIds` (raw Dexie), never
+// through the entity proxy. PROPERTY_TABLES only governs createEntityProxy, so
+// enrolling it would change nothing at all today while looking like a fix.
+//
+// What actually protects it is one layer down: rollbackImportSession() deletes
+// through `entities[row.entity]`, the scoped proxy, which throws on the first id
+// belonging to a property the caller may not touch. Section 4b proves that, and
+// pins the assumption the exemption rests on — that nothing reads the ledger
+// through the proxy.
+const LEDGER_EXEMPT = new Set(["ImportRecordIds"]);
+
+const carriers = localDb.tables.filter(indexesPropertyId).map((t) => t.name).sort();
+T("the live schema still has property_id tables to check (guards a vacuous loop)",
+  carriers.length >= 24, `derived ${carriers.length}: ${carriers.join(", ")}`);
+
+const enrolled = carriers.filter((n) => !LEDGER_EXEMPT.has(n));
+for (const name of LEDGER_EXEMPT) {
+  T(`${name} is a known exemption, and still exists to be exempted`,
+    carriers.includes(name),
+    `not found among property_id carriers — if it was renamed or dropped, remove it from LEDGER_EXEMPT rather than leaving a dead entry that hides a real table`);
 }
-T("a cross-property aggregate write is refused",
-  (await threw(() => db.entities.DailyFinancialAggregate.create({ property_id: B, business_date: "2026-02-01" }))) !== null);
-T("a cross-property scan result write is refused",
-  (await threw(() => db.entities.ScanResult.create({ property_id: B, file_id: "x" }))) !== null);
+
+// Give every derived table one row per property, so no assertion below can pass
+// just because a table happened to be empty.
+for (const name of enrolled) {
+  await localDb[name].add({ property_id: A, date: "2026-03-01", business_date: "2026-03-01", probe_marker: true });
+  await localDb[name].add({ property_id: B, date: "2026-03-01", business_date: "2026-03-01", probe_marker: true });
+}
+
+await sessionAs("u_clerk_a", "clerk_a");
+for (const name of enrolled) {
+  const planted = await localDb[name].where("property_id").equals(B).count();
+  const seen = await db.entities[name].filter({});
+  const leaked = seen.filter((r) => String(r.property_id) === B);
+  T(`${name} is scoped to the clerk's property`,
+    planted > 0 && seen.length > 0 && leaked.length === 0,
+    `prop_b rows present in the raw table: ${planted}; rows returned: ${seen.length}; of another property: ${leaked.length}. ` +
+      `If this table is new, add it to PROPERTY_TABLES in src/api/base44Client.js — a table missing from that set is readable and writable across every property even by code that uses the proxy correctly.`);
+}
+
+// Writes, not just reads. A scoped read that still permits a cross-property
+// create leaks in the other direction: rows planted under a property the caller
+// cannot see, which then feed the aggregates everyone else reads.
+for (const name of ["DailyFinancialAggregate", "ScanResult", "TransactionLine"]) {
+  T(`a cross-property write to ${name} is refused`,
+    (await threw(() => db.entities[name].create({ property_id: B, date: "2026-02-01", business_date: "2026-02-01" }))) !== null,
+    "create() must reject a property_id outside the caller's access rather than storing it");
+}
+
+// ── 4b. The rollback ledger exemption, and the negative case behind it ───────
+// The ledger names raw Dexie primary keys, so anything that consumes it is one
+// unscoped delete away from reaching across properties. Two things are asserted:
+// that the exemption's premise still holds (nothing reads the ledger through the
+// proxy), and that an undo requested by the wrong account fails instead of
+// deleting another property's rows.
+console.log("\n=== 4b. The rollback ledger stays out of reach (B4) ===");
+
+const { readFileSync, readdirSync, statSync } = await import("node:fs");
+const nodePath = await import("node:path");
+const SRC = nodePath.resolve(process.cwd(), "src");
+const walk = (dir, out = []) => {
+  for (const entry of readdirSync(dir)) {
+    const full = nodePath.join(dir, entry);
+    if (statSync(full).isDirectory()) walk(full, out);
+    else if (/\.(js|jsx|ts|tsx)$/.test(entry) && !/\.test\./.test(entry)) out.push(full);
+  }
+  return out;
+};
+
+const proxyReaders = [];
+for (const file of walk(SRC)) {
+  const body = readFileSync(file, "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+  if (/\b(?:db|entities)\s*(?:\.entities)?\s*\.\s*ImportRecordIds\b/.test(body)) {
+    proxyReaders.push(nodePath.relative(process.cwd(), file));
+  }
+}
+T("nothing reaches the rollback ledger through the entity proxy",
+  proxyReaders.length === 0,
+  `${proxyReaders.join(", ")}\n          The exemption above holds only while the ledger is raw-Dexie-only. Reading it through db.entities gives an UNSCOPED proxy, because ImportRecordIds is deliberately absent from PROPERTY_TABLES. If this access is intended, enrol the table there first.`);
+
+// A real import belonging to prop_b, undone by an account that may only see
+// prop_a. The ledger row is visible to that caller (it is unscoped, by design),
+// so the only thing standing between them and prop_b's rows is the proxy inside
+// rollbackImportSession.
+await seed();
+const { rollbackImportSession, addImportRecordIds, createImportSession, completeImportSession } =
+  await import("@/api/base44Client");
+
+await sessionAs("u_owner", "owner");
+const bRows = await localDb.TransactionLine.where("property_id").equals(B).primaryKeys();
+T("the prop_b import fixture has rows to protect", bRows.length > 0, `ids: ${bRows.join(",")}`);
+const session = await createImportSession("probe-b-import.csv", "TransactionLine", bRows.length);
+const importId = session.importId ?? session.import_id ?? session;
+await addImportRecordIds(importId, "TransactionLine", bRows, B);
+await completeImportSession(importId, bRows.length);
+
+await sessionAs("u_clerk_a", "clerk_a");
+const undoErr = await threw(() => rollbackImportSession(importId));
+const survived = await localDb.TransactionLine.where("property_id").equals(B).count();
+T("a clerk cannot undo another property's import",
+  undoErr !== null || survived === bRows.length,
+  `rollback threw: ${JSON.stringify(undoErr)}; prop_b rows remaining: ${survived} of ${bRows.length}`);
+T("...and prop_b's rows are all still there",
+  survived === bRows.length,
+  `${survived} of ${bRows.length} remain — a partial delete is worse than a refusal, because the import history now disagrees with the data`);
+
+// Positive control: the refusal above must be about property access, not a
+// rollback path that is simply broken for everyone.
+await sessionAs("u_owner", "owner");
+const ownerUndo = await rollbackImportSession(importId);
+const afterOwner = await localDb.TransactionLine.where("property_id").equals(B).count();
+T("an all-property account CAN undo the same import (the refusal was about scope)",
+  ownerUndo?.success === true && afterOwner === 0,
+  `result: ${JSON.stringify(ownerUndo)}; prop_b rows remaining: ${afterOwner}`);
 
 // ── 5. B1: the Dashboard's preferred read path ──────────────────────────────
 // This is the one that renders in production: rebuildDailyAggregates runs on

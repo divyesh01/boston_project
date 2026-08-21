@@ -42,9 +42,9 @@ async function overLimit(base44, key, action, max) {
   const rows = await base44.asServiceRole.entities.RateLimit.filter({ ip: key, action }, null, 1, 0);
   const bucket = rows[0];
   if (bucket && new Date(bucket.reset_at).getTime() > now) {
-    if ((bucket.count || 0) >= max) return true;
+    if ((bucket.count || 0) >= max) return { throttled: true, resetAt: bucket.reset_at };
     await base44.asServiceRole.entities.RateLimit.update(bucket.id, { count: (bucket.count || 0) + 1 });
-    return false;
+    return { throttled: false };
   }
   const reset_at = new Date(now + 15 * 60 * 1000).toISOString();
   if (bucket) {
@@ -52,7 +52,7 @@ async function overLimit(base44, key, action, max) {
   } else {
     await base44.asServiceRole.entities.RateLimit.create({ ip: key, action, count: 1, reset_at });
   }
-  return false;
+  return { throttled: false };
 }
 
 export default async function (req) {
@@ -79,13 +79,14 @@ export default async function (req) {
     // about whether the address exists — the same reason the not-found case below
     // answers success.
     const ip = req.headers.get('x-forwarded-for') || req.headers.get('remote-addr') || 'unknown';
-    const throttled =
-      (await overLimit(base44, `ip:${ip}`, 'reset_request', 5)) ||
-      (await overLimit(base44, `email:${email.slice(0, 120)}`, 'reset_request', 5));
-    if (throttled) {
+    const ipLimit = await overLimit(base44, `ip:${ip}`, 'reset_request', 5);
+    const resultLimit = ipLimit.throttled ? ipLimit : await overLimit(base44, `email:${email.slice(0, 120)}`, 'reset_request', 5);
+    if (resultLimit.throttled) {
+      const resetAtTime = new Date(resultLimit.resetAt).getTime();
+      const retryAfter = isNaN(resetAtTime) ? 900 : Math.max(1, Math.ceil((resetAtTime - Date.now()) / 1000));
       return Response.json(
         { error: "Too many reset requests. Try again in a few minutes." },
-        { status: 429 }
+        { status: 429, headers: { "Retry-After": String(retryAfter) } }
       );
     }
 

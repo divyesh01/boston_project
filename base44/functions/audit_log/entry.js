@@ -78,12 +78,28 @@ export default async function (req) {
     const lastEntries = await base44.asServiceRole.entities.AuditLog.filter({}, '-created_date', 1, 0);
     const lastRow = (lastEntries && lastEntries[0]) || null;
     const previousHash = (lastRow && lastRow.hash) || '0'.repeat(64);
-    // created_date is the column audit_verify orders the chain by, so it must be
-    // STRICTLY increasing. Two rows written inside the same millisecond would
-    // tie, and the verifier could then walk them in the opposite order to the
-    // one they were linked in and report a chain break that never happened.
-    // Nudging forward by 1ms costs nothing and removes that class of false
-    // alarm — and a false alarm is indistinguishable from a real one.
+    // created_date is the column the audit page orders by, so it is kept strictly
+    // increasing relative to the row we just read. Two rows written in the same
+    // millisecond would otherwise tie and display in an arbitrary order.
+    //
+    // SCOPE — read this before assuming it fixes the concurrency problem, because
+    // it does not (known problem #15):
+    //
+    //   FIXES     a SEQUENTIAL same-millisecond tie. We read `lastRow`, so we can
+    //             step past it.
+    //   DOES NOT  fix CONCURRENT writers. Two overlapping invocations of this
+    //   FIX       function both read the same tail before either writes, so both
+    //             compute the same `previousHash` AND the same `nowIso`. Measured
+    //             with three simultaneous logins (scripts/probe-audit-chain-race.mjs):
+    //             three rows, one shared parent hash, one shared timestamp.
+    //
+    // There is no compare-and-swap or transaction primitive on the entity API, so
+    // this cannot be closed here — a fork is genuinely possible. It is handled
+    // where it is observable instead: audit_verify/entry.js verifies the chain as
+    // a DAG and classifies a shared parent as `concurrent_append` (benign,
+    // chain stays valid) rather than as `hash_mismatch` (tampering). Before that
+    // change, three people logging in at once permanently red-lined the audit
+    // page with a tampering accusation.
     const nowIso = monotonicIso(lastRow && lastRow.created_date);
     // AUDIT_CANONICAL_V1 = user_id,action,performed_by_id,performed_by,property_id,result,detail,created_date,previous_hash
     const canonical = JSON.stringify({
@@ -125,10 +141,13 @@ export default async function (req) {
   }
 }
 
-// Next ISO timestamp that is strictly greater than the previous row's. Shared in
-// spirit (not in code — the base44 host has no module sharing between functions)
-// with base44/functions/custom_user_admin/entry.js, the other writer on this
-// chain. See the note at the call site for why strict monotonicity matters.
+// Next ISO timestamp strictly greater than `lastIso`, so a sequential write never
+// ties with the row it read. Shared in spirit (not in code — the base44 host has
+// no module sharing between functions) with the other writers on this chain.
+//
+// This is a display-ordering aid, NOT a concurrency control: it can only step past
+// a timestamp that was passed in, and two overlapping invocations both read the
+// same tail. See the SCOPE block at the call site.
 function monotonicIso(lastIso) {
   const now = Date.now();
   const last = lastIso ? Date.parse(lastIso) : NaN;

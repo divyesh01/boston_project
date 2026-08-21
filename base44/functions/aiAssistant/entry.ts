@@ -1,28 +1,73 @@
-const db = globalThis.__B44_DB__ || { auth:{ isAuthenticated: async()=>false, me: async()=>null }, entities:new Proxy({}, { get:()=>({ filter:async()=>[], get:async()=>null, create:async()=>({}), update:async()=>({}), delete:async()=>({}) }) }), integrations:{ Core:{ UploadFile:async()=>({ file_url:'' }) } } };
-
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import * as crypto from 'node:crypto';
+import { z } from "npm:zod";
 
-export default async function(req) {
-  try {
-    const base44 = createClientFromRequest(req);
+import { createApiHandler } from "../../utils/apiHandler.js";
 
-    // Resolve the caller from the session cookie (same as every auth function).
-    const cookieHeader = req.headers.get('cookie') || '';
-    const cookieMatch = cookieHeader.match(/base44_session=([^;]+)/);
-    const token = cookieMatch ? cookieMatch[1] : null;
-    if (!token) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-    const sessions = await base44.asServiceRole.entities.Session.filter({ token_hash: tokenHash }, null, 1, 0);
-    const session = sessions[0];
-    if (!session || session.is_revoked || new Date(session.expires_at) < new Date()) {
-      return Response.json({ error: 'Unauthorized' }, { status: 401 });
+const BodySchema = z.object({
+  question: z.string().max(2000),
+  dateFrom: z.string().optional(),
+  dateTo: z.string().optional(),
+  propertyId: z.union([z.string(), z.array(z.string())]).optional(),
+  synthetic: z.object({
+    occRows: z.array(z.any()).optional(),
+    srcRows: z.array(z.any()).optional(),
+    payRows: z.array(z.any()).optional(),
+    expenseRows: z.array(z.any()).optional(),
+    payroll: z.array(z.any()).optional(),
+    clerkRecords: z.array(z.any()).optional(),
+    uploads: z.array(z.any()).optional(),
+  }).optional()
+}).strict();
+const QuerySchema = z.object({}).strict();
+
+export default createApiHandler({ bodySchema: BodySchema, querySchema: QuerySchema }, async ({ body, req }) => {
+  const base44 = createClientFromRequest(req);
+
+  // Resolve the caller from the session cookie (same as every auth function).
+  const cookieHeader = req.headers.get('cookie') || '';
+  const cookieMatch = cookieHeader.match(/base44_session=([^;]+)/);
+  const token = cookieMatch ? cookieMatch[1] : null;
+  if (!token) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const sessions = await base44.asServiceRole.entities.Session.filter({ token_hash: tokenHash }, null, 1, 0);
+  const session = sessions[0];
+  if (!session || session.is_revoked || new Date(session.expires_at) < new Date()) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  const user = await base44.asServiceRole.entities.User.get(session.user_id);
+  if (!user || !user.is_active || user.is_locked) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const now = Date.now();
+  const rlRecords = await base44.asServiceRole.entities.RateLimit.filter({ ip: String(user.id), action: 'ai_invoke' }, null, 1, 0);
+  let rl = rlRecords[0];
+  if (rl) {
+    if (new Date(rl.reset_at).getTime() < now) {
+      rl.count = 1;
+      rl.reset_at = new Date(now + 15 * 60 * 1000).toISOString();
+      await base44.asServiceRole.entities.RateLimit.update(rl.id, { count: rl.count, reset_at: rl.reset_at });
+    } else {
+      if (rl.count >= 10) {
+        const resetAtTime = new Date(rl.reset_at).getTime();
+        const retryAfter = isNaN(resetAtTime) ? 900 : Math.max(1, Math.ceil((resetAtTime - now) / 1000));
+        return Response.json(
+          { error: "Too many AI requests. Please try again later." },
+          { status: 429, headers: { "Retry-After": String(retryAfter) } }
+        );
+      }
+      rl.count += 1;
+      await base44.asServiceRole.entities.RateLimit.update(rl.id, { count: rl.count });
     }
-    const user = await base44.asServiceRole.entities.User.get(session.user_id);
-    if (!user || !user.is_active || user.is_locked) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  } else {
+    await base44.asServiceRole.entities.RateLimit.create({
+      ip: String(user.id),
+      action: 'ai_invoke',
+      count: 1,
+      reset_at: new Date(now + 15 * 60 * 1000).toISOString()
+    });
+  }
 
-    const body = await req.json();
-    const question = String(body.question || "").trim().slice(0, 2000);
+  const question = String(body.question || "").trim().slice(0, 2000);
     const dateFrom = body.dateFrom || "";
     const dateTo = body.dateTo || "";
     const propertyId = body.propertyId || "all";
@@ -196,7 +241,7 @@ ${safeQ}
 DATA SUMMARY:
 ${JSON.stringify(summary, null, 2)}`;
 
-    const llmResponse = await db.asServiceRole.integrations.Core.InvokeLLM({
+    const llmResponse = await base44.asServiceRole.integrations.Core.InvokeLLM({
       prompt,
       model: "automatic",
     });
@@ -205,7 +250,4 @@ ${JSON.stringify(summary, null, 2)}`;
       answer: typeof llmResponse === "string" ? llmResponse : JSON.stringify(llmResponse),
       summary,
     });
-  } catch (error) {
-    return Response.json({ error: "Internal server error" }, { status: 500 });
-  }
-}
+});

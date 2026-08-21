@@ -49,7 +49,6 @@ base44\functions\getWeather\entry.ts
 base44\functions\importDriveFile\entry.ts
 base44\functions\listDriveFiles\entry.ts
 base44\lib\corsConfig.js
-base44\lib\securityHeaders.js
 scripts\_harness-auth.mjs
 scripts\_loader-boot.mjs
 scripts\acceptance-harness.mjs

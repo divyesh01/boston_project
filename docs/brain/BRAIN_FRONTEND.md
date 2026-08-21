@@ -108,7 +108,7 @@ These are the files in `src/lib/` -- the brains of the app. Grouped by what they
 | `validator.js` PROTECTED | Email/input validation rules | Bad data accepted, injection possible. |
 | `authHelpers.js` | Auth utility functions | Login flow breaks. |
 | `authReturnTo.js` | Remembers where user was before login redirect | User redirected wrong after login. |
-| `deleteGuard.js` | Safe deletion pipeline: Confirm -> Rate-Limit -> CSRF check | Accidental mass deletion possible. |
+| `deleteGuard.js` | Safe deletion pipeline: Dependent-disclosure -> Confirm -> Rate-Limit -> CSRF check. `dependents` puts the count and money value of the records that will *survive* into the dialog | Accidental mass deletion possible; operator cannot tell what a delete keeps. |
 | `launchPolicy.js` | Production launch restrictions (LAUNCH_POLICY_V1) | Wrong users get production access. |
 | `sessionChannel.js` | Cross-tab session sync via BroadcastChannel | Logout in one tab does not logout others. |
 | `mfaRecovery.js` | MFA recovery code generation + SHA-256 hash validation | Users locked out of MFA accounts forever. |
@@ -253,5 +253,118 @@ These are the files in `src/lib/` -- the brains of the app. Grouped by what they
 | `KpiCard.jsx` | KPI metric display with count-up animation |
 | `RangePicker.jsx` | Date range picker |
 | `StatusBadge.jsx` | Status indicator badge |
+
+---
+
+
+# 7. GETTING DATA OUT (Owner-facing export + fast filters)
+
+> [!IMPORTANT]
+> `src/lib/exportData.js` is the **only** download implementation in the app. There is
+> no second one. `hotel.js#downloadCsv` and `hotel.js#downloadExcel` were deleted on
+> 2026-08-20 once the last page migrated — do not reintroduce them, and do not add a
+> per-page CSV writer. Two implementations of a download cannot be kept in agreement
+> by review: the negative-number guard fix and the Excel column spec would each have
+> had to be applied twice.
+
+## 7.1 The five export surfaces
+
+| Page | Rows exported | Column spec |
+|------|---------------|-------------|
+| `AuditLog.jsx` | Filtered + sorted audit rows | `AUDIT_EXPORT_COLUMNS` (`auditView.js`) — 19 columns covering all 13 fields the writers persist |
+| `Transactions.jsx` | `visible` (the filtered ledger) | `TRANSACTION_EXPORT_COLUMNS` — 13 columns, owner-facing labels |
+| `Statistics.jsx` | The snapshot rows | `STATISTICS_EXPORT_COLUMNS` — includes `original_value` as "As imported" |
+| `ManualEntry.jsx` | The spreadsheet grid | Derived from `config.fields`, so headers match the on-screen grid |
+| `ChartBuilder.jsx` | The aggregated groups | Derived from the table header expressions `{g}` and `` `${agg} (${v})` `` |
+
+Every one is `(isExcel ? downloadExcel : downloadCsv)(rows, { filename, columns, sheetName })`.
+Both return the row count and both **throw** on an empty set.
+
+## 7.2 The contract, and the four defects it closes
+
+```js
+downloadCsv(rows, { filename, columns, bom = true })   // -> row count, throws if empty
+downloadExcel(rows, { filename, columns, sheetName })  // -> row count, throws if empty
+buildCsv(rows, { columns, bom })                       // pure, testable
+buildSheetRows(rows, { columns })                      // pure, testable
+```
+
+1. **Silent column loss.** `Object.keys(rows[0])` decided the columns for the whole
+   file. Audit, transaction and payroll rows are heterogeneous — `device` is absent on
+   server-side events, `employee_id` on non-payroll charges. If row 0 lacked a field,
+   that column vanished for every row that had it, with no error and no count. An
+   export that quietly drops a column is worse than one that fails, because the
+   recipient reconciles against it.
+2. **Silent empty export.** A filter matching nothing produced a header-only download
+   and no message — indistinguishable from a browser blocking the download. Both
+   functions now throw, and every call site reports through that page's existing
+   feedback channel (`toast`, or `setSaveMsg`/`setMsgTone` on ManualEntry).
+3. **No UTF-8 BOM, LF endings.** Excel on Windows read a BOM-less UTF-8 CSV as the
+   local ANSI code page, so "Nuñez" arrived as "NuÃ±ez". Now BOM + CRLF per RFC 4180.
+4. **Blob URL revoked on the same tick as `.click()`**, racing the browser's own fetch
+   of that URL, and an anchor never attached to the document.
+
+## 7.3 The formula-injection guard, and the bug the guard itself caused
+
+Cells beginning `= + - @ tab CR` are prefixed with `'` via
+`securityUtils.js#neutralizeFormula`, so a payload like `-2+3+cmd|' /C calc'!A0`
+imported from a hostile CSV cannot execute when the owner opens the export.
+
+> [!CAUTION]
+> Applied naively, that rule prefixes **every negative amount**. `-25.50` exported as
+> the text `'-25.50`, and a refund column of text cannot be summed — silently, with no
+> error, in a file an accountant reconciles against. This defect was introduced and
+> caught inside the same session.
+
+The fix is an exemption for values that are plain decimal numbers:
+
+```js
+const NUMERIC_TEXT = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+const guarded = NUMERIC_TEXT.test(raw) ? raw : neutralizeFormula(raw);
+```
+
+> [!TIP]
+> **BEST OUTCOME NOTE.** No formula or DDE payload is *also* a valid plain decimal, so
+> the exemption gives up nothing. The alternative — a list of "numeric columns" to skip
+> — would need updating every time a column is added, and would fail silently when
+> someone forgot. This rule needs no list to keep in sync. Verified both directions in
+> `probe-export-data.mjs` §4b: `-25.5`, `-1234.56`, `-1.2e3`, `.5` pass through as
+> numbers; `-2+3`, `- 1`, `+1`, `-1,000`, `-$5`, `=-1` are all still guarded.
+
+In Excel the same rule keeps numbers as **numbers**: `excelCell` coerces numeric text
+with `Number()` so the cell is right-aligned and summable, rather than a text cell that
+looks like a number.
+
+## 7.4 Fast filters: what the owner does not have to redo
+
+`exportData.js` also owns the date-filter layer, because a filter and an export of that
+filter must agree about what "this month" means.
+
+- `QUICK_RANGES` / `resolveQuickRange` — Today, Yesterday, This week, This month, Last
+  month, This quarter, YTD, Last 7/30/90 days.
+- `readStoredFilters` / `writeStoredFilters` / `clearStoredFilters` — the dashboard
+  reopens where the owner left it.
+- `describeRange` — the active range is rendered next to the total, so **a subtotal is
+  never read as a total**. Covered by `probe-export-data.mjs` §8.
+- `countUndated` — rows with no date are counted and shown, not dropped. A date filter
+  that silently discards undated rows makes the total disagree with the unfiltered view
+  for a reason the owner cannot see.
+
+> [!WARNING]
+> **Every date here derives from LOCAL calendar parts, never `toISOString()`.** The
+> repo's timezone is America/New_York, so `new Date().toISOString().slice(0,10)`
+> returns **tomorrow's** date after 8pm — a "Today" filter that hides the evening
+> shift's own events, precisely when a night-audit clerk is looking at them.
+>
+> Same trap, different symptom: `new Date("YYYY-MM-DD")` parses as **UTC midnight**, so
+> formatting it locally names the **previous** day. Use `hotel.js#formatDayLabel` for
+> any date-only string; never construct a `Date` from one to make a label.
+
+## 7.5 Bundle note
+
+Deleting `downloadExcel` from `hotel.js` also removed `import * as XLSX` from it. `xlsx`
+is the largest dependency in the bundle and `hotel.js` is imported by nearly every
+page, so it was being pulled into almost every route. It now loads only with the export
+module that uses it.
 
 ---

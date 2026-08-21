@@ -989,7 +989,7 @@ export default async function (req) {
         // Spend the counter, exactly as the login path does, so a code confirmed
         // here cannot then be replayed at sign-in inside its ±1 window.
         await base44.asServiceRole.entities.User.update(user.id, { mfa_last_counter: counter });
-        await writeAudit(base44, { action: 'MFA Verified', actor, targetUser: user });
+        await writeAudit(base44, { action: 'MFA Verified', actor, targetUser: user, detail: 'MFA verification succeeded' });
         return Response.json({ success: true });
       },
 

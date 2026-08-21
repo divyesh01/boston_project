@@ -25,6 +25,9 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
+      'npm:@base44/sdk@0.8.40': '@base44/sdk',
+      'npm:@base44/sdk@^0.8.41': '@base44/sdk',
+      'npm:zod': 'zod',
       "@": path.resolve(import.meta.dirname, "./src"),
     },
   },

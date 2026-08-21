@@ -83,7 +83,7 @@ const server = await createServer({
   server: { middlewareMode: true, hmr: false },
   appType: 'custom',
   plugins: [],
-  optimizeDeps: { enabled: false },
+  optimizeDeps: { noDiscovery: true },
   resolve: { alias: [{ find: '@', replacement: path.resolve(root, 'src') }] },
 });
 try {

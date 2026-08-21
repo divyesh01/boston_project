@@ -345,10 +345,11 @@ const server = await createServer({
   server: { middlewareMode: true, hmr: false },
   appType: 'custom',
   plugins: [],
-  optimizeDeps: { enabled: false },
+  optimizeDeps: { noDiscovery: true },
   resolve: { alias: [{ find: '@', replacement: path.resolve(root, 'src') }] },
 });
 const mod = (rel) => server.ssrLoadModule(rel);
+try {
 
 const clientMod = await mod('/src/api/base44Client.js');
 const db = clientMod.db || clientMod.default;
@@ -1067,5 +1068,7 @@ const report = {
 };
 fs.writeFileSync(path.join(__dirname, 'acceptance-report.json'), JSON.stringify(report, null, 2));
 console.log(`\nReport written to scripts/acceptance-report.json`);
-await server.close();
+} finally {
+  await server.close();
+}
 process.exit(failed ? 1 : 0);

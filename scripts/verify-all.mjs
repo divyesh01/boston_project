@@ -40,12 +40,6 @@
 //
 // Exit code is 0 only if every suite that ran passed.
 
-// Disable Vite's dev server and dep-scan for all child processes.
-process.env.VITE_SKIP_DEP_SCAN = '1';
-process.env.VITE_DISABLE_DEP_SCAN = '1';
-process.env.VITE_TEST = '1';
-process.env.NODE_ENV = 'test';
-process.env.SKIP_VITE = 'true';
 
 import { readdirSync, existsSync } from "node:fs";
 import { spawn } from "node:child_process";

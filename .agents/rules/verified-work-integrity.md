@@ -23,6 +23,8 @@ cannot run it, say "Not run" and do not claim the change is safe.
 | `vitest.config.js`, `tests/stubs/base44-runtime.js` | `npx vitest run tests/backend` | must not regress to a resolution error |
 | `.github/workflows/security.yml` | `npm run typecheck` **and** `npm run audit:gate` | both exit 0 |
 | `scripts/audit-gate.mjs` | `npm run audit:gate` | exit 0, prints `Audit gate passed` |
+| `base44/functions/**/entry.{js,ts}` | `node --import ./scripts/_loader-boot.mjs scripts/probe-audit-chain.mjs` | `PASSED: 36 passed, 0 failed` |
+| `src/components/dashboard/MoneyKept.jsx` | `node --import ./scripts/_loader-boot.mjs scripts/verify-money-kept.mjs` | `PASSED: 29 checks passed, 0 failed` |
 
 ## Invariants that must not be weakened
 
@@ -94,25 +96,57 @@ the defect it was written for.
     gains a fix, and on its own inability to parse `npm audit --json`. That last
     one is deliberate: a gate that goes green because the registry was
     unreachable has verified nothing.
+12. **`MoneyKept.jsx` computes `kept` and `netRevenueBase` in integer cents.**
+    This looks like pointless ceremony — every deduction is already snapped to 2dp
+    by `pushItem`, and the float residue was ~1e-10, invisible after formatting.
+    That is exactly why it survived, and why a future "simplification" back to
+    `gross - totalDeductions` will look harmless. It is the flagship figure on the
+    card and the denominator of the displayed keep rate, and CLAUDE.md §4 forbids
+    float arithmetic on dollars without exception. Section 6 of
+    `verify-money-kept.mjs` asserts both expressions statically, so a revert turns
+    the suite red instead of shipping quietly. The per-day `share` / `lumpTotal`
+    revenue-share allocation is deliberately left fractional — it is an
+    apportionment feeding a trend chart, not a stated amount.
 
 ## Deliberate non-changes
 
 Do not "fix" these. Each was investigated and left alone on purpose.
 
-- **`base44/functions/**` import specifiers** (`npm:@base44/sdk@0.8.40`,
-  `npm:@base44/sdk@^0.8.41`, `base44:runtime`). Deno needs them exactly as
-  written, and `custom_auth_login/entry.js:204` /
-  `custom_user_admin/entry.js:311` both record that the signed audit payload
-  depends on those import lines being byte-identical across copies. `vitest.config.js`
-  aliases them instead. The three disagreeing SDK pins are a real defect, tracked
-  in `LAUNCH_READINESS_CHECKLIST.md`, not fixed as a side effect of a test change.
-- **`chooseOuterRadiusPct` returning `maxPct` when the box measures 0**
-  (`donutLabelLayout.js:162`). This is the largest ring, i.e. the least room for
-  labels, in exactly the state where nothing is known — the opposite of the
-  function's stated purpose. It self-corrects when the ResizeObserver fires, so
-  the visible cost is one frame, and the alternative (`minPct`) trades that for a
-  ring that visibly grows on every mount. Left as-is because the UI outcome
-  cannot be verified in the Linux VM (no browser, no `npm run build`). Recorded
+- **`base44/functions/**` import specifiers** (`npm:@base44/sdk@^0.8.41`,
+  `base44:runtime`). Deno needs them exactly as written; `vitest.config.js`
+  aliases them instead of resolving them. Do not rewrite them to bare
+  `@base44/sdk` to make a bundler happy.
+
+  **Corrected 2026-08-22.** An earlier version of this bullet said the signed
+  audit payload depends on *the import lines* being byte-identical across copies.
+  It does not. What `custom_auth_login/entry.js:204` and
+  `custom_user_admin/entry.js:311` actually record is that the **canonical field
+  list** (`AUDIT_CANONICAL_V1 = user_id,action,performed_by_id,performed_by,`
+  `property_id,result,detail,created_date,previous_hash`) must be identical in all
+  seven copies, because the host offers no way to share a module. Line 1 is not
+  part of the hash. That misreading is why the version split below survived as a
+  "deliberate non-change" for as long as it did — so re-read the source comment
+  before treating any line as frozen.
+
+  The split itself is **fixed**, not deferred: seven `entry.ts` files pinned exact
+  `0.8.40` while eleven `entry.js` files — the entire auth, session and audit path —
+  pinned `^0.8.41`, which is also `package.json:25` and the installed version.
+  All eighteen now read `^0.8.41`. Safe because those seven import exactly one SDK
+  export, `createClientFromRequest`, which is present and documented at 0.8.41, and
+  because `probe-audit-chain.mjs` (36/0 after the change) proves the payload copies
+  did not move. Two of the seven — `autoPayroll` and `deleteAccount` — write audit
+  rows, so running them against a different SDK build than the verifier was the
+  actual risk. Runtime behaviour on the base44 Deno host is **Not Run** from the
+  Linux VM.
+- **`chooseOuterRadiusPct` returns `minPct` when the box measures 0**
+  (`donutLabelLayout.js:173`). **This bullet said the opposite until 2026-08-22 —
+  do not "restore" `maxPct`.** A zero box means the ResizeObserver has not
+  reported, so nothing is known about the space; the largest ring leaves the least
+  label room, which inverts the function's purpose. `minPct` makes the first frame
+  safe by construction and the ring settles outward once the observer fires —
+  growth reads as settling, shrink reads as breakage. Verified by
+  `verify-donut-labels.mjs`; the *visual* outcome is still unverifiable here (no
+  browser, no `npm run build`). Recorded
   in `LAUNCH_READINESS_CHECKLIST.md`.
 - **`base44/functions/validateUpload/`** is an empty directory; `entry.js` never
   existed in git history. Its orphan test was deleted, not "repaired" — there is

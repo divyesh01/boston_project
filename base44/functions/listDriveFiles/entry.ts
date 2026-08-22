@@ -1,4 +1,4 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { createClientFromRequest } from 'npm:@base44/sdk@^0.8.41';
 import * as crypto from 'node:crypto';
 
 export default async function(req) {

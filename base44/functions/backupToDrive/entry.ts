@@ -1,4 +1,4 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { createClientFromRequest } from 'npm:@base44/sdk@^0.8.41';
 import * as crypto from 'node:crypto';
 import * as dns from 'node:dns';
 import { promisify } from 'node:util';

@@ -498,8 +498,15 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     pushItem("other", "Other Expenses", expAmt("other"), expRows("other").map(expRecord));
     pushItem("refunds", "Refunds", refundRecords.reduce((a, x) => a + x.amount, 0), refundRecords);
 
-    const totalDeductions = items.reduce((a, i) => a + i.amount, 0);
-    const kept = gross - totalDeductions;
+    // INTEGER CENTS on the headline figure (CLAUDE.md §4). `pushItem` already
+    // snaps each amount to 2dp, but summing a dozen of them with `+` and then
+    // subtracting from gross accumulates ~1e-10 of binary residue — invisible
+    // after formatting, which is exactly why it survived. Summing cents and
+    // subtracting once is exact, so `kept` no longer depends on how many
+    // deduction categories the period happens to have.
+    const totalDeductionsCents = items.reduce((a, i) => a + toCents(i.amount), 0);
+    const totalDeductions = fromCents(totalDeductionsCents);
+    const kept = fromCents(toCents(gross) - totalDeductionsCents);
 
     // ── Tax liability (state / city / other shown separately) ──
     //
@@ -675,7 +682,10 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
   // the government, never the owner's to keep) are removed from the denominator
   // so the percentage reflects true net-revenue efficiency rather than an
   // artificially inflated share of uncollected gross.
-  const netRevenueBase = gross - refundsTotal - passThrough;
+  // Integer cents for the same reason as `kept` above: this is the denominator
+  // of the displayed keep rate, so a residue here moves a percentage the owner
+  // reads against a target.
+  const netRevenueBase = fromCents(toCents(gross) - toCents(refundsTotal) - toCents(passThrough));
   const keepRate = netRevenueBase > 0 ? kept / netRevenueBase : (gross > 0 ? kept / gross : 0);
   const periodLabel = `${from || "—"} → ${to || "—"}`;
   const taxTotal = tax.state + tax.city + tax.other;

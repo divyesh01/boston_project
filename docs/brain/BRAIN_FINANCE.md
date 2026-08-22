@@ -184,6 +184,49 @@ node --import ./scripts/_loader-boot.mjs scripts/probe-decimal-integration.mjs
 
 Both must pass before trusting the Money Kept card after a cache-format change.
 
+## 12.5.2 The headline figure itself — FIXED 2026-08-22
+
+Section 12.5 explains why the *formulas* run in cents. The last place that did not
+was the number the whole card exists to state.
+
+`MoneyKept.jsx` used to compute:
+
+```js
+const totalDeductions = items.reduce((a, i) => a + i.amount, 0);
+const kept = gross - totalDeductions;
+const netRevenueBase = gross - refundsTotal - passThrough;   // keep-rate denominator
+```
+
+Every `i.amount` is already snapped to 2dp by `pushItem`, so this looks safe — and
+it very nearly was. The residue was around 1e-10, invisible after formatting. That
+is precisely why it lasted: it is the *guarantee* that was wrong, not usually the
+output, which is the same reason given in the note at the end of 12.5. Both now
+read:
+
+```js
+const totalDeductionsCents = items.reduce((a, i) => a + toCents(i.amount), 0);
+const kept = fromCents(toCents(gross) - totalDeductionsCents);
+const netRevenueBase = fromCents(toCents(gross) - toCents(refundsTotal) - toCents(passThrough));
+```
+
+`netRevenueBase` matters as much as `kept`: it is the denominator of the displayed
+keep rate, so a residue there moves a percentage the owner reads against a target.
+
+**Deliberately still fractional:** the per-day `share` / `lumpTotal` allocation
+that apportions a lump deduction across days for the trend chart. It is an
+apportionment, not a stated amount — forcing it to whole cents would stop the daily
+slices summing to the lump they came from. Snapping the *displayed* slice
+(`keptSlice`) is fine and unchanged.
+
+Section 6 of the proof command below asserts both expressions **statically against
+the component source**, not just re-implemented arithmetic, because a probe that
+mirrors the formula cannot notice the original changing. All three of those static
+assertions were mutation-tested against the pre-fix source and each fails on it.
+
+```
+node --import ./scripts/_loader-boot.mjs scripts/verify-money-kept.mjs   # 29/0
+```
+
 ## 12.6 Real Numbers — RESOLVED 2026-08-20
 
 Measured, not transcribed. `scripts/probe-money-kept-gross.mjs` drives the real

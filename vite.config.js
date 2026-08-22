@@ -90,14 +90,16 @@ export default defineConfig({
           'chart-vendor': ['recharts'],
           'ui-vendor': ['lucide-react', 'framer-motion', 'clsx', 'tailwind-merge'],
           // No 'map-vendor' entry. It used to read ['leaflet', 'react-leaflet'],
-          // which named `leaflet` — a package that is not declared in
-          // package.json and exists in node_modules only because npm
-          // auto-installs react-leaflet's peer. The one file that imports
-          // react-leaflet (src/components/propertyMap.jsx) is imported by
-          // nothing, so neither package is in the module graph and the chunk was
-          // empty. manualChunks only groups modules, it never pulls them in, so
-          // dropping it changes no output. If the map is ever wired up, run
-          // `npm i leaflet@^1.9.4` first so the dependency is declared.
+          // and the chunk was always empty: the only file importing react-leaflet
+          // (src/components/propertyMap.jsx) is imported by nothing, so neither
+          // package is in the module graph. manualChunks only groups modules that
+          // are already there — it never pulls them in — so dropping the entry
+          // changes no output. Restore it if the map is ever wired up.
+          //
+          // (An earlier version of this comment claimed `leaflet` was undeclared
+          // and only present as react-leaflet's auto-installed peer. That was
+          // wrong: package.json declares leaflet ^1.9.4, react-leaflet ^4.2.1 and
+          // @types/leaflet ^1.9.22. Nothing needs installing.)
           'crdt-vendor': ['yjs', 'y-websocket'],
           'query-vendor': ['@tanstack/react-query'],
           'data-vendor': ['@base44/sdk', 'dexie', 'otplib'],

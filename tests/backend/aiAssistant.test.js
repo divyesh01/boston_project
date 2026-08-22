@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 
-vi.mock("npm:@base44/sdk@0.8.40", () => ({
+vi.mock("npm:@base44/sdk@^0.8.41", () => ({
   createClientFromRequest: () => ({
     asServiceRole: {
       entities: {

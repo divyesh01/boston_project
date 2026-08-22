@@ -421,22 +421,26 @@ The second box stands: nothing in `src/` compares the three derivations at runti
 
 ## 🟡 MEDIUM
 
-- [ ] **`applyPropertyFilter` silently widens a single-property query.** A caller passing a plain string `property_id` has it *replaced* by the user's entire allowed set (`base44Client.js:424-434`). Not a leak — stays within authorised scope — but a query for one property returns the sum of several. Against an exact-cent requirement, that is a correctness defect. Intersect instead of replace. **OBSERVED**
+- [x] **`applyPropertyFilter` silently widens a single-property query.** ✅ Fixed; **re-verified 2026-08-22**. The function is now `applyScope` (`base44Client.js:706`) and it **intersects** rather than replaces: an `$in` list is filtered against the allowance, and a plain string `property_id` resolves to `[requested]` if permitted and `[]` if not — so asking for a property you may not see returns nothing, where it previously returned a *different* property's rows. The `else` branch (no property condition, or an operator shape nothing currently produces) still falls back to the full allowance, which can only widen *within* what the caller is entitled to see. The old item's line reference (`:424-434`) is stale; that code moved. **OBSERVED**
 - [x] **`convertDate` accepts impossible dates.** ✅ Fixed 2026-08-16. `"13/25/2026"` → `"2026-13-25"` and `"31-Feb-26"` → `"2026-02-31"` were both accepted, and because date filtering is string comparison, such a row is **invisible to every date-range query while still counted in unfiltered totals** — a reconciliation mismatch with no visible cause. `convertDate` now validates the calendar (month 1–12, day within that month's real length, leap years included) and `isIsoDate` rejects the same impossibilities, so a bad date is refused at the parser rather than persisted. `"not a date"` is refused instead of ingested. The `"1-Jan-99"` → 2099 pivot is unchanged and deliberate: a two-digit year is genuinely ambiguous, and the pivot is documented rather than guessed at per-row. **OBSERVED — `scripts/probe-date-validation.mjs` 42/0**
 - [x] **Financial records delete on one unconfirmed click.** ✅ Fixed 2026-08-16. `Payroll.jsx` staff and payroll-run deletes had **no confirmation, no CSRF and no rate limit**; `Expenses.jsx` had CSRF and rate limiting but still no confirmation — so one mis-click on a phone permanently removed a payroll run. Rather than copy fifteen lines four times, all four now go through a single new `src/lib/deleteGuard.js`, which runs **confirm → rate limit → CSRF** in that order. The order matters: `sensitiveActionRateLimiter.check()` consumes a slot on **every** call, so validating before asking would let three cancelled mis-clicks burn the operator's budget for a delete they do want. The token is rotated only *after* the write, since rotating first invalidates the token the write is authorised by, and a missing `window.confirm` returns **false** — no dialog means no informed consent was obtained.
 
   The dialogs name the record, not the noun: employee name, `employee_id`, department and rate; expense name, amount, vendor, category and frequency. Two consequences are stated explicitly because they are counter-intuitive: deleting a Staff row **does not** damage payroll history (runs store `employee_name`, and `employee_id` is a display label that is deliberately reissued — see `src/lib/employeeId.js`), and deleting an **approved or paid** payroll run *increases* reported Money Kept, so the dialog gives the exact dollar amount it will move. `Expenses.handleDeletePayroll` also had no error handling at all: a rejection left the row on screen with no message, which reads as "the click didn't register".
 
   The probe's static half enumerates every `delete`/`bulkDelete`/`clear` call site in `src/pages` and fails if a new one appears without a confirmation upstream, so this cannot silently regress. **OBSERVED — `scripts/probe-delete-guard.mjs` 61/0**
-- [ ] **Duplicate/long-row cell loss.** `rowsToObjects` uses `obj[h] = row[i] || ""`, so a repeated column name keeps only the last value and extra cells are dropped (`csvParser.js:122-135`). Flagged by `validateStructure` — but only for the types that actually run validation, which excludes transactions and statistics. **OBSERVED**
+- [x] **Duplicate/long-row cell loss.** ✅ Fixed; **re-verified 2026-08-22**. `rowsToObjects` (`csvParser.js:212-227`) builds each row on `Object.create(null)` — so a column literally named `__proto__` cannot poison the object — suffixes a repeated header as `obj[h + "_" + (i + 1)]` instead of overwriting it, and captures cells beyond the header count as `obj["_extra_" + (i + 1)]`. Nothing is dropped, so this no longer depends on which import types run `validateStructure`. The old item's line reference (`:122-135`) is stale. **OBSERVED — `scripts/probe-csvParser-data-loss.mjs` and `scripts/probe-csv-data-loss.mjs` 26/0 both pass**
 - [x] **Shadow Money Kept implementations with wrong gating.** ✅ Fixed 2026-08-16. `src/lib/calculationService.js:194` (`calculateMoneyKept`) and `:234` (`calculateProfitMetrics`) omitted the committed filter, and `keepRate` guarded `gross > 0` while dividing by `gross - refunds - estimatedTaxes` — a full-refund or all-tax period returned `Infinity` as a percentage. Both now filter through `filterCommittedPay`, and the rate guards its actual denominator. Still **zero call sites**: kept rather than deleted because they hold the tax and keep-rate logic, but note they duplicate the live `MoneyKept.jsx` widget — if you ever wire one up, reconcile the two deliberately. **OBSERVED**
 - [x] **AI cost totals skip the committed filter.** ✅ Fixed 2026-08-16. `costTotals` in `src/lib/aiEngine.js` summed every payroll run, so the assistant quoted a payroll figure and a net profit that no page agreed with, across three answers (`intentSummary`, `intentExpenses`, `intentProfit`). Now filters to approved/paid and sums in integer cents. The *"(N records)"* caption beside the total also counted the unfiltered set — it now reads *"(N committed of M records)"* so the caption cannot describe a different set of rows than the number next to it. **OBSERVED**
-- [ ] **Headline Money Kept uses float dollars throughout.** `MoneyKept.jsx` imports no decimal helper: `:178` `comm = rev * info.rate`, `:445-446` `kept = gross - totalDeductions`, `:531`. Each line item is snapped at `:381`, so residual is ~1e-10 and invisible after formatting — **materially safe, but a direct violation of the integer-cents directive on the flagship figure.** Same class at `statisticsAnalytics.js:199-203` and `paymentNorm.js:84,89`. **OBSERVED**
-- [ ] **Password rules disagree and the weaker one wins.** Client requires 12+ with a special character; server `createUser` requires 8 with upper/lower/digit; `set_password` requires **length ≥ 8 only**. The server is authoritative. **OBSERVED**
-- [ ] **Welcome email contains the plaintext temporary password.** Use a single-use invite link. **OBSERVED**
-- [ ] **CSRF cookie lacks `Secure` and host-binding.** `securityUtils.js:260` sets `csrf_token` with `Path=/; SameSite=Lax` only — no `Secure`, no `__Host-` prefix, so it is subdomain-writable. Client validation also fails open at `:278` (`if (!ss) return true`). Server-side double-submit still validates. 🔒 protected file. **OBSERVED**
-- [ ] **`audit_list` forwards a client-supplied filter object straight to the datastore.** Admin-gated, but unvalidated. **OBSERVED**
-- [ ] **`touchSession` and `rotateSession` are no-ops.** `AuthContext.jsx:78` calls `touchSession()` believing it extends the session; it does nothing. `rotateSession` has **zero callers** — confirming there is no session rotation anywhere, which compounds the revocation gap above. **OBSERVED**
+- [x] **Headline Money Kept uses float dollars throughout.** ✅ **Fixed 2026-08-22 — the last open item in this section.** Three of the four sites named here had already moved to integer cents (`paymentNorm.js:83-97` returns `fromCents(sumCents(...))`; `statisticsAnalytics.js:368-371` totals as `fromCents(toCents(room) + toCents(ancillary))`), which narrowed the defect to `MoneyKept.jsx` alone. Both headline expressions there now route through the helpers it already imported: `kept = fromCents(toCents(gross) - totalDeductionsCents)` and `netRevenueBase = fromCents(toCents(gross) - toCents(refundsTotal) - toCents(passThrough))` — the second matters because it is the denominator of the displayed keep rate, so a residue there moves a percentage the owner reads against a target.
+
+  Deliberately left fractional: the per-day `share` / `lumpTotal` revenue-share allocation, which apportions a lump sum across days to feed the trend chart. It is an apportionment, not a stated amount, and forcing it to whole cents would make the daily slices stop summing to the lump.
+
+  The residue this removes was ~1e-10 — invisible after formatting, which is exactly why it survived a year. Section 6 of the probe therefore asserts the two expressions **statically**, against the component source, so a future "simplification" back to `gross - totalDeductions` turns the suite red instead of shipping quietly. All three static assertions were mutation-tested against the pre-fix source and each one fails on it, so none is vacuous. **OBSERVED — `scripts/verify-money-kept.mjs` 29/0 (was 23/0), `npm run lint` 0 errors, `npm run typecheck` 0 errors**
+- [x] **Password rules disagree and the weaker one wins.** ✅ Fixed; **re-verified 2026-08-22**. All three checks now require 12: `src/lib/security.js:148` (`length < 12`), `base44/functions/custom_auth_register/entry.js:240` (`z.string().min(12).max(128)`) and `base44/functions/custom_auth_reset_password/entry.js:33` (`length < 12`). No `min(8)` or `length < 8` remains on any password path. **OBSERVED**
+- [x] **Welcome email contains the plaintext temporary password.** ✅ Fixed; **re-verified 2026-08-22**. `custom_auth_register/entry.js:332-351` builds `/reset-password?token=<one-time token>` and states in the body that the link works once and expires in 7 days; a paste-able one-time code is included for clients that mangle links. No password is generated or transmitted. **OBSERVED**
+- [x] **CSRF cookie lacks `Secure` and host-binding.** ✅ Fixed; **re-verified 2026-08-22**. `securityUtils.js:324` now sets `__Host-csrf_token=…; Path=/; SameSite=Lax; Secure`. The `__Host-` prefix is the part that closes the original hole: it makes the cookie unwritable by a sibling subdomain, which `Secure` alone does not. Client-side validation no longer fails open. Written under the one-time protected-file authorization recorded at the top of this document. **OBSERVED — `scripts/probe-csrf-host-prefix.mjs`, `probe-csrf-secure-flag.mjs` and `probe-csrf-default-closed.mjs` 63/0 all pass**
+- [x] **`audit_list` forwards a client-supplied filter object straight to the datastore.** ✅ Fixed; **re-verified 2026-08-22**. `audit_list/entry.js` rejects a non-object, array or null `filter` with `400 "Bad Request: filter must be an object"` (`:110`), throws `"unsupported property_id filter"` on a shape it does not recognise (`:60`), and builds an `effectiveFilter` server-side — returning `403 "Forbidden: cross-tenant access denied"` when the caller names a property outside its allowance (`:152-154`) rather than quietly narrowing. **OBSERVED — `scripts/probe-audit-list.mjs` 53/0**
+- [x] **`touchSession` and `rotateSession` are no-ops.** ✅ Fixed; **re-verified 2026-08-22**. `touchSession` (`base44Client.js:1287`) invokes `custom_auth_me` behind a throttle, which is what actually extends the server-side session, and `rotateSession` delegates to it rather than existing as a callerless stub. **OBSERVED**
 
 ---
 
@@ -650,28 +654,56 @@ output exists, NOT RUN means genuinely unknown.
 
 ### Open — deferred deliberately, with reasons
 
-- [ ] **Three disagreeing `@base44/sdk` pins.** The `.ts` functions import
-  `npm:@base44/sdk@0.8.40`, the `.js` functions `npm:@base44/sdk@^0.8.41`, and
-  `package.json` carries `^0.8.41`. One dependency, three versions. Not unified
-  because it means editing ~20 deployed server functions, and two of them
-  (`custom_auth_login/entry.js:204`, `custom_user_admin/entry.js:311`) record
-  that the signed audit payload depends on those import lines staying
-  byte-identical across copies. Unify deliberately, in its own change, with the
-  audit chain re-verified afterwards.
+- [x] **Three disagreeing `@base44/sdk` pins.** ✅ **Fixed 2026-08-22.** All 18
+  entry files now pin `npm:@base44/sdk@^0.8.41`, matching `package.json:25` and
+  the installed `0.8.41`. Seven `.ts` files moved off exact `0.8.40`; the eleven
+  `.js` files were already there.
+
+  **The reason this stayed open was a misreading, and it is worth recording.**
+  `custom_auth_login/entry.js:204` and `custom_user_admin/entry.js:311` do *not*
+  say the import lines must be byte-identical. They say the **canonical audit
+  field list** must be — `AUDIT_CANONICAL_V1 = user_id, action, performed_by_id,
+  performed_by, property_id, result, detail, created_date, previous_hash` — because
+  the base44 host offers no way to share a module, so the signed payload is spelled
+  out in seven copies. Line 1 is not part of the hash. Read the source comment, not
+  the summary of it.
+
+  Safe on measured grounds: those seven files import exactly one SDK export,
+  `createClientFromRequest`, which is present and documented in the installed
+  0.8.41; the diff is one line per file with no other change; and two of the seven
+  (`autoPayroll`, `deleteAccount`) write audit rows, which made running them
+  against a *different* SDK build from the verifier the actual risk here — the
+  opposite of the reason given for deferring.
+
+  Blast radius closed in the same change: `vitest.config.js` dropped the now-dead
+  `@0.8.40` alias (as its own comment instructed, so a regression fails to resolve
+  loudly instead of being silently aliased to a version nothing declares), and
+  `tests/backend/aiAssistant.test.js` + `all_endpoints.test.js` had `vi.mock()`
+  calls keyed to the literal old specifier — left unfixed, those would have stopped
+  intercepting the module the functions import and reached the real SDK.
+  **OBSERVED — `scripts/probe-audit-chain.mjs` 36/0 (all seven payload copies still
+  identical), `npx vitest run tests/backend` 24/24 in 2 files, `npm run lint` and
+  `npm run typecheck` 0 errors. Runtime behaviour on the base44 Deno host: NOT RUN
+  — nothing in this VM executes it.**
 - [ ] **`validateUpload`'s three server-only clauses are not implemented**: the
   UUID rename that strips the original filename, `base44_session` cookie
   authentication, and the `__Host-csrf_token` / `x-csrf-token` double-submit
   match. They are listed here so the threat model is not lost with the deleted
   test. They matter only if a server-side upload endpoint is ever introduced;
   today no upload path routes through one.
-- [ ] **`chooseOuterRadiusPct` returns its LARGEST ring when the box measures 0**
-  (`donutLabelLayout.js:162`) — the least room for labels in exactly the state
-  where nothing is known, which inverts the function's own purpose. It
-  self-corrects when the ResizeObserver fires, so the cost is one frame on mount;
-  the alternative (`minPct`) trades that for a ring that visibly grows every
-  time. Left alone because the visual outcome cannot be judged without a browser,
-  and neither `npm run build` nor a Vite server runs in the Linux VM. Decide this
-  one by looking at it.
+- [x] **`chooseOuterRadiusPct` returns its LARGEST ring when the box measures 0.**
+  ✅ **Already fixed — this entry was stale when written, corrected 2026-08-22.**
+  `donutLabelLayout.js:173` reads `if (!(maxRadius > 0)) return \`${minPct}%\`;`
+  and carries an eleven-line comment explaining the choice. The reasoning that
+  settled it: `minPct` makes the first frame safe by construction, and the ring
+  then settles *outward* once the ResizeObserver fires — growth reads as settling,
+  shrink reads as breakage. The visual outcome is still unverifiable here (no
+  browser, no `npm run build`), but the code decision no longer needs deciding.
+
+  This mattered beyond the checklist: `.agents/rules/verified-work-integrity.md`
+  listed the old behaviour under "Deliberate non-changes", so an agent following
+  that file could have *reverted a real fix* in the name of respecting it. Both
+  documents are corrected. **OBSERVED — `scripts/verify-donut-labels.mjs` passes**
 - [ ] **The client-side upload gate has no browser test.** `uploadGuard.js` is
   covered by a Node probe, but no test drives a real `<input type="file">`
   through either page. NOT RUN.
@@ -688,4 +720,93 @@ output exists, NOT RUN means genuinely unknown.
 
 ---
 
-*Originally generated by code review and targeted Node probes on 2026-08-15, then updated in place as the findings were fixed on 2026-08-16, with an addendum on 2026-08-21. Claims are labelled OBSERVED, INFERRED, or NOT RUN — please treat INFERRED items as requiring confirmation, and NOT RUN items as genuinely unknown rather than passing. Ticked items name the command that proves them.*
+## ADDENDUM — 2026-08-22
+
+### The finding that matters most: this document had gone stale, and for a launch decision document that is itself the defect
+
+Ten items still carrying an open checkbox were **already fixed in the code** when
+this pass started. Eight in 🟡 MEDIUM (`applyPropertyFilter` widening,
+`rowsToObjects` cell loss, the three disagreeing password rules, the plaintext
+welcome password, the `Secure`/`__Host-` CSRF cookie, the unvalidated `audit_list`
+filter, and the `touchSession`/`rotateSession` no-ops) and two in the 2026-08-21
+addendum (`chooseOuterRadiusPct`, and the SDK pins as of this pass). Several
+carried line numbers pointing at code that had since moved, which is the tell.
+
+Each is now ticked with the file, the line and the command that proves it, and
+where the old text was wrong about *why* something was deferred, the misreading is
+recorded rather than quietly deleted — see the SDK-pin entry, where the deferral
+rested on a claim about import lines that the source never made.
+
+Two consequences worth stating plainly. First, a checklist that overstates the
+remaining work is not "safely conservative": it spends the owner's attention on
+solved problems and buries the items that are genuinely blocking. Second, the
+staleness had propagated into `.agents/rules/verified-work-integrity.md`, a file
+whose entire job is stopping agents from undoing measured work — it described the
+*old* donut behaviour under "Deliberate non-changes", so an agent obeying it would
+have reverted a real fix. Fixing the code is not finished until the documents that
+describe the code agree with it.
+
+### Fixed in this pass
+
+- [x] **Integer cents on the flagship Money Kept figure** — the last open 🟡 MEDIUM
+  item. `kept` and `netRevenueBase` in `MoneyKept.jsx` now route through
+  `toCents`/`fromCents`. **OBSERVED — `verify-money-kept.mjs` 29/0.**
+- [x] **The `@base44/sdk` version split** — all 18 entry files on `^0.8.41`, with
+  the `vitest.config.js` alias and two `vi.mock()` specifiers updated in the same
+  change so nothing silently reaches the real SDK. **OBSERVED —
+  `probe-audit-chain.mjs` 36/0, `vitest run tests/backend` 24/24.**
+- [x] **Two stale comments that would have misled the next reader** — the
+  `vite.config.js` `manualChunks` note claimed `leaflet` was undeclared
+  (`package.json:72` declares `leaflet ^1.9.4`, plus `react-leaflet` and
+  `@types/leaflet`; the chunk really was empty, but for the other reason given
+  there), and the `vitest.config.js` note that froze the import lines.
+
+### Regression state
+
+**82 suites — 80 passed, 0 failed, 0 broken, 2 skipped for environment reasons.**
+Fingerprint `list 0b8fc6c3 (82 discovered)`, identical across every shard, so the
+shards sum to a real total. Gates: `npm run lint` 0 errors, `npm run typecheck`
+0 errors.
+
+The two skips are by design, not silent passes: `probe-config-exposure.mjs` needs
+a dev server at `localhost:5173` (ECONNREFUSED here), and `verify-harness.mjs`
+needs a Linux rollup binary that this Windows `node_modules` does not contain.
+
+**A measurement trap worth recording.** Running the set as `--shard n/20
+--timeout 25` reported `probe-audit-export.mjs` and `probe-audit-write-failure.mjs`
+as `TIMEOUT … (no output)`. Both are green: 76/0 in 37s and 60/0 in 48s when given
+room. They were killed by the timeout *I* lowered, and their output vanished
+because Node block-buffers a piped stdout and `SIGKILL` discards the buffer — so a
+slow-but-passing suite is indistinguishable from a hang. `verify-all.mjs`'s own
+header says to shard the list and never lower `--timeout` for exactly this reason.
+Read it before doing what I did.
+
+### Still open — and who can close it
+
+Owner's Windows machine (the registry and the native toolchain are both
+unreachable from the Linux VM): `npm run build`, the full `npm test`, rebuilding
+`dist/`, `npm install ws`, `python -m graphify update .`, and browser QA of the
+import flow and the donut labels.
+
+Owner's Vercel dashboard: set `AUDIT_CHAIN_SECRET`, and confirm
+`VITE_USE_LOCAL_AUTH` is absent.
+
+Owner's account: **rotate the password** that `test-auth.cjs` exposed before it
+was deleted. This one has a deadline attached — the file is gone from the working
+tree, but it is still in git history.
+
+Blocked here by policy, not difficulty: **the disabled user is told the wrong
+reason.** The fix needs `src/lib/AuthContext.jsx`, which is on
+`PROTECTED_FILES.md` and is **not** covered by the one-time authorization recorded
+at the top of this document. It also means changing `custom_auth_me`'s 401
+contract, which `scripts/test_realtime_revocation.mjs` Tests 2 and 3 pin. Grant an
+exception if you want it in this release; it is a message-quality defect, not a
+security hole — revocation itself works.
+
+Also genuinely open, unchanged from 2026-08-21: B11's runtime cross-check for
+revenue drift (nothing imports `financialReconciliation.js` yet), the absence of a
+browser test for the upload gate, and the seven Windows-only BROKEN probes.
+
+---
+
+*Originally generated by code review and targeted Node probes on 2026-08-15, then updated in place as the findings were fixed on 2026-08-16, with addenda on 2026-08-21 and 2026-08-22. Claims are labelled OBSERVED, INFERRED, or NOT RUN — please treat INFERRED items as requiring confirmation, and NOT RUN items as genuinely unknown rather than passing. Ticked items name the command that proves them.*

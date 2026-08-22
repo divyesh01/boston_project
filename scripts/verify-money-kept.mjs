@@ -18,8 +18,10 @@
 // component is caught by the parallel assertions on the real category
 // vocabulary below.
 
+import { readFileSync } from 'node:fs';
 import { STANDARD_CATEGORY_KEYS } from '@/lib/expenseCategories.js';
 import { CARD_METHODS, refundOf, refundTotal } from '@/lib/paymentNorm.js';
+import { toCents, fromCents } from '@/lib/decimal.js';
 
 let pass = 0;
 const failures = [];
@@ -140,6 +142,52 @@ console.log('\n5. Refund sign convention (paymentNorm contract)');
     !CARD_METHODS.includes('cash') && !CARD_METHODS.includes('check') &&
     !CARD_METHODS.includes('direct_bill') && !CARD_METHODS.includes('wire_transfer'),
     CARD_METHODS.join(','));
+}
+
+console.log('\n6. The headline figure is computed in integer cents');
+{
+  // A real period reaches a dozen-odd deduction categories. Each `i.amount` is
+  // already snapped to 2dp by pushItem, so the residue does not come from the
+  // items — it comes from adding them with `+` and subtracting the sum from
+  // gross. Values chosen because each is exactly representable to 2dp and their
+  // float sum is not.
+  const amounts = [1234.57, 890.13, 76.29, 55.11, 4321.09, 12.07, 8.99, 640.33, 71.41, 5000.03, 45.19, 2.51, 199.99];
+  const gross = 20000.01;
+
+  const floatTotal = amounts.reduce((a, x) => a + x, 0);
+  const floatKept = gross - floatTotal;
+
+  const centsTotal = amounts.reduce((a, x) => a + toCents(x), 0);
+  const centsKept = fromCents(toCents(gross) - centsTotal);
+
+  // The point of the section: the float form is genuinely inexact here. If this
+  // assertion ever fails the fixture has stopped exercising the defect, and the
+  // two below would then be passing vacuously.
+  check('the float form is inexact on this fixture (fixture still bites)',
+    floatTotal !== fromCents(centsTotal) || floatKept !== centsKept,
+    `floatTotal=${floatTotal} centsTotal=${fromCents(centsTotal)} floatKept=${floatKept} centsKept=${centsKept}`);
+  check('cents total is exact to the cent',
+    Number.isInteger(Math.round(centsTotal)) && centsTotal === Math.round(centsTotal),
+    `centsTotal=${centsTotal}`);
+  check('cents kept is exact to the cent',
+    Math.round(centsKept * 100) === toCents(gross) - centsTotal,
+    `centsKept=${centsKept}`);
+
+  // Static half: bind the component, because the arithmetic above is a mirror
+  // and a mirror cannot notice the original changing. A revert to the float
+  // expression fails these two.
+  const src = readFileSync(
+    new URL('../src/components/dashboard/MoneyKept.jsx', import.meta.url), 'utf8');
+  check('MoneyKept computes `kept` from cents, not float dollars',
+    /const kept = fromCents\(toCents\(gross\) - totalDeductionsCents\)/.test(src),
+    'expected `const kept = fromCents(toCents(gross) - totalDeductionsCents)`');
+  check('MoneyKept computes the keep-rate denominator from cents',
+    /const netRevenueBase = fromCents\(toCents\(gross\) - toCents\(refundsTotal\) - toCents\(passThrough\)\)/.test(src),
+    'expected netRevenueBase to route through toCents/fromCents');
+  // Anchored on the assignment, not on the substring: a comment that *explains*
+  // the old float expression must not be able to fail this.
+  check('neither headline figure is assigned straight from float dollars',
+    !/const\s+kept\s*=\s*gross\b/.test(src) && !/const\s+netRevenueBase\s*=\s*gross\b/.test(src));
 }
 
 console.log(`\n${failures.length ? 'FAILED' : 'PASSED'}: ${pass} checks passed, ${failures.length} failed`);

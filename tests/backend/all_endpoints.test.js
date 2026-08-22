@@ -73,11 +73,11 @@ const makeClient = () => ({
   integrations: { Core: { InvokeLLM: async () => "Mock answer" } },
 });
 
-// Both spellings are mocked because the functions do not agree with each other:
-// the .ts functions pin @0.8.40 and the .js functions pin @^0.8.41. That
-// disagreement is a real (recorded) defect; until it is unified, a test that
-// mocks only one specifier silently reaches the real SDK from the other.
-vi.mock("npm:@base44/sdk@0.8.40", () => ({ createClientFromRequest: () => makeClient() }));
+// One specifier, because the functions now agree: all 18 entry files pin
+// `npm:@base44/sdk@^0.8.41` (unified 2026-08-22). This used to mock both
+// spellings — the .ts functions pinned @0.8.40 and the .js functions @^0.8.41 —
+// because mocking only one silently let the other reach the real SDK. If a
+// second spelling ever reappears here, that is the signal the split is back.
 vi.mock("npm:@base44/sdk@^0.8.41", () => ({ createClientFromRequest: () => makeClient() }));
 
 // A REAL sha256, not a stub returning a fixed string.

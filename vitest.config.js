@@ -33,22 +33,20 @@ export default defineConfig({
       // reaching an assertion. `vi.mock()` cannot rescue that: the specifier has to
       // resolve before the mock is applied.
       //
-      // Both SDK spellings are listed because the functions do not agree with each
-      // other — the .ts functions pin `@0.8.40` and the .js functions pin
-      // `@^0.8.41`, while package.json carries `^0.8.41`. Three pins for one
-      // dependency is a real defect, but unifying it means editing ~20 deployed
-      // server functions, so it is recorded here and in
-      // LAUNCH_READINESS_CHECKLIST.md rather than fixed as a side effect of a test
-      // config change. When it IS unified, delete the stale key here and the
-      // suites will fail loudly rather than silently aliasing a version that no
-      // longer exists.
+      // One SDK spelling, because the functions now agree. All 18 entry files —
+      // 7 `.ts` and 11 `.js` — pin `npm:@base44/sdk@^0.8.41`, matching
+      // package.json. Unified 2026-08-22; the `@0.8.40` key that used to sit here
+      // was deleted in the same change, per the instruction it carried, so any
+      // function that regresses to the old pin now fails to resolve loudly
+      // instead of being silently aliased to a version nothing declares.
       //
       // Do NOT "fix" the specifiers in base44/functions/** to make this
-      // unnecessary. Deno needs them as written, and
-      // custom_auth_login/entry.js:204 / custom_user_admin/entry.js:311 both note
-      // that the signed audit payload depends on those import lines being
-      // byte-identical across copies.
-      "npm:@base44/sdk@0.8.40": "@base44/sdk",
+      // unnecessary — Deno needs them as written. And note what
+      // custom_auth_login/entry.js:204 / custom_user_admin/entry.js:311 actually
+      // say: it is the CANONICAL AUDIT FIELD LIST that must be byte-identical
+      // across copies, not the import lines. An earlier version of this comment
+      // claimed the import lines were frozen, which is why the version split
+      // survived this long.
       "npm:@base44/sdk@^0.8.41": "@base44/sdk",
       "npm:zod": "zod",
       "base44:runtime": path.resolve(import.meta.dirname, "./tests/stubs/base44-runtime.js"),

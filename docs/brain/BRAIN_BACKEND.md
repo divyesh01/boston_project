@@ -132,6 +132,49 @@ Two traps when repairing this class of defect:
 
 `autoPayroll` and `deleteAccount` are now WRITERS on the audit chain (see BRAIN_SECURITY.md).
 
+### Fixed 2026-08-22: one SDK specifier across all 18 functions
+
+Every function imports the SDK by a Deno specifier that carries its own version
+range. Until now the repository held **two** ranges: the 7 `.ts` functions pinned
+`npm:@base44/sdk@0.8.40` and the 11 `.js` functions `npm:@base44/sdk@^0.8.41`.
+`package.json` declares `^0.8.41`, so the exact pin named a version nothing else
+in the repository asked for. All 18 now read `npm:@base44/sdk@^0.8.41`.
+
+This had been deferred twice on a misreading, which is the part worth recording.
+`custom_auth_login/entry.js:204` and `custom_user_admin/entry.js:311` carry a
+warning that copies must stay byte-identical — **that warning is about the
+canonical audit field list (`AUDIT_CANONICAL_V1`), not about the import line.**
+Read as covering line 1, it froze the split in place.
+
+Why the split was a real hazard rather than untidiness: `autoPayroll/entry.ts` and
+`deleteAccount/entry.ts` are audit-chain writers (previous paragraph), so two
+functions were appending to **one hash chain** through a different SDK build from
+every other writer. The `.ts` functions use exactly one export between them,
+`createClientFromRequest`, which is present in 0.8.41 — checked against
+`node_modules/@base44/sdk/dist/client.d.ts`, not assumed.
+
+Blast radius, because this specifier is a **string key** in three other places and
+a mechanical rename orphans all three:
+
+```
+vitest.config.js                     resolve.alias key   -> stale alias deleted
+tests/backend/aiAssistant.test.js    vi.mock() specifier -> updated
+tests/backend/all_endpoints.test.js  vi.mock() specifier -> two mocks collapsed to one
+```
+
+A missed `vi.mock` does not fail loudly. The mock simply stops intercepting the
+module the function imports and the test reaches the **real** SDK. All three were
+updated in the same change; `vitest run tests/backend` is 24/24.
+
+`scripts/probe-no-real-credentials.mjs:104,286` still contain the literal string
+`npm:@base44/sdk@0.8.40` and must be **left alone** — they are regex fixtures
+asserting a version specifier is not misread as an email address.
+
+```
+node --import ./scripts/_loader-boot.mjs scripts/probe-audit-chain.mjs   # 36/0
+npx vitest run tests/backend                                            # 24/24
+```
+
 ---
 
 # 9. ALL CONFIG FILES

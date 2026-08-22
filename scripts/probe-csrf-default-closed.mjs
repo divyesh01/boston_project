@@ -43,10 +43,14 @@ import { webcrypto } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
+import { REPO_ROOT } from "./_repo-root.mjs";
 
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
 
-const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+// See scripts/_repo-root.mjs — `new URL(...).pathname` keeps the leading slash
+// before the drive letter on Windows, so this resolved to `C:\C:\Users\...` and
+// the probe threw ERR_MODULE_NOT_FOUND before running a single check.
+const REPO = REPO_ROOT;
 const SRC = path.join(REPO, "src", "lib", "securityUtils.js");
 
 let pass = 0;

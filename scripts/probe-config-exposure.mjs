@@ -40,7 +40,52 @@ const T = (name, ok, detail = "") => {
 };
 
 async function post(body, contentType = "application/json") {
-  return fetch(ENDPOINT, { method: "POST", headers: { "content-type": contentType }, body });
+  return fetch(ENDPOINT, {
+    method: "POST",
+    headers: {
+      "content-type": contentType,
+      // Ask the server to close each connection rather than pooling it.
+      //
+      // This probe is the only suite in the repo that makes real network calls, and
+      // that is what made it the only one that crashed: see the note above
+      // `finish()` below. Not pooling the socket in the first place is the cheapest
+      // half of the fix.
+      connection: "close",
+    },
+    body,
+    keepalive: false,
+  });
+}
+
+/**
+ * Finish the run without killing the process mid-flight.
+ *
+ * THE CRASH THIS REPLACES, in plain terms. This probe used to end with
+ * `process.exit(fail === 0 ? 0 : 1)`. On Windows + Node 26 that aborted the whole
+ * process with a native assertion:
+ *
+ *     Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\win\async.c, line 94
+ *     exit code -1073740791  (0xC0000409)
+ *
+ * `fetch` keeps its TCP sockets in a keep-alive pool. `process.exit()` tears the
+ * event loop down immediately, so libuv is asked to close a handle that is already
+ * closing, and it aborts. Reproduced in isolation: four fetches then
+ * `process.exit(0)` crashes; the same four fetches with `process.exitCode = 0`
+ * exit cleanly.
+ *
+ * WHY IT MATTERED MORE THAN A COSMETIC CRASH. The probe printed
+ * "PASSED: 8 passed, 0 failed" and THEN aborted with a non-zero code, so
+ * scripts/verify-all.mjs — which reads exit codes — filed a fully green suite under
+ * FAILED. Anyone reading the summary saw a security probe failing and, on opening
+ * it, saw it passing. That is worse than either outcome on its own, because it
+ * teaches the reader that the FAILED list is unreliable.
+ *
+ * `process.exitCode` sets the same status and lets Node drain the loop and exit on
+ * its own. The keep-alive pool closes itself, so nothing hangs.
+ */
+function finish() {
+  console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
+  process.exitCode = fail === 0 ? 0 : 1;
 }
 
 async function main() {
@@ -54,7 +99,8 @@ async function main() {
     console.log(`SKIP: no server reachable at ${BASE} (${why}).`);
     console.log("      Start the app with `npm run dev` (or set PROBE_BASE_URL) and re-run;");
     console.log("      this probe needs a live endpoint to observe what it returns on an error.");
-    process.exit(0);
+    process.exitCode = 0;
+    return;
   }
 
   console.log(`Probing ${ENDPOINT} for internal error exposure...\n`);
@@ -75,6 +121,23 @@ async function main() {
     }
   }
 
+  // A 404 on every case means the function route is not mounted here at all — the
+  // Vite dev server does not run base44's serverless functions. That is NOT
+  // evidence the endpoint is safe: an unmounted route trivially "leaks nothing",
+  // so counting it as a pass manufactures coverage that does not exist. Report it
+  // as a skip, the same as no server at all.
+  const allNotFound = cases.length > 0 && cases.every(([, , status]) => status === 404);
+  if (allNotFound) {
+    console.log(`SKIP: every request returned 404 — ${ENDPOINT} is not mounted here.`);
+    console.log("      `npm run dev` serves the frontend only; base44's serverless functions");
+    console.log("      are not part of it. Point PROBE_BASE_URL at a deployed preview, or run");
+    console.log("      `base44 dev` so the functions are served, then re-run.");
+    console.log("      Reported as SKIP rather than PASS: an endpoint that is not there cannot");
+    console.log("      leak a stack trace, and calling that a pass invents coverage.");
+    process.exitCode = 0;
+    return;
+  }
+
   for (const [label, text, status] of cases) {
     const hits = LEAK_PATTERNS.filter(([, re]) => re.test(text)).map(([n]) => n);
     T(`${label} -> no internal detail in the response body`, hits.length === 0,
@@ -86,11 +149,10 @@ async function main() {
       `status ${status}, body: ${text.slice(0, 200)}`);
   }
 
-  console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
-  process.exit(fail === 0 ? 0 : 1);
+  finish();
 }
 
 main().catch((err) => {
   console.error(`FAILED: probe crashed: ${err?.stack || err}`);
-  process.exit(1);
+  process.exitCode = 1;
 });

@@ -369,6 +369,56 @@ ok(estimateTextWidth("abc", 40) > estimateTextWidth("abc", 20), "width scales wi
   }
 }
 
+// ── 12. The two geometries hardcoded in PieDonut.test.jsx ─────────────────
+// src/components/charts/PieDonut.test.jsx asserts wrapping at a WIDE geometry and
+// ellipsis truncation at a NARROW one, with cx/cy/outerRadius written as literals
+// because a unit test must not recompute production logic to test it. Those
+// literals can go stale silently — the previous fixture claimed a 360px box with
+// a 70px ring, a combination the sizer never produces, which made a correct
+// engine look broken and left that test red from the day it was written.
+// This section is what keeps them honest: it derives the same numbers from the
+// real sizing functions and fails if the literals no longer match.
+{
+  const NAME = "Credit Card Processing Fees (estimated)";
+  const one = [{ name: NAME, value: 50 }];
+
+  // WIDE: 560x320, the size MoneyKept.jsx:817 actually renders.
+  const wide = plan(one, 560, 320);
+  const wl = wide.labels[0];
+  ok(Math.round(wide.cx) === 280 && Math.round(wide.cy) === 160,
+    "PieDonut.test WIDE fixture: cx/cy literals 280/160 still match a 560x320 box",
+    `got cx=${wide.cx} cy=${wide.cy}`);
+  ok(Math.round(wide.outerRadius) === 74,
+    "PieDonut.test WIDE fixture: outerRadius literal 74 still matches the sizer",
+    `got ${wide.outerRadius}`);
+  ok(wl.nameLines.length === 2, "WIDE: the 39-char name wraps to exactly 2 lines",
+    JSON.stringify(wl.nameLines));
+  ok(wl.nameLines.join(" ") === NAME, "WIDE: every character survives",
+    JSON.stringify(wl.nameLines));
+  ok(!wl.nameLines.join("").includes("…"), "WIDE: no ellipsis when there is room",
+    JSON.stringify(wl.nameLines));
+
+  // NARROW: 360x300, the narrowest box any call site produces.
+  const narrow = plan(one, 360, 300);
+  const nl = narrow.labels[0];
+  ok(Math.round(narrow.cx) === 180 && Math.round(narrow.cy) === 150,
+    "PieDonut.test NARROW fixture: cx/cy literals 180/150 still match a 360x300 box",
+    `got cx=${narrow.cx} cy=${narrow.cy}`);
+  ok(Math.round(narrow.outerRadius) === 39,
+    "PieDonut.test NARROW fixture: outerRadius literal 39 still matches the sizer",
+    `got ${narrow.outerRadius}`);
+  const joined = nl.nameLines.join("");
+  ok(joined.endsWith("…") && joined.split("…").length - 1 === 1,
+    "NARROW: truncation is marked once, at the end", JSON.stringify(nl.nameLines));
+  const kept = joined.slice(0, -1).replace(/\s+/g, "");
+  ok(kept.length > 0 && NAME.replace(/\s+/g, "").startsWith(kept),
+    "NARROW: what survives is a genuine PREFIX — no reordering, no interior loss",
+    JSON.stringify(nl.nameLines));
+  ok(kept.length < NAME.replace(/\s+/g, "").length,
+    "NARROW: text really was shortened, so the prefix check is not vacuous",
+    JSON.stringify(nl.nameLines));
+}
+
 console.log("\n" + "=".repeat(72));
 console.log(`PASS ${pass}   FAIL ${fail}`);
 if (failures.length) {

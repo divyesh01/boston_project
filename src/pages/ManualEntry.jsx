@@ -8,6 +8,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { downloadCsv, downloadExcel, stampFilename } from "@/lib/exportData";
 import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
+import { ErrorState } from "@/components/ui/status";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
 import { parseManualEntryCsv, parseManualEntryPaste } from "@/lib/manualEntryImport";
 import { saveManualRows } from "@/lib/manualEntrySave";
@@ -195,7 +196,12 @@ export default function ManualEntry() {
 
   const config = REPORT_CONFIGS[reportType];
   const selectedProperty = properties.find((p) => p.id === (Array.isArray(property) ? property[0] : property));
-  const { data: existing = [] } = useManualEntries(reportType, property);
+  // The query OBJECT is kept, not just its data. `existingQ.isError` is what lets
+  // handleSave refuse to write when the dedupe list could not load — see the guard
+  // there. Defaulting via `?? []` (rather than destructuring `= []`) keeps the
+  // failure visible instead of laundering it into an ordinary empty list.
+  const existingQ = useManualEntries(reportType, property);
+  const existing = existingQ.data ?? [];
 
   const propertyOpts = (accessibleProperties.length ? accessibleProperties : properties).map((p) => [p.id, p.name]);
 
@@ -427,6 +433,21 @@ export default function ManualEntry() {
     };
     const entityName = config.entity;
 
+    // A FAILED READ BLOCKS THE SAVE — this is not a cosmetic guard.
+    //
+    // The dedupe set below is built from `existing`. If that query failed and we
+    // carried on, `existing` would be its empty default, every key would look new,
+    // and a save would write rows that ALREADY EXIST as second copies — double-
+    // counted revenue with no error anywhere. An empty grid is a nuisance; an
+    // empty dedupe set is silent data corruption. So the save refuses until the
+    // read succeeds, and says exactly why.
+    if (existingQ.isError) {
+      setSaveMsg("Not saved - the saved-entries list could not be loaded, so duplicate rows cannot be detected. Retry, and do not re-enter rows until it loads.");
+      setMsgTone("error");
+      setSaving(false);
+      return;
+    }
+
     // Build the dedupe key the same way report imports do so manual rows never
     // double-count against imported report rows.
     const dedupeKey = (rec) => {
@@ -596,6 +617,14 @@ export default function ManualEntry() {
             </button>
           </div>
         </div>
+        {existingQ.isError && (
+          <ErrorState
+            title="Saved entries could not be loaded"
+            description="Saving is disabled while this fails: duplicates can only be detected against the saved list. Nothing you already typed is lost."
+            error={existingQ.error}
+            onRetry={existingQ.refetch}
+          />
+        )}
       </Card>
 
       {/* One file input for the whole page. It used to live inside the grid card's

@@ -252,25 +252,91 @@ export function normalizeName(name) {
   return String(name || "").trim().replace(/\s+/g, " ");
 }
 
+// ─── Capacity: rooms per DAY, not rooms per ROW ─────────────────────────────
+//
+// WHY THIS HELPER EXISTS. Read this before "simplifying" it back to a loop.
+//
+// Capacity means "how many room-nights were available to sell". A property's
+// inventory belongs to the DAY, not to a row in a spreadsheet. This PMS
+// legitimately emits SEVERAL occupancy rows for one (property, business_date) —
+// duplicate report sections are real data here, not corruption.
+//
+// The old code added a full property's inventory once PER ROW. Measured on a
+// 30-day month for one 50-room property whose export carried two sections per
+// date (60 rows):
+//
+//     TRUE      capacity 1500   occupancy 70.0%   RevPAR $70.00   days 30
+//     REPORTED  capacity 3000   occupancy 35.0%   RevPAR $35.00   days 60
+//
+// Occupancy and RevPAR both divide BY capacity, so both read at HALF their true
+// value — and the more complete the import, the worse the understatement, while
+// no individual row looks wrong. Those two numbers drive the Compare page, the
+// Monthly Calendar, MTD Growth and the Room Board.
+//
+// It was also a SPLIT BRAIN. src/lib/calculationService.js fixed this same bug in
+// its own copy on 2026-08-20 (see capacityCents there), so calculationService
+// reported 70% while hotel.js reported 35% for identical rows — two live read
+// paths disagreeing about the same month. This helper is the shared rule; the two
+// files now compute capacity the same way by construction.
+//
+// SUMMED, NOT MAXED, within a day. When several rows for one date DO carry an
+// explicit `total_rooms`, their values are added. That is deliberate and it is the
+// only choice that keeps the two read paths equal: src/lib/dailyAggregates.js:177
+// has already collapsed those rows into a single `occ_capacity_rooms` by summing,
+// and a max cannot be recovered from a sum. The FALLBACK is the thing that must
+// not repeat per row, and now it does not — it is consulted only when NO row for
+// that date states an inventory.
+//
+// Proven by scripts/probe-capacity-per-day.mjs.
+/**
+ * Room-nights of capacity for a set of occupancy rows.
+ *
+ * @param {Array<Object>} rows occupancy rows carrying `property_id`, `date`, `total_rooms`
+ * @param {(propertyId: string) => number} roomsFor fallback inventory for a property
+ * @returns {number} capacity in whole room-nights
+ */
+function capacityRoomNightsBy(rows, roomsFor) {
+  /** @type {Map<string, { pid: string, explicit: number }>} */
+  const byDay = new Map();
+  (rows || []).forEach((r) => {
+    const pid = r.property_id || "_default";
+    // A row with no date cannot be grouped by date. It gets its own bucket keyed
+    // on the row's position, which reproduces the old per-row behaviour for that
+    // row alone — the honest answer when the data does not say which day it is.
+    const day = r.date ? String(r.date).slice(0, 10) : `__nodate_${byDay.size}`;
+    const key = `${pid}|${day}`;
+    const rowRooms = Number(r.total_rooms) || 0;
+    const cur = byDay.get(key);
+    if (cur) cur.explicit += rowRooms > 0 ? rowRooms : 0;
+    else byDay.set(key, { pid, explicit: rowRooms > 0 ? rowRooms : 0 });
+  });
+
+  let total = 0;
+  byDay.forEach((day) => {
+    total += day.explicit > 0 ? day.explicit : (Number(roomsFor(day.pid)) || 0);
+  });
+  return total;
+}
+
+/** Distinct business dates covered by a row set — NOT the row count. */
+function distinctDays(rows) {
+  const days = new Set();
+  (rows || []).forEach((r, i) => {
+    days.add(r.date ? String(r.date).slice(0, 10) : `__nodate_${i}`);
+  });
+  return days.size;
+}
+
 // Weighted portfolio calculations — never average property percentages
 export function portfolioStats(occRows, roomCounts) {
   const safeRows = occRows || [];
   const revenue = sumCents(safeRows.map(r => r.room_revenue));
   const roomsSold = sumCents(safeRows.map(r => r.rooms_sold));
 
-  // Calculate total capacity using per-row total_rooms (actual inventory per date)
-  // Falls back to Property.rooms for legacy rows missing total_rooms.
+  // Capacity is per DAY, not per row. See capacityRoomNightsBy above for the
+  // measured consequence of the per-row version this replaced.
   const rooms = roomCountsFrom(roomCounts); // normalizes both properties arrays and plain maps
-  let capacity = 0;
-  safeRows.forEach((r) => {
-    const pid = r.property_id || "_default";
-    const rowRooms = Number(r.total_rooms) || 0;
-    if (rowRooms > 0) {
-      capacity += rowRooms * 100; // Scale to cents
-    } else {
-      capacity += (rooms[pid] ?? PROPERTY.rooms) * 100;
-    }
-  });
+  const capacity = capacityRoomNightsBy(safeRows, (pid) => rooms[pid] ?? PROPERTY.rooms) * 100;
 
   const occupancy = capacity ? divideRate(roomsSold, capacity) : 0;
   const adr = roomsSold ? divide(revenue, roomsSold) : 0;
@@ -320,22 +386,12 @@ export function roomCountsFrom(input) {
 
 // Total room-nights of capacity represented by a set of occupancy rows.
 //
-// Capacity is the sum of per-row total_rooms (which reflects actual inventory
-// per property per date, accounting for renovations, closures, seasonal changes).
-// Falls back to Property.rooms × days for legacy rows missing total_rooms.
+// Capacity is inventory per (property, DAY) — see capacityRoomNightsBy above for
+// why, and for the measurement showing the old per-ROW version halved occupancy
+// and RevPAR on any export with more than one section per date.
 export function capacityRoomNights(occRows, properties) {
   const rooms = roomCountsFrom(properties);
-  let capacity = 0;
-  (occRows || []).forEach((r) => {
-    const pid = r.property_id || "_default";
-    const rowRooms = Number(r.total_rooms) || 0;
-    if (rowRooms > 0) {
-      capacity += rowRooms;
-    } else {
-      capacity += rooms[pid] ?? PROPERTY.rooms;
-    }
-  });
-  return capacity;
+  return capacityRoomNightsBy(occRows, (pid) => rooms[pid] ?? PROPERTY.rooms);
 }
 
 // Physical room inventory in scope: one property's rooms, or the sum across the
@@ -364,7 +420,11 @@ export function occupancyStats(occRows, properties) {
     revenue,
     roomsSold,
     capacity,
-    days: rows.length,
+    // Distinct business dates, not row count. Same root cause as the capacity bug
+    // above: this PMS emits several rows per date, so `rows.length` reported 60
+    // "days" for a 30-day month — and it sat in the same object as the occupancy
+    // figure it was helping to halve.
+    days: distinctDays(rows),
     occupancy: capacity ? roomsSold / capacity : 0,
     adr: roomsSold ? revenue / roomsSold : 0,
     revpar: capacity ? revenue / capacity : 0,
@@ -386,13 +446,10 @@ export function perPropertyStats(occRows = [], properties = []) {
     const fallbackRooms = prop?.rooms || PROPERTY.rooms;
     const revenue = sumCents(rows.map(r => r.room_revenue));
     const roomsSold = sumCents(rows.map(r => r.rooms_sold));
-    // Sum per-row total_rooms (actual inventory per date), fallback to Property.rooms
-    let capacity = 0;
-    rows.forEach((r) => {
-      const rowRooms = Number(r.total_rooms) || 0;
-      capacity += rowRooms > 0 ? rowRooms : fallbackRooms;
-    });
-    capacity *= 100; // Scale to cents
+    // Inventory per DAY, not per row — see capacityRoomNightsBy above. This
+    // function carried its own copy of the per-row fallback, so the per-property
+    // table under-reported occupancy for the same reason the portfolio total did.
+    const capacity = capacityRoomNightsBy(rows, () => fallbackRooms) * 100;
     results.push({
       property_id: pid,
       property_name: prop?.name || rows[0]?.property_name || "Unknown",
@@ -401,7 +458,8 @@ export function perPropertyStats(occRows = [], properties = []) {
       occupancy: capacity ? fromRate(divideRate(roomsSold, capacity)) : 0,
       adr: roomsSold ? fromCents(divide(revenue, roomsSold)) : 0,
       revpar: capacity ? fromCents(divide(revenue, capacity)) : 0,
-      days: rows.length,
+      // Distinct business dates, not row count.
+      days: distinctDays(rows),
       rooms: fallbackRooms,
     });
   });

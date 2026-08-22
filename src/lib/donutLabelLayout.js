@@ -159,7 +159,18 @@ export function chooseOuterRadiusPct(labels, opts = {}) {
     maxPct = 46, minPct = 26, stub = 18, shelf = 16, textPad = 8, maxNameLines = 2,
   } = opts;
   const maxRadius = Math.min(Number(width) || 0, Number(height) || 0) / 2;
-  if (!(maxRadius > 0)) return `${maxPct}%`;
+  // UNMEASURED BOX: yield the floor, not the ceiling.
+  //
+  // A zero box means the ResizeObserver has not reported yet — nothing is known
+  // about the space. This used to return `maxPct`, i.e. the LARGEST ring exactly
+  // when we know the LEAST, which is the opposite of this function's whole purpose
+  // (the ring yields room so labels fit). The cost of the old choice was one bad
+  // first frame on mount: labels clipped against an oversized ring until the
+  // observer fired and the real percentage replaced it. `minPct` inverts that: the
+  // smallest legal ring leaves maximum label room, so the first frame is safe by
+  // construction, and the ring visibly settles outward a frame later — growth reads
+  // as settling, shrink reads as breakage.
+  if (!(maxRadius > 0)) return `${minPct}%`;
 
   let need = 0;
   for (const l of labels || []) {

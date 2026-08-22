@@ -123,6 +123,30 @@ const labelText = (el) => {
 };
 
 describe("PieDonut — visible-in-box contract", () => {
+  // ── Shared label geometry ──────────────────────────────────────────────────
+  //
+  // Declared once, here, because EVERY label test needs it and the tests that
+  // invented their own numbers were the ones that broke.
+  //
+  // PieDonut derives its box from the pie's centre when the ResizeObserver has
+  // not reported (PieDonut.jsx — `boxWidth > 0 ? boxWidth : cx * 2`), which is
+  // ALWAYS the case in jsdom. So the cx/cy handed to label() here, not the
+  // ResponsiveContainer mock's width/height props, decide the layout width.
+  //
+  // WIDE — a card the size the dashboard actually renders. MoneyKept.jsx puts a
+  // PieDonut in a `lg:grid-cols-5` cell at height={480}, so the real box is
+  // ~500-700px wide, never 360. cx/cy below describe a 560x320 box, and
+  // outerRadius 74 is what the component itself picks there: at width 560
+  // chooseOuterRadiusPct returns its 46% ceiling, and recharts resolves a
+  // percentage radius against min(w,h)/2 = 160, giving 73.6px. Measured.
+  const WIDE = { cx: 280, cy: 160, innerRadius: 40, outerRadius: 74 };
+  // NARROW — 360x300, the narrowest box any call site produces (a phone-width
+  // card). Here chooseOuterRadiusPct picks its 26% floor, so the ring is 26% of
+  // min(360,300)/2 = 39px. The label column that leaves is ~99px against the
+  // ~149px a long name needs, so truncation is unavoidable and correct.
+  const NARROW = { cx: 180, cy: 150, innerRadius: 40, outerRadius: 39 };
+  const LONG_NAME = "Credit Card Processing Fees (estimated)";
+
   it("renders a 'No data' message instead of an empty ring when there is no data", () => {
     render(<PieDonut data={[]} />);
     expect(screen.getByText(/No data to visualise/i)).toBeInTheDocument();
@@ -156,8 +180,15 @@ describe("PieDonut — visible-in-box contract", () => {
 
     data.forEach((d, i) => {
       // Every slice — even a small one — gets an outside label. Hand it the
-      // slice's REAL mid-angle so the renderer anchors it on the right side.
-      const el = label({ ...d, percent: (d.value / 175), cx: 180, cy: 150, midAngle: midAngleOf(data, i), innerRadius: 40, outerRadius: 140 });
+      // slice's REAL mid-angle so the renderer anchors it on the right side, and
+      // the WIDE box so there is room for the full name.
+      //
+      // This used to pass `cx: 180` (a 360px box). At that width the label column
+      // is ~99px, so "Cash" was truncated to "Ca…" and the assertion below failed
+      // — the ENGINE was right and the FIXTURE was wrong. Every label test now
+      // shares one geometry constant so a box size can no longer be invented
+      // per-test.
+      const el = label({ ...d, percent: (d.value / 175), midAngle: midAngleOf(data, i), ...WIDE });
       expect(el).not.toBeNull();
 
       // The label is a <g> containing an elbow leader line plus a <text> block.
@@ -165,31 +196,61 @@ describe("PieDonut — visible-in-box contract", () => {
       expect(children.some((c) => c.type === "polyline" || c.type === "line" || c.type === "path")).toBe(true);
       expect(children.some((c) => c.type === "text")).toBe(true);
 
-      // The text block shows the name, the formatted value, and the %.
+      // The text block shows the FULL name, the formatted value, and the %.
       const text = labelText(el);
       expect(text).toContain(d.name);
       expect(text).toContain(fmtTrim(d.value));
       expect(text).toContain("%");
+      // And it is not quietly truncated at a real card width — the whole point of
+      // the yielding ring. Without this line the test would pass on "Ca…".
+      expect(text).not.toContain("…");
     });
   });
 
   it("keeps a short name on ONE line, and wraps a long one rather than clipping it", () => {
     // Short name, plenty of room → exactly one line.
     render(<PieDonut data={[{ name: "Cash", value: 50 }]} formatter={fmt} />);
-    const shortEl = pieProps().label({ name: "Cash", value: 50, percent: 1, cx: 180, cy: 150, midAngle: 0, innerRadius: 40, outerRadius: 70 });
+    const shortEl = pieProps().label({ name: "Cash", value: 50, percent: 1, midAngle: 0, ...WIDE });
     expect(nameLinesOf(shortEl)).toEqual(["Cash"]);
 
     // The 39-character name that used to be clipped to "Credit Card Processing F".
-    // It now wraps onto a second line and keeps every character.
-    const long = "Credit Card Processing Fees (estimated)";
-    render(<PieDonut data={[{ name: long, value: 50 }]} formatter={fmt} />);
-    const el = pieProps().label({ name: long, value: 50, percent: 1, cx: 180, cy: 150, midAngle: 0, innerRadius: 40, outerRadius: 70 });
+    // At a real card width it wraps onto a second line and keeps every character.
+    render(<PieDonut data={[{ name: LONG_NAME, value: 50 }]} formatter={fmt} />);
+    const el = pieProps().label({ name: LONG_NAME, value: 50, percent: 1, midAngle: 0, ...WIDE });
     const lines = nameLinesOf(el);
     expect(lines.length).toBeGreaterThanOrEqual(1);
     expect(lines.length).toBeLessThanOrEqual(2); // never more than 2 lines
     // Nothing was silently dropped or ellipsised away.
-    expect(lines.join(" ")).toBe(long);
+    expect(lines.join(" ")).toBe(LONG_NAME);
     expect(lines.join("")).not.toContain("…");
+  });
+
+  it("truncates with a trailing ellipsis, losing only a suffix, when the box is too narrow to wrap", () => {
+    // The companion to the test above. Wrapping needs room; when there is none
+    // the engine truncates (donutLabelLayout.js truncateToWidth). That fallback
+    // is asserted here so it stays HONEST: text may be cut short, but what
+    // remains must be a real prefix of the name with one ellipsis marking the
+    // cut — never reordered, never silently shortened with no marker, and never
+    // spilling past two lines. Without this test, "fixing" a truncation bug by
+    // dropping a middle word would still pass the suite above.
+    render(<PieDonut data={[{ name: LONG_NAME, value: 50 }]} formatter={fmt} />);
+    const el = pieProps().label({ name: LONG_NAME, value: 50, percent: 1, midAngle: 0, ...NARROW });
+    const lines = nameLinesOf(el);
+
+    expect(lines.length).toBeLessThanOrEqual(2);
+    const joined = lines.join("");
+    // Exactly one ellipsis, and it is the last character — the cut is marked once
+    // and at the end, so no interior text was elided.
+    expect(joined.split("…").length - 1).toBe(1);
+    expect(joined.endsWith("…")).toBe(true);
+    // What survived is a genuine prefix of the original. Compared with spaces
+    // stripped because the line break consumes a space and truncateToWidth drops
+    // trailing punctuation before appending the ellipsis.
+    const kept = joined.slice(0, -1).replace(/\s+/g, "");
+    expect(kept.length).toBeGreaterThan(0);
+    expect(LONG_NAME.replace(/\s+/g, "").startsWith(kept)).toBe(true);
+    // And it really is shorter — otherwise this test would pass on a full string.
+    expect(kept.length).toBeLessThan(LONG_NAME.replace(/\s+/g, "").length);
   });
 
   it("keeps every label on its own row and orders rows by the slice's radial position", () => {

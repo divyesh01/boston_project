@@ -25,8 +25,13 @@
 
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { REPO_ROOT } from './_repo-root.mjs';
 
-const ROOT = path.resolve(new URL('..', import.meta.url).pathname);
+// See scripts/_repo-root.mjs. This used to be
+// `path.resolve(new URL('..', import.meta.url).pathname)`, which yields
+// `C:\C:\Users\...` on Windows, so this whole probe died at load and verified
+// nothing while looking like it had passed.
+const ROOT = REPO_ROOT;
 const PAGES_DIR = path.join(ROOT, 'src/pages');
 const read = (p) => readFileSync(path.join(ROOT, p), 'utf8');
 

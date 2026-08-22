@@ -96,10 +96,14 @@
 import { webcrypto } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { REPO_ROOT } from "./_repo-root.mjs";
 
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
 
-const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+// See scripts/_repo-root.mjs — the old `.pathname` form gave `C:\C:\Users\...`
+// on Windows, so all five files below were unreadable and this probe reported
+// 18 phantom failures that described the path bug, not the password policy.
+const REPO = REPO_ROOT;
 const SECURITY_JS = path.join(REPO, "src", "lib", "security.js");
 const LOGIN_FN = path.join(REPO, "base44", "functions", "custom_auth_login", "entry.js");
 const ADMIN_FN = path.join(REPO, "base44", "functions", "custom_user_admin", "entry.js");

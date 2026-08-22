@@ -10,7 +10,7 @@ import Card from "@/components/ui-exec/Card";
 import { usePaymentData } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { money, money2, pct, sum, inRange, C, CHART_COLORS, commissionFor, grossRevenueForPeriod, rowAncillaryRevenueCents } from "@/lib/hotel";
-import { fromCents, toCents } from "@/lib/decimal";
+import { fromCents, toCents, multiply } from "@/lib/decimal";
 import { getCcFeeRate, getCcFeeOnRefunds } from "@/lib/commissionRates";
 import { getTaxConfig } from "@/lib/taxConfig";
 import { getEffectiveTaxRates, getTaxSettings } from "@/lib/taxSettings";
@@ -199,11 +199,16 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       const rev = Number(r.net_revenue) || 0;
       const stays = Number(r.stays) || 0;
       const info = commissionFor(r.source || r.code);
-      let comm = 0;
-      if (info.type === "percentage") comm = rev * info.rate;
-      else if (info.type === "fixed") comm = info.rate * stays;
-      else if (info.type === "actual") comm = info.rate;
-      bump(String(r.date).slice(0, 10), "commission", comm);
+      // INTEGER CENTS, not float dollars. rev * info.rate let each row land on
+      // either side of a half-cent depending on nothing but binary rounding, and
+      // the errors accumulated across every source row of the period — the same
+      // defect class fixed in calculationService.calculateChannelMetrics. multiply()
+      // is the cents-safe primitive: (cents, rate) -> cents, exact.
+      let commCents = 0;
+      if (info.type === "percentage") commCents = multiply(rev, info.rate);
+      else if (info.type === "fixed") commCents = toCents(info.rate) * stays;
+      else if (info.type === "actual") commCents = toCents(info.rate);
+      bump(String(r.date).slice(0, 10), "commission", fromCents(commCents));
     });
     payRows.forEach((r) => {
       const date = String(r.date).slice(0, 10);
@@ -356,22 +361,26 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       const info = commissionFor(src);
       const rev = Number(r.net_revenue) || 0;
       const stays = Number(r.stays) || 0;
-      let comm = 0;
-      if (info.type === "percentage") comm = rev * info.rate;
-      else if (info.type === "fixed") comm = info.rate * stays;
-      else if (info.type === "actual") comm = info.rate;
-      const cur = srcMap.get(src) || { name: src, gross: 0, stays: 0, comm: 0, rate: info.rate };
+      // Same integer-cents rule as the day ledger above: accumulate commission in
+      // cents via multiply(), convert once for display. The per-source `comm`
+      // figure feeds a headline deduction item, so float drift here was visible
+      // money, not noise.
+      let commCents = 0;
+      if (info.type === "percentage") commCents = multiply(rev, info.rate);
+      else if (info.type === "fixed") commCents = toCents(info.rate) * stays;
+      else if (info.type === "actual") commCents = toCents(info.rate);
+      const cur = srcMap.get(src) || { name: src, gross: 0, stays: 0, commCents: 0, rate: info.rate };
       cur.gross += rev;
       cur.stays += stays;
-      cur.comm += comm;
+      cur.commCents += commCents;
       srcMap.set(src, cur);
     });
     const otaRecords = [...srcMap.values()]
-      .filter((x) => x.gross > 0 || x.comm > 0)
+      .filter((x) => x.gross > 0 || x.commCents > 0)
       .map((x) => ({
         name: x.name,
         detail: `Gross ${money2(x.gross)} @ ${pct(x.rate, 1)} commission`,
-        amount: x.comm,
+        amount: fromCents(x.commCents),
       }));
 
     // ── CC fees & refunds per day ──

@@ -148,6 +148,42 @@ RATE_SCALE = 10000   (basis points)
 add/subtract -> return CENTS, not dollars
 ```
 
+## 12.5.1 Money Kept sign and cache units — ADDED 2026-08-21
+
+`Money Kept = gross - deductions`. A negative result is mathematically valid when
+deductions are greater than gross; the UI must show that loss rather than changing
+the sign to make the dashboard look healthy.
+
+An **estimated OTA commission greater than total revenue is not valid** when every
+percentage rate is clamped below 100%. Investigate the input rows and cache before
+changing the sign or adding a cap. A cap would hide bad data and make the report
+unreconcilable.
+
+The dashboard reads `DailyFinancialAggregate` before it reads the raw ledgers. The
+aggregate contract is:
+
+```
+source_net.<channel>.net       dollars
+occ_revenue                    dollars
+gross_misc.<field>             dollars
+expense_by_category.<key>      dollars
+```
+
+The accumulator may use integer cents internally, but `finalizeDay()` converts every
+money field, including nested `source_net`, back to dollars before storage. The cache
+has `aggregate_version = 2`; rows without that version are legacy data and must be
+ignored so the caller falls back to raw ledgers. Guessing the unit of an old row can
+turn a normal commission into a multi-million-dollar deduction.
+
+Proof commands:
+
+```
+node --import ./scripts/_loader-boot.mjs scripts/probe-money-kept-gross.mjs
+node --import ./scripts/_loader-boot.mjs scripts/probe-decimal-integration.mjs
+```
+
+Both must pass before trusting the Money Kept card after a cache-format change.
+
 ## 12.6 Real Numbers — RESOLVED 2026-08-20
 
 Measured, not transcribed. `scripts/probe-money-kept-gross.mjs` drives the real

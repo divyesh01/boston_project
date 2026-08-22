@@ -3,7 +3,7 @@ import { db, listImportSessions, rollbackImportSession } from '@/api/base44Clien
 import React, { useState } from "react";
 import { UploadCloud, CheckCircle2, FileSpreadsheet, XCircle, Search, Building2, Loader2, Eye, Trash2, ArrowDownToLine, RefreshCw, RotateCcw, X } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
-import { EmptyState } from "@/components/ui/status";
+import { EmptyState, ErrorState } from "@/components/ui/status";
 
 import { useUploads, useProperties } from "@/lib/useHotelData";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -17,6 +17,7 @@ import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrf
 import { rebuildDailyAggregates } from "@/lib/dailyAggregates";
 import { queryClientInstance } from "@/lib/query-client";
 import { toCents, formatCents } from "@/lib/decimal";
+import { inspectUploadFile } from "@/lib/uploadGuard";
 
 // Per-import undo. Deletes exactly the rows one import created, via the
 // rollback ledger — unlike "Clear all imported data", which wipes every table.
@@ -226,8 +227,16 @@ function rawRowsTtlExpiry() {
 }
 
 export default function Import() {
-  const { data: uploads = [], refetch } = useUploads();
-  const { data: properties = [] } = useProperties();
+  // Query OBJECTS, not just data. `uploadsQ.isError`/`propertiesQ.isError` drive
+  // the ErrorState below: a failed read used to be indistinguishable from "no
+  // uploads yet", which on this page reads as a clean slate right before someone
+  // re-imports a month that is already in the database.
+  const uploadsQ = useUploads();
+  const propertiesQ = useProperties();
+  const uploads = uploadsQ.data ?? [];
+  const properties = propertiesQ.data ?? [];
+  const refetch = uploadsQ.refetch;
+  const readFailed = uploadsQ.isError ? uploadsQ : propertiesQ.isError ? propertiesQ : null;
   const { canAccessProperty } = useAuth();
   const [type, setType] = useState("auto");
   const [propertyId, setPropertyId] = useState("");
@@ -279,54 +288,19 @@ export default function Import() {
 
   const handleFiles = async (fileList) => {
     const files = [];
-    const MAX_SIZE = 10 * 1024 * 1024;
 
     for (const f of Array.from(fileList)) {
-      const isExtValid = /\.(csv|xlsx|xls)$/i.test(f.name);
-      const isExecutable = /\.(exe|sh|bat|cmd|msi|ps1|js|vbs|jar)$/i.test(f.name);
-
-      if (!isExtValid || isExecutable) {
-        alert(`File ${f.name} has an invalid or unsafe extension.`);
+      // Extension allowlist, executable denylist, 10MB cap and magic-byte
+      // inspection all moved to src/lib/uploadGuard.js unchanged, so that
+      // DataIntelligence.jsx — the other upload door into this same pipeline —
+      // enforces exactly the same rules instead of only checking the extension.
+      // Only the reporting stays here: this page alerts, that page toasts.
+      const verdict = await inspectUploadFile(f);
+      if (!verdict.ok) {
+        alert(verdict.reason);
         continue;
       }
-
-      if (f.size > MAX_SIZE) {
-        alert(`File ${f.name} exceeds the 10MB limit and will not be processed.`);
-        continue;
-      }
-
-      // ── Bulletproof Magic Byte Inspection ──
-      try {
-        const headerBlob = f.slice(0, 4);
-        const buffer = await headerBlob.arrayBuffer();
-        const view = new Uint8Array(buffer);
-        let isValidMagic = false;
-
-        if (/\.(xlsx|xls)$/i.test(f.name)) {
-          // Check for ZIP/XLSX magic bytes (50 4B 03 04) or OLE (D0 CF 11 E0)
-          const isZip = view.length >= 4 && view[0] === 0x50 && view[1] === 0x4B && view[2] === 0x03 && view[3] === 0x04;
-          const isOle = view.length >= 4 && view[0] === 0xD0 && view[1] === 0xCF && view[2] === 0x11 && view[3] === 0xE0;
-          if (!isZip && !isOle) {
-            alert(`File ${f.name} failed security inspection (invalid magic bytes). This is not a genuine Excel file.`);
-            continue;
-          }
-          isValidMagic = true;
-        } else if (/\.csv$/i.test(f.name)) {
-          // For CSV, ensure the first few bytes are valid text (no null bytes or obvious binary)
-          if (view.includes(0x00)) {
-            alert(`File ${f.name} failed security inspection. CSV cannot contain binary null bytes.`);
-            continue;
-          }
-          isValidMagic = true;
-        }
-
-        if (isValidMagic) {
-          files.push(f);
-        }
-      } catch (e) {
-        console.warn(`Failed to inspect magic bytes for ${f.name}`, e);
-        alert(`Could not verify the integrity of ${f.name}.`);
-      }
+      files.push(f);
     }
 
     if (!files.length) return;
@@ -732,6 +706,19 @@ export default function Import() {
           Excel or CSV. Select a property first, then batch-import reports. Zero-revenue duplicates are filtered automatically.
         </p>
       </header>
+
+      {readFailed && (
+        <ErrorState
+          title={readFailed === propertiesQ ? "Properties could not be loaded" : "Upload history could not be loaded"}
+          description={
+            readFailed === propertiesQ
+              ? "The property list is needed before any report can be imported. Importing into the wrong property would misattribute revenue, so imports stay disabled until this loads."
+              : "Past uploads may exist that are not shown. Re-importing the same file while this fails could create rows the duplicate filter cannot see. Retry before importing."
+          }
+          error={readFailed.error}
+          onRetry={() => { refetch(); propertiesQ.refetch(); }}
+        />
+      )}
 
       <Card title="Target property" subtitle="Select which property these reports belong to">
         <div className="flex items-center gap-3">

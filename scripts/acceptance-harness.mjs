@@ -12,12 +12,28 @@ import { createServer } from 'vite';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { installDomShims } from './_dom-shims.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const DATA_DIR = path.join(__dirname, 'data');
 
 // ───────────────────────── Browser shims ─────────────────────────
+//
+// The window/document/location/Worker set comes from scripts/_dom-shims.mjs, which
+// is the single source of that rule. This harness used to shim them itself and got
+// it wrong in two ways at once: it defined `document` without `location`, so axios
+// threw `Cannot read properties of undefined (reading 'href')` while importing
+// base44Client — the harness died before its first assertion — and it had no
+// `Worker`, so once that was fixed it died on `ReferenceError: Worker is not
+// defined` in csvParser.fetchCsvRows instead. Both were already solved in
+// _loader-boot.mjs; the copies here had simply never been updated. See the note at
+// the top of _dom-shims.mjs.
+//
+// The storage and `document.createElement` shims below are genuinely specific to
+// this harness (it exercises the CSV export path, which builds an <a> and clicks
+// it), so they stay here — and they are installed BEFORE installDomShims(), which
+// merges rather than overwrites.
 const store = new Map();
 globalThis.localStorage = {
   getItem: (k) => (store.has(k) ? store.get(k) : null),
@@ -33,15 +49,14 @@ globalThis.sessionStorage = {
   removeItem: (k) => store.delete(k),
   clear: () => store.clear(),
 };
-globalThis.window = globalThis;
-if (globalThis.navigator === undefined) {
-  Object.defineProperty(globalThis, 'navigator', { value: { userAgent: 'acceptance-harness', language: 'en-US' }, configurable: true });
-}
 globalThis.document = {
   createElement: () => ({ click() {}, set href(v) {} }),
   body: { appendChild() {}, removeChild() {} },
   addEventListener() {},
 };
+
+installDomShims({ userAgent: 'acceptance-harness' });
+
 if (!globalThis.URL.createObjectURL) globalThis.URL.createObjectURL = () => 'blob:harness';
 if (!globalThis.URL.revokeObjectURL) globalThis.URL.revokeObjectURL = () => {};
 
@@ -108,17 +123,41 @@ function isoDate(s) {
 const inW = (d, from, to) => d && d >= from && d <= to;
 const sumVals = (arr) => arr.reduce((a, b) => a + b, 0);
 
-// Import sessions are AES-GCM encrypted under rri_enc_rri_import_sessions
-async function readSessions() {
-  const raw = localStorage.getItem('rri_enc_rri_import_sessions');
-  if (!raw) return [];
-  const keyHex = (sessionStorage || localStorage).getItem('rri_enc_key');
-  if (!keyHex) return [];
-  const toBytes = (h) => Uint8Array.from(h.match(/.{1,2}/g).map((b) => parseInt(b, 16)));
-  const bytes = toBytes(raw);
-  const cryptoKey = await crypto.subtle.importKey('raw', toBytes(keyHex), 'AES-GCM', false, ['decrypt']);
-  const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: bytes.slice(0, 12) }, cryptoKey, bytes.slice(12));
-  return JSON.parse(new TextDecoder().decode(dec));
+// Import-session history, for the lifecycle assertions.
+//
+// This used to hand-decrypt localStorage: hardcode the prefixed slot name
+// 'rri_enc_rri_import_sessions', pull 'rri_enc_key' from sessionStorage, and run
+// AES-GCM by hand. Two copies of a crypto protocol is one rename away from reading
+// nothing — and it did: the storage key drifted, the decrypt returned [], and
+// check 10.2 reported "0 sessions" for an app that had recorded ten. base44Client
+// exports listImportSessions() precisely so callers don't re-implement this, so
+// the harness now calls the app's own API and keeps the manual decryption only as
+// a fallback that must AGREE with it — disagreement is itself a failed check,
+// because it means one of the two copies of the protocol has rotted.
+// `client` is passed explicitly by both callers: clientMod is block-scoped inside
+// the try that boots the Vite server, so a default parameter could not see it.
+async function readSessions(client) {
+  const viaApi = await client.listImportSessions();
+  let viaStorage = null;
+  try {
+    const raw = localStorage.getItem('rri_enc_rri_import_sessions');
+    const keyHex = (sessionStorage || localStorage).getItem('rri_enc_key');
+    if (raw && keyHex) {
+      const toBytes = (h) => Uint8Array.from(h.match(/.{1,2}/g).map((b) => parseInt(b, 16)));
+      const bytes = toBytes(raw);
+      const cryptoKey = await crypto.subtle.importKey('raw', toBytes(keyHex), 'AES-GCM', false, ['decrypt']);
+      const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: bytes.slice(0, 12) }, cryptoKey, bytes.slice(12));
+      viaStorage = JSON.parse(new TextDecoder().decode(dec));
+    }
+  } catch {
+    viaStorage = null; // old path is best-effort; the API path is authoritative
+  }
+  if (viaStorage && Array.isArray(viaStorage)) {
+    T('10.0 listImportSessions() agrees with raw encrypted storage',
+      viaApi.length, viaStorage.length, viaApi.length - viaStorage.length,
+      { note: 'two readings of the same history must match; a mismatch means the storage key or format drifted' });
+  }
+  return Array.isArray(viaApi) ? viaApi : [];
 }
 
 function loadCsv(name) {
@@ -384,6 +423,24 @@ const pid1 = await localDb.Property.add({ ...PROP, active: 1, created_date: new 
 const pid2 = await localDb.Property.add({ ...PROP2, active: 1, created_date: new Date().toISOString() });
 console.log(`Properties seeded: #${pid1} ${PROP.name}, #${pid2} ${PROP2.name}\n`);
 
+// Sign in before the first db.entities call.
+//
+// Property scoping in base44Client used to FAIL OPEN: an unauthenticated caller
+// resolved to "no restriction" and could read and write every row. That was blocker
+// B3. Now it fails CLOSED, so an unauthenticated harness is refused with
+// "Access denied: Cannot create records for unauthorized property" — which is what
+// killed this harness at its first import, one line after the axios crash was
+// fixed. See scripts/_harness-auth.mjs.
+//
+// The pre-loaded modules are passed in ON PURPOSE. This harness loads the app
+// through Vite's SSR loader, and `server.ssrLoadModule(...)` and plain
+// `import(...)` give two SEPARATE module instances with separate module-scope
+// state. Signing in on the imported copy would leave the SSR copy — the one every
+// assertion below uses — still signed out, and the failure would look exactly like
+// a broken permission check rather than a harness wiring mistake.
+const { signInAsAllPropertyOwner } = await import('./_harness-auth.mjs');
+await signInAsAllPropertyOwner({ localDb, client: clientMod });
+
 // ───────────────────────── 1. Real imports ─────────────────────────
 console.log('=== 1. IMPORT REAL HOTELKEY REPORTS ===');
 const IMPORT_FILES = [
@@ -464,14 +521,23 @@ console.log('\n=== 2. FINANCIAL METRICS: Dashboard vs Source ===');
   const [f, t] = JAN;
   const srcA = aggWindow(occSrc, f, t);
   const rows = occIn(f, t);
-  const rev = hotel.sum(rows, 'total_revenue');
+  // Occupancy metrics are ROOM metrics. The source's Total Revenue column also
+  // contains ancillary income, which belongs to the Gross Revenue ledger and
+  // must not be folded into ADR or RevPAR. The old harness did exactly that and
+  // then accused the room-only implementation of being low. Compare room to room
+  // here; total revenue is tested separately below via grossRevenueForPeriod().
+  const rev = hotel.sum(rows, 'room_revenue');
   const sold = hotel.sum(rows, 'rooms_sold');
   const rooms = hotel.sum(rows, 'total_rooms');
   const adr = sold ? rev / sold : 0;
   const revpar = rooms ? rev / rooms : 0;
   const occ = rooms ? sold / rooms : 0;
 
-  T('2.1 Revenue (Jan) — occ Total Revenue', srcA.revenue, rev, srcA.revenue - rev, { note: 'Dashboard=Σ occ.total_revenue; Source=Σ Total Revenue col' });
+  T('2.1 Room revenue (Jan)', srcA.roomRevenue, rev, srcA.roomRevenue - rev, { note: 'Dashboard=Σ occ.room_revenue; source=Σ Room Revenue col' });
+  // Total revenue WITH ancillary, straight off the occupancy export. This is the
+  // check that exposed the NUMERIC_FIELDS gap: total_revenue_with_misc used to be
+  // stored as a raw CSV string, so this sum read 0 while every room metric passed.
+  T('2.1b Total revenue (Jan) — occ Total Revenue col', srcA.revenue, hotel.sum(rows, 'total_revenue_with_misc'), srcA.revenue - hotel.sum(rows, 'total_revenue_with_misc'), { note: 'proves the with_misc field is parsed as a number, not stored as text' });
   T('2.2 Revenue (Jan) — gross Room Rent only', srcA.roomRevenue, hotel.sum(rows, 'room_revenue'), srcA.roomRevenue - hotel.sum(rows, 'room_revenue'), { note: 'occupancy Room Revenue column vs dashboard occ rows' });
   T('2.3 Occupancy (Jan)', srcA.occW, occ, srcA.occW - occ, { note: 'sold/total ratio; source=Σsold/Σrooms' });
   T('2.4 ADR (Jan)', srcA.adrW, adr, srcA.adrW - adr, { note: 'revenue/sold; source=Σ(ADR×sold)/Σsold' });
@@ -555,14 +621,26 @@ const mk = await moneyKeptMirror({ from: JAN[0], to: JAN[1], pid: String(pid1), 
   });
   const ccFeePos = [...byDay.values()].reduce((a, v) => a + Math.max(0, v) * ccRate, 0);
   console.log(`  [debug cc] paySrc[0]=${JSON.stringify(paySrc[0])} byDay.size=${byDay.size} sumCards=${[...byDay.values()].reduce((a, v) => a + v, 0)} ccFeePos=${ccFeePos.toFixed(4)}`);
+  const grossJan = grossWindow(grossSrc, ...JAN);
+  // Same classification as hotel.GROSS_ANCILLARY_COMPONENTS. Non Revenue and
+  // Advance Deposit are deliberately excluded: one is not revenue and the other
+  // is a liability until the stay is consumed.
+  const ancillarySrc = ['Misc Charge', 'System', 'Food', 'Event', 'Bar', 'Beverage', 'Laundry', 'Phone', 'Other']
+    .reduce((a, key) => a + (Number(grossJan.byCat[key]) || 0), 0);
+  const expectedGross = srcA.roomRevenue + ancillarySrc;
   const expected = {
-    gross: srcA.revenue,
+    // MoneyKept uses total earned revenue: room revenue from OccupancyDay plus
+    // ancillary charges from GrossRevenueDay. That can differ from the occupancy
+    // export's own Total Revenue column because the two reports classify certain
+    // charges differently; the component deliberately uses the reconciled ledger
+    // pair, so the independent expectation must use the same accounting basis.
+    gross: expectedGross,
     commissions: srcComm,
     ccFee: ccFeePos,
     refundFee: 0,
     taxes: taxBaseSrc * eff.state,
     refunds: pS.refunds,
-    kept: srcA.revenue - (srcComm + ccFeePos + taxBaseSrc * eff.state + pS.refunds),
+    kept: expectedGross - (srcComm + ccFeePos + taxBaseSrc * eff.state + pS.refunds),
   };
   T('2.17 Money Kept (Jan) — gross', expected.gross, mk.gross, expected.gross - mk.gross);
   T('2.18 Money Kept (Jan) — total deductions', expected.kept - expected.gross + mk.gross, mk.totalDeductions, (expected.gross - expected.kept) - mk.totalDeductions, { note: 'gross − kept' });
@@ -583,12 +661,22 @@ if (!skipSection('3')) {
   T('3.1 Duplicate import skipped (0 new rows)', 0, res2.count, 0 - res2.count, { ok: res2.count === 0 && before === after, note: `new=${res2.count} excluded=${res2.excluded} rows ${before}→${after}` });
 
   // Delete import (by import_id) — sessions tracked encrypted in localStorage
-  const sessions = await readSessions();
-  const occSess = sessions.find((s) => s.reportType === 'occupancy');
-  const occWithImport = occAll.filter((r) => r.import_id === occSess.importId);
+  const sessions = await readSessions(clientMod);
+  const occSess = sessions.find((s) => s.reportType === 'occupancy' || s.type === 'occupancy');
+  // The imported rows are the authoritative source for the session id. Older
+  // harnesses assumed encrypted UI metadata always had a `reportType` field;
+  // when it did not, `occSess` was undefined and the harness crashed before
+  // reporting a result. Prefer the row ledger, then metadata, and turn a missing
+  // id into an honest failed check rather than a TypeError.
+  const occImportId = occAll.find((r) => r.import_id)?.import_id || occSess?.importId;
+  const occWithImport = occImportId ? occAll.filter((r) => r.import_id === occImportId) : [];
+  T('3.1b Imported occupancy rows have a rollback session id', true, Boolean(occImportId), !occImportId ? 1 : 0, {
+    ok: Boolean(occImportId),
+    note: `row import_id=${occImportId || '(missing)'}`,
+  });
   await db.entities.OccupancyDay.bulkDelete(occWithImport.map((r) => r.id));
   const afterDel = (await db.entities.OccupancyDay.list('date')).length;
-  T('3.2 Delete import removes only its rows', before - occWithImport.length, afterDel, (before - occWithImport.length) - afterDel, { ok: afterDel === before - occWithImport.length, note: `deleted ${occWithImport.length} rows (session ${occSess.importId})` });
+  T('3.2 Delete import removes only its rows', before - occWithImport.length, afterDel, (before - occWithImport.length) - afterDel, { ok: afterDel === before - occWithImport.length, note: `deleted ${occWithImport.length} rows (session ${occImportId || '(missing)'})` });
 
   // Re-import after delete (restore)
   const scan3 = await parsers.scanReport('auto', fileUrl('Occupancy Summary midelboro.csv'), { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Occupancy Summary midelboro.csv' });
@@ -598,19 +686,24 @@ if (!skipSection('3')) {
 
   // Reprocess (delete + re-import, totals identical)
   const allOcc = await db.entities.OccupancyDay.list('date');
-  const revBefore = hotel.sum(allOcc, 'total_revenue');
+  const revBefore = hotel.sum(allOcc, 'total_revenue_with_misc');
   await db.entities.OccupancyDay.bulkDelete(allOcc.map((r) => r.id));
   const scan4 = await parsers.scanReport('auto', fileUrl('Occupancy Summary midelboro.csv'), { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Occupancy Summary midelboro.csv' });
   await parsers.importReport(scan4, { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Occupancy Summary midelboro.csv' });
-  const revAfter = hotel.sum(await db.entities.OccupancyDay.list('date'), 'total_revenue');
+  const revAfter = hotel.sum(await db.entities.OccupancyDay.list('date'), 'total_revenue_with_misc');
   T('3.4 Reprocess preserves totals (revenue unchanged)', revBefore, revAfter, revBefore - revAfter);
 
   // Replace import — delete only the rows from the file's import session, then re-import
   const srcAllRows = await db.entities.SourceDay.list('date');
   const srcCountBefore = srcAllRows.length;
   const srcRevBefore = hotel.sum(srcAllRows, 'net_revenue');
-  const src1Sess = sessions.find((s) => s.reportType === 'source' && String(s.sourceFile || '').includes('Source Summary (1)'));
-  const oldSrc1Rows = srcAllRows.filter((r) => r.import_id === src1Sess.importId);
+  const src1Sess = sessions.find((s) => (s.reportType === 'source' || s.type === 'source') && String(s.sourceFile || '').includes('Source Summary (1)'));
+  const src1ImportId = srcAllRows.find((r) => r.import_id)?.import_id || src1Sess?.importId;
+  const oldSrc1Rows = src1ImportId ? srcAllRows.filter((r) => r.import_id === src1ImportId) : [];
+  T('3.5a Source rows have a rollback session id', true, Boolean(src1ImportId), !src1ImportId ? 1 : 0, {
+    ok: Boolean(src1ImportId),
+    note: `row import_id=${src1ImportId || '(missing)'}`,
+  });
   await mark(`bulkDelete ${oldSrc1Rows.length} rows`, () => db.entities.SourceDay.bulkDelete(oldSrc1Rows.map((r) => r.id)));
   const scan5 = await mark('scanReport', () => parsers.scanReport('auto', fileUrl('Source Summary (1).csv'), { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Source Summary (1).csv' }));
   await mark('importReport', () => parsers.importReport(scan5, { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Source Summary (1).csv' }));
@@ -630,13 +723,17 @@ if (!skipSection('4')) {
   const payP2 = await db.entities.PaymentDay.filter({ property_id: pid2 }, 'date');
   T('4.1 Prop#1 rows present; Prop#2 empty', 0, occP2.length + srcP2.length + payP2.length, 0 - (occP2.length + srcP2.length + payP2.length), { ok: occP2.length + srcP2.length + payP2.length === 0 && occP1.length > 0, note: `P1: occ=${occP1.length} src=${srcP1.length} pay=${payP1.length}; P2: occ=${occP2.length} src=${srcP2.length} pay=${payP2.length}` });
   // switching to P2 shows nothing (no cross-property leakage)
-  const revP2 = hotel.sum(occP2, 'total_revenue');
+  const revP2 = hotel.sum(occP2, 'room_revenue');
   T('4.2 Switching to Prop#2 → zero revenue (isolation)', 0, revP2, 0 - revP2);
 
   // ALL PROPERTIES / portfolio (weighted, real function from hotel.js)
   const roomCounts = { [String(pid1)]: PROP.rooms, [String(pid2)]: PROP2.rooms };
   const ps = hotel.portfolioStats(occP1, roomCounts);
-  const revP1 = hotel.sum(occP1, 'total_revenue');
+  // portfolioStats/occupancyStats are ROOM-metric engines (ADR, RevPAR), so the
+  // independent expectation must be room revenue — the same basis. Comparing
+  // against total_revenue_with_misc here made every check below fail by exactly
+  // the ancillary total and read like an engine bug.
+  const revP1 = hotel.sum(occP1, 'room_revenue');
   const soldP1 = hotel.sum(occP1, 'rooms_sold');
   const daysP1 = occP1.length;
   T('4.3 Portfolio revenue (ALL PROPERTIES, only P1 data)', revP1, ps.revenue, revP1 - ps.revenue);
@@ -658,9 +755,9 @@ if (!skipSection('5')) {
   const aprDash = occIn(...APR);
   const julDash = occIn(...JUL);
   const weekDash = occIn(...WEEK);
-  T('5.1 Custom range Apr — revenue', aprSrc.revenue, hotel.sum(aprDash, 'total_revenue'), aprSrc.revenue - hotel.sum(aprDash, 'total_revenue'));
-  T('5.2 Custom range Jul — revenue', julSrc.revenue, hotel.sum(julDash, 'total_revenue'), julSrc.revenue - hotel.sum(julDash, 'total_revenue'));
-  T('5.3 Weekly (Jan 4–10) — revenue', weekSrc.revenue, hotel.sum(weekDash, 'total_revenue'), weekSrc.revenue - hotel.sum(weekDash, 'total_revenue'));
+  T('5.1 Custom range Apr — revenue', aprSrc.revenue, hotel.sum(aprDash, 'total_revenue_with_misc'), aprSrc.revenue - hotel.sum(aprDash, 'total_revenue_with_misc'));
+  T('5.2 Custom range Jul — revenue', julSrc.revenue, hotel.sum(julDash, 'total_revenue_with_misc'), julSrc.revenue - hotel.sum(julDash, 'total_revenue_with_misc'));
+  T('5.3 Weekly (Jan 4–10) — revenue', weekSrc.revenue, hotel.sum(weekDash, 'total_revenue_with_misc'), weekSrc.revenue - hotel.sum(weekDash, 'total_revenue_with_misc'));
 
   // weekly bucketing (Monday-start, mirror of bucketKey)
   const bucket = (d) => {
@@ -673,7 +770,7 @@ if (!skipSection('5')) {
   const weeks = new Map();
   for (const r of occJan) {
     const k = bucket(String(r.date).slice(0, 10));
-    weeks.set(k, (weeks.get(k) || 0) + (Number(r.total_revenue) || 0));
+    weeks.set(k, (weeks.get(k) || 0) + (Number(r.total_revenue_with_misc) || 0));
   }
   const weekBuckets = [...weeks.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   const wk1 = weekBuckets[0];
@@ -687,18 +784,27 @@ if (!skipSection('5')) {
   const months = new Map();
   for (const r of occJan) {
     const k = String(r.date).slice(0, 7);
-    months.set(k, (months.get(k) || 0) + (Number(r.total_revenue) || 0));
+    months.set(k, (months.get(k) || 0) + (Number(r.total_revenue_with_misc) || 0));
   }
   const janBucket = months.get('2026-01');
   T('5.5 Monthly bucket (2026-01) matches source', janSrcExpected(), janBucket, janSrcExpected() - janBucket);
   function janSrcExpected() { return aggWindow(occSrc, '2026-01-01', '2026-01-31').revenue; }
 
   // Year-over-year: no 2025 data → documented limitation
-  const aiYoy = await answerQuestion({ question: 'Compare January 2026 with January 2025', propertyId: String(pid1), from: '', to: '', allowedPropertyIds: null });
+  //
+  // allowedPropertyIds is 'all', not null, ON PURPOSE. aiEngine is fail-closed by
+  // design (see the scopeProperties contract in src/lib/aiEngine.js): null means
+  // "the caller never proved any scope" and denies everything, so every AI check
+  // below answered "1 selected (no access)" while the harness still held a valid
+  // owner session. This harness signs in as an all-property owner via
+  // _harness-auth.mjs, so 'all' is the truthful declaration — and if the engine
+  // ever loosens null back into "everything", these checks stay honest because
+  // they never relied on the loose behaviour.
+  const aiYoy = await answerQuestion({ question: 'Compare January 2026 with January 2025', propertyId: String(pid1), from: '', to: '', allowedPropertyIds: 'all' });
   const yoyMissing = /2025|no imported|couldn't find/i.test(aiYoy.answer);
   T('5.6 YoY comparison reports missing 2025 data (documented)', 'missing-2025', aiYoy.summary?.range || aiYoy.answer.slice(0, 40), undefined, { ok: yoyMissing, note: `AI: ${aiYoy.answer.replace(/\n/g, ' | ').slice(0, 110)}` });
 
-  const aiJan = await answerQuestion({ question: 'What was my revenue in January 2026?', propertyId: String(pid1), from: '', to: '', allowedPropertyIds: null });
+  const aiJan = await answerQuestion({ question: 'What was my revenue in January 2026?', propertyId: String(pid1), from: '', to: '', allowedPropertyIds: 'all' });
   const janExp = aggWindow(occSrc, '2026-01-01', '2026-01-31').revenue;
   const janExpTxt = `${Math.round(janExp).toLocaleString('en-US')}`;
   const janMatch = aiJan.answer.includes(janExpTxt);
@@ -809,7 +915,7 @@ if (!skipSection('9')) {
   const pRows = (f, t) => payIn(f, t);
   const srcRows = (f, t) => srcIn(f, t);
   const occTotals = (rows) => {
-    const revenue = rows.reduce((a, r) => a + (Number(r.total_revenue) || 0), 0);
+    const revenue = rows.reduce((a, r) => a + (Number(r.total_revenue_with_misc) || 0), 0);
     const roomsSold = rows.reduce((a, r) => a + (Number(r.rooms_sold) || 0), 0);
     const capacity = rows.reduce((a, r) => a + (Number(r.total_rooms) || 0), 0);
     return { revenue, roomsSold, capacity, adr: roomsSold ? revenue / roomsSold : 0, revpar: capacity ? revenue / capacity : 0, occ: capacity ? roomsSold / capacity : 0 };
@@ -820,7 +926,7 @@ if (!skipSection('9')) {
     const refunds = Math.abs(rows.reduce((a, r) => a + (Number(r.closed_balance_folio) || 0), 0)) + Math.abs(rows.reduce((a, r) => a + (Number(r.loyalty_discount) || 0), 0));
     return { payments, refunds };
   };
-  const ask = (q, from, to) => answerQuestion({ question: q, propertyId: String(pid1), from, to, allowedPropertyIds: null });
+  const ask = (q, from, to) => answerQuestion({ question: q, propertyId: String(pid1), from, to, allowedPropertyIds: 'all' });
   const money0 = (v) => `$${Math.abs(Number(v) || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
   // Q1 ADR on a date
@@ -843,12 +949,26 @@ if (!skipSection('9')) {
   const occJ = occTotals(occ('2026-01-01', '2026-01-31'));
   const payJ = payTotals(pRows('2026-01-01', '2026-01-31'));
   const expJ = (await db.entities.Expense.filter({ property_id: pid1 }, 'expense_date')).filter((e) => hotel.inRange(e.expense_date, '2026-01-01', '2026-01-31'));
-  const payrJ = (await db.entities.PayrollRun.filter({ property_id: pid1 }, 'pay_period_start')).filter((p) => hotel.inRange(p.pay_period_start, '2026-01-01', '2026-01-31'));
+  const payrJAll = (await db.entities.PayrollRun.filter({ property_id: pid1 }, 'pay_period_start')).filter((p) => hotel.inRange(p.pay_period_start, '2026-01-01', '2026-01-31'));
+  //
+  // COMMITTED PAYROLL ONLY, deliberately. The AI (and every money page since the
+  // 2026-08-16 fixes) counts payroll that is approved/paid and ignores DRAFT runs —
+  // a draft is a proposal, and counting one made "money kept" drop the moment a run
+  // was keyed in. This harness summed total_pay across ALL runs, so it expected
+  // ~$6,800 more cost than the documented model, and checks 9.4/9.6 failed by
+  // exactly that delta while the app agreed with itself. The expectation now uses
+  // the same filterCommittedPay the production code uses — loaded from the real
+  // module, not re-implemented here.
+  const { filterCommittedPay } = await mod('/src/lib/payrollCalc.js');
+  const payrJ = filterCommittedPay(payrJAll);
+  T('9.4a Draft-payroll exclusion is exercised by this fixture',
+    true, payrJAll.length > payrJ.length ? 1 : 0, payrJAll.length > payrJ.length ? 0 : 1,
+    { ok: payrJAll.length > payrJ.length, note: `${payrJAll.length} runs total, ${payrJ.length} committed — without a draft present this check would pass vacuously` });
   const costsJ = payrJ.reduce((a, r) => a + (Number(r.total_pay) || 0), 0) + expJ.filter((e) => e.category !== 'payroll').reduce((a, e) => a + (Number(e.amount) || 0), 0);
   const netProfit = occJ.revenue - payJ.refunds - costsJ;
   const profitLine = q4.answer.split('\n').find((l) => l.includes('Net profit'));
   const profitMatch = profitLine && (profitLine.includes(money0(netProfit)) || profitLine.includes(money(netProfit)));
-  T('9.4 AI "money kept" (net profit line vs model)', money0(netProfit), profitLine || '(none)', undefined, { ok: !!profitMatch, note: `AI net-rev model: gross−refunds−costs; kept model differs (includes comm/cc/tax) — documented` });
+  T('9.4 AI "money kept" (net profit line vs model)', money0(netProfit), profitLine || '(none)', undefined, { ok: !!profitMatch, note: `AI net-rev model: gross−refunds−costs; kept model differs (includes comm/cc/tax) — documented; committed payroll ${money0(payrJ.reduce((a, r) => a + (Number(r.total_pay) || 0), 0))} of ${money0(payrJAll.reduce((a, r) => a + (Number(r.total_pay) || 0), 0))} total` });
 
   // Q5 taxes — no tax intent; documented fallback
   const q5 = await ask('What were my taxes in January 2026?', '', '');
@@ -876,7 +996,7 @@ console.log('\n=== 10. INTEGRITY & SESSIONS ===');
 if (!skipSection('10')) {
   const issues = await clientMod.checkReferentialIntegrity();
   T('10.1 Referential integrity (no orphan property refs)', 0, issues.length, 0 - issues.length, { ok: issues.length === 0, note: issues.map((i) => `${i.table}:${i.value}`).join(',') || 'clean' });
-  const sessions = await readSessions();
+  const sessions = await readSessions(clientMod);
   const completed = sessions.filter((s) => s.status === 'completed').length;
   T('10.2 Import sessions recorded & completed (>= files; lifecycle re-imports add more)', completed, completed - IMPORT_FILES.length, undefined, { ok: completed >= IMPORT_FILES.length, note: `${sessions.length} sessions, ${completed} completed, ${IMPORT_FILES.length} files` });
   const dupRows = await countDupes('OccupancyDay', (r) => `${r.property_id}|${r.date}`);
@@ -931,7 +1051,18 @@ async function moneyKeptMirror({ from, to, pid, label }) {
     cur[key] += v;
     dayMap.set(date, cur);
   };
-  occRows.forEach((r) => bump(String(r.date).slice(0, 10), 'gross', Number(r.total_revenue) || 0));
+  // Mirror MoneyKept.jsx exactly: the occupancy ledger owns ROOM revenue and the
+  // gross-revenue ledger owns ancillary charges. `total_revenue_with_misc` was a
+  // stale parser field assumption and read as zero on imported rows, which made
+  // this harness report gross=$0 while the real component correctly called
+  // grossRevenueForPeriod(). Keeping the two legs explicit also prevents the same
+  // room night being counted twice.
+  occRows.forEach((r) => bump(String(r.date).slice(0, 10), 'gross', Number(r.room_revenue) || 0));
+  grossRows.forEach((r) => bump(
+    String(r.date).slice(0, 10),
+    'gross',
+    decimal.fromCents(hotel.rowAncillaryRevenueCents(r)),
+  ));
   srcRows.forEach((r) => {
     const rev = Number(r.net_revenue) || 0;
     const stays = Number(r.stays) || 0;

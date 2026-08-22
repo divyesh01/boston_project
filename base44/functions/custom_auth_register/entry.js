@@ -1,8 +1,59 @@
 import { createClientFromRequest } from "npm:@base44/sdk@^0.8.41";
 import crypto from "node:crypto";
 import { z } from "npm:zod";
+import { secrets } from "base44:runtime";
 
 const ALLOWED_ROLES = ['owner', 'admin', 'manager', 'front_desk', 'accountant', 'read_only', 'user'];
+
+// ─── APP_ORIGIN_V1 ───────────────────────────────────────────────────────────
+// Where this app lives, for links inside outgoing email.
+//
+// THE BUG THIS REPLACES. The welcome mail said:
+//     https://your-app.com/reset-password?token=<real token>
+// `your-app.com` is a placeholder that was never filled in, so **every invited
+// user received a link to somebody else's domain carrying their own single-use
+// account-creation token.** Nobody could complete an invite, and the token was
+// handed to a third party in the process.
+//
+// WHY NOT JUST USE THE `Host` HEADER. Because `Host` is supplied by whoever makes
+// the request. Build the link from it and an attacker sends
+// `Host: evil.example` with a victim's address; the victim then receives a
+// perfectly ordinary-looking reset mail whose link delivers their live token to
+// the attacker's server. That is textbook host-header injection, and this exact
+// file has already been burned by trusting `Host` once (see isLocalHost in
+// custom_auth_reset_request/entry.js, where `.includes('localhost')` matched
+// `localhost.evil.com`). The origin must come from configuration the operator
+// controls, never from the request.
+//
+// FAIL SOFT, LOUDLY. If `APP_BASE_URL` is unset the mail still goes out and still
+// carries the token, with instructions instead of a link — because refusing to
+// send would silently strand every new account, and the token in the body is the
+// same secret a link would carry to the same verified mailbox. The
+// misconfiguration is reported in the response (`invite_link: false`) and to the
+// log, so it is visible rather than mysterious.
+//
+// The parse is deliberately strict: only the origin survives, so a trailing path
+// or query an operator pasted in cannot alter the link's meaning, and plain
+// `http:` is refused except on a loopback host, because a single-use credential
+// must not travel in clear text.
+//
+// KEEP IN LOCKSTEP with custom_auth_reset_request/entry.js. The base44 host gives
+// these functions no way to share a module, so this helper necessarily exists in
+// two copies; scripts/probe-auth-email-links.mjs fails if they drift.
+function appOrigin() {
+  const raw = secrets.get('APP_BASE_URL');
+  if (!raw) return null;
+  let url;
+  try {
+    url = new URL(String(raw).trim());
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase();
+  const loopback = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) return null;
+  return url.origin;
+}
 
 async function hashPasswordScrypt(password, saltHex) {
   return new Promise((resolve, reject) => {
@@ -275,17 +326,62 @@ export default async function (req) {
       reset_token_expires_at: resetTokenExpiresAt
     });
 
+    // The invite mail. See APP_ORIGIN_V1 at the top of this file for why the
+    // origin comes from configuration and never from the request's Host header.
+    const origin = appOrigin();
+    const resetPath = `/reset-password?token=${encodeURIComponent(resetToken)}`;
+    const body_text = origin
+      ? [
+          `An account has been created for you on Red Roof Intelligence.`,
+          ``,
+          `Set your password here (the link works once, and expires in 7 days):`,
+          `${origin}${resetPath}`,
+          ``,
+          `If you did not expect this, tell your administrator — do not use the link.`,
+        ].join('\n')
+      : [
+          // No configured origin. Send the token itself rather than a link to a
+          // domain we cannot name: a broken link is a dead invite, and guessing
+          // the domain from the request is how host-header injection works.
+          `An account has been created for you on Red Roof Intelligence.`,
+          ``,
+          `Open the app, go to "Reset password", and paste this one-time code:`,
+          resetToken,
+          ``,
+          `It works once and expires in 7 days.`,
+          `(Your administrator has not configured APP_BASE_URL, which is why this`,
+          `message has a code instead of a link.)`,
+        ].join('\n');
+
+    if (!origin) {
+      console.warn('[custom_auth_register] APP_BASE_URL is not configured — invite email sent with a pasteable code instead of a link.');
+    }
+
+    let inviteEmailSent = false;
     try {
       await base44.asServiceRole.integrations.Core.SendEmail({
         to: newUser.email,
         subject: "Welcome to Red Roof Intelligence",
-        body: `Your account has been created. Set your password: https://your-app.com/reset-password?token=${resetToken}`
+        body: body_text,
       });
+      inviteEmailSent = true;
     } catch (emailErr) {
+      // The account EXISTS at this point and its only activation path is this
+      // mail. Saying so in the response is the difference between an admin who
+      // hands the person a code and an admin who watches them wait for a mail
+      // that never arrives.
       console.error("Failed to send welcome email:", emailErr);
     }
 
-    return Response.json({ success: true, user: publicUser(newUser) });
+    return Response.json({
+      success: true,
+      user: publicUser(newUser),
+      // Reported so the caller can tell the invited person what to expect. The
+      // token itself is deliberately NOT returned: it belongs in the mailbox that
+      // proves the address, not in an API response.
+      invite_email_sent: inviteEmailSent,
+      invite_link: !!origin,
+    });
 
   } catch (err) {
     console.error("Registration error:", err);

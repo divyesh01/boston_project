@@ -97,13 +97,13 @@ async function seedUsers() {
   // hashes produced by browserHashPassword, so seed with that exact format.
   const ownerSalt = generateSalt();
   const ownerId = await localDb.User.add({
-    username: 'boss', email: 'boss@x.com', role: 'owner', permissions: 'all',
+    username: 'boss', email: 'boss@test.local', role: 'owner', permissions: 'all',
     property_access: 'all', is_active: true, is_locked: false, failed_attempts: 0,
     salt: ownerSalt, password_hash: '$pbkdf2$' + await browserHashPassword('S3cure!Pass', ownerSalt),
   });
   const victimSalt = generateSalt();
   const victimId = await localDb.User.add({
-    username: 'staff', email: 'staff@x.com', role: 'read_only',
+    username: 'staff', email: 'staff@test.local', role: 'read_only',
     // property_access 'all' because this release only admits all-property
     // accounts (src/lib/launchPolicy.js) and the victim has to be able to sign
     // in for a session to revoke. What this suite tests — cross-tab revocation,

@@ -132,7 +132,12 @@ export function isHumanAccount(username) {
   return classifyAccount(username) !== "system";
 }
 
-// Readable label for a username: "sanaullah.shoaib86@gmail.com" -> "Sanaullah Shoaib86".
+// Readable label for a username: "jane.doe86@example.com" -> "Jane Doe86".
+//
+// The example used to be a real staff member's personal Gmail address, copied out
+// of a PMS export into a source comment. Nothing needed it — the transformation is
+// the same for any address — so it is now a reserved-domain placeholder. Real
+// people's addresses belong in the imported data, never in the code that reads it.
 export function displayEmployee(username) {
   const u = String(username || "").trim();
   if (!u) return "Unknown";

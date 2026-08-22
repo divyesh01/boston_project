@@ -56,8 +56,11 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { REPO_ROOT } from "./_repo-root.mjs";
 
-const ROOT = path.resolve(new URL("..", import.meta.url).pathname);
+// See scripts/_repo-root.mjs — the old `.pathname` form gave `C:\C:\Users\...`
+// on Windows, so this probe threw ENOENT at load and verified nothing.
+const ROOT = REPO_ROOT;
 const read = (p) => readFileSync(path.join(ROOT, p), "utf8");
 
 // Negative assertions run against source with comments stripped. Both files quote

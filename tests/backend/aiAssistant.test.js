@@ -6,6 +6,19 @@ vi.mock("npm:@base44/sdk@0.8.40", () => ({
       entities: {
         Session: { filter: async () => [{ user_id: '123' }] },
         User: { get: async () => ({ is_active: true, role: 'admin' }) },
+        // RateLimit was missing, and its absence did not read as a missing mock.
+        // entry.ts:42 calls entities.RateLimit.filter(...) on the happy path, so
+        // `entities.RateLimit` being undefined threw
+        // "Cannot read properties of undefined (reading 'filter')" INSIDE the
+        // function's try block, which returned HTTP 500 — so the suite failed with
+        // "expected 200, got 500" and looked like a broken endpoint rather than an
+        // incomplete fixture. All three methods the function can reach are stubbed
+        // (filter/create/update, verified by grepping entities.RateLimit.* in
+        // entry.ts) so an added call site fails as a missing method, not as a 500.
+        //
+        // filter returns [] on purpose: no existing window means the function takes
+        // the create branch, which is the path a first request in 15 minutes hits.
+        RateLimit: { filter: async () => [], create: async () => ({ id: 'rl1' }), update: async () => ({}) },
         AuditLog: { filter: async () => [], create: async () => ({}) }
       },
       integrations: {

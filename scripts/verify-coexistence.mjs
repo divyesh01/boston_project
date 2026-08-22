@@ -34,6 +34,7 @@ if (globalThis.navigator === undefined) {
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const DATA = process.env.DATA_DIR || path.resolve(process.env.HARNESS_ROOT || ".", "scripts", "data");
 // Resolve the statistics fixture from the repo rather than one session's upload
@@ -42,7 +43,11 @@ const DATA = process.env.DATA_DIR || path.resolve(process.env.HARNESS_ROOT || ".
 // statistics half is reported as skipped — a missing fixture must not look like
 // a code regression.
 const LOCAL_STATS = path.join(
-  path.dirname(new URL(import.meta.url).pathname),
+  // fileURLToPath, not `new URL(...).pathname`: the latter keeps a leading slash
+  // before the drive letter on Windows ('/C:/repo/scripts') and never decodes
+  // %20, so this fixture looked "genuinely absent" and the statistics half of
+  // the coexistence check silently skipped. Matches verify-statistics.mjs:42.
+  path.dirname(fileURLToPath(import.meta.url)),
   "data",
   "Hotel Statistics (1).csv"
 );

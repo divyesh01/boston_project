@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { Save, Plus, CheckCircle2, RotateCcw, Trash2, Building2, RefreshCw, UserCog, LogOut, Shield, ShieldOff, Key, Smartphone } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
+import { ErrorState } from "@/components/ui/status";
 import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, getCcFeeOnRefunds, setCcFeeOnRefunds, COMMISSION_TYPES } from "@/lib/commissionRates";
 import { getAlertThresholds, saveAlertThresholds } from "@/lib/alertThresholds";
 import { getRevenueThresholds, saveRevenueThresholds } from "@/lib/revenueThresholds";
@@ -42,7 +43,12 @@ export default function Settings() {
   const [thresholdSaved, setThresholdSaved] = useState(false);
   const [revThresholds, setRevThresholds] = useState(() => getRevenueThresholds());
   const [revSaved, setRevSaved] = useState(false);
-  const { data: properties = [], refetch: refetchProps } = useProperties();
+  // Query OBJECT kept alongside the data: propertiesQ.isError drives the banner
+  // above. `?? []` instead of `= []` so a failure is never laundered into an
+  // ordinary empty list.
+  const propertiesQ = useProperties();
+  const properties = propertiesQ.data ?? [];
+  const refetchProps = propertiesQ.refetch;
   const [newPropCode, setNewPropCode] = useState("");
   const [newPropName, setNewPropName] = useState("");
   const [newPropRooms, setNewPropRooms] = useState("100");
@@ -522,6 +528,19 @@ export default function Settings() {
           Commission rates, alert thresholds, user access, and account management.
         </p>
       </header>
+
+      {/* A failed property read is surfaced, not swallowed. The dropdown below
+          would otherwise show only "All properties (default)" and read as a
+          single-property install — and a new property added from this page while
+          the list is broken would appear to vanish the moment it saved. */}
+      {propertiesQ.isError && (
+        <ErrorState
+          title="Properties could not be loaded"
+          description="Property-scoped settings and the property management list below may be incomplete until this loads."
+          error={propertiesQ.error}
+          onRetry={refetchProps}
+        />
+      )}
 
       <Card title="Source commission rates" subtitle="Editable per-source — supports %, fixed $, actual, or none. Tax-exempt = OTA pre-deducts commission.">
         <div className="space-y-2">

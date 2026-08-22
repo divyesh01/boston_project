@@ -106,12 +106,35 @@ try {
   test('divideRate 50/100 = 0.50', () => decimal.divideRate(50, 100) === decimal.toRate(0.5));
 
   console.log('\n=== 2. Portfolio KPIs (weighted, not percentage averages) ===');
+  // FIXTURE FIELD NAME: `room_revenue`, not `total_revenue`.
+  //
+  // These four rows used to say `total_revenue`, and every revenue assertion below
+  // measured 0 against an expectation of 35000 — four red checks that looked like a
+  // broken calculation engine and were actually a fixture naming a column the code
+  // does not read.
+  //
+  // The rename is real and deliberate, not cosmetic. `portfolioStats` sums
+  // `room_revenue` (hotel.js) because OccupancyDay is a ROOM ledger: ADR and RevPAR
+  // are room metrics, so folding ancillary income (pet fees, laundry, restaurant)
+  // into them would corrupt both. Total revenue is assembled separately by
+  // `grossRevenueForPeriod`, which adds the charge ledger's ancillary columns to
+  // this room figure — that pair is the $1,011,258.67 + $9,339.50 = $1,020,598.17
+  // invariant. See the long comment above GROSS_ANCILLARY_COMPONENTS in hotel.js.
+  //
+  // So a fixture that feeds `total_revenue` into a room-metric function is asking
+  // the wrong question, and getting 0 is the correct answer to it.
+  //
+  // Capacity below is 2 days x 50 rooms + 2 days x 100 rooms = 300 room-nights.
+  // Each property has two DISTINCT dates, which is why the per-day capacity rule
+  // (see capacityRoomNightsBy in hotel.js) gives the same answer as the old per-row
+  // one here — this fixture never had a duplicate date to expose that bug.
   const occ = [
-    // Prop A: 50 rooms, sells 15 @ avg rev $3000 => occ 30%
-    { property_id: 'A', date: '2026-01-01', total_revenue: 4000, rooms_sold: 15 },
-    { property_id: 'A', date: '2026-01-02', total_revenue: 5000, rooms_sold: 20 },
-    { property_id: 'B', date: '2026-01-01', total_revenue: 12000, rooms_sold: 30 }, // 100 rooms -> 30%
-    { property_id: 'B', date: '2026-01-02', total_revenue: 14000, rooms_sold: 35 },
+    // Prop A: 50 rooms, 2 days -> capacity 100
+    { property_id: 'A', date: '2026-01-01', room_revenue: 4000, rooms_sold: 15 },
+    { property_id: 'A', date: '2026-01-02', room_revenue: 5000, rooms_sold: 20 },
+    // Prop B: 100 rooms, 2 days -> capacity 200
+    { property_id: 'B', date: '2026-01-01', room_revenue: 12000, rooms_sold: 30 },
+    { property_id: 'B', date: '2026-01-02', room_revenue: 14000, rooms_sold: 35 },
   ];
   const roomCounts = { A: 50, B: 100 };
   const ps = hotel.portfolioStats(occ, roomCounts);
@@ -123,6 +146,9 @@ try {
   const per = hotel.perPropertyStats(occ, [{ id: 'A', name: 'Alpha', rooms: 50 }, { id: 'B', name: 'Bravo', rooms: 100 }]);
   test('per-property A ADR', () => approx(per.find((p) => p.property_id === 'A')?.adr, 9000 / 35));
   test('per-property B occupancy', () => approx(per.find((p) => p.property_id === 'B')?.occupancy, 65 / 200));
+  // Days are DISTINCT DATES, not row count — the other half of the per-row bug.
+  test('per-property A reports 2 days, not 2 rows by luck',
+    () => per.find((p) => p.property_id === 'A')?.days === 2);
 
   console.log('\n=== 3. Commission engine (commissionRates.js) ===');
   test('Expedia default 15%', () => {

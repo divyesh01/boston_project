@@ -310,6 +310,13 @@ const badExit = by("BAD-EXIT");
 const skipped = by("SKIP");
 const notPassing = [...failed, ...broken, ...timedOut, ...badExit];
 
+// Every result must land in exactly one bucket. Computed here, outside the report
+// branch, because it also decides the exit code: a tally that does not add up is a
+// broken runner, and a broken runner reporting 0 is the worst outcome this script
+// has — it is the same class of defect as the console.assert probes that printed a
+// success line unconditionally.
+const bucketed = passed.length + failed.length + broken.length + timedOut.length + badExit.length + skipped.length;
+
 if (AS_JSON) {
   console.log(JSON.stringify({
     listId: LIST_ID,
@@ -327,6 +334,37 @@ if (AS_JSON) {
 } else {
   console.log(`\n${"─".repeat(78)}`);
   console.log(`${results.length} suite(s)${shardLabel}: ${passed.length} passed, ${failed.length} failed, ${broken.length} broken, ${timedOut.length} timed out, ${badExit.length} bad exit code, ${skipped.length} skipped`);
+
+  // The fingerprint belongs NEXT TO the tally, not only in the header.
+  //
+  // It was printed once at the top of the run and then again only under --list, so a
+  // reader scrolling to the summary saw a count with nothing to check it against. On
+  // 2026-08-21 a report paired "list 8d7fd854 (78 discovered)" with "80 suite(s)" —
+  // two numbers that cannot both describe one run — and the discrepancy survived
+  // being read by three people because the two figures were 80 lines apart. Whatever
+  // produced it (a stale --list, or two probe files added mid-session), the tally is
+  // the place where a mismatch has to be visible, because the tally is the thing
+  // people quote.
+  //
+  // --shard, --filter and --bail all narrow the run on purpose, so only an
+  // unnarrowed run is expected to account for every discovered suite.
+  const narrowed = Boolean(SHARD || FILTER || BAIL);
+  const ranAll = results.length === discovered.length;
+  console.log(
+    ranAll
+      ? `${listId} — every discovered suite ran`
+      : narrowed
+        ? `${listId} — narrowed run, not the full set`
+        : `${listId} — MISMATCH: ${discovered.length} discovered but ${results.length} ran. This tally does not cover the discovered set.`
+  );
+
+  // The buckets are derived from one array, so this can only fire if a status is
+  // added to runSuite without a matching bucket here — at which point suites would
+  // silently vanish from the tally while the run still exited 0.
+  if (bucketed !== results.length) {
+    console.log(`ACCOUNTING BUG: buckets sum to ${bucketed} but ${results.length} suite(s) ran — ${results.length - bucketed} unaccounted for. Fix the bucket list before trusting any number above.`);
+  }
+
   if (shardLabel) {
     // A green shard is not a green run, and a report that says "all passed" after one
     // shard is the same lie this runner exists to prevent.
@@ -344,10 +382,33 @@ if (AS_JSON) {
   }
 
   if (broken.length) {
+    // Print the ERROR, not just which signature matched.
+    //
+    // This used to print `${file} — ${why[0]}`, where why[0] was the matched
+    // signature text. For a template like /ENOENT: no such file or directory/ that
+    // renders as literally "ENOENT: no such file or directory" — no path, no
+    // importer, no stack. On 2026-08-21 a run reported seven BROKEN suites and the
+    // report contained nothing that could distinguish a missing fixture from a
+    // half-installed node_modules from a bad cwd, so the next step had to be
+    // guesswork. A broken suite's output is short by definition, so there is no
+    // reason to withhold it.
+    //
+    // The line is located in OUTPUT order rather than signature order. The old
+    // BROKEN_SIGNATURES.map(...).find(Boolean) returned whichever signature sits
+    // earliest in that array, which is not necessarily the error that killed the
+    // process — with both a SyntaxError and an ERR_MODULE_NOT_FOUND present it
+    // reported the module error because it is listed first.
     console.log(`\nBROKEN — these could not start, so they verified NOTHING:`);
     for (const r of broken) {
-      const why = BROKEN_SIGNATURES.map((re) => r.output.match(re)).find(Boolean);
-      console.log(`  ${r.file} — ${why ? why[0] : "import-time error"}`);
+      const lines = r.output.split("\n").map((l) => l.trimEnd());
+      const at = lines.findIndex((l) => BROKEN_SIGNATURES.some((re) => re.test(l)));
+      console.log(`  ${r.file}`);
+      const show = at === -1
+        // A signature can match across a line break, in which case there is no
+        // single culprit line to point at; the tail is where the throw lands.
+        ? lines.filter(Boolean).slice(-6)
+        : lines.slice(at, at + 6).filter(Boolean);
+      show.forEach((l) => console.log(`    │ ${l}`));
     }
   }
   if (badExit.length) {
@@ -367,4 +428,4 @@ if (AS_JSON) {
   console.log(notPassing.length ? `\nNOT GREEN.` : `\nAll green.`);
 }
 
-process.exit(notPassing.length ? 1 : 0);
+process.exit(notPassing.length || bucketed !== results.length ? 1 : 0);

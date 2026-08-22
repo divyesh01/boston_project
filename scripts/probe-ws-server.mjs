@@ -40,8 +40,12 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { REPO_ROOT } from './_repo-root.mjs';
 
-const ROOT = path.resolve(new URL('..', import.meta.url).pathname);
+// See scripts/_repo-root.mjs — the old `.pathname` form gave `C:\C:\Users\...`
+// on Windows, so backend/websocket.js was unreadable and this probe died at
+// load. It claimed "20 passed, 0 failed" in the checklist while never running.
+const ROOT = REPO_ROOT;
 const SERVER = path.join(ROOT, 'backend/websocket.js');
 const ALLOWED = 'http://allowed.example';
 

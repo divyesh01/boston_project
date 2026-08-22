@@ -30,12 +30,28 @@ if (globalThis.navigator === undefined) {
 const { db } = await import("@/api/base44Client");
 const { default: localDb } = await import("@/api/localDb");
 
-// Mirrors the exact credentials the owner uses (same shape as Setup.jsx submit).
+// The owner fixture. Same SHAPE as a real Setup.jsx submit, deliberately not the
+// same VALUES.
+//
+// This used to hardcode the repository owner's personal email address. Nothing
+// in the test needed it — `db.auth.login` only cares that the string it is given
+// matches the string that was registered — so the only thing the real address
+// added was a permanent copy of the owner's identity in a tracked file and in
+// every clone of the repo. A test that names a real person is a test that leaks
+// one.
+//
+// `@test.local` is a reserved, non-routable domain (RFC 6761), so this address
+// can never resolve to a real mailbox even if a future test is wired to send
+// mail. The password is a fixture value, not anyone's credential; it is long
+// enough to satisfy validatePasswordStrength (12+ chars, upper, lower, digit,
+// symbol) so the registration path under test is the real one and not the
+// rejection path. scripts/probe-no-real-credentials.mjs fails if a routable
+// address or a credential-shaped literal reappears here.
 const OWNER = {
   username: "owner",
-  email: "divyesh.boston@gmail.com",
+  email: "owner@test.local",
   password: "MockSecurePass#2026",
-  full_name: "Divyesh",
+  full_name: "Test Owner",
 };
 
 async function registerOwner() {
@@ -110,7 +126,7 @@ describe("local owner auth lifecycle (setup → login → me → logout)", () =>
 
   it("login fails when the email does not exist", async () => {
     await registerOwner();
-    await expect(db.auth.login("nobody@gmail.com", OWNER.password)).rejects.toThrow(/Invalid email or password/);
+    await expect(db.auth.login("nobody@test.local", OWNER.password)).rejects.toThrow(/Invalid email or password/);
   });
 
   it("me() returns the logged-in user, then logout clears the session", async () => {

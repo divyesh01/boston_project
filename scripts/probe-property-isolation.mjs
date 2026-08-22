@@ -63,7 +63,7 @@ const T = (name, cond, detail = "") => {
 
 const localDb = (await import("@/api/localDb")).default;
 const { db, invalidatePropertyAccess, browserHashPassword } = await import("@/api/base44Client");
-const { getDailyAggregates } = await import("@/lib/dailyAggregates");
+const { getDailyAggregates, DAILY_AGGREGATE_VERSION } = await import("@/lib/dailyAggregates");
 const { secureStore } = await import("@/lib/securityUtils");
 
 const A = "prop_a";
@@ -124,7 +124,10 @@ async function seed() {
     await localDb.HotelMetric.add({ property_id: pid, business_date: "2026-01-05", section: "Revenue", metric_name: "YTD Revenue", period: "ytd", value: 5000 });
     await localDb.UploadedReport.add({ property_id: pid, file_name: `${pid}.csv`, uploaded_at: "2026-01-05T00:00:00.000Z" });
     // Tables that carry property_id but are absent from PROPERTY_TABLES today.
-    await localDb.DailyFinancialAggregate.add({ property_id: pid, business_date: "2026-01-05", occ_revenue: 1000, payment_total: 900 });
+    // Current cache rows must carry the same version that rebuildDailyAggregates
+    // writes. Unversioned rows are intentionally ignored: they may contain the
+    // old cents/dollars contract and must never be trusted as financial data.
+    await localDb.DailyFinancialAggregate.add({ property_id: pid, business_date: "2026-01-05", aggregate_version: DAILY_AGGREGATE_VERSION, occ_revenue: 1000, payment_total: 900 });
     await localDb.ScanResult.add({ property_id: pid, file_id: `${pid}-f1`, scanned_at: "2026-01-05T00:00:00.000Z", health_score: 90 });
     await localDb.TimecardPunch.add({ property_id: pid, employee_name: "Someone", shift_date: "2026-01-05" });
     await localDb.Reservation.add({ property_id: pid, channel: "Direct", confirmation_num: `${pid}-C1`, check_in: "2026-01-05", check_out: "2026-01-06", status: "booked" });

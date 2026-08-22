@@ -32,14 +32,14 @@ const T = (name, cond, detail = "") => {
 // ─────────────────────────────── isValidEmail ───────────────────────────────
 console.log("\n=== isValidEmail (RFC 5322) ===");
 T("user@example.com", isValidEmail("user@example.com") === true);
-T("u.ser+tag@sub.domain.co", isValidEmail("u.ser+tag@sub.domain.co") === true);
+T("u.ser+tag@sub.domain.test", isValidEmail("u.ser+tag@sub.domain.test") === true);
 T("MixedCase@Example.COM (case-insensitive)", isValidEmail("MixedCase@Example.COM") === true);
 T("  padded@example.com  ", isValidEmail("  padded@example.com  ") === true);
 T("quoted local part rejected (practical subset)", isValidEmail(`"a b"@example.com`) === false);
 T("TLD is required", isValidEmail("user@example") === false);
 T("empty domain", isValidEmail("user@") === false);
 T("empty local", isValidEmail("@example.com") === false);
-T("double @", isValidEmail("a@b@c.com") === false);
+T("double @", isValidEmail("a@b@c.test") === false);
 T("embedded space", isValidEmail("user name@example.com") === false);
 T("consecutive dots in local", isValidEmail("a..b@example.com") === false);
 T("leading dot in local", isValidEmail(".ab@example.com") === false);

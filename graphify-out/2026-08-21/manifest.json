@@ -336,10 +336,10 @@
     "semantic_hash": "81b60bcb5441b4c7c741e27abce01858"
   },
   "base44/functions/custom_user_admin/entry.js": {
-    "mtime": 1787279096.016758,
-    "seen": 1787290120.6113148,
-    "ast_hash": "b569fae7481237d1d634e1b9032d5a62",
-    "semantic_hash": "b569fae7481237d1d634e1b9032d5a62"
+    "mtime": 1787305778.9208996,
+    "seen": 1787305801.4259212,
+    "ast_hash": "818c8499da918d4459989f5f90f23ba8",
+    "semantic_hash": ""
   },
   "base44/functions/deleteAccount/entry.ts": {
     "mtime": 1787204825.2264614,
@@ -432,8 +432,8 @@
     "semantic_hash": ""
   },
   "package.json": {
-    "mtime": 1787303364.4746926,
-    "seen": 1787303431.430822,
+    "mtime": 1787305777.8280468,
+    "seen": 1787305801.4259212,
     "ast_hash": "056f50b0c5cdc5e034c7ac52db6a2921",
     "semantic_hash": ""
   },
@@ -468,10 +468,10 @@
     "semantic_hash": "de5983c7f2f7f1a462a410a9d6d00ebc"
   },
   "scripts/acceptance-harness.mjs": {
-    "mtime": 1787204824.6668205,
-    "seen": 1787290120.6113148,
-    "ast_hash": "576f7f055e417e5c50503f092b64c552",
-    "semantic_hash": "576f7f055e417e5c50503f092b64c552"
+    "mtime": 1787305745.2025583,
+    "seen": 1787305801.4259212,
+    "ast_hash": "d4162da65fa3a6aec0b4683550e1177e",
+    "semantic_hash": ""
   },
   "scripts/acceptance-report.json": {
     "mtime": 1787046349.1789927,
@@ -642,9 +642,9 @@
     "semantic_hash": "c192f7d1a4c544c97edcf6925076afd8"
   },
   "scripts/probe-deploy-config.mjs": {
-    "mtime": 1787303653.9209118,
-    "seen": 1787303721.5568879,
-    "ast_hash": "c45cd12f99042d1fe0885e50ecfbc2a8",
+    "mtime": 1787304582.6899004,
+    "seen": 1787305801.4259212,
+    "ast_hash": "2395dd8c471670942b2c7f8a78d92229",
     "semantic_hash": ""
   },
   "scripts/probe-employee-id-reuse.mjs": {
@@ -996,10 +996,10 @@
     "semantic_hash": "2c3ce603f56868fe8ae91ff24b95f992"
   },
   "scripts/verify-all.mjs": {
-    "mtime": 1787241251.220181,
-    "seen": 1787290120.619606,
-    "ast_hash": "fdc47468b2e9d9e7b9cc2c56c33bc44e",
-    "semantic_hash": "fdc47468b2e9d9e7b9cc2c56c33bc44e"
+    "mtime": 1787305726.5899405,
+    "seen": 1787305801.4259212,
+    "ast_hash": "ef6b5e59946db02e1820a5955e820670",
+    "semantic_hash": ""
   },
   "scripts/verify-anomaly-ingestion.mjs": {
     "mtime": 1787204824.7327077,

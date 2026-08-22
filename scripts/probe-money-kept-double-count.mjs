@@ -61,6 +61,7 @@ import { setTaxConfig } from '../src/lib/taxConfig.js';
 import { saveTaxSettings } from '../src/lib/taxSettings.js';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { REPO_ROOT } from './_repo-root.mjs';
 
 // ── Environment ──────────────────────────────────────────────────────────────
 if (!globalThis.localStorage) {
@@ -73,7 +74,10 @@ if (!globalThis.localStorage) {
   };
 }
 
-const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+// See scripts/_repo-root.mjs — the old `new URL(...).pathname` form resolved to
+// `C:\C:\Users\...` on Windows, so every readFileSync below threw ENOENT and the
+// probe verified nothing.
+const REPO = REPO_ROOT;
 
 let pass = 0;
 let fail = 0;

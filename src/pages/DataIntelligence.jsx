@@ -17,6 +17,7 @@ import { useGlobalFilters } from '@/lib/useGlobalFilters';
 import { formatNumber } from '@/lib/decimal';
 import { ErrorState } from '@/components/ui/status';
 import { toast } from 'sonner';
+import { inspectUploadFile } from '@/lib/uploadGuard';
 
 const SEVERITY_COLORS = {
   critical: 'border-[#FF6B6B]/30 bg-[#FF6B6B]/[0.08] text-[#FF6B6B]',
@@ -117,13 +118,31 @@ export default function DataIntelligence() {
   };
 
   const handleUpload = async (fileList) => {
-    const validFiles = Array.from(fileList).filter(
-      (f) => /\.(csv|xlsx?|xls)$/i.test(f.name)
-    );
-    if (!validFiles.length) {
-      toast.error('No valid CSV or Excel files found');
+    // This page used to accept anything whose NAME ended in .csv/.xlsx/.xls — no
+    // size cap, no magic-byte check — while Import.jsx enforced all three on the
+    // same pipeline. One shared gate now guards both doors; see
+    // src/lib/uploadGuard.js. Rejections are surfaced per file rather than as a
+    // single "no valid files" message, so the user learns WHICH file was refused
+    // and why.
+    const picked = Array.from(fileList);
+    const validFiles = [];
+    for (const f of picked) {
+      const verdict = await inspectUploadFile(f);
+      if (verdict.ok) {
+        validFiles.push(f);
+      } else {
+        toast.error(verdict.reason);
+      }
+    }
+    // An empty drop (a folder, a URL, a text selection) is a different event from
+    // "every file you gave me was refused", which has already produced one toast
+    // per file above. The old code printed the same message for both; saying
+    // nothing at all for the empty case would be the same conflation in reverse.
+    if (!picked.length) {
+      toast.error('No files found. Drop a .csv, .xlsx or .xls file.');
       return;
     }
+    if (!validFiles.length) return;
 
     setScanning(true);
     const newResults = [];

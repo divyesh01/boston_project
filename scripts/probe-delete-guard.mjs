@@ -19,8 +19,12 @@ import { register } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { REPO_ROOT } from './_repo-root.mjs';
 
-const ROOT = path.resolve(new URL('..', import.meta.url).pathname);
+// See scripts/_repo-root.mjs — the old `.pathname` form produced `C:\C:\...` on
+// Windows, so `register()` pointed at a resolver that did not exist and the
+// probe died before its first assertion.
+const ROOT = REPO_ROOT;
 register(pathToFileURL(path.join(ROOT, 'scripts/resolve-alias.mjs')));
 
 const { guardDestructiveAction, buildDestructiveMessage } = await import(

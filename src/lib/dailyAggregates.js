@@ -16,6 +16,12 @@ import localDb from '@/api/localDb';
 import { CARD_METHODS } from '@/lib/paymentNorm';
 import { toCents, fromCents } from '@/lib/decimal';
 
+// Stored aggregates are a materialized cache, not the source of truth. Version
+// the cache whenever its units or shape change so an old browser cannot render a
+// cents-valued source_net as dollars and turn a normal commission into a six-figure
+// deduction. The raw ledgers remain available as the honest fallback.
+export const DAILY_AGGREGATE_VERSION = 2;
+
 const PAYMENT_FIELDS = [
   ...CARD_METHODS, 'cash', 'check', 'direct_bill', 'corpay', 'wire_transfer',
   'loyalty_certificate', 'loyalty_discount', 'vip_pass', 'other', 'closed_balance_folio',
@@ -126,6 +132,7 @@ function finalizeDay(d) {
     sourceNet[k] = { net: fromCents(v.net), stays: v.stays };
   }
   return {
+    aggregate_version: DAILY_AGGREGATE_VERSION,
     property_id: d.property_id,
     business_date: d.business_date,
     occ_revenue: fromCents(d.occ_revenue),
@@ -233,7 +240,7 @@ export async function rebuildDailyAggregates({ propertyId = 'all', from = '', to
         .where('[property_id+business_date]')
         .equals([agg.property_id, agg.business_date])
         .first();
-      if (existing) {
+       if (existing) {
         await localDb.DailyFinancialAggregate.update(existing.id, agg);
       } else {
         await localDb.DailyFinancialAggregate.add(agg);
@@ -269,7 +276,12 @@ export async function getDailyAggregates({ propertyId = 'all', from = '', to = '
     query.property_id = Array.isArray(propertyId) ? { $in: propertyId } : propertyId;
   }
   const rows = await db.entities.DailyFinancialAggregate.filter(query);
-  return rows.filter((r) => inRange(r.business_date, from, to));
+  // Rows written before DAILY_AGGREGATE_VERSION used a different money-unit
+  // contract. Do not guess whether a legacy row is dollars or cents: ignore it so
+  // the caller falls back to raw ledgers. Guessing here is how the dashboard can
+  // display an impossible commission larger than total revenue.
+  return rows.filter((r) => r.aggregate_version === DAILY_AGGREGATE_VERSION)
+    .filter((r) => inRange(r.business_date, from, to));
 }
 
 // Turn cached aggregates back into the synthetic per-day row shape the Dashboard

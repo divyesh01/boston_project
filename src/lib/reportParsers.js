@@ -233,6 +233,13 @@ const COLUMN_MAP = {
 
 const NUMERIC_FIELDS = new Set([
   "room_revenue", "other_room_revenue", "total_revenue", "total_rooms", "rooms_sold",
+  // The occupancy export's "Total Revenue" column maps here (see COLUMN_MAP), so
+  // this MUST be a numeric field or mapRow stores the raw CSV STRING — "$5,713.42"
+  // as text — and every consumer summing the field silently reads 0. Found because
+  // scripts/acceptance-harness.mjs compared this exact figure against the source
+  // file and got dash=0 while every room-level metric passed. Anything added to
+  // COLUMN_MAP that carries a number belongs in this set too.
+  "total_revenue_with_misc",
   "rooms_sold_without_comp", "down_rooms", "vacant_rooms", "clean_rooms", "dirty_rooms",
   "stayover_rooms", "same_day_bookings", "comp_rooms", "house_rooms", "zero_rate_rooms",
   "day_use_rooms", "no_shows", "cancellations", "total_guests", "adr", "occupancy", "revpar",

@@ -81,13 +81,13 @@ async function seedUsers() {
   const salt = generateSalt();
   const hash = '$pbkdf2$' + await browserHashPassword('S3cure!Pass', salt);
   const ownerId = await localDb.User.add({
-    username: 'owner', email: 'owner@x.com', full_name: 'Owner', role: 'owner',
+    username: 'owner', email: 'owner@test.local', full_name: 'Owner', role: 'owner',
     permissions: 'all', property_access: 'all', is_active: true, is_locked: false,
     failed_attempts: 0, salt, password_hash: hash,
   });
   const targetSalt = generateSalt();
   const targetId = await localDb.User.add({
-    username: 'clerk', email: 'clerk@x.com', full_name: 'Clerk', role: 'read_only',
+    username: 'clerk', email: 'clerk@test.local', full_name: 'Clerk', role: 'read_only',
     // property_access 'all' because this release only admits all-property
     // accounts (src/lib/launchPolicy.js) and these scenarios need the account to
     // be able to sign in. 'read_only' + 'all' is a real shape — a portfolio-wide

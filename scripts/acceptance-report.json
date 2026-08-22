@@ -1,9 +1,9 @@
 {
-  "generated": "2026-08-09T20:12:16.641Z",
+  "generated": "2026-08-21T15:15:38.690Z",
   "summary": {
-    "passed": 78,
+    "passed": 82,
     "failed": 0,
-    "total": 78
+    "total": 82
   },
   "rows": [
     {
@@ -127,12 +127,20 @@
       "note": "rows=214, property_ids=1"
     },
     {
-      "test": "2.1 Revenue (Jan) — occ Total Revenue",
+      "test": "2.1 Room revenue (Jan)",
       "source": "$57134.22",
       "dashboard": "$57134.22",
       "diff": "$0.00",
       "pass": true,
-      "note": "Dashboard=Σ occ.total_revenue; Source=Σ Total Revenue col"
+      "note": "Dashboard=Σ occ.room_revenue; source=Σ Room Revenue col"
+    },
+    {
+      "test": "2.1b Total revenue (Jan) — occ Total Revenue col",
+      "source": "$57134.22",
+      "dashboard": "$57134.22",
+      "diff": "$0.00",
+      "pass": true,
+      "note": "proves the with_misc field is parsed as a number, not stored as text"
     },
     {
       "test": "2.2 Revenue (Jan) — gross Room Rent only",
@@ -256,15 +264,15 @@
     },
     {
       "test": "2.17 Money Kept (Jan) — gross",
-      "source": "$57134.22",
-      "dashboard": "$57134.22",
+      "source": "$57916.78",
+      "dashboard": "$57916.78",
       "diff": "$0.00",
       "pass": true,
       "note": ""
     },
     {
       "test": "2.18 Money Kept (Jan) — total deductions",
-      "source": "$48648.45",
+      "source": "$49431.01",
       "dashboard": "$8485.77",
       "diff": "$0.00",
       "pass": true,
@@ -272,8 +280,8 @@
     },
     {
       "test": "2.19 Money Kept (Jan) — kept = gross − deductions",
-      "source": "$48648.45",
-      "dashboard": "$48648.45",
+      "source": "$49431.01",
+      "dashboard": "$49431.01",
       "diff": "$0.00",
       "pass": true,
       "note": "mirror of MoneyKept.jsx item model (cc fee skips negative-card days)"
@@ -287,12 +295,20 @@
       "note": "new=0 excluded=214 rows 214→214"
     },
     {
+      "test": "3.1b Imported occupancy rows have a rollback session id",
+      "source": "true",
+      "dashboard": "true",
+      "diff": "$0.00",
+      "pass": true,
+      "note": "row import_id=imp_1787324985605_nti75ay"
+    },
+    {
       "test": "3.2 Delete import removes only its rows",
       "source": "$0.00",
       "dashboard": "$0.00",
       "diff": "$0.00",
       "pass": true,
-      "note": "deleted 214 rows (session imp_1786306102525_cld6dhw)"
+      "note": "deleted 214 rows (session imp_1787324985605_nti75ay)"
     },
     {
       "test": "3.3 Re-import after delete restores rows",
@@ -309,6 +325,14 @@
       "diff": "$0.00",
       "pass": true,
       "note": ""
+    },
+    {
+      "test": "3.5a Source rows have a rollback session id",
+      "source": "true",
+      "dashboard": "true",
+      "diff": "$0.00",
+      "pass": true,
+      "note": "row import_id=imp_1787324985751_c4r0u2i"
     },
     {
       "test": "3.5 Replace import: same-file rows replaced (count restored)",
@@ -567,12 +591,20 @@
       "note": "**Channel revenue — Red Roof Inn & Suites Middleborough · January 2026** | 1. EXPEDIA: **$7,702** (100 stays · 100.0%)"
     },
     {
+      "test": "9.4a Draft-payroll exclusion is exercised by this fixture",
+      "source": "true",
+      "dashboard": "$1.00",
+      "diff": "$0.00",
+      "pass": true,
+      "note": "2 runs total, 0 committed — without a draft present this check would pass vacuously"
+    },
+    {
       "test": "9.4 AI \"money kept\" (net profit line vs model)",
-      "source": "$48,883",
-      "dashboard": "- **Net profit:** +$48,883",
+      "source": "$55,683",
+      "dashboard": "- **Net profit:** +$55,683",
       "diff": "-",
       "pass": true,
-      "note": "AI net-rev model: gross−refunds−costs; kept model differs (includes comm/cc/tax) — documented"
+      "note": "AI net-rev model: gross−refunds−costs; kept model differs (includes comm/cc/tax) — documented; committed payroll $0 of $6,800 total"
     },
     {
       "test": "9.5 AI taxes question returns (documented: summary fallback, no tax intent)",
@@ -584,11 +616,11 @@
     },
     {
       "test": "9.6 AI expenses Jan",
-      "source": "$8,251",
-      "dashboard": "$8,251",
+      "source": "$1,451",
+      "dashboard": "$1,451",
       "diff": "-",
       "pass": true,
-      "note": "**Expenses — Red Roof Inn & Suites Middleborough · January 2026** | - Total expenses: **$8,251** | - Payroll: $6,800 (2 "
+      "note": "**Expenses — Red Roof Inn & Suites Middleborough · January 2026** | - Total expenses: **$1,451** | - Payroll: $0 (0 comm"
     },
     {
       "test": "9.7 AI month-vs-month compare answers",

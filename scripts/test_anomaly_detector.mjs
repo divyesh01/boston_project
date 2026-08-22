@@ -31,10 +31,16 @@ const T = (name, cond, detail = "") => {
 };
 
 // Shape mirrors a normalized TransactionLine row (see src/lib/transactionNorm.js).
+//
+// The default username used to be a real staff member's personal Gmail address,
+// copied out of a PMS export. The detector never looks at the domain — it only
+// groups by the string — so a reserved-domain placeholder tests exactly the same
+// code path without carrying someone's identity in the repo. `.test` is reserved
+// by RFC 6761 and can never resolve.
 const mk = (overrides) => ({
   date: "2026-01-15",
   time: "10:14:10 AM",
-  username: "kushpatel859@gmail.com",
+  username: "clerk.one86@staff.test",
   account_class: "staff",
   transaction_code: "RR",
   transaction_type: "CHARGE",
@@ -81,31 +87,31 @@ console.log("\n=== detectRateOverrides ===");
 console.log("\n=== detectExcessiveAdjustments ===");
 {
   const rows = [
-    mk({ username: "a@x.com", folio_number: "A1", amount: -100 }),
-    mk({ username: "a@x.com", folio_number: "A2", amount: -150 }),
-    mk({ username: "a@x.com", folio_number: "A3", amount: -50 }),  // day total 300 > 200 → FLAG
-    mk({ username: "b@x.com", folio_number: "B1", amount: -40 }),  // day total 70 → ok
-    mk({ username: "b@x.com", folio_number: "B2", amount: -30 }),
-    mk({ username: "c@x.com", folio_number: "C1", amount: 500 }),  // positive charge, ignored
-    mk({ username: "d@x.com", folio_number: "D1", amount: -150, date: "2026-01-10" }),
-    mk({ username: "d@x.com", folio_number: "D2", amount: -100, date: "2026-01-11" }), // split across days → ok
+    mk({ username: "a@staff.test", folio_number: "A1", amount: -100 }),
+    mk({ username: "a@staff.test", folio_number: "A2", amount: -150 }),
+    mk({ username: "a@staff.test", folio_number: "A3", amount: -50 }),  // day total 300 > 200 → FLAG
+    mk({ username: "b@staff.test", folio_number: "B1", amount: -40 }),  // day total 70 → ok
+    mk({ username: "b@staff.test", folio_number: "B2", amount: -30 }),
+    mk({ username: "c@staff.test", folio_number: "C1", amount: 500 }),  // positive charge, ignored
+    mk({ username: "d@staff.test", folio_number: "D1", amount: -150, date: "2026-01-10" }),
+    mk({ username: "d@staff.test", folio_number: "D2", amount: -100, date: "2026-01-11" }), // split across days → ok
   ];
   const flags = detectExcessiveAdjustments(rows);
   const flaggedUsers = new Set(flags.map((f) => f.username));
-  T("flags username with >$200 negative adjustments in one day", flaggedUsers.has("a@x.com"), JSON.stringify(flags));
-  T("does not flag username under threshold", !flaggedUsers.has("b@x.com"));
-  T("does not flag spread across different days", !flaggedUsers.has("d@x.com"));
+  T("flags username with >$200 negative adjustments in one day", flaggedUsers.has("a@staff.test"), JSON.stringify(flags));
+  T("does not flag username under threshold", !flaggedUsers.has("b@staff.test"));
+  T("does not flag spread across different days", !flaggedUsers.has("d@staff.test"));
   T("alert records the day total", flags[0]?.amount === 300 && flags[0]?.detail.includes("300"));
   T("alert severity is high", flags.every((f) => f.severity === "high"));
 
   // Custom threshold override.
   const tight = detectExcessiveAdjustments(
-    [mk({ username: "e@x.com", amount: -150 })],
+    [mk({ username: "e@staff.test", amount: -150 })],
     { adjustmentAmount: 100 }
   );
   T("custom threshold respected (150 > 100)", tight.length === 1);
   const loose = detectExcessiveAdjustments(
-    [mk({ username: "f@x.com", amount: -150 })],
+    [mk({ username: "f@staff.test", amount: -150 })],
     { adjustmentAmount: 200 }
   );
   T("default threshold not crossed (150 <= 200)", loose.length === 0);
@@ -142,7 +148,7 @@ console.log("\n=== detectAnomalies (combined) ===");
 {
   const rows = [
     mk({ folio_number: "C1", amount: 20 }),                                    // rate override
-    mk({ folio_number: "C2", username: "a@x.com", amount: -250 }),             // adjustment spike
+    mk({ folio_number: "C2", username: "a@staff.test", amount: -250 }),             // adjustment spike
     mk({ folio_number: "C3", time: "03:00:00 AM", transaction_code: "CASH", charge_category: "", amount: 60 }), // off-hours
     mk({ folio_number: "C4", amount: 110 }),                                   // clean
   ];

@@ -25,9 +25,37 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      'npm:@base44/sdk@0.8.40': '@base44/sdk',
-      'npm:@base44/sdk@^0.8.41': '@base44/sdk',
-      'npm:zod': 'zod',
+      // Deno specifiers, mapped so the backend suites can load at all.
+      //
+      // base44/functions/** is deployed to base44's Deno runtime, which resolves
+      // `npm:<pkg>@<range>` and `base44:runtime` itself. Node and vitest do not, so
+      // tests/backend/* died at import with "Cannot bundle built-in module" before
+      // reaching an assertion. `vi.mock()` cannot rescue that: the specifier has to
+      // resolve before the mock is applied.
+      //
+      // Both SDK spellings are listed because the functions do not agree with each
+      // other — the .ts functions pin `@0.8.40` and the .js functions pin
+      // `@^0.8.41`, while package.json carries `^0.8.41`. Three pins for one
+      // dependency is a real defect, but unifying it means editing ~20 deployed
+      // server functions, so it is recorded here and in
+      // LAUNCH_READINESS_CHECKLIST.md rather than fixed as a side effect of a test
+      // config change. When it IS unified, delete the stale key here and the
+      // suites will fail loudly rather than silently aliasing a version that no
+      // longer exists.
+      //
+      // Do NOT "fix" the specifiers in base44/functions/** to make this
+      // unnecessary. Deno needs them as written, and
+      // custom_auth_login/entry.js:204 / custom_user_admin/entry.js:311 both note
+      // that the signed audit payload depends on those import lines being
+      // byte-identical across copies.
+      "npm:@base44/sdk@0.8.40": "@base44/sdk",
+      "npm:@base44/sdk@^0.8.41": "@base44/sdk",
+      "npm:zod": "zod",
+      "base44:runtime": path.resolve(import.meta.dirname, "./tests/stubs/base44-runtime.js"),
+
+      // Keep last. @rollup/plugin-alias matches a string `find` when the importee
+      // equals it or starts with it + "/", so "@" catches "@/lib/hotel" and does
+      // NOT catch "@base44/sdk" — but a shorter key added above this line could.
       "@": path.resolve(import.meta.dirname, "./src"),
     },
   },

@@ -1,5 +1,46 @@
 import { createClientFromRequest } from "npm:@base44/sdk@^0.8.41";
 import crypto from "node:crypto";
+import { secrets } from "base44:runtime";
+
+// ─── APP_ORIGIN_V1 ───────────────────────────────────────────────────────────
+// Where this app lives, for links inside outgoing email.
+//
+// THE BUG THIS REPLACES. The reset mail said only "Use this token: <64 hex
+// characters>". There was no link at all, so a person who had forgotten their
+// password had to know to open the app, find the reset page, and paste a 64-
+// character string by hand. In practice that means they call the owner, and the
+// owner reads the code down the phone — a credential spoken aloud, because the
+// mail did not contain a link.
+//
+// WHY NOT JUST USE THE `Host` HEADER. Because `Host` is supplied by whoever makes
+// the request, and this endpoint is UNAUTHENTICATED — anyone can trigger it for
+// any address. Build the link from `Host` and an attacker sends
+// `Host: evil.example` with a victim's email; the victim receives an ordinary-
+// looking reset mail whose link delivers their live token to the attacker. This
+// file has already been burned by trusting `Host` once: `isLocalHost` below used
+// to be `.includes('localhost')`, which `localhost.evil.com` satisfied. The
+// origin must come from configuration the operator controls.
+//
+// FAIL SOFT, LOUDLY: with no `APP_BASE_URL` the mail still carries the code, so a
+// reset is still possible; the log says why the link is missing.
+//
+// KEEP IN LOCKSTEP with custom_auth_register/entry.js. The base44 host gives these
+// functions no way to share a module, so this helper necessarily exists in two
+// copies; scripts/probe-auth-email-links.mjs fails if they drift.
+function appOrigin() {
+  const raw = secrets.get('APP_BASE_URL');
+  if (!raw) return null;
+  let url;
+  try {
+    url = new URL(String(raw).trim());
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase();
+  const loopback = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) return null;
+  return url.origin;
+}
 
 /**
  * Whether this request came from a local development server.
@@ -108,11 +149,38 @@ export default async function (req) {
       reset_token_expires_at: expiresAt
     });
 
+    // See APP_ORIGIN_V1 at the top of this file: the origin comes from
+    // configuration, never from the request's Host header.
+    const origin = appOrigin();
+    const resetPath = `/reset-password?token=${encodeURIComponent(token)}`;
+    const emailBody = origin
+      ? [
+          `Someone asked to reset the password for this account.`,
+          ``,
+          `Reset it here (the link works once, and expires in 1 hour):`,
+          `${origin}${resetPath}`,
+          ``,
+          `If that was not you, ignore this message — nothing has changed yet.`,
+        ].join('\n')
+      : [
+          `Someone asked to reset the password for this account.`,
+          ``,
+          `Open the app, go to "Reset password", and paste this one-time code:`,
+          token,
+          ``,
+          `It works once and expires in 1 hour.`,
+          `If that was not you, ignore this message — nothing has changed yet.`,
+        ].join('\n');
+
+    if (!origin) {
+      console.warn('[custom_auth_reset_request] APP_BASE_URL is not configured — reset email sent with a pasteable code instead of a link.');
+    }
+
     try {
       await base44.asServiceRole.integrations.Core.SendEmail({
         to: user.email,
         subject: "Password Reset Request",
-        body: `You requested a password reset. Use this token: ${token}`
+        body: emailBody,
       });
     } catch (emailErr) {
       console.error("Failed to send reset email:", emailErr);

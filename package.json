@@ -18,6 +18,7 @@
     "preview": "vite preview",
     "brain:map": "node scripts/generate-brain-map.mjs",
     "brain:verify": "node scripts/verify-brain.mjs",
+    "audit:gate": "node scripts/audit-gate.mjs",
     "verify:all": "node scripts/verify-all.mjs"
   },
   "dependencies": {

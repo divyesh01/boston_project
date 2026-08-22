@@ -40,6 +40,8 @@
 | 36 | `probe-money-kept-fix.mjs` never exited: the imported module graph holds open Base44 SDK handles that keep the event loop alive, so the suite could only ever report TIMEOUT — never PASS, never FAIL. Its three checks were `console.assert`, so it could not have failed anyway | HIGH | FIXED 2026-08-20 | `scripts/probe-money-kept-fix.mjs` — synchronous `process.exit`, real assertions, and the values checked rather than just the field names. 170s hang → 8s, 17/0 | (Uncommitted) |
 | 37 | A sharded `verify:all` re-reads `scripts/` per invocation, so a suite file written mid-run shifts every slice boundary — a suite can be run twice or not at all while all shards print "All green". Measured: the 2026-08-20 baseline reported 68+2=70 against 71 files on disk, missing `probe-audit-write-failure.mjs` (since run alone: 60/0) | MEDIUM | FIXED 2026-08-20 | `scripts/verify-all.mjs` — `LIST_ID` sha256 fingerprint of the full discovered list printed on every run and in `--json`, plus a shard-summary line telling the reader to match ids before summing. See 22.5 | (Uncommitted) |
 | 38 | The Staff delete dialog asserted in prose that "payroll runs already recorded for this person are kept". True, but it could not say whether that meant one run or forty, and nothing kept the sentence honest if the schema changed | MEDIUM | FIXED 2026-08-20 | `src/lib/deleteGuard.js` — new `dependents` option folds the count and its integer-cent money value into the dialog; `src/pages/Payroll.jsx#handleDeleteStaff` supplies them. Guarded by `scripts/probe-delete-guard.mjs` (78/0), both branches mutation-tested | (Uncommitted) |
+| 39 | The CI `verify` job's typecheck step ran bare `npx tsc --noEmit`. With no root `tsconfig.json` that finds no input files, so it printed tsc's help text and exited 1 on **every** run — the step was simultaneously red and vacuous, and it had never type-checked anything | HIGH | FIXED 2026-08-21 | `.github/workflows/security.yml` — now `npm run typecheck`. See section 24 | (This commit) |
+| 40 | The same job's `npm audit --audit-level=high` could not pass while `xlsx` carries two high advisories SheetJS publishes no npm fix for, so the job was unpassable regardless of code quality | HIGH | FIXED 2026-08-21 | `scripts/audit-gate.mjs` (NEW) + `npm run audit:gate`. See section 24 | (This commit) |
 
 ---
 
@@ -488,6 +490,14 @@ Rollup's Linux binding is absent) and `probe-config-exposure.mjs` (needs a dev s
 on `localhost:5173`). `acceptance-harness.mjs` and `npm test` share the Rollup limit
 and are not auto-discovered at all.
 
+> [!NOTE]
+> **Superseded in part, 2026-08-21.** The Rollup/esbuild limit is *soft*: installing the
+> missing Linux platform binaries into a scratch prefix outside the repo and pointing
+> `NODE_PATH` at it runs Vite-dependent tooling here without touching `node_modules`.
+> See **24.3**. What still does not fit is a *full* isolated suite run, for a different
+> reason (per-file jsdom cost across the Windows mount), so the 2 SKIPs above stay
+> Not Run — but a single targeted test file can now be executed.
+
 ---
 
 # 23. THE §14 TRACKER IS NOT THE OWNER’S REVIEW PLAYBOOK
@@ -524,3 +534,157 @@ set of claims to be tested, not a set of instructions to be executed.
 > deleting two lines from `package.json` removed roughly twenty packages from the lock.
 > Measure first, and record the measurement next to the verdict so the next reader does
 > not have to re-derive it — the verdict alone is not evidence.
+
+---
+
+
+# 24. THE CI JOB THAT COULD NOT PASS (tracker #39, #40)
+
+> [!CAUTION]
+> `.github/workflows/security.yml` is the only workflow, and its `verify` job had **two**
+> steps that could never go green. The first also never checked anything. A red pipeline
+> that is red for a reason nobody has read is functionally the same as no pipeline —
+> after enough failed runs, people stop opening them.
+
+### 24.1 `npx tsc --noEmit` type-checked nothing, for as long as it existed
+
+The step was `run: npx tsc --noEmit`. This repo has **no root `tsconfig.json`** — the
+typecheck config is `jsconfig.json`, and `npm run typecheck` is `tsc -p ./jsconfig.json`.
+Given no project file and no file arguments, `tsc` has no inputs, so it prints its CLI
+help and exits 1.
+
+Observed 2026-08-21 by running the exact CI command locally: **exit 1, zero `error TS`
+lines, help text present.** That is the whole failure. The screenshot from the GitHub run
+matches — the step failed in **0s**, which no real type-check of this repo does, and the
+four steps after it were skipped.
+
+Two things made it durable:
+
+- **It looks like a type error.** A red typecheck step with unreadable output reads as
+  "someone has type errors to fix", not "this command has never checked anything".
+- **Section 23 row 27 already knew.** That row records that bare `tsc` prefers
+  `tsconfig.json` over `jsconfig.json` and argues against adding one. Nobody connected
+  it to the CI step that depends on exactly that resolution order.
+
+**Fix:** the step calls `npm run typecheck`. Not because the script is shorter, but
+because CI and the local gate then execute *one* command. Any future change to the
+typecheck invocation moves both at once and cannot silently diverge again.
+
+| Command | Exit | `error TS` lines | Help text |
+|---------|------|------------------|-----------|
+| `npx tsc --noEmit` (what CI ran) | 1 | 0 | present |
+| `npm run typecheck` (what CI runs now) | 0 | 0 | absent |
+
+> [!TIP]
+> **BEST OUTCOME NOTE.** A gate is only a gate if it can both pass and fail *for the
+> right reason*. Before trusting any check, confirm it reports on a known-bad input —
+> a step that exits non-zero on an empty input set is indistinguishable from one that
+> found real problems, and it will be believed for months. Prefer `npm run <script>`
+> over an inline tool invocation in CI for exactly this reason: duplicated commands
+> drift, and the copy in the YAML is the one nobody runs locally.
+
+### 24.2 `npm audit --audit-level=high` was unpassable, and the two easy fixes are both worse
+
+`xlsx@0.18.5` carries two **high** advisories — `GHSA-4r6h-8v6p-xvw6` (Prototype
+Pollution) and `GHSA-5pgg-2g8v-p4x9` (ReDoS) — and npm reports **no fix available**,
+because SheetJS stopped publishing to the npm registry and ships fixes from its own CDN.
+So the step failed on every run no matter what the code did. The two obvious escapes:
+
+| Escape | What it actually does |
+|--------|----------------------|
+| `--audit-level=critical` | Silently tolerates **every** high forever, including ones that arrive next month in unrelated packages |
+| `continue-on-error: true` | The step goes green whatever it found |
+
+Both convert a security gate into decoration. `scripts/audit-gate.mjs` instead accepts
+named advisories **by GHSA id, with a written reachability argument**, and keeps failing
+on everything else:
+
+- **The reachability argument, measured not assumed.** `xlsx` is used **write-only**
+  here. The single importer is `src/lib/exportData.js`, which calls only
+  `utils.aoa_to_sheet`, `utils.json_to_sheet`, `utils.book_new`,
+  `utils.book_append_sheet` and `writeFile`. `XLSX.read`, `XLSX.readFile` and
+  `sheet_to_json` appear **nowhere** under `src/`. Uploaded spreadsheets are parsed
+  **server-side** by the platform (`db.integrations.Core.ExtractDataFromUploadedFile`,
+  `src/pages/DataIntelligence.jsx`). Both advisories require parsing an
+  attacker-supplied workbook, and nothing in this app parses one.
+- **The exception expires by itself.** If `npm audit` starts reporting `fixAvailable`
+  for an accepted advisory, the gate **fails** and tells you to upgrade and delete the
+  entry. "No fix available" is the situation, not the argument, and it will not stay
+  true forever.
+- **A stale entry is fatal.** If an accepted advisory stops being reported at all, the
+  gate fails and demands the entry be deleted. Failing here is deliberate: it is the
+  only moment anyone will ever remove it.
+- **It fails closed.** If `npm audit --json` cannot be parsed — registry unreachable,
+  npm missing, output shape changed — the gate exits 1 saying *"This is a gate failure,
+  not a pass — the audit did not run."*
+- **No new dependency** (this repo's standing rule, see `src/lib/exportData.js`), which
+  is why `audit-ci` / `better-npm-audit` were not used.
+
+Mutation-tested 2026-08-21 — the real run exits 0, and each of these exits 1:
+
+| Mutation | Result |
+|----------|--------|
+| Remove one advisory from `ACCEPTED` | exit 1, names the unaccepted advisory |
+| Add an `ACCEPTED` entry npm does not report | exit 1, "stale exception" |
+| `npm` emits non-JSON (shim printing `npm ERR!`) | exit 1, "the audit did not run" |
+| `npm` absent from `PATH` entirely | exit 1, same |
+
+> [!WARNING]
+> An earlier mutation attempt was **invalid and I briefly reported its result as a
+> defect**: clearing `PATH` to `/usr/bin:/bin` still resolved `npm` at `/usr/bin/npm`,
+> so the gate ran normally and exited 0 — which I read as a fail-open. When a negative
+> test passes, verify the mutation actually took effect before believing the finding.
+
+### 24.3 What is still Not Run, and the one limit that turned out to be soft
+
+The two remaining steps in the job, `npm test` and `npm run build`, are **Not Run** as
+whole-suite verifications. But the reason recorded in 22.2/22.6 — "`node_modules` was
+installed on Windows, so Rollup's Linux binding is absent" — is **surmountable**, and
+that correction matters more than the numbers:
+
+Installing the two missing platform binaries into a scratch prefix **outside the repo**
+and pointing `NODE_PATH` at it is enough to run Vite-dependent tooling in the Linux VM,
+without touching the repo's `node_modules`:
+
+```bash
+npm i --prefix /tmp/nativebin @rollup/rollup-linux-x64-gnu@<ver> @esbuild/linux-x64@<ver>
+NODE_PATH=/tmp/nativebin/node_modules npx vitest run <file>   # versions must match installed rollup/esbuild
+```
+
+Measured 2026-08-21 with that in place:
+
+| Run | Result |
+|-----|--------|
+| `src/components/charts/PieDonut.test.jsx`, isolated | **18/18 passed** (84s) |
+| `src/components/ui/card.test.jsx`, isolated | **13/13 passed** |
+| All 36 files, `--no-isolate` | 291 tests, 206 passed, **85 failed in 20 files** |
+| All 36 files, CI-equivalent isolation | **Not Run** — see below |
+
+**The 85 failures are an artifact of the flag, not a defect.** Every one is
+`getMultipleElementsFoundError`, and the 20 failing files are exactly the DOM-rendering
+suites while all 15 non-DOM suites passed: `--no-isolate` shares one jsdom `document`
+across files, so each file inherits the previous file's markup. Two of those "failing"
+files pass **13/13** and **18/18** when isolated. CI uses the default `isolate: true`,
+where the shared document does not exist.
+
+A CI-equivalent full run does not fit this VM. With isolation, each file rebuilds the
+jsdom environment by re-reading `node_modules` across the Windows mount — ~50-90s per
+file, ~40 minutes for 36 files, against a ~178s per-command ceiling. Pushed harder, the
+`forks` and `threads` pools both fail to bootstrap at all
+(`[vitest-pool-runner]: Timeout waiting for worker to respond`).
+
+> [!NOTE]
+> `npm test` and `npm run build` must still be read from the GitHub Actions run, or from
+> the owner's Windows machine. What changed is that a *single* test file can now be
+> executed here, which is what a targeted probe needs — the PieDonut fixture geometry in
+> §14 row 18 had previously been verified only indirectly through the node harness.
+
+> [!TIP]
+> **BEST OUTCOME NOTE.** When a measurement will not fit the harness, changing the
+> harness's *axis of division* is right (22.3) — but changing its *semantics* is not.
+> `--no-isolate` made the suite fit and produced 85 failures that describe the flag
+> rather than the code. The tell was structural, not statistical: a single error class,
+> falling on exactly the files that share the mutated resource. Before reporting any
+> mass failure, ask what all the failures have in common and whether the harness change
+> is that thing.
+

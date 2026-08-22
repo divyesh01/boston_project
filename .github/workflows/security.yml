@@ -27,13 +27,26 @@ jobs:
         run: npm run lint
 
       - name: Run Typecheck
-        run: npx tsc --noEmit
+        # Must be `npm run typecheck`, never a bare `npx tsc --noEmit`. There is
+        # no root tsconfig.json in this repo — only jsconfig.json — so bare tsc
+        # finds no input files, prints its help text and exits 1. That looks like
+        # a type error but checks nothing; it failed this job in 0s on 2026-08-21.
+        # Calling the npm script keeps CI and the local gate on one command
+        # (`tsc -p ./jsconfig.json`) so they cannot drift apart again.
+        run: npm run typecheck
 
       - name: Run Tests
         run: npm test
 
       - name: Security Vulnerability Audit
-        run: npm audit --audit-level=high
+        # Was `npm audit --audit-level=high`, which cannot pass while `xlsx`
+        # carries two high advisories that SheetJS publishes no npm fix for — it
+        # made this job unpassable regardless of code quality. The gate now
+        # accepts those two advisories BY ID with a written reachability
+        # argument, and still fails on anything else, on a stale exception, and
+        # on its own inability to run. Never swap this back for
+        # `--audit-level=critical` or `continue-on-error`.
+        run: npm run audit:gate
 
       - name: Verify Production Build
         run: npm run build

@@ -21,6 +21,8 @@ cannot run it, say "Not run" and do not claim the change is safe.
 | `src/components/charts/PieDonut.test.jsx` | as above (section 12 cross-checks its literals) | as above |
 | `scripts/verify-all.mjs` | `node scripts/verify-all.mjs --list` | prints a list fingerprint + count |
 | `vitest.config.js`, `tests/stubs/base44-runtime.js` | `npx vitest run tests/backend` | must not regress to a resolution error |
+| `.github/workflows/security.yml` | `npm run typecheck` **and** `npm run audit:gate` | both exit 0 |
+| `scripts/audit-gate.mjs` | `npm run audit:gate` | exit 0, prints `Audit gate passed` |
 
 ## Invariants that must not be weakened
 
@@ -75,6 +77,23 @@ the defect it was written for.
    printed one message for both, and an earlier draft of this refactor printed
    nothing for the empty case — the same conflation in reverse. CLAUDE.md §4
    (`USER / UI: Truthful Experience`) is the reason.
+10. **The CI typecheck step stays `npm run typecheck` — never a bare
+    `npx tsc --noEmit`.** There is no root `tsconfig.json` in this repo, only
+    `jsconfig.json`, so bare `tsc` finds no input files, prints its CLI help and
+    exits 1. That is what the `verify` job did until 2026-08-21: it failed in 0s
+    on every run while type-checking nothing, and it blocked the four steps after
+    it. Keeping CI on the npm script keeps it identical to the local gate
+    (`tsc -p ./jsconfig.json`) so the two cannot drift apart again.
+11. **The audit step stays `npm run audit:gate`.** Do not "fix" a red audit with
+    `--audit-level=critical` or `continue-on-error: true` — the first tolerates
+    every future high advisory in every package, the second makes the step green
+    whatever it finds, and both turn a security gate into decoration. The gate
+    accepts advisories one at a time, by GHSA id, with a written argument for why
+    that advisory is unreachable *in this codebase*; it fails on anything
+    unaccepted, on an entry that has become stale, on an accepted advisory that
+    gains a fix, and on its own inability to parse `npm audit --json`. That last
+    one is deliberate: a gate that goes green because the registry was
+    unreachable has verified nothing.
 
 ## Deliberate non-changes
 

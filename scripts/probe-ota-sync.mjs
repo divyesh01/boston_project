@@ -29,6 +29,13 @@ const { signInAsAllPropertyOwner } = await import("./_harness-auth.mjs");
 await signInAsAllPropertyOwner();
 
 const TEST_PROP = "prop-test-ota";
+let pass = 0;
+let failed = 0;
+
+function record(condition) {
+  if (condition) pass++;
+  else failed++;
+}
 
 async function run() {
   console.log(`\n=== Testing OTA Sync for ${TEST_PROP} ===`);
@@ -40,7 +47,8 @@ async function run() {
   // 2. Pull Reservations
   const reservations = await db.integrations.ChannelManager.PullReservations(TEST_PROP);
   console.log(`Pulled ${reservations.length} reservations`);
-  assert(reservations.length === 2, "Expected 2 mock reservations");
+   record(reservations.length === 2);
+   assert(reservations.length === 2, "Expected 2 mock reservations");
 
   // 3. Write to DB
   for (const res of reservations) {
@@ -59,13 +67,16 @@ async function run() {
   // 4. Verify in DB
   const stored = await localDb.Reservation.where({ property_id: TEST_PROP }).toArray();
   console.log(`Stored ${stored.length} reservations in localDb`);
-  assert(stored.length === 2, "Reservations were not saved to DB correctly");
+   record(stored.length === 2);
+   assert(stored.length === 2, "Reservations were not saved to DB correctly");
 
   const bookingCom = stored.find(r => r.channel === 'Booking.com');
   const expedia = stored.find(r => r.channel === 'Expedia');
   
-  assert(bookingCom, "Booking.com reservation missing");
-  assert(expedia, "Expedia reservation missing");
+   record(bookingCom);
+   assert(bookingCom, "Booking.com reservation missing");
+   record(expedia);
+   assert(expedia, "Expedia reservation missing");
 
   // 5. Test Upsert/Idempotency
   console.log(`Testing Upsert Idempotency...`);
@@ -94,13 +105,30 @@ async function run() {
 
   const storedAfter = await localDb.Reservation.where({ property_id: TEST_PROP }).toArray();
   console.log(`Stored ${storedAfter.length} reservations after second sync`);
-  assert(storedAfter.length === 2, "Upsert failed: duplicate reservations were created");
+   record(storedAfter.length === 2);
+   assert(storedAfter.length === 2, "Upsert failed: duplicate reservations were created");
 
-  console.log("\n  PASS  OTA Sync logic successfully tested\n");
-  process.exit(0);
+   console.log(`\n${failed === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${failed} failed`);
+   // Guarded: console.assert does not stop the run, so a failed check reaches
+   // this line. Unguarded it printed "PASS  OTA Sync logic successfully tested"
+   // directly beneath "FAILED: 4 passed, 1 failed".
+   if (failed === 0) console.log("\n  PASS  OTA Sync logic successfully tested\n");
+   process.exit(failed > 0 ? 1 : 0);
 }
 
 run().catch(e => {
   console.error("Test Failed:", e);
+  // Reached only by a genuine exception (DB/auth), NOT by a failed check:
+  // line 1 imports `assert` from "console", i.e. console.assert, which prints
+  // "Assertion failed: ..." to stderr and returns. Before the pass/failed
+  // counters existed, all 5 checks here were non-fatal and the file ended in an
+  // unconditional process.exit(0) — a broken OTA sync printed
+  // "PASS  OTA Sync logic successfully tested" and exited green. Measured after
+  // the counters: flipping the first expectation to 99 yields
+  // "FAILED: 4 passed, 1 failed" rc=1, and execution continues past the bad
+  // check (which is why 4, not 0, still pass). This is the only file in the
+  // repo that imports assert from "console".
+  failed = failed > 0 ? failed : 1;
+  console.error(`\n${failed === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${failed} failed`);
   process.exit(1);
 });

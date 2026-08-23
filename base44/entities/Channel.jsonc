@@ -63,5 +63,63 @@
   },
   "required": [
     "channel_name"
-  ]
+  ],
+  "rls": {
+    "read": {
+      "$and": [
+        {
+          "user_condition": {
+            "is_active": true
+          }
+        },
+        {
+          "$or": [
+            {
+              "user_condition": {
+                "role": "admin"
+              }
+            },
+            {
+              "user_condition": {
+                "role": "owner"
+              }
+            },
+            {
+              "data.property_id": {
+                "$in": "{{user.property_access}}"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "write": {
+      "$and": [
+        {
+          "user_condition": {
+            "is_active": true
+          }
+        },
+        {
+          "$or": [
+            {
+              "user_condition": {
+                "role": "admin"
+              }
+            },
+            {
+              "user_condition": {
+                "role": "owner"
+              }
+            },
+            {
+              "data.property_id": {
+                "$in": "{{user.property_access}}"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
 }

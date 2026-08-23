@@ -449,4 +449,5 @@ if (failures.length) {
   failures.forEach((f) => console.log("  ✗ " + f));
 }
 console.log("=".repeat(72));
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

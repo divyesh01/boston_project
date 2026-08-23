@@ -1752,9 +1752,73 @@ async function handleLocalAuditLog(params = {}) {
   return { success: true, entry: row };
 }
 
+/**
+ * Match one audit row against a caller-supplied filter. Local-dev shim only.
+ *
+ * WHY THIS EXISTS. handleLocalAuditList honoured exactly one key — `filter.action`
+ * — and silently dropped every other one, so `db.audit.list({ property_id: 'x' })`
+ * returned rows from every property. Measured 2026-08-23 by
+ * scripts/test_defect_5_probe.mjs: three rows seeded across two properties plus
+ * null, asked for one, got all three.
+ *
+ * Production was never affected. base44/functions/audit_list/entry.js spreads the
+ * caller's filter into the datastore query (`effectiveFilter`), derives the allowed
+ * scope from the authenticated actor, and refuses out-of-scope ids with 403; and
+ * src/main.jsx refuses to boot when PROD && VITE_USE_LOCAL_AUTH === 'true', so this
+ * shim cannot serve a real user. It was a dev/prod parity defect — and a
+ * load-bearing one, because scripts/_loader-boot.mjs sets VITE_USE_LOCAL_AUTH=true,
+ * which means every suite in scripts/ that reads db.audit.list was asserting
+ * against a mock that ignored filters. A property-scoping regression in the audit
+ * read path was undetectable in the harness.
+ *
+ * `{ $in: [...] }` is supported because the server generates that shape itself:
+ * propertyFilterFor() in the entry file emits it whenever a restricted actor's
+ * scope spans more than one property. The String() comparison mirrors that file's
+ * `value.$in.map(String)`.
+ *
+ * Any other operator object ({ $ne }, { $regex }, a bare nested object) matches
+ * NOTHING rather than being ignored. The server rejects those with 400, so neither
+ * path yields rows; failing closed keeps an unrecognized operator from quietly
+ * widening a read, which is the direction this function was already wrong in once.
+ *
+ * NOT mirrored, deliberately: actor-derived property scoping and the 403 on
+ * cross-tenant ids. Those need the authenticated user, and src/lib/launchPolicy.js
+ * admits only all-property accounts, so there is no restricted actor to scope.
+ * Sort order is also left alone — src/pages/AuditLog.jsx sorts client-side via
+ * sortAuditLogs, so the shim's insertion order has no consumer.
+ *
+ * @param {any} row
+ * @param {any} filter
+ * @returns {boolean}
+ */
+function auditRowMatchesFilter(row, filter) {
+  for (const key of Object.keys(filter)) {
+    const want = filter[key];
+    if (want === undefined) continue;
+    const got = row ? row[key] : undefined;
+    if (want !== null && typeof want === 'object') {
+      const keys = Array.isArray(want) ? [] : Object.keys(want);
+      if (keys.length === 1 && keys[0] === '$in' && Array.isArray(want.$in)) {
+        if (!want.$in.some((/** @type {any} */ v) => String(v) === String(got))) return false;
+        continue;
+      }
+      return false;
+    }
+    if (got !== want) return false;
+  }
+  return true;
+}
+
 async function handleLocalAuditList({ filter = /** @type {any} */ ({}), limit = 500 } = {}) {
+  // `db.audit.list(null)` arrives here as filter === null: a parameter default
+  // fills in `undefined` only. The server performs the same coercion with
+  // `payload.filter || {}`.
+  const active = /** @type {any} */ (filter == null ? {} : filter);
+  // A non-object filter is answered with 400 by the server — no rows either way.
+  if (typeof active !== 'object' || Array.isArray(active)) return { logs: [] };
+
   let logs = await localDb.AuditLog.toArray();
-  if (filter && filter.action) logs = logs.filter((l) => l.action === filter.action);
+  logs = logs.filter((row) => auditRowMatchesFilter(row, active));
   if (typeof limit === 'number') logs = logs.slice(-limit);
   return { logs };
 }

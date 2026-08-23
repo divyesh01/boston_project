@@ -3,9 +3,10 @@
 // native BroadcastChannel transport (Node 18+). No IndexedDB involved.
 import { publishChange, subscribeChanges } from "../src/lib/realtime.js";
 
+let passed = 0;
 let failed = 0;
 function assert(cond, msg) {
-  if (cond) console.log("  ok -", msg);
+  if (cond) { passed += 1; console.log("  ok -", msg); }
   else { failed += 1; console.error("  FAIL -", msg); }
 }
 
@@ -30,4 +31,5 @@ assert(!!stay && stay.change === "create", "RoomStay create change delivered");
 assert(!!stay && stay.record && stay.record.room_number === "205", "change carries the record payload");
 
 console.log(failed ? `\n${failed} assertion(s) FAILED` : "\nALL REALTIME ASSERTIONS PASSED");
+console.log(`\n${failed === 0 ? "PASSED" : "FAILED"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

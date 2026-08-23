@@ -140,7 +140,7 @@ check('REPO_ROOT has no trailing separator',
 // The package.json really is THIS project's, not some parent directory's.
 try {
   const pkg = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
-  check('REPO_ROOT resolves to this project', pkg.name === 'base44-app', `name=${pkg.name}`);
+  check('REPO_ROOT resolves to this project', pkg.name === 'divyesh-hotel', `name=${pkg.name}`);
 } catch (err) {
   check('REPO_ROOT package.json parses', false, String(err?.message || err));
 }

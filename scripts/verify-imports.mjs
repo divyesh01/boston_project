@@ -123,6 +123,7 @@ for (const [f, tree] of ast) {
 }
 
 console.log(`Parsed ${ast.size} files, resolved ${checked} internal imports.`);
+console.log(`\n${problems.length === 0 ? "PASSED" : "FAILED"}: ${checked} passed, ${problems.length} failed`);
 if (problems.length) {
   for (const p of problems) console.log(`  ✗ ${p}`);
   console.log(`\n${problems.length} problem(s).`);

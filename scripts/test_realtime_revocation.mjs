@@ -195,6 +195,7 @@ async function run() {
   console.log('\n========================================');
   console.log(`RESULTS: ${pass} passed, ${fail} failed`);
   console.log('========================================\n');
+  console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
   if (fail > 0) process.exit(1);
   console.log('✓ ALL REAL-TIME REVOCATION TESTS PASSED\n');
   process.exit(0); // close BroadcastChannel handles held open by the process

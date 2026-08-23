@@ -54,20 +54,20 @@ export default function KpiCard(
       className={cn(
         "fx-enter group relative overflow-hidden rounded-2xl p-5",
         "border border-[var(--line-subtle)] bg-[var(--s-raised)] shadow-[var(--elev-2)]",
-        "transition-[border-color,transform,box-shadow] duration-[var(--fx-base)] ease-[var(--fx-ease)]",
+        "transition-[border-color,transform,box-shadow] [transition-duration:var(--fx-base)] [transition-timing-function:var(--fx-ease)]",
         "hover:-translate-y-0.5 hover:border-[var(--line)] hover:shadow-[var(--elev-3)]"
       )}
     >
       {/* Accent hairline along the top edge. 1px, not the old 2px — at display
           scale a 2px bar reads as a UI chrome stripe, 1px reads as a bevel. */}
       <div
-        className="absolute inset-x-0 top-0 h-px opacity-70 transition-opacity duration-[var(--fx-base)] group-hover:opacity-100"
+        className="absolute inset-x-0 top-0 h-px opacity-70 transition-opacity [transition-duration:var(--fx-base)] group-hover:opacity-100"
         style={{ background: `linear-gradient(90deg, transparent, ${accent} 50%, transparent)` }}
       />
       {/* A very faint accent bloom in the corner on hover. Opacity tops out at
           0.10 deliberately: enough to feel lit, not enough to tint the figure. */}
       <div
-        className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full opacity-0 blur-2xl transition-opacity duration-[var(--fx-base)] ease-[var(--fx-ease)] group-hover:opacity-[0.10]"
+        className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full opacity-0 blur-2xl transition-opacity [transition-duration:var(--fx-base)] [transition-timing-function:var(--fx-ease)] group-hover:opacity-[0.10]"
         style={{ backgroundColor: accent }}
         aria-hidden="true"
       />
@@ -76,7 +76,7 @@ export default function KpiCard(
         <p className="u-eyebrow min-w-0 truncate">{label}</p>
         {Icon && (
           <Icon
-            className="h-4 w-4 shrink-0 transition-transform duration-[var(--fx-base)] ease-[var(--fx-ease)] group-hover:scale-110"
+            className="h-4 w-4 shrink-0 transition-transform [transition-duration:var(--fx-base)] [transition-timing-function:var(--fx-ease)] group-hover:scale-110"
             style={{ color: accent }}
           />
         )}

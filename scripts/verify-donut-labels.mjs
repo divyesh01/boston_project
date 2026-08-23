@@ -420,7 +420,7 @@ ok(estimateTextWidth("abc", 40) > estimateTextWidth("abc", 20), "width scales wi
 }
 
 console.log("\n" + "=".repeat(72));
-console.log(`PASS ${pass}   FAIL ${fail}`);
+console.log(`${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 if (failures.length) {
   console.log("\nFailures:");
   failures.slice(0, 40).forEach((f) => console.log("  ✗ " + f));

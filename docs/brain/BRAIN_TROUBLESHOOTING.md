@@ -382,7 +382,8 @@ to have been in danger:
 
 | Suite | Result | Time |
 |-------|--------|------|
-| `probe-property-isolation.mjs` | 47 passed, 0 failed | 8.5s |
+| `probe-property-isolation.mjs` | 76 passed, 0 failed | 8.5s |
+
 | `verify-anomaly-ingestion.mjs` | 9 passed, 0 failed | 10.0s |
 | `verify-source-contributions.mjs` | 12 passed, 0 failed | 25.6s |
 | `verify-statistics.mjs` | 84 passed, 0 failed | 12.5s |

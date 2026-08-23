@@ -240,6 +240,7 @@ section('4. No silent catches on the honesty inventory');
 // ── Result ──────────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(60)}`);
 console.log(`probe-ui-feedback: ${pass} passed, ${fail} failed`);
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 if (fail) {
   console.log('\nFailures:');
   failures.forEach((f) => console.log(`  · ${f}`));

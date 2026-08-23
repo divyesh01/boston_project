@@ -16,7 +16,9 @@
 import { detectClerkAnomalies } from "../src/lib/anomalyDetector.js";
 
 let failures = 0;
+let checks = 0;
 const ok = (label, cond) => {
+  checks++;
   console.log(`${cond ? "PASS" : "FAIL"}  ${label}`);
   if (!cond) failures++;
 };
@@ -104,8 +106,10 @@ ok(
 );
 
 console.log("");
+console.log(`\n${failures === 0 ? "PASSED" : "FAILED"}: ${checks - failures} passed, ${failures} failed`);
 if (failures) {
   console.error(`RESULT: ${failures} check(s) FAILED`);
   process.exit(1);
 }
 console.log("RESULT: all checks PASSED");
+process.exit(failures > 0 ? 1 : 0);

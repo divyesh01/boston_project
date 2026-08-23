@@ -648,6 +648,7 @@ check("getCcFeeRate returns a usable rate and multiply() applies it in cents", (
 
 console.log("");
 console.log(`PASS ${pass}  FAIL ${failures.length}`);
+console.log(`\n${failures.length === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${failures.length} failed`);
 if (failures.length) {
   console.log("");
   for (const f of failures) console.log(`  - ${f}`);

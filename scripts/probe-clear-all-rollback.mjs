@@ -387,4 +387,5 @@ if (failures.length) {
   failures.forEach((f) => console.log(`  • ${f}`));
 }
 console.log(`PASS ${pass}   FAIL ${fail}`);
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

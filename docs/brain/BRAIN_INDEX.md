@@ -133,7 +133,6 @@ scripts\test_auditlog_immutability.mjs
 scripts\test_bulletproof_auth.mjs
 scripts\test_defect_5_probe.mjs
 scripts\test_local_auth.mjs
-scripts\test_me_disabled.mjs
 scripts\test_realtime_revocation.mjs
 scripts\test_validator.mjs
 scripts\test-parser.mjs

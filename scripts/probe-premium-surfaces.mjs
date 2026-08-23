@@ -639,4 +639,5 @@ if (failures.length) {
   if (failures.length > 40) console.log(`  ... and ${failures.length - 40} more`);
 }
 console.log("=".repeat(72));
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

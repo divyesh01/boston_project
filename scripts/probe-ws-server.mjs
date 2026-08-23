@@ -262,6 +262,7 @@ check('the server sends Yjs sync step 1 over the upgraded socket',
 
 console.log(`\n${'─'.repeat(60)}`);
 console.log(`probe-ws-server: ${pass} passed, ${fail} failed`);
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 console.log('NOT TESTED: an AUTHORIZED handshake through backend/websocket.js\'s');
 console.log('            own upgrade handler. That needs a live base44 endpoint');
 console.log('            for auth.me(), so sections 1/6 pin the handoff shape');

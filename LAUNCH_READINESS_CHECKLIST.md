@@ -38,7 +38,7 @@ Any one of these is disqualifying for real financial data. Together they mean th
 
 | # | Blocker | Status | Evidence |
 |---|---|---|---|
-| B1 | Restricted user sees all properties | ✅ Fixed | `probe-property-isolation` 47/0 |
+| B1 | Restricted user sees all properties | ✅ Fixed | `probe-property-isolation` 76/0 |
 | B2 | Property roster leaks | ✅ Fixed | same |
 | B3 | Access fails open | ✅ Fixed | same, §6 |
 | B4 | 24 sites bypass the proxy | ✅ Fixed | same + `verify-timecard` 47/0 |
@@ -130,7 +130,8 @@ Because `rebuildDailyAggregates` populates that table on every import, the unfil
 - [x] Route `getDailyAggregates` through the entity proxy, or pass and enforce an allowed-ID list
 - [x] Re-test as a restricted (non-owner, non-admin) user on first load, before touching any filter
 
-**RESOLVED 2026-08-16.** `effectiveProperties` now drops any selected id that is not accessible, so a stale selection surviving a permission change cannot widen the next query. The empty-selection sentinel `"all"` is kept deliberately and is no longer a hole: `applyScope` turns an absent property condition into *the caller's own allowance*, so `"all"` resolves to "all of mine". `getDailyAggregates` reads through `db.entities`. Verified by `scripts/probe-property-isolation.mjs` — **47 passed, 0 failed** (was 16 passed / 29 failed when the workstream began), including a case asserting that `'all'` means all *accessible*, not all *existing*.
+**RESOLVED 2026-08-16.** `effectiveProperties` now drops any selected id that is not accessible, so a stale selection surviving a permission change cannot widen the next query. The empty-selection sentinel `"all"` is kept deliberately and is no longer a hole: `applyScope` turns an absent property condition into *the caller's own allowance*, so `"all"` resolves to "all of mine". `getDailyAggregates` reads through `db.entities`. Verified by `scripts/probe-property-isolation.mjs` — **76 passed, 0 failed** (was 16 passed / 29 failed when the workstream began), including a case asserting that `'all'` means all *accessible*, not all *existing*.
+
 
 ### ✅ B2 — The full property roster leaks to every user — RESOLVED
 **OBSERVED.** `src/api/base44Client.js:383-388` — `PROPERTY_TABLES` omits both `Property` and `User`, so `Property.list()` returns every property to everyone. `useGlobalFilters` computes a correct `accessibleProperties` but *also* exports the raw `properties` (`:288`), and **16 pages read the unfiltered one**: Dashboard, ActionCenter, ChannelManager, Compare, DataIntelligence, Employees, Expenses, Forecasting, Housekeeping, ManualEntry, MonthlyCalendar, MtdGrowth, Payments, Payroll, Pricing, RoomBoard. Forecasting and ManualEntry destructure *both*, which shows the correct variable existed and was not adopted.
@@ -554,7 +555,8 @@ Every row below was re-run at the end of the work, after the last code edit, on 
 | Source contributions | same form, `verify-source-contributions.mjs` | **OBSERVED PASS — 12 checks, 0 failed** |
 | Anomaly ingestion | same form, `verify-anomaly-ingestion.mjs` | **OBSERVED PASS — 9 checks, 0 failed** |
 | Action Center | same form, `verify-actioncenter.mjs` | **OBSERVED PASS — all scenarios correct** |
-| Property isolation (negative cases) | same form, `probe-property-isolation.mjs` | **OBSERVED PASS — 47 checks, 0 failed** |
+| Property isolation (negative cases) | same form, `probe-property-isolation.mjs` | **OBSERVED PASS — 76 checks, 0 failed** |
+
 | Auth audit trail | `node scripts/probe-auth-audit.mjs` | **OBSERVED PASS — 56 checks, 0 failed** |
 | Auth / MFA / session hardening | `node scripts/probe-auth-hardening.mjs` | **OBSERVED PASS — 105 checks, 0 failed** |
 | Audit hash chain | `node scripts/probe-audit-chain.mjs` | **OBSERVED PASS — 32 checks, 0 failed** |

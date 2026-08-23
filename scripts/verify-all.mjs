@@ -47,6 +47,10 @@ import { createHash } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
+// The verdict logic lives in _verdict.mjs so it can be regression-tested on its
+// own — see the header of that file, and scripts/probe-verify-all-verdict.mjs.
+import { BROKEN_SIGNATURES, classifySuiteRun } from "./_verdict.mjs";
+
 const SCRIPTS_DIR = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPTS_DIR, "..");
 
@@ -64,8 +68,18 @@ const BAIL = flag("bail");
 const AS_JSON = flag("json");
 
 // ── Which files are suites ───────────────────────────────────────────────────
-// Convention over configuration: probe-*.mjs and verify-*.mjs are suites. Anything
-// else in scripts/ is tooling (generators, loaders, stubs) and is not run.
+// Convention over configuration: probe-*.mjs, verify-*.mjs and test_*.mjs are suites.
+// Anything else in scripts/ is tooling (generators, loaders, stubs) and is not run.
+//
+// `test_` was ADDED 2026-08-23. It is a third naming convention that predates the
+// probe-/verify- one, and for as long as this runner has existed it silently excluded
+// seven real suites — test_anomaly_detector, test_auditlog_immutability,
+// test_bulletproof_auth, test_defect_5_probe, test_local_auth,
+// test_realtime_revocation, test_validator — carrying several hundred assertions
+// between them. Nothing was wrong with those files; the gate simply could not see
+// them, so "all green" was quoted over a set that never included them. Note the
+// underscore: these are test_foo.mjs, not test-foo.mjs, which is why no dash-based
+// prefix ever caught them.
 //
 // EXCLUSIONS are listed with a reason, and each reason is a factual statement about
 // the file — not a judgement. A suite must never be excluded merely because it is
@@ -80,7 +94,7 @@ const EXCLUDE = new Map([
 
 const isSuite = (f) =>
   f.endsWith(".mjs") &&
-  (f.startsWith("probe-") || f.startsWith("verify-")) &&
+  (f.startsWith("probe-") || f.startsWith("verify-") || f.startsWith("test_")) &&
   !f.startsWith("_") &&
   !EXCLUDE.has(f);
 
@@ -178,18 +192,6 @@ const BOOT_PATH = path.join(SCRIPTS_DIR, "_loader-boot.mjs");
 const useBoot = existsSync(BOOT_PATH);
 const BOOT = useBoot ? "./scripts/_loader-boot.mjs" : null;
 
-// Signatures of a suite that could not start, as opposed to one that ran and
-// failed. Kept explicit so a new import-time failure mode has to be added here
-// deliberately rather than being quietly counted as a normal test failure.
-const BROKEN_SIGNATURES = [
-  /ERR_MODULE_NOT_FOUND/,
-  /does not provide an export named/,
-  /Cannot find module/,
-  /ERR_UNSUPPORTED_DIR_IMPORT/,
-  /SyntaxError/,
-  /ENOENT: no such file or directory/,
-];
-
 function runSuite(file) {
   return new Promise((resolve) => {
     const suitePath = path.join("scripts", file);
@@ -225,56 +227,22 @@ function runSuite(file) {
     child.on("close", (code) => {
       clearTimeout(timer);
       const ms = Date.now() - started;
-      const broken = !killed && code !== 0 && BROKEN_SIGNATURES.some((re) => re.test(out));
 
-      // Prefer the suite's own summary line for the one-line report.
-      const lines = out.split("\n").map((l) => l.trim()).filter(Boolean);
-      const summary =
-        lines.filter((l) => /^(PASS|FAIL|PASSED|FAILED)\b|passed,\s*\d+\s*failed|all scenarios correct/i.test(l)).pop()
-        || lines[lines.length - 1]
-        || "(no output)";
-
-      // A suite that prints a failing summary but exits 0 is itself a defect — the
-      // console.assert trap. Catch it here so it can never pass unnoticed again.
-      //
-      // The COUNT matters, not the word. Several suites end with
-      // "PASS 728   FAIL 0", and a bare /\bFAIL\b/ test reports those healthy
-      // suites as broken. A runner that cries wolf gets ignored, which costs more
-      // than the check saves — so a numeric count wins over the keyword whenever
-      // one is present, and the keyword only decides when there is no number.
-      const counted =
-        summary.match(/(\d+)\s*(?:check\(s\)\s*)?failed/i) ||
-        summary.match(/\bFAIL(?:ED)?[:\s]+(\d+)\b/i);
-      const claimsFailure = counted
-        ? Number(counted[1]) > 0
-        : /^\s*(FAIL|FAILED)\b/i.test(summary);
-      const lyingExitCode = code === 0 && claimsFailure;
-
-      // A suite may legitimately decline to run: verify-harness.mjs and
-      // probe-import.mjs need vite (whose rollup native binding is absent when
-      // node_modules was installed for another platform), and
-      // probe-config-exposure.mjs needs a live dev server. Reporting those as
-      // FAIL trains the reader to ignore red, and reporting them as PASS claims
-      // coverage that does not exist. They print a line starting with "SKIP:" and
-      // exit 0; this is the only way to be counted as skipped.
-      const skipLine = lines.find((l) => /^SKIP:/i.test(l));
-      const skipped = code === 0 && !!skipLine;
+      // Every judgement about what this output MEANS lives in _verdict.mjs, which
+      // scripts/probe-verify-all-verdict.mjs holds to 14 measured output shapes.
+      const { status, summary } = classifySuiteRun({ out, code, killed });
 
       resolve({
         file,
         code,
         ms,
         killed,
-        broken,
-        lyingExitCode,
-        skipped,
-        status: killed ? "TIMEOUT"
-          : broken ? "BROKEN"
-          : lyingExitCode ? "BAD-EXIT"
-          : skipped ? "SKIP"
-          : code === 0 ? "PASS"
-          : "FAIL",
-        summary: skipped ? skipLine : summary,
+        broken: status === "BROKEN",
+        lyingExitCode: status === "BAD-EXIT",
+        skipped: status === "SKIP",
+        diagnostic: status === "DIAGNOSTIC",
+        status,
+        summary,
         output: out,
       });
     });
@@ -286,7 +254,7 @@ function runSuite(file) {
 // parallel in this environment starved them badly enough that they produced no
 // output at all — which would have been reported as BROKEN.
 const results = [];
-const label = { PASS: "PASS   ", FAIL: "FAIL   ", BROKEN: "BROKEN ", TIMEOUT: "TIMEOUT", "BAD-EXIT": "BADEXIT", SKIP: "SKIP   " };
+const label = { PASS: "PASS   ", FAIL: "FAIL   ", BROKEN: "BROKEN ", TIMEOUT: "TIMEOUT", "BAD-EXIT": "BADEXIT", SKIP: "SKIP   ", DIAGNOSTIC: "DIAG   " };
 
 if (!AS_JSON) console.log(`Running ${suites.length} suite(s)${shardLabel}, ${TIMEOUT_S}s timeout each — ${listId}\n`);
 
@@ -308,6 +276,10 @@ const broken = by("BROKEN");
 const timedOut = by("TIMEOUT");
 const badExit = by("BAD-EXIT");
 const skipped = by("SKIP");
+// Not in notPassing: a diagnostic exits 0 and has broken no contract. It is kept
+// out of `passed` for the opposite reason — it verified nothing, so counting it
+// green overstates coverage by one suite per printer.
+const diagnostics = by("DIAGNOSTIC");
 const notPassing = [...failed, ...broken, ...timedOut, ...badExit];
 
 // Every result must land in exactly one bucket. Computed here, outside the report
@@ -315,7 +287,7 @@ const notPassing = [...failed, ...broken, ...timedOut, ...badExit];
 // broken runner, and a broken runner reporting 0 is the worst outcome this script
 // has — it is the same class of defect as the console.assert probes that printed a
 // success line unconditionally.
-const bucketed = passed.length + failed.length + broken.length + timedOut.length + badExit.length + skipped.length;
+const bucketed = passed.length + failed.length + broken.length + timedOut.length + badExit.length + skipped.length + diagnostics.length;
 
 if (AS_JSON) {
   console.log(JSON.stringify({
@@ -329,11 +301,12 @@ if (AS_JSON) {
     timedOut: timedOut.length,
     badExit: badExit.length,
     skipped: skipped.length,
+    diagnostics: diagnostics.length,
     suites: results.map(({ output, ...rest }) => rest),
   }, null, 2));
 } else {
   console.log(`\n${"─".repeat(78)}`);
-  console.log(`${results.length} suite(s)${shardLabel}: ${passed.length} passed, ${failed.length} failed, ${broken.length} broken, ${timedOut.length} timed out, ${badExit.length} bad exit code, ${skipped.length} skipped`);
+  console.log(`${results.length} suite(s)${shardLabel}: ${passed.length} passed, ${failed.length} failed, ${broken.length} broken, ${timedOut.length} timed out, ${badExit.length} bad exit code, ${skipped.length} skipped, ${diagnostics.length} diagnostic (asserted nothing)`);
 
   // The fingerprint belongs NEXT TO the tally, not only in the header.
   //
@@ -381,6 +354,13 @@ if (AS_JSON) {
     skipped.forEach((r) => console.log(`  ${r.file} — ${r.summary}`));
   }
 
+  if (diagnostics.length) {
+    // Printed even when everything is green, for the same reason as SKIPPED: these
+    // suites ran to completion and checked nothing, so their green is not coverage.
+    console.log(`\nDIAGNOSTIC — ran, asserted nothing, so they verified nothing:`);
+    diagnostics.forEach((r) => console.log(`  ${r.file} — ${r.summary}`));
+  }
+
   if (broken.length) {
     // Print the ERROR, not just which signature matched.
     //
@@ -425,7 +405,20 @@ if (AS_JSON) {
     console.log(`\nFirst failing suite's output (${failed[0].file}):`);
     console.log(failed[0].output.split("\n").map((l) => `  │ ${l}`).join("\n"));
   }
-  console.log(notPassing.length ? `\nNOT GREEN.` : `\nAll green.`);
+  // "All green." on its own overclaimed: before 2026-08-23 the four DIAGNOSTIC
+  // printers sat in the PASS bucket, so a run with zero assertions in four suites
+  // still printed an unqualified all-clear. Say what green does not cover.
+  const caveats = [
+    skipped.length ? `${skipped.length} skipped` : null,
+    diagnostics.length ? `${diagnostics.length} asserted nothing` : null,
+  ].filter(Boolean);
+  console.log(
+    notPassing.length
+      ? `\nNOT GREEN.`
+      : caveats.length
+        ? `\nAll green, except: ${caveats.join(", ")} — that many suites verified nothing here.`
+        : `\nAll green.`
+  );
 }
 
 process.exit(notPassing.length || bucketed !== results.length ? 1 : 0);

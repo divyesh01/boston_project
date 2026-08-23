@@ -1,4 +1,4 @@
-﻿# RED ROOF INTELLIGENCE - MASTER BRAIN (HUB)
+# RED ROOF INTELLIGENCE - MASTER BRAIN (HUB)
 
 > [!IMPORTANT]
 > **AI AGENTS:** You are currently in the HUB. To save tokens and maximize context window efficiency, this file only contains routing.
@@ -107,7 +107,8 @@ the wrong package — always use `npm run typecheck`.**
 > **Correction, 2026-08-20.** An earlier revision of this table listed 7 suites as
 > timing out. That was a measurement error, not a defect: the runs had been given a
 > reduced `--timeout` so a full pass would fit inside a 178s command cap. Six of the
-> seven pass in 9-25s each (`probe-property-isolation` 47/0, `verify-anomaly-ingestion`
+> seven pass in 9-25s each (`probe-property-isolation` 76/0, `verify-anomaly-ingestion`
+
 > 9/0, `verify-source-contributions` 12/0, `verify-statistics` 84/0,
 > `verify-import-rollback` 11/11, `verify-coexistence` 23/0). The seventh,
 > `probe-money-kept-fix.mjs`, was a genuine defect and is fixed — see tracker #36.

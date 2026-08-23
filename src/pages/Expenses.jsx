@@ -10,7 +10,7 @@ import { useRef } from "react";
 import { useGlobalFilters, MONTHS_LONG } from "@/lib/useGlobalFilters";
 import { useOccupancy, usePaymentData } from "@/lib/useHotelData";
 import { sum, inRange, pct, C, money2 } from "@/lib/hotel";
-import { filterCommittedPay } from "@/lib/payrollCalc";
+import { calculatePay, filterCommittedPay } from "@/lib/payrollCalc";
 import { refundTotal } from "@/lib/paymentNorm";
 import { toast } from "sonner";
 import { EXPENSE_CATEGORIES, EXPENSE_FREQUENCIES, EXPENSE_STATUSES, expenseLabel, frequencyLabel, isStandardCategory, slugifyCategory } from "@/lib/expenseCategories";
@@ -241,19 +241,46 @@ export default function Expenses() {
 
     if (!payrollForm.employee_name) return;
     const prop = properties.find((p) => p.id === (Array.isArray(property) ? property[0] : property));
-    const reg = (Number(payrollForm.base_rate) || 0) * (Number(payrollForm.hours) || 0);
-    const otPay = (Number(payrollForm.base_rate) || 0) * 1.5 * (Number(payrollForm.overtime_hours) || 0);
-    const total = reg + otPay + (Number(payrollForm.bonus) || 0) - (Number(payrollForm.deductions) || 0);
+
+    // Pay is computed by the shared calculatePay, not here.
+    //
+    // This handler used to do its own arithmetic, and it had no pay_type branch:
+    //
+    //     const reg = (Number(payrollForm.base_rate) || 0) * (Number(payrollForm.hours) || 0);
+    //
+    // The form above offers a Salary option, and its Hours box defaults to "40" and
+    // is rendered for every pay type. So a salaried employee recorded at $3,000 was
+    // written to the ledger as regular_pay $120,000 — the period salary multiplied by
+    // the hours box, a 40x overstatement — stored next to pay_type: "salary", which
+    // asserts the opposite. calculatePay's contract is that "salary" treats base_rate
+    // as the WHOLE period amount, and it does every step in integer cents, which the
+    // float `*` and `+` here did not. src/pages/Payroll.jsx's manual Add Entry has
+    // always gone through it; this page was the odd one out.
+    //
+    // Spread order is load-bearing: payrollForm holds raw <input> strings, so payCalc
+    // must land AFTER it to replace them with coerced numbers. PayrollRun.jsonc types
+    // base_rate, hours, overtime_hours, overtime_rate and every *_pay field as
+    // "number", and overtime_hours was the one field the old code never coerced — it
+    // persisted as the string "0" from this page and as 0 from the other.
+    //
+    // scripts/probe-payroll-entry-parity.mjs holds both entry points to this.
+    const payCalc = calculatePay({
+      pay_type: payrollForm.pay_type,
+      base_rate: payrollForm.base_rate,
+      hours: payrollForm.hours,
+      overtime_hours: payrollForm.overtime_hours,
+      bonus: payrollForm.bonus,
+      deductions: payrollForm.deductions,
+    });
     await db.entities.PayrollRun.create({
       ...payrollForm,
-      base_rate: Number(payrollForm.base_rate) || 0,
-      hours: Number(payrollForm.hours) || 0,
-      regular_pay: reg,
-      overtime_rate: Number(payrollForm.base_rate) * 1.5 || 0,
-      overtime_pay: otPay,
-      bonus: Number(payrollForm.bonus) || 0,
-      deductions: Number(payrollForm.deductions) || 0,
-      total_pay: total,
+      ...payCalc,
+      // Money Kept only moves on approved/paid, so writing "draft" changes no figure
+      // anywhere — it was already the fallback every reader applied to a run with no
+      // status. It is written explicitly because the schema declares an enum and a row
+      // that omits it is invalid, and because the delete dialog quotes this field back
+      // to the owner before destroying the record.
+      payroll_status: "draft",
       property_id: property !== "all" ? (Array.isArray(property) ? property[0] : property) : "",
       property_name: prop?.name || "",
     });

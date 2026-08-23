@@ -1,9 +1,10 @@
 // Probe for feature 5 — weather service logic.
 import { forecastRows, buildDemoForecast, cacheIsFresh } from "../src/lib/weatherService.js";
 
+let passed = 0;
 let failed = 0;
 function assert(cond, msg) {
-  if (cond) console.log("  ok -", msg);
+  if (cond) { passed += 1; console.log("  ok -", msg); }
   else { failed += 1; console.error("  FAIL -", msg); }
 }
 
@@ -38,4 +39,5 @@ assert(Number.isFinite(demo.current.temp), "demo forecast has a finite current t
 assert(demo.hourly.length === 8, "demo forecast has 8 three-hourly points (0..21h)");
 
 console.log(failed ? `\n${failed} assertion(s) FAILED` : "\nALL WEATHER ASSERTIONS PASSED");
+console.log(`\n${failed === 0 ? "PASSED" : "FAILED"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

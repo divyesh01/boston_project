@@ -817,8 +817,8 @@ let mk2;
 if (!skipSection('6')) {
   const [f, t] = JAN;
   // expense entry (real app path)
-  await db.entities.Expense.create({ property_id: pid1, expense_date: '2026-01-10', expense_name: 'Laundry supplies', vendor: 'Acme', category: 'laundry', amount: 250.75, frequency: 'one_time', status: 'paid', created_date: new Date().toISOString() });
-  await db.entities.Expense.create({ property_id: pid1, expense_date: '2026-01-20', expense_name: 'Office rent', vendor: 'LLC', category: 'other', amount: 1200.00, frequency: 'one_time', status: 'paid', created_date: new Date().toISOString() });
+  await db.entities.Expense.create({ property_id: pid1, expense_date: '2026-01-10', expense_name: 'Laundry supplies', vendor: 'Acme', category: 'laundry', amount: 250.75, frequency: 'one_time', payment_status: 'paid', created_date: new Date().toISOString() });
+  await db.entities.Expense.create({ property_id: pid1, expense_date: '2026-01-20', expense_name: 'Office rent', vendor: 'LLC', category: 'other', amount: 1200.00, frequency: 'one_time', payment_status: 'paid', created_date: new Date().toISOString() });
   // payroll entry (real app path)
   await db.entities.PayrollRun.create({ property_id: pid1, pay_period_start: '2026-01-01', pay_period_end: '2026-01-15', employee_name: 'Front Desk', total_pay: 3400.00, payroll_status: 'completed', created_date: new Date().toISOString() });
   // recurring payroll (3 periods → totals counted in the window)

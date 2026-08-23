@@ -75,5 +75,5 @@ ok(jan && jan.revpar_contribution===3.65, `Jan1 PRP revpar_contribution === 3.65
 ok(jan && jan.occupancy_contribution===7, `Jan1 PRP occupancy_contribution === 7 (got ${jan?.occupancy_contribution})`);
 ok(jan && jan.net_revenue===364.59, `Jan1 PRP net_revenue === 364.59 (got ${jan?.net_revenue})`);
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail?1:0);
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

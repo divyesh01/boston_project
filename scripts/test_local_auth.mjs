@@ -7,11 +7,12 @@ import { hashPassword, verifyPassword, generateSalt, generateToken, isCryptoAvai
 let auditChainSecret = 'test-secret';
 let lastAuditHash = '0'.repeat(64);
 const auditLogs = [];
+let pass = 0;
+let failed = 0;
 
 function assert(condition, message) {
-  if (!condition) {
-    throw new Error(`Assertion failed: ${message}`);
-  }
+  if (condition) pass++;
+  else throw new Error(`Assertion failed: ${message}`);
 }
 
 async function hashEntry(entry, previousHash) {
@@ -178,12 +179,20 @@ async function testValidPasswordResetFlow() {
   console.log('✓ Password successfully reset');
 
   // Verify audit log
+  // options.userId, not user_id — createAuditEntry() reads camelCase and maps to the
+  // snake_case row itself. Passing user_id here meant the helper silently defaulted to
+  // null and the signed entry never carried the id this test is about.
   await createAuditEntry('Password Reset Completed', {
-    user_id: userId,
+    userId,
     username: 'testuser',
     result: 'success',
     detail: 'Self-service password reset completed',
   });
+
+  assert(
+    auditLogs[auditLogs.length - 1].user_id === userId,
+    'Password-reset audit entry must carry the resetting user id'
+  );
 
   const chainResult = await verifyAuditChain();
   assert(chainResult.valid === true, 'Audit chain should be valid');
@@ -361,9 +370,9 @@ async function testAuditLogChain() {
   auditLogs.length = 0;
   lastAuditHash = '0'.repeat(64);
 
-  await createAuditEntry('Test Action 1', { user_id: 1, username: 'user1', result: 'success' });
-  await createAuditEntry('Test Action 2', { user_id: 2, username: 'user2', result: 'success' });
-  await createAuditEntry('Test Action 3', { user_id: 1, username: 'user1', result: 'failed', detail: 'Failed attempt' });
+  await createAuditEntry('Test Action 1', { userId: 1, username: 'user1', result: 'success' });
+  await createAuditEntry('Test Action 2', { userId: 2, username: 'user2', result: 'success' });
+  await createAuditEntry('Test Action 3', { userId: 1, username: 'user1', result: 'failed', detail: 'Failed attempt' });
 
   const result = await verifyAuditChain();
   assert(result.valid === true, 'Audit chain should be valid');
@@ -430,14 +439,22 @@ async function testRegisterUser() {
   };
   users.set(userId, user);
 
+  // Same camelCase contract as above. performed_by_id/performed_by were dropped too;
+  // they happened to match the helper's own defaults (null / 'system'), which is why
+  // nothing looked wrong.
   await createAuditEntry('User Registered', {
-    user_id: userId,
+    userId,
     username,
-    performed_by_id: null,
-    performed_by: 'system',
+    performedById: null,
+    performedBy: 'system',
     result: 'success',
     detail: `Role: ${role}, Admin creation`,
   });
+
+  assert(
+    auditLogs[auditLogs.length - 1].user_id === userId,
+    'User-Registered audit entry must carry the new user id'
+  );
 
   const createdUser = users.get(userId);
   assert(createdUser !== undefined, 'User should be created');
@@ -470,11 +487,15 @@ async function runAllTests() {
     console.log('\n========================================');
     console.log('ALL TESTS PASSED ✓');
     console.log('========================================\n');
+    console.log(`\n${failed === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${failed} failed`);
+    process.exit(failed > 0 ? 1 : 0);
   } catch (error) {
+    failed = 1;
     console.error('\n========================================');
     console.error('TEST FAILED ✗');
     console.error('========================================\n');
     console.error(error);
+    console.error(`\n${failed === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${failed} failed`);
     process.exit(1);
   }
 }

@@ -1,9 +1,10 @@
 // Probe for feature 6 — guest review / reputation logic.
 import { scoreSentiment, isInconsistent, aggregateRating, needsResponse } from "../src/lib/reputationService.js";
 
+let passed = 0;
 let failed = 0;
 function assert(cond, msg) {
-  if (cond) console.log("  ok -", msg);
+  if (cond) { passed += 1; console.log("  ok -", msg); }
   else { failed += 1; console.error("  FAIL -", msg); }
 }
 
@@ -30,4 +31,5 @@ assert(agg.bySentiment.positive === 2 && agg.bySentiment.negative === 1, "sentim
 assert(needsResponse(reviews).length === 2, "2 reviews still need a response");
 
 console.log(failed ? `\n${failed} assertion(s) FAILED` : "\nALL REVIEW ASSERTIONS PASSED");
+console.log(`\n${failed === 0 ? "PASSED" : "FAILED"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

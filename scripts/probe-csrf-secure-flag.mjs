@@ -3,6 +3,19 @@ import { getCsrfToken } from '../src/lib/securityUtils.js';
 
 console.log('Testing CSRF cookie Secure flag...');
 
+let passed = 0;
+let failed = 0;
+
+function check(condition, name) {
+  if (condition) {
+    passed++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    failed++;
+    console.log(`  FAIL  ${name}`);
+  }
+}
+
 // Mock document.cookie so we can capture what gets written
 let capturedCookie = '';
 global.document = {
@@ -17,27 +30,34 @@ getCsrfToken();
 console.log('Cookie written:', capturedCookie);
 
 // TEST 1: Check that cookie HAS __Host- prefix
-console.assert(
+check(
   capturedCookie.includes('__Host-csrf_token='),
-  'FAIL: Cookie missing __Host- prefix'
+  'cookie has __Host- prefix'
 );
 
 // TEST 2: Check that cookie HAS ; Secure flag
-console.assert(
+check(
   capturedCookie.includes('; Secure'),
-  'FAIL: Cookie missing ; Secure flag'
+  'cookie HAS ; Secure flag'
 );
 
 // TEST 3: Check that cookie has SameSite=Lax
-console.assert(
+check(
   capturedCookie.includes('SameSite=Lax'),
-  'FAIL: Cookie missing SameSite=Lax'
+  'cookie has SameSite=Lax'
 );
 
 // TEST 4: Check that NO conditional logic is used (no variable names)
-console.assert(
+check(
   !capturedCookie.includes('${secure}'),
-  'FAIL: Cookie still using conditional secure variable'
+  'no conditional logic is used (no variable names)'
 );
 
-console.log('✓ Probe PASSED: CSRF cookie correctly includes mandatory Secure flag');
+if (failed === 0) {
+  console.log(`PASSED: ${passed} passed, ${failed} failed`);
+} else {
+  console.log(`FAILED: ${passed} passed, ${failed} failed`);
+}
+
+process.exit(failed > 0 ? 1 : 0);
+

@@ -85,25 +85,100 @@ export default defineConfig({
         entryFileNames: 'assets/[name]-[hash].js',
         chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash].[ext]',
-        manualChunks: {
-          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-          'chart-vendor': ['recharts'],
-          'ui-vendor': ['lucide-react', 'framer-motion', 'clsx', 'tailwind-merge'],
-          // No 'map-vendor' entry. It used to read ['leaflet', 'react-leaflet'],
-          // and the chunk was always empty: the only file importing react-leaflet
-          // (src/components/propertyMap.jsx) is imported by nothing, so neither
-          // package is in the module graph. manualChunks only groups modules that
-          // are already there — it never pulls them in — so dropping the entry
-          // changes no output. Restore it if the map is ever wired up.
-          //
-          // (An earlier version of this comment claimed `leaflet` was undeclared
-          // and only present as react-leaflet's auto-installed peer. That was
-          // wrong: package.json declares leaflet ^1.9.4, react-leaflet ^4.2.1 and
-          // @types/leaflet ^1.9.22. Nothing needs installing.)
-          'crdt-vendor': ['yjs', 'y-websocket'],
-          'query-vendor': ['@tanstack/react-query'],
-          'data-vendor': ['@base44/sdk', 'dexie', 'otplib'],
-          'pdf-vendor': ['jspdf', 'html2canvas'],
+        // Vendor chunks are assigned by PACKAGE DIRECTORY, and the two shared
+        // virtual helper modules are pinned explicitly. This replaced the object
+        // form ('react-vendor': ['react', 'react-dom', 'react-router-dom'], and
+        // so on), which was measured mis-assigning three things in the build of
+        // 2026-08-23. scripts/probe-build-chunks.mjs now gates all of it by
+        // reading the emitted graph in dist/:
+        //
+        //   · Vite's ~2 kB __vitePreload helper landed in pdf-vendor. The entry
+        //     chunk lazy-loads every route, so it had to import that helper, and
+        //     all 594,722 bytes of jspdf + html2canvas came with it into
+        //     index.html's modulepreload list — 34% of a 1,728,124-byte
+        //     first-paint payload, for a library no first paint uses.
+        //   · react's own CJS module landed in ui-vendor (which is why ui-vendor
+        //     exported requireReact) while react/jsx-runtime landed in
+        //     query-vendor, so the two chunks imported each other. That was the
+        //     "Circular chunk: query-vendor -> ui-vendor -> query-vendor" warning.
+        //   · react-vendor, chart-vendor and data-vendor all imported ui-vendor
+        //     for the commonjs interop helpers, so no vendor chunk could be
+        //     cached independently of the icon library.
+        //
+        // One root cause behind all three: the object form resolves each listed
+        // string to that package's ENTRY module and walks static dependencies
+        // from there. React is CJS, so its real code lives behind ids carrying
+        // ?commonjs-* suffixes; react/jsx-runtime is a second entry point that no
+        // walk from react/index.js ever reaches; and rollup's virtual modules are
+        // not packages, so they cannot be named in that form at all. Everything
+        // the walk misses is placed by rollup's automatic algorithm, wherever it
+        // happens to land. Matching on the package directory inside the id covers
+        // the suffixed ids and the secondary entry points, because both still
+        // live under node_modules/<pkg>/.
+        //
+        // There is deliberately no 'map-vendor' case. It used to read
+        // ['leaflet', 'react-leaflet'] and the chunk was always empty: the only
+        // file importing react-leaflet (src/components/propertyMap.jsx) is
+        // imported by nothing, so neither package is in the module graph.
+        // manualChunks only groups modules that are already there — it never
+        // pulls them in — so dropping it changes no output. Restore it if the map
+        // is ever wired up. (An earlier version of this comment claimed leaflet
+        // was undeclared and present only as react-leaflet's auto-installed peer.
+        // That was wrong: package.json declares leaflet ^1.9.4, react-leaflet
+        // ^4.2.1 and @types/leaflet ^1.9.22. Nothing needs installing.)
+        manualChunks(id) {
+          const norm = id.split('\\').join('/');
+
+          // Rollup's commonjs interop helpers and Vite's preload helper. Both are
+          // leaves — they import nothing — and nearly every chunk needs them,
+          // which is exactly why leaving them unassigned dragged a lazy 594 kB
+          // chunk into the entry. react-vendor is the correct home because every
+          // member listed below depends only on other members (react-dom ->
+          // scheduler, react-router-dom -> react-router -> cookie and
+          // set-cookie-parser), making that chunk a sink in the import graph: it
+          // imports no other chunk, so nothing it exports can complete a cycle.
+          if (norm.includes('vite/preload-helper') || norm.includes('commonjsHelpers')) {
+            return 'react-vendor';
+          }
+
+          // Greedy prefix, so a nested copy is attributed to the package that
+          // actually contains it rather than to the outermost one. Scoped names
+          // keep both segments. The classes stop at ? and # so query-suffixed
+          // ids match too.
+          const pkg = /^.*\/node_modules\/(@[^/]+\/[^/?#]+|[^/?#]+)/.exec(norm)?.[1];
+          if (!pkg) return; // application code — leave route-level splitting alone
+
+          switch (pkg) {
+            case 'react':
+            case 'react-dom':
+            case 'scheduler':
+            case 'react-router':
+            case 'react-router-dom':
+            case 'cookie':
+            case 'set-cookie-parser':
+              return 'react-vendor';
+            case 'recharts':
+              return 'chart-vendor';
+            case 'lucide-react':
+            case 'framer-motion':
+            case 'clsx':
+            case 'tailwind-merge':
+              return 'ui-vendor';
+            case 'yjs':
+            case 'y-websocket':
+              return 'crdt-vendor';
+            case '@tanstack/react-query':
+              return 'query-vendor';
+            case '@base44/sdk':
+            case 'dexie':
+            case 'otplib':
+              return 'data-vendor';
+            case 'jspdf':
+            case 'html2canvas':
+              return 'pdf-vendor';
+            default:
+              return; // rollup groups the rest by which chunks reach them
+          }
         },
       },
     },

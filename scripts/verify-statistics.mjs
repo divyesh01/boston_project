@@ -328,7 +328,7 @@ console.log("\n11. quality summary");
   eq("quality summary names the prior-year metrics", q.priorYearMetrics.length, 3);
 }
 
-console.log(`\n${pass} passed, ${fail} failed`);
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 if (fail) {
   console.log("\nFailures:");
   for (const f of failures) console.log(`  - ${f}`);

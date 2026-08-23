@@ -4,9 +4,10 @@ import {
   housekeepingRollup, overdueTasks, roomHkStatus, roomHkByRoom,
 } from "../src/lib/housekeepingService.js";
 
+let passed = 0;
 let failed = 0;
 function assert(cond, msg) {
-  if (cond) console.log("  ok -", msg);
+  if (cond) { passed += 1; console.log("  ok -", msg); }
   else { failed += 1; console.error("  FAIL -", msg); }
 }
 
@@ -46,4 +47,5 @@ const byRoom = roomHkByRoom([{ room_number: "A", status: "pending", task_date: "
 assert(byRoom["A"].status === "in_progress", "most recent task per room wins");
 
 console.log(failed ? `\n${failed} assertion(s) FAILED` : "\nALL HOUSEKEEPING ASSERTIONS PASSED");
+console.log(`\n${failed === 0 ? "PASSED" : "FAILED"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

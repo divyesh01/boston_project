@@ -1,6 +1,20 @@
 import { toCents, fromCents } from '../src/lib/decimal.js';
+import { calculatePay } from '@/lib/payrollCalc';
 
 console.log("--- RED-1: Floating-Point Math in AutoPayroll ---");
+
+let passed = 0;
+let failed = 0;
+
+function check(condition, name) {
+  if (condition) {
+    passed++;
+    console.log(`  PASS  ${name}`);
+  } else {
+    failed++;
+    console.log(`  FAIL  ${name}`);
+  }
+}
 
 // Test case: 15.15 * 8.5 hours (classic floating-point drift)
 const baseRate = 15.15;
@@ -11,30 +25,7 @@ const baseRateCents = toCents(baseRate);
 const regularPayCents = Math.round(baseRateCents * hours);
 console.log("Cents math (new):      ", fromCents(regularPayCents), "→ displayed:", fromCents(regularPayCents).toFixed(2));
 
-// Replicate calculatePay logic with cents math (since Vite alias doesn't work in Node)
-function calculatePayFixed({ pay_type, base_rate, hours = 0, overtime_hours = 0, overtime_rate, bonus = 0, deductions = 0 }) {
-  const br = Number(base_rate) || 0;
-  const hrs = Number(hours) || 0;
-  const otHrs = Number(overtime_hours) || 0;
-  const otRate = Number(overtime_rate) || br * 1.5;
-  const bns = Number(bonus) || 0;
-  const ded = Number(deductions) || 0;
-
-  const baseRateCents = toCents(br);
-  const regularPayCents = pay_type === "salary" ? baseRateCents : Math.round(baseRateCents * hrs);
-  const overtimePayCents = Math.round(toCents(otRate) * otHrs);
-  const bonusCents = toCents(bns);
-  const deductionsCents = toCents(ded);
-  const totalPayCents = regularPayCents + overtimePayCents + bonusCents - deductionsCents;
-
-  return {
-    base_rate: br, hours: hrs, overtime_hours: otHrs, overtime_rate: otRate,
-    regular_pay: fromCents(regularPayCents), overtime_pay: fromCents(overtimePayCents),
-    bonus: bns, deductions: ded, total_pay: fromCents(totalPayCents),
-  };
-}
-
-// Old floating-point version for comparison
+// Frozen reference copy of the pre-fix float implementation, retained only to demonstrate the delta
 function calculatePayOld({ pay_type, base_rate, hours = 0, overtime_hours = 0, overtime_rate, bonus = 0, deductions = 0 }) {
   const br = Number(base_rate) || 0;
   const hrs = Number(hours) || 0;
@@ -50,7 +41,7 @@ function calculatePayOld({ pay_type, base_rate, hours = 0, overtime_hours = 0, o
 
 // Test calculatePay with hourly
 console.log("\n--- calculatePay (hourly) ---");
-const hourlyNew = calculatePayFixed({
+const hourlyNew = calculatePay({
   pay_type: "hourly", base_rate: 15.15, hours: 8.5,
   overtime_hours: 2.5, overtime_rate: 22.725, bonus: 10.01, deductions: 5.55,
 });
@@ -81,22 +72,37 @@ console.log("Difference:            ", Math.abs(oldSum - newSum).toFixed(6));
 
 const expected = fromCents(Math.round(toCents(15.15) * 8.5)) * 200;
 console.log("Expected (cents*200):  ", expected.toFixed(2));
-console.log("Match:", Math.abs(newSum - expected) < 0.001 ? "PASS ✓" : "FAIL ✗");
+check(Math.abs(newSum - expected) < 0.001, "200-row accumulation matches expected cents math");
 
 // Test salary pay type
 console.log("\n--- calculatePay (salary) ---");
-const salary = calculatePayFixed({
+const salary = calculatePay({
   pay_type: "salary", base_rate: 3500.00, hours: 0, bonus: 100.50, deductions: 250.75,
 });
-console.log("regular_pay:", salary.regular_pay, "→ expected 3500.00", salary.regular_pay === 3500 ? "PASS ✓" : "FAIL ✗");
-console.log("total_pay:", salary.total_pay, "→ expected 3349.75", salary.total_pay === 3349.75 ? "PASS ✓" : "FAIL ✗");
+check(salary.regular_pay === 3500, "salary regular_pay is 3500.00");
+check(salary.total_pay === 3349.75, "salary total_pay is 3349.75");
 
 // Verify cents math produces clean .2 decimals
 console.log("\n--- Precision edge cases ---");
-const edge1 = calculatePayFixed({ pay_type: "hourly", base_rate: 0.10, hours: 3 });
-console.log("$0.10 × 3h =", edge1.regular_pay, "→ expected 0.30", edge1.regular_pay === 0.30 ? "PASS ✓" : "FAIL ✗");
+const edge1 = calculatePay({ pay_type: "hourly", base_rate: 0.10, hours: 3 });
+check(edge1.regular_pay === 0.30, "$0.10 * 3h regular_pay is 0.30");
 
-const edge2 = calculatePayFixed({ pay_type: "hourly", base_rate: 99.99, hours: 40 });
-console.log("$99.99 × 40h =", edge2.regular_pay, "→ expected 3999.60", edge2.regular_pay === 3999.60 ? "PASS ✓" : "FAIL ✗");
+const edge2 = calculatePay({ pay_type: "hourly", base_rate: 99.99, hours: 40 });
+check(edge2.regular_pay === 3999.60, "$99.99 * 40h regular_pay is 3999.60");
 
-console.log("\n--- All RED-1 checks completed ---");
+// Explicit new assertions
+console.log("\n--- Explicit regression cases ---");
+const explicitHourly = calculatePay({ pay_type: "hourly", base_rate: 25, hours: 40 });
+check(explicitHourly.regular_pay === 1000, "hourly base_rate 25 * 40h regular_pay is 1000");
+
+const explicitSalary = calculatePay({ pay_type: "salary", base_rate: 3000, hours: 40 });
+check(explicitSalary.regular_pay === 3000, "salary base_rate 3000 with 40h regular_pay is 3000 (not 120000)");
+
+if (failed === 0) {
+  console.log(`PASSED: ${passed} passed, ${failed} failed`);
+} else {
+  console.log(`FAILED: ${passed} passed, ${failed} failed`);
+}
+
+process.exit(failed > 0 ? 1 : 0);
+

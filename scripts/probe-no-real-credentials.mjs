@@ -203,9 +203,6 @@ const ALLOWED_TEST_FIXTURES = new Map([
   // The shared harness sign-in used by every suite that must authenticate first
   // (see _harness-auth.mjs). Self-describing name.
   ['Harness-Owner-Password-1!', '_harness-auth.mjs shared owner sign-in'],
-  // Deliberately WEAK, to prove the disabled-account path is reached before any
-  // strength check. Kept as-is because changing it would change what is tested.
-  ['password123', 'test_me_disabled.mjs deliberately weak value'],
 ]);
 
 const credOffenders = [];

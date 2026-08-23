@@ -266,10 +266,10 @@ check(
 );
 
 // ---------------------------------------------------------------------------
-console.log(`\n=== RESULT: ${passes} passed, ${failures} failed ===`);
+console.log(`\n${failures === 0 ? "PASSED" : "FAILED"}: ${passes} passed, ${failures} failed`);
 if (failures > 0) {
   console.log("DEFECTS PRESENT — see failures above.");
   process.exit(1);
 }
 console.log("All calendar day-modal invariants hold.");
-process.exit(0);
+process.exit(failures > 0 ? 1 : 0);

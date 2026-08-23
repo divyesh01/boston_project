@@ -57,4 +57,10 @@ console.log(`    vs long:  ${ratioLong.toFixed(2)}x`);
 T("No significant timing leak (short diff)", ratioShort < 2.0, `ratio=${ratioShort.toFixed(2)}x — diff-length was ${(1/ratioShort).toFixed(1)}x faster`);
 T("No significant timing leak (long diff)", ratioLong < 2.0, `ratio=${ratioLong.toFixed(2)}x — diff-length was ${(1/ratioLong).toFixed(1)}x faster`);
 
-console.log(`\n=== RED-8 Result: ${pass} passed, ${fail} failed ===\n`);
+if (fail === 0) {
+  console.log(`PASSED: ${pass} passed, ${fail} failed`);
+} else {
+  console.log(`FAILED: ${pass} passed, ${fail} failed`);
+}
+
+process.exit(fail > 0 ? 1 : 0);

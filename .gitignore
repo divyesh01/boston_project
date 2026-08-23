@@ -91,3 +91,12 @@ fix_user.py
 # repo zip and copy .claude/skills/ui-ux-pro-max into place.
 /ui-ux-pro-max-skill-main/
 /.claude/skills/ui-ux-pro-max/
+
+# Local agent/tooling scratch. None of it is an input to the app, the gates or
+# CI, and all of it regenerates on demand — but while untracked-and-unignored it
+# buries the genuinely load-bearing untracked files in `git status`, which is how
+# scripts/_verdict.mjs (imported by scripts/verify-all.mjs) sat uncommitted long
+# enough for a `git commit -a` to have shipped a gate that cannot start.
+/.antigravity/
+/graphify-out/
+/verif-logs/

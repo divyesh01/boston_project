@@ -51,6 +51,13 @@ const rowsReal = parseCsvText(csvT(csvReal));
 T("Real-world lone \\r CSV: 4 rows", rowsReal.length === 4, `got ${rowsReal.length}`);
 T("Real-world: correct amount in row 2", rowsReal[2][2] === "45.50", `got "${rowsReal[2][2]}"`);
 
-console.log(`\n=== RED-6 Result: ${pass} passed, ${fail} failed ===\n`);
-
 function csvT(s) { return s; }
+
+if (fail === 0) {
+  console.log(`PASSED: ${pass} passed, ${fail} failed`);
+} else {
+  console.log(`FAILED: ${pass} passed, ${fail} failed`);
+}
+
+process.exit(fail > 0 ? 1 : 0);
+

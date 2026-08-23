@@ -262,4 +262,5 @@ check('a late env change is not picked up (value cached once)',
 
 // ---------------------------------------------------------------------------
 console.log(`\n${passed} passed, ${failed} failed`);
+console.log(`\n${failed === 0 ? "PASSED" : "FAILED"}: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

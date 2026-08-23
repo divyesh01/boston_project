@@ -44,7 +44,22 @@ export default function Card(
         // greps this file for it as raw text.)
         // Durations come from the motion tokens rather than Tailwind's scale so
         // the CSS and JS halves of the motion system cannot drift.
-        "transition-[border-color,box-shadow] duration-[var(--fx-base)] ease-[var(--fx-ease)]",
+        //
+        // The duration and easing MUST use the arbitrary-PROPERTY form
+        // (square brackets around a full "transition-duration:value" pair),
+        // never the shorthand utility form ("duration-" plus a bracketed
+        // value). tailwindcss-animate registers duration-* and ease-* for
+        // animation-duration/animation-timing-function, which collides with
+        // core's transition-* pair: for an arbitrary value Tailwind cannot tell
+        // the two apart, warns "ambiguous and matches multiple utilities", and
+        // emits NO RULE AT ALL. The class silently vanishes and the element
+        // falls back to Tailwind's 150ms / cubic-bezier(.4,0,.2,1) default,
+        // which is the exact token drift the note above says is impossible.
+        // verify-motion.mjs asserts this. Do not "tidy" the syntax back.
+        // (Spelled out in prose, not as literals: the content scanner reads
+        // comments too, and a bracketed example here becomes a real candidate
+        // class that re-triggers the very warning it describes.)
+        "transition-[border-color,box-shadow] [transition-duration:var(--fx-base)] [transition-timing-function:var(--fx-ease)]",
         "hover:border-[var(--line)] hover:shadow-[var(--elev-3)]",
         className
       )}

@@ -215,6 +215,7 @@ if (e2eSkip) {
 }
 
 console.log(`\n${pass}/${pass + failures.length} passed`);
+console.log(`\n${failures.length === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${failures.length} failed`);
 if (failures.length) {
   console.log("\nFailures:");
   for (const f of failures) console.log(`  - ${f.name}\n    ${f.detail}`);

@@ -392,5 +392,5 @@ T("month totals reconcile to the annual total",
   Math.abs([...Array(12).keys()]
     .reduce((s, m) => s + Math.round(summarize(filterByMonths(all, [m])).revenue * 100), 0) / 100 - EXPECTED_REVENUE) < 0.02);
 
-console.log(`\n${"=".repeat(62)}\n  ${pass} passed, ${fail} failed\n${"=".repeat(62)}`);
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

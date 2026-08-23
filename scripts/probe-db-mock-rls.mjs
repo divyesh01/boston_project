@@ -362,6 +362,13 @@ console.log("");
 for (const w of warnings) console.warn(`   ⚠ OWNER ACTION REQUIRED: ${w}`);
 if (warnings.length) console.log("");
 
+// One verdict line on both paths. `behavioural` counts shipped RLS rules
+// evaluated against the access matrix; `failures` also collects the static
+// checks and the self-test, so the two are different populations and
+// `behavioural - failures.length` was arithmetic across unrelated quantities
+// (it can even go negative — there are 12 distinct failures.push sites and only
+// one of them is behavioural).
+console.log(`\n${failures.length === 0 ? "PASSED" : "FAILED"}: ${behavioural} passed, ${failures.length} failed`);
 if (failures.length) {
   console.error(`❌ PROBE FAILED (Code 1): ${failures.length} defect(s)\n`);
   for (const f of failures) console.error(`   ✗ ${f}`);
@@ -369,4 +376,4 @@ if (failures.length) {
 }
 
 console.log("✅ PROBE PASSED: no db shim, no shim call sites, RLS operators canonical, audit rows signed.");
-process.exit(0);
+process.exit(failures.length > 0 ? 1 : 0);

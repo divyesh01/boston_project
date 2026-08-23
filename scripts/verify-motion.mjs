@@ -19,7 +19,7 @@
 // It also asserts the CSS half of the token set in src/index.css matches the JS
 // half in src/lib/motion.js, so the two cannot drift.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -435,8 +435,68 @@ ok(shouldCountUp("$100", "3 of 12") === false, "shouldCountUp: ambiguous target 
   console.log(`\n  Fuzz: ${RUNS} figures × 41 frames = ${RUNS * 41} frames checked`);
 }
 
+// ── 13. No Tailwind utility may be silently dropped as ambiguous ─────────────
+//
+// tailwindcss-animate (tailwind.config.js) registers `duration-*`, `ease-*` and
+// `delay-*` against animation-duration / animation-timing-function /
+// animation-delay. Tailwind core registers the same three names against the
+// transition-* equivalents. For a FIXED value both rules are emitted, which is
+// harmless. For an ARBITRARY value Tailwind cannot infer which of the two the
+// author meant, so it warns "ambiguous and matches multiple utilities" and
+// EMITS NOTHING AT ALL.
+//
+// That failure is invisible three times over: the class stays in the JSX, the
+// build still succeeds, and the element keeps working — it just silently falls
+// back to Tailwind's 150ms / cubic-bezier(.4,0,.2,1) defaults instead of the
+// motion tokens. Section 10 above asserts the CSS and JS token halves agree,
+// but agreeing tokens that no component can actually reach still produce drift.
+// Measured 2026-08-23 in dist/assets/index-CxYzGbNj.css: five call sites across
+// Card.jsx and KpiCard.jsx animated on Tailwind's defaults, and this suite was
+// green throughout.
+//
+// The fix, and the only form allowed here, is the arbitrary-PROPERTY syntax,
+// which names the property outright and so cannot be ambiguous.
+{
+  const SRC = join(ROOT, "src");
+  const files = [];
+  (function walk(dir) {
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (/\.(jsx?|tsx?)$/.test(name)) files.push(p);
+    }
+  })(SRC);
+
+  ok(files.length > 100, `walked src/ and found ${files.length} source files to scan`);
+
+  // Built from fragments so this scanner's own source is not a candidate class
+  // if it is ever moved under src/ (Tailwind's content scanner reads comments
+  // and string literals alike — it has no idea what a regex is).
+  const AMBIGUOUS = new RegExp("\\b(duration|ease|delay)-\\" + "[", "g");
+  const offenders = [];
+  for (const f of files) {
+    const text = readFileSync(f, "utf8");
+    const hits = text.match(AMBIGUOUS);
+    if (hits) offenders.push(`${f.slice(ROOT.length + 1).replace(/\\/g, "/")} (${hits.length})`);
+  }
+  ok(offenders.length === 0,
+    "no file in src/ uses the ambiguous bracketed duration/ease/delay utility form " +
+    "(Tailwind emits NO CSS for it — use the arbitrary-property form instead)",
+    offenders.join(", "));
+
+  // And the two components that carry the motion tokens must still carry them.
+  // Spelled as fragments for the same reason as above.
+  const DUR = "[transition-duration:var(--fx-base)]";
+  const EASE = "[transition-timing-function:var(--fx-ease)]";
+  for (const rel of ["src/components/ui-exec/Card.jsx", "src/components/ui-exec/KpiCard.jsx"]) {
+    const text = readFileSync(join(ROOT, rel), "utf8");
+    ok(text.includes(DUR), `${rel} reaches the base duration token via the arbitrary-property form`);
+    ok(text.includes(EASE), `${rel} reaches the easing token via the arbitrary-property form`);
+  }
+}
+
 console.log("\n" + "=".repeat(72));
-console.log(`PASS ${pass}   FAIL ${fail}`);
+console.log(`${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 if (failures.length) {
   console.log("\nFailures:");
   failures.slice(0, 40).forEach((f) => console.log("  ✗ " + f));

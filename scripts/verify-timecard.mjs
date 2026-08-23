@@ -191,5 +191,5 @@ for (const t of OTHER_TABLES) {
   T(`${t}: still ${baseline[t]} row(s)`, now === baseline[t], `got ${now}`);
 }
 
-console.log(`\n${"=".repeat(62)}\n  ${pass} passed, ${fail} failed\n${"=".repeat(62)}`);
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

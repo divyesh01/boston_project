@@ -7,9 +7,10 @@ import {
   RATE_SCALE,
 } from "../src/lib/pricingEngine.js";
 
+let passed = 0;
 let failed = 0;
 function assert(cond, msg) {
-  if (cond) console.log("  ok -", msg);
+  if (cond) { passed += 1; console.log("  ok -", msg); }
   else { failed += 1; console.error("  FAIL -", msg); }
 }
 
@@ -74,4 +75,5 @@ assert(suggestion.occupancy === 1, "suggestion reports the occupancy it used");
 assert(suggestion.multiplierBps >= suggestion.minBps && suggestion.multiplierBps <= suggestion.maxBps, "suggestion within clamp band");
 
 console.log(failed ? `\n${failed} assertion(s) FAILED` : "\nALL PRICING ENGINE ASSERTIONS PASSED");
+console.log(`\n${failed === 0 ? "PASSED" : "FAILED"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

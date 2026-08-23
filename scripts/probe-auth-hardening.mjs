@@ -1022,6 +1022,7 @@ section("17. The TOTP seed never leaves the server except once, for enrolment");
 
 console.log(`\n${"─".repeat(60)}`);
 console.log(`probe-auth-hardening: ${pass} passed, ${fail} failed`);
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 if (fail) {
   console.log("\nFailures:");
   failures.forEach((f) => console.log(`  · ${f}`));

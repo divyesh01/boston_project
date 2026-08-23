@@ -239,7 +239,7 @@ console.log("\n6. property isolation");
   eq("another property sees no transactions", otherLines.length, 0);
 }
 
-console.log(`\n${pass} passed, ${fail} failed`);
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 if (fail) {
   console.log("\nFailures:");
   for (const f of failures) console.log(`  - ${f}`);

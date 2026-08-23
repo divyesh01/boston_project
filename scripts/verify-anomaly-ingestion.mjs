@@ -92,5 +92,5 @@ T("re-import short-circuits (already-imported)", result2.reason === "already-imp
 const alertsAfterReimport = await localDb.AnomalyAlert.where("property_id").equals("prop_smoke").toArray();
 T("re-import does not stack duplicate alerts", alertsAfterReimport.length === alerts.length, `${alerts.length} -> ${alertsAfterReimport.length}`);
 
-console.log(`\n${"=".repeat(62)}\n  ${pass} passed, ${fail} failed\n${"=".repeat(62)}`);
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -212,7 +212,7 @@ try {
     );
   });
 
-  console.log(`\n─── RESULT: ${passed} passed, ${failed} failed ───`);
+  console.log(`\n${failed === 0 ? "PASSED" : "FAILED"}: ${passed} passed, ${failed} failed`);
   if (failures.length) {
     console.log('\nFailures:');
     failures.forEach((f) => console.log('  - ' + f));

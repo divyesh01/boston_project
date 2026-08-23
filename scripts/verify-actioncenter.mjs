@@ -38,6 +38,7 @@ globalThis.document ??= { cookie: "", querySelectorAll: () => [], createElement:
 const { buildActionCenter } = await import("../src/lib/actionCenter.js");
 
 let failures = 0;
+let checks = 0;
 // `cond` may be a boolean OR a thunk. A thunk that throws is recorded as a
 // FAILURE rather than killing the process.
 //
@@ -47,6 +48,7 @@ let failures = 0;
 // executed and their state was unknown while the summary line never printed. A
 // verification suite that stops at the first surprise hides more than it reports.
 const check = (label, cond, extra = "") => {
+  checks++;
   let ok = false;
   let thrown = "";
   try {
@@ -343,5 +345,6 @@ console.log("\n— no actual rows: rate-card estimate stands in —");
 }
 
 console.log("\n— summary —");
+console.log(`\n${failures === 0 ? "PASSED" : "FAILED"}: ${checks - failures} passed, ${failures} failed`);
 console.log(failures ? `FAIL: ${failures} check(s) failed` : "PASS: all scenarios correct");
 process.exit(failures ? 1 : 0);

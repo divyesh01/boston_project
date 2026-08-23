@@ -186,8 +186,13 @@ localDb.version(13).stores({
 // [property_id+date] on the four daily ledgers is the driving index for every
 // property-scoped date-range read (Dashboard, Payments, Sources, occupancy
 // pages). It sits alongside the existing [date+property_id] so trend scans that
-// start from the date axis stay indexed too. [property_id+status] on Expense
-// serves status scoping (e.g. committed/approved expense filters). Adding
+// start from the date axis stay indexed too. [property_id+status] on Expense was
+// added for status scoping, but it is INERT: the field Expense rows actually
+// carry is `payment_status` (declared in base44/entities/Expense.jsonc, written
+// by src/pages/Expenses.jsx), so no row ever has a `status` key to index. It is
+// left in place because dropping an index costs another version bump and buys
+// nothing. Do not route a query onto it, and do not assume a payment-state
+// filter is indexed — it is a full scan today. Adding
 // indexes is a non-destructive upgrade: Dexie backfills the new indexes from
 // existing rows without touching data.
 localDb.version(14).stores({

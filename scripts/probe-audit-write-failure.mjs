@@ -384,4 +384,5 @@ T("the writer cannot report success when there is no store",
   !/localStorage\?\.setItem/.test(readCode("src/lib/auditFailureLog.js")));
 
 console.log(`\n${fail === 0 ? "ALL PASS" : "FAILURES"}: ${pass} passed, ${fail} failed`);
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

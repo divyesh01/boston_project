@@ -608,6 +608,7 @@ check('the root-script scan actually had files to read',
 // ── Result ─────────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(60)}`);
 console.log(`probe-deploy-config: ${pass} passed, ${fail} failed`);
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 if (fail) {
   console.log('\nFailures:');
   failures.forEach((f) => console.log(`  · ${f}`));

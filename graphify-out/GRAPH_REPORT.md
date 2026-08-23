@@ -1,16 +1,16 @@
-# Graph Report - boston_project  (2026-08-21)
+# Graph Report - boston_project  (2026-08-22)
 
 ## Corpus Check
-- 840 files · ~1,821,019 words
+- 844 files · ~1,829,131 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 9364 nodes · 13525 edges · 881 communities (719 shown, 162 thin omitted)
+- 9420 nodes · 13590 edges · 872 communities (708 shown, 164 thin omitted)
 - Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 125 edges (avg confidence: 0.85)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `751dadc0`
+- Built from commit: `57b612a3`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -19,13 +19,13 @@
 - base44Client.js
 - verify-motion.mjs
 - pricingEngine.js
-- sidebar.jsx
+- probe-cors-config.mjs
 - DeckStage
-- securityUtils.js
+- sanitizeCsvCell
 - verify_cross_module_impact.mjs
 - hotel.js
 - Users.jsx
-- dailyAggregates.js
+- Import.jsx
 - anomalyDetector.js
 - Housekeeping.jsx
 - acceptance-harness.mjs
@@ -33,12 +33,12 @@
 - package-build.mjs
 - Statistics.jsx
 - verify-transactions.mjs
-- Dashboard.jsx
+- money2
 - App.jsx
 - cn
 - probe-audit-chain-race.mjs
 - custom_user_admin/entry.js
-- Payments.jsx
+- Settings.jsx
 - Transactions.jsx
 - probe-no-real-credentials.mjs
 - MonthlyCalendar.jsx
@@ -51,7 +51,7 @@
 - utils.js
 - Tools
 - probe-money-kept-gross.mjs
-- Settings.jsx
+- securityUtils.js
 - RoomBoard.jsx
 - Payroll.jsx
 - ImageSlot
@@ -69,15 +69,15 @@
 - probe-ws-server.mjs
 - localDb.js
 - probe-premium-surfaces.mjs
-- command.jsx
+- exportData.js
 - types.d.ts
-- GlobalControlBar.jsx
+- DemoYDoc.jsx
 - validate_palette.py
 - Tools
 - probe-app-config.mjs
 - probe-db-mock-rls.mjs
 - probe-decimal-integration.mjs
-- verify-timecard.mjs
+- probe-money-kept-fix.mjs
 - alert-dialog.jsx
 - DataScanner
 - probe-session-sliding.mjs
@@ -85,7 +85,7 @@
 - dependencies
 - probe-profit-leakage.mjs
 - probe-validation-gaps.mjs
-- useGlobalFilters
+- Dashboard.jsx
 - preview-rebuild.mjs
 - components.json
 - <search_instructions>
@@ -114,8 +114,8 @@
 - compilerOptions
 - probe-calendar-day-modal.mjs
 - claude-cowork.md
-- RevenueReconciliation.js
-- MoneyKept.jsx
+- probe-capacity-per-day.mjs
+- Expenses.jsx
 - auditFailureLog.js
 - verify-actioncenter.mjs
 - crdtSync.js
@@ -126,7 +126,7 @@
 - fraudScoringEngine.js
 - probe-audit-list.mjs
 - scripts
-- manualEntryImport.js
+- ManualEntry.jsx
 - probe-deploy-config.mjs
 - Building LLM-Powered Applications with Claude
 - image.jsx
@@ -140,16 +140,16 @@
 - CRDTSync
 - importValidation.js
 - upgrade_system.cjs
-- menubar.jsx
+- mcp_app_suggestions
 - verify-coexistence.mjs
 - docs.mjs
 - Claude API — Python
 - aiAssistant/entry.ts
 - probe-clear-all-rollback.mjs
 - verify-statistics.mjs
-- toast.jsx
+- use-toast.jsx
 - verify-imports.mjs
-- form.jsx
+- probe-audit-export.mjs
 - base44 logout
 - websocket.js
 - RecalculationService
@@ -164,27 +164,27 @@
 - functions
 - Managed Agents — Endpoint Reference
 - chart.jsx
-- Login.jsx
+- base44 auth push
 - ui-utils.js
 - downloads.d.ts
 - remote-diff.mjs
 - android-frame.jsx
 - autoPayroll/entry.ts
 - System Prompt
-- useAuth
+- AuthContext.jsx
 - test_realtime_revocation.mjs
 - Content safety
 - convertDate
-- ChartToolbar.jsx
+- audit-gate.mjs
 - Content safety
-- use-toast.jsx
+- probe-export-data.mjs
 - ColumnarCube
 - 5. ALL 90+ LIBRARIES (The Engines Under The Hood)
 - RateLimiter
 - base44-cli/SKILL.md
 - browser-window.jsx
 - backupToDrive/entry.ts
-- probe-import-rollback-id.mjs
+- LazyErrorBoundary
 - AIInsightsEngine
 - Tools (24)
 - Content safety
@@ -194,7 +194,7 @@
 - corsConfig.js
 - Content safety
 - package.json
-- verify-anomaly-ingestion.mjs
+- TopLevelErrorBoundary
 - claude-opus-4.6-raw.md
 - Imagine — Visual Creation Suite
 - app-params.js
@@ -210,10 +210,10 @@
 - Examples
 - Skills
 - probe-upload-guard.mjs
-- avatar.jsx
+- tabs.jsx
 - toggle-group.jsx
 - authHelpers.js
-- probe-realtime.mjs
+- Claude Opus 4.5
 - Tools
 - vite.config.js
 - Tools
@@ -221,15 +221,15 @@
 - probe-startup.mjs
 - test-throttle-standalone.mjs
 - Tools
-- probe-repo-root.mjs
+- baseline-browser-mapping
 - deleteAccount/entry.ts
 - graphify.js
 - probe-idle-polling.mjs
 - resolve-base44.mjs
 - Tools
 - WORD AGENT — SYSTEM INSTRUCTIONS
-- navigation-menu.jsx
-- 22. SUITES THAT COULD NOT FAIL (verification integrity)
+- @eslint/js
+- BRAIN_TROUBLESHOOTING.md
 - vercel.json
 - @base44/sdk
 - dompurify
@@ -241,10 +241,10 @@
 - embla-carousel-react
 - content
 - carousel.jsx
-- eslint-plugin-react-refresh
+- eslint-plugin-react
 - leaflet
 - eslint-plugin-react-hooks
-- eslint-plugin-unused-imports
+- postcss
 - fake-indexeddb
 - framer-motion
 - globals
@@ -305,16 +305,13 @@
 - yjs
 - zod
 - ws
-- tailwindcss
+- vite
 - jsdom
-- @testing-library/react
 - @types/leaflet
 - @types/react
 - @types/react-dom
 - typescript
-- @vitejs/plugin-react
 - vitest
-- sheet.jsx
 - base44 auth password-login
 - update-csrf.mjs
 - update-test-csrf.mjs
@@ -328,12 +325,11 @@
 - Claude API — C#
 - Managed Agents — cURL / Raw HTTP
 - claude-code-desktop-fable-5.md
-- alert.jsx
-- PieDonut.jsx
+- MFASetup.jsx
+- Reviews.jsx
 - Base44 Coder
 - Keybindings Skill
-- 7. ALL 16 DATABASE TABLES (Entities)
-- base44 auth pull
+- 8. ALL 19 BACKEND FUNCTIONS (The Server Brain)
 - Creating Functions
 - Managed Agents — Go
 - Managed Agents — Java
@@ -369,7 +365,6 @@
 - CRITICAL_COPYRIGHT_COMPLIANCE
 - computer_use
 - anthropic_api_in_artifacts
-- request_evaluation_checklist
 - Remotely develop a Base44 app over MCP
 - base44 logs
 - Claude API — Java
@@ -420,7 +415,6 @@
 - Claude Sonnet 3.5
 - 6. PRODUCTION-READY SYSTEM PROMPTS & TRAINING INPUTS (50 PROMPTS)
 - 12. THE MONEY MATH (Formulas)
-- test-parser.mjs
 - base44 connectors initiate
 - base44 eject
 - Claude API — cURL / Raw HTTP
@@ -469,7 +463,6 @@
 - claude-in-powerpoint.md
 - Infrastructure Security Playbook
 - Rule: Verified Work — Do Not Silently Rewrite
-- base44 agent-skills pull
 - base44 auth sso
 - Creating Connectors
 - base44 dashboard open
@@ -500,8 +493,6 @@
 - base44 workspace move
 - @types/node
 - Best Practices
-- ClerkAuditMatrix
-- Claude Opus 4
 - Tool Use — C#
 - HTTP Error Codes Reference
 - Managed Agents — Scheduled Deployments
@@ -823,12 +814,12 @@
 ## God Nodes (most connected - your core abstractions)
 1. `cn()` - 238 edges
 2. `Tools` - 172 edges
-3. `fromCents()` - 65 edges
+3. `fromCents()` - 66 edges
 4. `money2()` - 64 edges
 5. `DeckStage` - 59 edges
 6. `useGlobalFilters()` - 59 edges
 7. `Tools` - 54 edges
-8. `toCents()` - 49 edges
+8. `toCents()` - 50 edges
 9. `pct()` - 46 edges
 10. `money()` - 44 edges
 
@@ -841,61 +832,61 @@
   scripts/probe-red8.mjs → src/lib/security.js
 - `agg` --calls--> `scoreSentiment()`  [EXTRACTED]
   scripts/probe-reviews.mjs → src/lib/reputationService.js
-- `scanAdjustmentsRefunds()` --calls--> `convertDate()`  [EXTRACTED]
-  scripts/test-parser.mjs → src/lib/csvParser.js
+- `testWeakPasswordRejection()` --calls--> `validatePasswordStrength()`  [EXTRACTED]
+  scripts/test_local_auth.mjs → src/lib/security.js
 
 ## Import Cycles
 - 3-file cycle: `src/api/base44Client.js -> src/lib/aiEngine.js -> src/lib/dailyAggregates.js -> src/api/base44Client.js`
 
-## Communities (881 total, 162 thin omitted)
+## Communities (872 total, 164 thin omitted)
 
 ### Community 0 - "aiEngine.js"
 Cohesion: 0.13
 Nodes (48): allowedIdSet(), answerQuestion(), buildAlerts(), channelTotals(), clerkVariance(), costTotals(), dateToWeekRange(), extractDate() (+40 more)
 
 ### Community 1 - "base44Client.js"
-Cohesion: 0.03
-Nodes (79): audit, auth, base44, browserHashPassword(), checkReferentialIntegrity(), clearImportSessions(), completeImportSession(), compoundIndexQuery() (+71 more)
+Cohesion: 0.04
+Nodes (68): audit, auth, base44, browserHashPassword(), checkReferentialIntegrity(), compoundIndexQuery(), createImportSession(), CSRF_HEADER_TOKEN (+60 more)
 
 ### Community 2 - "verify-motion.mjs"
-Cohesion: 0.21
-Nodes (19): failures, HERE, ROOT, clamp01(), countUpFrame(), DURATION, EASE_OUT, EASE_OUT_CSS (+11 more)
+Cohesion: 0.14
+Nodes (26): failures, HERE, ROOT, CommandMenu(), AIAssistant, Layout(), SidebarBrand(), clamp01() (+18 more)
 
 ### Community 3 - "pricingEngine.js"
 Cohesion: 0.06
 Nodes (51): eq(), failures, HERE, ok(), REPO, SRC, forecast, high (+43 more)
 
-### Community 4 - "sidebar.jsx"
-Cohesion: 0.07
-Nodes (30): Separator, Sidebar, SidebarContent, SidebarContext, SidebarFooter, SidebarGroup, SidebarGroupAction, SidebarGroupContent (+22 more)
+### Community 4 - "probe-cors-config.mjs"
+Cohesion: 0.06
+Nodes (24): badGet, badPreflight, before, code, denoThrows, envObj, fakeRes(), res (+16 more)
 
-### Community 6 - "securityUtils.js"
-Cohesion: 0.08
-Nodes (15): handleLocalAuditVerify(), ReconciliationExportButton(), exportReconciliationToCsv(), apiRateLimiter, createAuditEntry(), escapeAttr(), escapeHtml(), getChainSecret() (+7 more)
+### Community 6 - "sanitizeCsvCell"
+Cohesion: 0.70
+Nodes (3): ReconciliationExportButton(), exportReconciliationToCsv(), sanitizeCsvCell
 
 ### Community 7 - "verify_cross_module_impact.mjs"
 Cohesion: 0.09
 Nodes (53): assert(), auditLogs, createAuditEntry(), createProtectedEntityProxy(), createVulnerableEntityProxy(), hashEntry(), lastAuditHash, runAllTests() (+45 more)
 
 ### Community 8 - "hotel.js"
-Cohesion: 0.06
-Nodes (66): moneyKept(), RANGE, moneyKept(), RANGE, baseRateCents, calculatePayFixed(), edge1, edge2 (+58 more)
+Cohesion: 0.05
+Nodes (72): moneyKept(), RANGE, moneyKept(), RANGE, baseRateCents, calculatePayFixed(), edge1, edge2 (+64 more)
 
 ### Community 9 - "Users.jsx"
-Cohesion: 0.11
-Nodes (27): ChangePassword, MFASetup(), PasswordConfirmDialog(), Badge, badgeVariants, Card, CardContent, CardDescription (+19 more)
+Cohesion: 0.09
+Nodes (25): hostile, PasswordConfirmDialog(), Badge, badgeVariants, DialogContent, DialogDescription, DialogFooter(), DialogHeader() (+17 more)
 
-### Community 10 - "dailyAggregates.js"
-Cohesion: 0.12
-Nodes (22): empty, eq(), failures, mockData, noCap, { occRows }, ok(), show() (+14 more)
+### Community 10 - "Import.jsx"
+Cohesion: 0.06
+Nodes (44): listImportSessions(), Import, AIAssistant(), SUGGESTIONS, CUR_YEAR, GlobalControlBar(), useFilterOptions(), YEARS (+36 more)
 
 ### Community 11 - "anomalyDetector.js"
 Cohesion: 0.08
 Nodes (42): adjustments, aliceOnly, allAll, cashOnly, full, refundAnoms, refunds, RFC-6761 (+34 more)
 
 ### Community 12 - "Housekeeping.jsx"
-Cohesion: 0.14
-Nodes (25): byRoom, cl, rollup, room, tasks, Housekeeping, HousekeepingSettingsModal(), DEFAULT_HOUSEKEEPING_CONFIG (+17 more)
+Cohesion: 0.07
+Nodes (35): byRoom, cl, rollup, room, tasks, received, stay, unsub (+27 more)
 
 ### Community 13 - "acceptance-harness.mjs"
 Cohesion: 0.07
@@ -917,17 +908,17 @@ Nodes (36): COLUMNS, formatValue(), MetricExplorer(), SHORT, composition(), firs
 Cohesion: 0.05
 Nodes (32): baseline, BOOKKEEPING, byFileSum, byScan, cardRows, charges, cmp, codeMix (+24 more)
 
-### Community 18 - "Dashboard.jsx"
-Cohesion: 0.06
-Nodes (71): agg, reviews, ChannelRevenue(), ClerkAudit(), axis, axisDate(), ExecutiveCharts(), MiniChartCard() (+63 more)
+### Community 18 - "money2"
+Cohesion: 0.07
+Nodes (41): ChartToolbar(), axis, tip, UniversalChart(), ChannelRevenue(), CompareBars(), ClerkAudit(), ClerkAuditMatrix() (+33 more)
 
 ### Community 19 - "App.jsx"
 Cohesion: 0.04
-Nodes (45): ActionCenterPage, App(), ChannelManager, ChartBuilder, Compare, Dashboard, DataTemplate, DemoYDoc (+37 more)
+Nodes (40): App(), AuditLog, ChangePassword, ChannelManager, ChartBuilder, Compare, Dashboard, DataTemplate (+32 more)
 
 ### Community 20 - "cn"
-Cohesion: 0.07
-Nodes (38): Breadcrumb, BreadcrumbEllipsis(), BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator(), ContextMenuCheckboxItem (+30 more)
+Cohesion: 0.03
+Nodes (98): Breadcrumb, BreadcrumbEllipsis(), BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator(), Command (+90 more)
 
 ### Community 21 - "probe-audit-chain-race.mjs"
 Cohesion: 0.07
@@ -937,25 +928,25 @@ Nodes (32): allIds, call(), concurrentLogins(), editedSorted, forged, forkBarrie
 Cohesion: 0.08
 Nodes (24): ALLOWED_ROLES, assertActorPassword(), base32Decode(), base32Encode(), createUser(), defaultPermissionsForRole(), deriveKey(), generateTotpSecret() (+16 more)
 
-### Community 23 - "Payments.jsx"
-Cohesion: 0.11
-Nodes (28): base, eq(), failures, kept(), OCC, ok(), PAY, RANGE (+20 more)
+### Community 23 - "Settings.jsx"
+Cohesion: 0.07
+Nodes (53): base, eq(), failures, kept(), OCC, ok(), PAY, RANGE (+45 more)
 
 ### Community 24 - "Transactions.jsx"
-Cohesion: 0.11
-Nodes (34): axis, CLASS_LABEL, EmployeeCompare(), FORMAT, Picker(), tip, describeRange(), downloadCsv() (+26 more)
+Cohesion: 0.12
+Nodes (32): axis, CLASS_LABEL, EmployeeCompare(), FORMAT, Picker(), tip, bucketLabel(), bucketOf() (+24 more)
 
 ### Community 25 - "probe-no-real-credentials.mjs"
 Cohesion: 0.11
 Nodes (16): RFC-2606, ALLOWED_TEST_FIXTURES, allSource, AUTH_TEST, credOffenders, emailOffenders, failures, files (+8 more)
 
 ### Community 26 - "MonthlyCalendar.jsx"
-Cohesion: 0.17
-Nodes (19): DEMAND_COLORS, DEMAND_ORDER, DISTANCE_STOPS, distanceColor(), EVENT_SCHEDULE, getEventsInRange(), hexToRgb(), lerp() (+11 more)
+Cohesion: 0.16
+Nodes (20): MonthlyCalendar, DEMAND_COLORS, DEMAND_ORDER, DISTANCE_STOPS, distanceColor(), EVENT_SCHEDULE, getEventsInRange(), hexToRgb() (+12 more)
 
 ### Community 27 - "csvParser.js"
-Cohesion: 0.09
-Nodes (16): rowsMixed, rowsN, rowsQuoted, rowsR, rowsReal, rowsRN, detectSections(), headerMatches() (+8 more)
+Cohesion: 0.07
+Nodes (18): rowsMixed, rowsN, rowsQuoted, rowsR, rowsReal, rowsRN, all, deduped (+10 more)
 
 ### Community 28 - "AI Gateway Module"
 Cohesion: 0.25
@@ -978,8 +969,8 @@ Cohesion: 0.12
 Nodes (24): clamp(), Easing, ImageSprite(), PlaybackBar(), PlaybackSync(), ppParse(), RectSprite(), SceneStage() (+16 more)
 
 ### Community 33 - "utils.js"
-Cohesion: 0.10
-Nodes (12): Badge(), TONES, Loading(), PopoverContent, Progress, Slider, Switch, TabsContent (+4 more)
+Cohesion: 0.07
+Nodes (20): Avatar, AvatarFallback, AvatarImage, EmptyState(), Badge(), TONES, FormControl, FormDescription (+12 more)
 
 ### Community 34 - "Tools"
 Cohesion: 0.01
@@ -989,17 +980,17 @@ Nodes (158): Artifact, AskUserQuestion, CronDelete, CronList, DesignSync, Edit, 
 Cohesion: 0.08
 Nodes (26): agg, aggregates, aggRoomRent, DATA, declared, empty, eq(), fb (+18 more)
 
-### Community 36 - "Settings.jsx"
-Cohesion: 0.08
-Nodes (56): listImportSessions(), rollbackImportSession(), setupRateLimiter, ManualEntry, SettingsPage, Setup, AuthLayout(), Button (+48 more)
+### Community 36 - "securityUtils.js"
+Cohesion: 0.07
+Nodes (51): AuthLayout(), MFASetup(), Button, Input, Label, labelVariants, toast(), useAuth() (+43 more)
 
 ### Community 37 - "RoomBoard.jsx"
-Cohesion: 0.17
-Nodes (24): avg(), distinctDays(), inventoryInScope(), occupancyStats(), roomsForProperty(), DEFAULT_BASE_RATES, DEFAULT_PRICING_CONFIG, getPricingConfig() (+16 more)
+Cohesion: 0.16
+Nodes (26): Pricing, RoomBoard, PricingPanel(), avg(), inventoryInScope(), roomsForProperty(), DEFAULT_BASE_RATES, DEFAULT_PRICING_CONFIG (+18 more)
 
 ### Community 38 - "Payroll.jsx"
 Cohesion: 0.16
-Nodes (25): META, StatusBadge(), EmptyState(), PROPERTY, buildPayrollRunRecord(), calculatePay(), calculatePayFromStaff(), COMMITTED_PAYROLL_STATUSES (+17 more)
+Nodes (26): META, StatusBadge(), PROPERTY, buildPayrollRunRecord(), calculatePay(), calculatePayFromStaff(), COMMITTED_PAYROLL_STATUSES, filterCommittedPay() (+18 more)
 
 ### Community 39 - "ImageSlot"
 Cohesion: 0.17
@@ -1014,16 +1005,16 @@ Cohesion: 0.08
 Nodes (21): allClaims, allSources, block, budgetDropped, confirmed, confRank, dupes, EXTRACT_SCHEMA (+13 more)
 
 ### Community 42 - "security.js"
-Cohesion: 0.13
-Nodes (17): diffLenLong, diffLenShort, sameLenTime, base32Decode(), base32Encode(), computeTotp(), constantTimeEqual(), deriveKey() (+9 more)
+Cohesion: 0.12
+Nodes (19): diffLenLong, diffLenShort, sameLenTime, handleLocalAuditVerify(), base32Decode(), base32Encode(), computeTotp(), constantTimeEqual() (+11 more)
 
 ### Community 43 - "WeatherPanel.jsx"
 Cohesion: 0.15
 Nodes (19): cached, demo, forecast, now, raw, rows, conditionLabel(), tempC() (+11 more)
 
 ### Community 44 - "AuditLog.jsx"
-Cohesion: 0.06
-Nodes (50): RFC-4180, failures, HERE, ROOT, ROWS, store, failures, store (+42 more)
+Cohesion: 0.14
+Nodes (26): actionInCategory(), AUDIT_CATEGORIES, auditActionSeverity(), filterAuditLogs(), normalizeAction(), SEVERITY_RULES, AUDIT_EXPORT_COLUMNS, AUDIT_ROW_FIELDS (+18 more)
 
 ### Community 45 - "probe-financial-invariant.mjs"
 Cohesion: 0.08
@@ -1038,8 +1029,8 @@ Cohesion: 0.12
 Nodes (20): ADMIN_FN, api(), eq(), extractValidator(), failures, generateTemporaryPassword, hashPassword, LINE_TERMINATORS (+12 more)
 
 ### Community 48 - "transactionNorm.js"
-Cohesion: 0.15
-Nodes (13): ACCOUNT_CLASSES, AGENCY_DOMAINS, assignDedupeKeys(), BRAND_DOMAINS, isHumanAccount(), LEDGER_SIDE_CHARGE, LEDGER_SIDE_PAYMENT, NUMERIC_FIELDS (+5 more)
+Cohesion: 0.14
+Nodes (14): recordCoercion(), ACCOUNT_CLASSES, AGENCY_DOMAINS, assignDedupeKeys(), BRAND_DOMAINS, isHumanAccount(), LEDGER_SIDE_CHARGE, LEDGER_SIDE_PAYMENT (+6 more)
 
 ### Community 49 - "package-capture.mjs"
 Cohesion: 0.10
@@ -1050,24 +1041,24 @@ Cohesion: 0.17
 Nodes (8): child, failures, localServer, localWss, rawSock, SERVER, src, t0
 
 ### Community 52 - "localDb.js"
-Cohesion: 0.07
-Nodes (21): signInAsAllPropertyOwner(), __storage, __store, __storage, __store, failures, rolled, __storage (+13 more)
+Cohesion: 0.04
+Nodes (36): signInAsAllPropertyOwner(), callerUuid, csvText, DATA, failed, myImportId, realLedgerAdd, __storage (+28 more)
 
 ### Community 53 - "probe-premium-surfaces.mjs"
 Cohesion: 0.11
 Nodes (17): badge, BODY_TEXT, card, css, failures, HERE, hexToRgb(), kpi (+9 more)
 
-### Community 54 - "command.jsx"
-Cohesion: 0.12
-Nodes (14): Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator, CommandShortcut() (+6 more)
+### Community 54 - "exportData.js"
+Cohesion: 0.16
+Nodes (19): RFC-4180, buildCsv(), buildSheetRows(), countUndated(), csvCell(), downloadCsv(), downloadExcel(), excelCell() (+11 more)
 
 ### Community 55 - "types.d.ts"
 Cohesion: 0.10
 Nodes (20): AuditLog, @base44/sdk, Channel, ClerkShiftRecord, ConnectorTypeRegistry, EntityTypeRegistry, Expense, FunctionNameRegistry (+12 more)
 
-### Community 56 - "GlobalControlBar.jsx"
-Cohesion: 0.15
-Nodes (9): CUR_YEAR, GlobalControlBar(), useFilterOptions(), YEARS, Checkbox, queryClientInstance, MONTHS_SHORT, PAGE_FILTERS (+1 more)
+### Community 56 - "DemoYDoc.jsx"
+Cohesion: 0.31
+Nodes (6): DemoYDoc, useYDoc(), YDocContext, YDocProvider(), useYSync(), DemoContent()
 
 ### Community 57 - "validate_palette.py"
 Cohesion: 0.24
@@ -1089,9 +1080,9 @@ Nodes (17): agents, canonicalRule, enhance, ENT_DIR, entFiles, evaluateRule(), f
 Cohesion: 0.11
 Nodes (18): AC, cachedMetrics, cents(), DAYS, DRIFTY, EXP, failures, GROSS (+10 more)
 
-### Community 62 - "verify-timecard.mjs"
-Cohesion: 0.10
-Nodes (18): allPunches, andreiWeek, bad, baseline, bella, blankWeek, CSV_TEXT, FIXTURE (+10 more)
+### Community 62 - "probe-money-kept-fix.mjs"
+Cohesion: 0.28
+Nodes (8): empty, eq(), failures, mockData, noCap, { occRows }, ok(), show()
 
 ### Community 63 - "alert-dialog.jsx"
 Cohesion: 0.12
@@ -1117,9 +1108,9 @@ Nodes (15): centsPayroll, draftOnly, expenses, leak1c, leakCents, leaksDraft, le
 Cohesion: 0.13
 Nodes (15): DATA, eF, eq(), failures, HERE, longF, near(), objs (+7 more)
 
-### Community 70 - "useGlobalFilters"
-Cohesion: 0.07
-Nodes (64): CompareBars(), CompareCard(), ModuleCard(), rgba(), THEMES, inferTone(), KpiCard(), Sparkline() (+56 more)
+### Community 70 - "Dashboard.jsx"
+Cohesion: 0.08
+Nodes (58): db, ActionCenterPage, AnomalySignoffModal(), CompareCard(), LowOccAlert(), ModuleCard(), ModuleCards(), rgba() (+50 more)
 
 ### Community 71 - "preview-rebuild.mjs"
 Cohesion: 0.11
@@ -1134,8 +1125,8 @@ Cohesion: 0.05
 Nodes (41): Additional Reminders, artifacts, <artifacts_info>, <automated_reminder_from_anthropic>, Available Tool Definitions, <citation_instructions>, <core_search_behaviors>, Core System Message (+33 more)
 
 ### Community 74 - "ResponsiveSelect.jsx"
-Cohesion: 0.15
-Nodes (15): Drawer(), DrawerContent, DrawerDescription, DrawerFooter(), DrawerHeader(), DrawerOverlay, DrawerTitle, Select() (+7 more)
+Cohesion: 0.13
+Nodes (17): Drawer(), DrawerContent, DrawerDescription, DrawerFooter(), DrawerHeader(), DrawerOverlay, DrawerTitle, ResponsiveSelect() (+9 more)
 
 ### Community 75 - "universalParser.js"
 Cohesion: 0.20
@@ -1211,7 +1202,7 @@ Nodes (11): escapeHtml(), previewExamples(), emitPerComponent(), emitReadme(), e
 
 ### Community 94 - "devDependencies"
 Cohesion: 0.13
-Nodes (15): autoprefixer, baseline-browser-mapping, @eslint/js, eslint-plugin-react, devDependencies, autoprefixer, baseline-browser-mapping, @eslint/js (+7 more)
+Nodes (15): autoprefixer, eslint-plugin-react-refresh, eslint-plugin-unused-imports, devDependencies, autoprefixer, eslint-plugin-react-refresh, eslint-plugin-unused-imports, tailwindcss (+7 more)
 
 ### Community 95 - "custom_auth_login/entry.js"
 Cohesion: 0.18
@@ -1229,13 +1220,13 @@ Nodes (10): cal, CASES, dayCell, dayDialog, handlers, iEvents, iTernary, LABEL_O
 Cohesion: 0.05
 Nodes (37): Artifacts (live, persisted HTML views), Artifacts (live, persisted HTML views), auto memory, auto memory, Before recommending from memory, Before recommending from memory, claudeMd, computer-use (+29 more)
 
-### Community 99 - "RevenueReconciliation.js"
-Cohesion: 0.19
-Nodes (5): isPresent(), PATH_PRECEDENCE, RECON_STATUS, RevenueReconciliation, ROOM_SCOPE_PATHS
+### Community 99 - "probe-capacity-per-day.mjs"
+Cohesion: 0.29
+Nodes (5): eq(), failures, ok(), PROPS, ROOM_MAP
 
-### Community 100 - "MoneyKept.jsx"
-Cohesion: 0.09
-Nodes (28): bucketOf(), deduct(), failures, SPECIAL_BUCKETS, TAX_EXPENSE_CATS, axis, bucketKey(), buildPropertyFilter() (+20 more)
+### Community 100 - "Expenses.jsx"
+Cohesion: 0.13
+Nodes (19): bucketOf(), deduct(), failures, SPECIAL_BUCKETS, TAX_EXPENSE_CATS, Expenses, DERIVED_COST_BUCKETS, EXPENSE_CATEGORIES (+11 more)
 
 ### Community 101 - "auditFailureLog.js"
 Cohesion: 0.21
@@ -1258,8 +1249,8 @@ Cohesion: 0.36
 Nodes (10): applyBreaks(), keyOf(), minutesBetween(), nameOf(), normalisePunch(), parseTime(), reconcileTimecards(), shiftDurationMinutes() (+2 more)
 
 ### Community 106 - "reportParsers.js"
-Cohesion: 0.13
-Nodes (22): addImportRecordIds(), fetchCsvRows(), isCsvFile(), addMeta(), CLERK_SKIP_LABELS, COLUMN_MAP, dedupByKey(), dedupePropertyRows() (+14 more)
+Cohesion: 0.11
+Nodes (28): addImportRecordIds(), completeImportSession(), fetchCsvRows(), isCsvFile(), rowsToObjects(), addMeta(), CLERK_SKIP_LABELS, COLUMN_MAP (+20 more)
 
 ### Community 108 - "fraudScoringEngine.js"
 Cohesion: 0.23
@@ -1270,12 +1261,12 @@ Cohesion: 0.18
 Nodes (5): auditRows(), body(), session(), TOKEN_HASH, world()
 
 ### Community 110 - "scripts"
-Cohesion: 0.15
-Nodes (13): scripts, brain:map, brain:verify, build, dev, lint, lint:fix, preview (+5 more)
+Cohesion: 0.14
+Nodes (14): scripts, audit:gate, brain:map, brain:verify, build, dev, lint, lint:fix (+6 more)
 
-### Community 111 - "manualEntryImport.js"
-Cohesion: 0.27
-Nodes (7): SOURCE_FIELDS, coerceCell(), headerAliases(), normalizeHeader(), parseManualEntryCsv(), parseManualEntryPaste(), pushProblem()
+### Community 111 - "ManualEntry.jsx"
+Cohesion: 0.16
+Nodes (14): SOURCE_FIELDS, runInTransaction(), ManualEntry, coerceCell(), headerAliases(), normalizeHeader(), parseManualEntryCsv(), parseManualEntryPaste() (+6 more)
 
 ### Community 112 - "probe-deploy-config.mjs"
 Cohesion: 0.21
@@ -1290,8 +1281,8 @@ Cohesion: 0.26
 Nodes (11): buildSrcSet(), buildTransformUrl(), clamp01(), clampDim(), DEVICE_PIXEL_RATIOS, Image, ImageWrapper, parseWixMediaUrl() (+3 more)
 
 ### Community 115 - "compareDots"
-Cohesion: 0.29
-Nodes (3): compareDots(), LWWElementSet, makeDot()
+Cohesion: 0.22
+Nodes (4): compareDots(), LWWElementSet, makeDot(), parseDot()
 
 ### Community 116 - "probe-welcome-email.mjs"
 Cohesion: 0.12
@@ -1325,9 +1316,9 @@ Nodes (11): FIELD_RANGES, finding(), NEGATIVE_OK, REQUIRED_FIELDS, SEVERITY, val
 Cohesion: 0.17
 Nodes (10): archMatch, content, { execSync }, finance, fs, index, missingSections, path (+2 more)
 
-### Community 125 - "menubar.jsx"
-Cohesion: 0.12
-Nodes (11): Menubar, MenubarCheckboxItem, MenubarContent, MenubarItem, MenubarLabel, MenubarRadioItem, MenubarSeparator, MenubarShortcut() (+3 more)
+### Community 125 - "mcp_app_suggestions"
+Cohesion: 0.29
+Nodes (7): After search, Connector directory first, mcp_app_suggestions, [third_party_mcp_app] tools need opt-in, What not to do, What this should feel like, When to call an [third_party_mcp_app] tool directly
 
 ### Community 126 - "verify-coexistence.mjs"
 Cohesion: 0.20
@@ -1346,24 +1337,24 @@ Cohesion: 0.16
 Nodes (6): BodySchema, QuerySchema, createApiHandler(), makeClient(), makeEntities(), state
 
 ### Community 130 - "probe-clear-all-rollback.mjs"
-Cohesion: 0.24
-Nodes (7): clearFn(), eq(), failures, ok(), REPO, __storage, __store
+Cohesion: 0.14
+Nodes (13): clearFn(), eq(), failures, ok(), REPO, __storage, __store, clearImportSessions() (+5 more)
 
 ### Community 131 - "verify-statistics.mjs"
 Cohesion: 0.29
 Nodes (7): check(), eq(), failures, LOCAL_STATS, meta, __storage, __store
 
-### Community 132 - "toast.jsx"
-Cohesion: 0.31
-Nodes (9): Toast, ToastAction, ToastClose, ToastDescription, ToastProvider, ToastTitle, toastVariants, ToastViewport (+1 more)
+### Community 132 - "use-toast.jsx"
+Cohesion: 0.15
+Nodes (18): Toast, ToastAction, ToastClose, ToastDescription, ToastProvider, ToastTitle, toastVariants, ToastViewport (+10 more)
 
 ### Community 133 - "verify-imports.mjs"
 Cohesion: 0.20
 Nodes (7): ast, exportsOf, EXTS, files, problems, ROOT, SRC
 
-### Community 135 - "form.jsx"
+### Community 135 - "probe-audit-export.mjs"
 Cohesion: 0.29
-Nodes (8): FormControl, FormDescription, FormFieldContext, FormItem, FormItemContext, FormLabel, FormMessage, useFormField()
+Nodes (5): failures, HERE, ROOT, ROWS, store
 
 ### Community 136 - "base44 logout"
 Cohesion: 0.29
@@ -1382,16 +1373,16 @@ Cohesion: 0.20
 Nodes (14): bundleExportEvidence(), bundleToIife(), reactShim, resolveDistEntry(), sharedBuildOptions(), tsconfigPathsPlugin(), leadingJsdoc(), readText() (+6 more)
 
 ### Community 141 - "🔴 LAUNCH BLOCKERS"
-Cohesion: 0.06
-Nodes (35): ADDENDUM — 2026-08-21, B10 — Failed logins and all pre-auth events are unloggable, B11 — The $1,020,598.17 reconciliation invariant is currently unprovable, ✅ B1 — A restricted user sees every property's financials on the default Dashboard — RESOLVED, ✅ B2 — The full property roster leaks to every user — RESOLVED, ✅ B3 — Property access fails OPEN in three places — RESOLVED, ✅ B4 — 24 call sites bypass the isolation proxy — RESOLVED, ✅ B5 — Isolation is advisory: there is no server-side entity path — ACCEPTED WITH A LAUNCH RESTRICTION (+27 more)
+Cohesion: 0.05
+Nodes (40): ADDENDUM — 2026-08-21, ADDENDUM — 2026-08-22, B10 — Failed logins and all pre-auth events are unloggable, B11 — The $1,020,598.17 reconciliation invariant is currently unprovable, ✅ B1 — A restricted user sees every property's financials on the default Dashboard — RESOLVED, ✅ B2 — The full property roster leaks to every user — RESOLVED, ✅ B3 — Property access fails OPEN in three places — RESOLVED, ✅ B4 — 24 call sites bypass the isolation proxy — RESOLVED (+32 more)
 
 ### Community 142 - "Update Config Skill"
 Cohesion: 0.06
 Nodes (31): Adding a Hook, Adding Permissions, Attribution (Commits & PRs), Common Mistakes to Avoid, Common Patterns, Constructing a Hook (with verification), CRITICAL: Read Before Write, CRITICAL: Use AskUserQuestion for Ambiguity (+23 more)
 
 ### Community 143 - "_repo-root.mjs"
-Cohesion: 0.14
-Nodes (10): eq(), failures, ok(), PROPS, ROOM_MAP, eq(), failures, ok() (+2 more)
+Cohesion: 0.12
+Nodes (11): eq(), failures, ok(), SRC, asUrl, failures, offenders, PREVIOUSLY_BROKEN (+3 more)
 
 ### Community 144 - "DataIntelligence.jsx"
 Cohesion: 0.16
@@ -1417,9 +1408,9 @@ Nodes (29): Agents, Beta Headers, CreateAgent Request Body, CreateDeployment Req
 Cohesion: 0.33
 Nodes (7): ChartContainer, ChartContext, ChartLegendContent, ChartTooltipContent, getPayloadConfigFromPayload(), THEMES, useChart()
 
-### Community 150 - "Login.jsx"
-Cohesion: 0.12
-Nodes (12): hostile, isValidIdentifier(), Login, safeReturnTo(), ALL_PROPERTY_REQUIRED_CODE, ALL_PROPERTY_REQUIRED_MESSAGE, isValidEmail(), isValidUsername() (+4 more)
+### Community 150 - "base44 auth push"
+Cohesion: 0.33
+Nodes (5): base44 auth push, Examples, Notes, Options, Syntax
 
 ### Community 151 - "ui-utils.js"
 Cohesion: 0.28
@@ -1441,9 +1432,9 @@ Nodes (7): minutesBetween(), monotonicIso(), parseTime(), reconcileTimecards(), 
 Cohesion: 0.07
 Nodes (30): Anti-patterns — DO NOT, Asking questions, Attached .fig files and local folders, Batch mechanical work through `run_script`, Commit to your first reasonable plan, Content Guidelines, Context management, ⚠ Design Components are mandatory (+22 more)
 
-### Community 159 - "useAuth"
-Cohesion: 0.07
-Nodes (39): assert(), createTab(), run(), seedUsers(), storage, store, winListeners, LoginRedirect() (+31 more)
+### Community 159 - "AuthContext.jsx"
+Cohesion: 0.09
+Nodes (29): assert(), createTab(), run(), seedUsers(), storage, store, winListeners, RequirePermission() (+21 more)
 
 ### Community 160 - "test_realtime_revocation.mjs"
 Cohesion: 0.39
@@ -1454,36 +1445,28 @@ Cohesion: 0.07
 Nodes (29): ask_user_input_v0, bash_tool, Content safety, conversation_search, create_file, Critical NEVER search for images in following categories (blocked):, end_conversation, Examples of when **NOT** to use image search: (+21 more)
 
 ### Community 162 - "convertDate"
-Cohesion: 0.25
-Nodes (12): convertDate(), isIsoDate(), isoOrEmpty(), isRealCalendarDate(), parseAmount(), recordCoercion(), detectReportType(), mapRow() (+4 more)
+Cohesion: 0.29
+Nodes (11): scanAdjustmentsRefunds(), convertDate(), isIsoDate(), isoOrEmpty(), isRealCalendarDate(), parseAmount(), ENTITY_TABLES, mapRow() (+3 more)
 
-### Community 163 - "ChartToolbar.jsx"
-Cohesion: 0.54
-Nodes (6): ChartToolbar(), captureChart(), copyChartToClipboard(), exportChartPng(), findSvg(), svgToCanvas()
+### Community 163 - "audit-gate.mjs"
+Cohesion: 0.33
+Nodes (5): ACCEPTED, BLOCKING, res, seen, stale
 
 ### Community 164 - "Content safety"
 Cohesion: 0.07
 Nodes (29): ask_user_input_v0, bash_tool, Content safety, conversation_search, create_file, Critical NEVER search for images in following categories (blocked):, end_conversation, Examples of when **NOT** to use image search: (+21 more)
-
-### Community 165 - "use-toast.jsx"
-Cohesion: 0.25
-Nodes (9): actionTypes, addToRemoveQueue(), dispatch(), genId(), listeners, memoryState, reducer(), toastTimeouts (+1 more)
 
 ### Community 167 - "5. ALL 90+ LIBRARIES (The Engines Under The Hood)"
 Cohesion: 0.07
 Nodes (28): 4. ALL 36 PAGES (What Users See), 5. ALL 90+ LIBRARIES (The Engines Under The Hood), 6. ALL 40+ COMPONENTS (Reusable UI Pieces), 7.1 The five export surfaces, 7.2 The contract, and the four defects it closes, 7.3 The formula-injection guard, and the bug the guard itself caused, 7.4 Fast filters: what the owner does not have to redo, 7.5 Bundle note (+20 more)
 
 ### Community 169 - "base44-cli/SKILL.md"
-Cohesion: 0.17
-Nodes (5): base44 auth push, Examples, Notes, Options, Syntax
+Cohesion: 0.13
+Nodes (10): base44 auth pull, Examples, Notes, Syntax, base44 workspace list, Examples, Notes, Options (+2 more)
 
 ### Community 171 - "backupToDrive/entry.ts"
 Cohesion: 0.39
 Nodes (8): dnsLookup, fetchValidatedFile(), findOrCreateFolder(), ip4IsPrivate(), ipIsPrivate(), isRedirect(), isUrlBlocked(), sanitizeDriveFolder()
-
-### Community 172 - "probe-import-rollback-id.mjs"
-Cohesion: 0.20
-Nodes (8): callerUuid, csvText, DATA, failed, myImportId, realLedgerAdd, __storage, __store
 
 ### Community 173 - "AIInsightsEngine"
 Cohesion: 0.21
@@ -1498,16 +1481,16 @@ Cohesion: 0.07
 Nodes (28): ask_user_input_v0, bash_tool, Content safety, conversation_search, create_file, Critical NEVER search for images in following categories (blocked):, end_conversation, Examples of when **NOT** to use image search: (+20 more)
 
 ### Community 176 - "node:crypto"
-Cohesion: 0.08
-Nodes (14): token, RFC-6761, OWNER, __storage, __store, PINNED, __storage, __store (+6 more)
+Cohesion: 0.05
+Nodes (32): token, allPunches, andreiWeek, bad, baseline, bella, blankWeek, CSV_TEXT (+24 more)
 
 ### Community 178 - "Content safety"
 Cohesion: 0.07
 Nodes (28): ask_user_input_v0, bash_tool, Content safety, conversation_search, create_file, Critical NEVER search for images in following categories (blocked):, end_conversation, Examples of when **NOT** to use image search: (+20 more)
 
 ### Community 179 - "corsConfig.js"
-Cohesion: 0.47
-Nodes (5): allowedOrigins, createCorsMiddleware(), isAllowedOrigin(), isProductionOrigin(), LOCAL_ORIGINS
+Cohesion: 0.38
+Nodes (9): allowedOrigins(), createCorsMiddleware(), getAllowedOrigins(), getProductionOrigins(), isAllowedOrigin(), isProductionOrigin(), LOCAL_ORIGINS, productionOrigins() (+1 more)
 
 ### Community 180 - "Content safety"
 Cohesion: 0.07
@@ -1516,10 +1499,6 @@ Nodes (28): ask_user_input_v0, bash_tool, Content safety, conversation_search, c
 ### Community 181 - "package.json"
 Cohesion: 0.33
 Nodes (5): imports, name, private, type, version
-
-### Community 182 - "verify-anomaly-ingestion.mjs"
-Cohesion: 0.22
-Nodes (7): csvText, meta, __storage, __store, t0, t1, t2
 
 ### Community 183 - "claude-opus-4.6-raw.md"
 Cohesion: 0.07
@@ -1573,9 +1552,9 @@ Nodes (24): 3D object, Aesthetics Guidelines, Animated video, Claude API in prot
 Cohesion: 0.23
 Nodes (9): accepts(), failures, file(), MZ, OLE, rejects(), ZIP, inspectUploadFile() (+1 more)
 
-### Community 199 - "avatar.jsx"
+### Community 199 - "tabs.jsx"
 Cohesion: 0.70
-Nodes (3): Avatar, AvatarFallback, AvatarImage
+Nodes (3): TabsContent, TabsList, TabsTrigger
 
 ### Community 200 - "toggle-group.jsx"
 Cohesion: 0.39
@@ -1585,9 +1564,9 @@ Nodes (5): ToggleGroup, ToggleGroupContext, ToggleGroupItem, Toggle, toggleVaria
 Cohesion: 0.70
 Nodes (3): formatMfaQrCodeUrl(), generatePasswordResetToken(), validateResetToken()
 
-### Community 202 - "probe-realtime.mjs"
-Cohesion: 0.17
-Nodes (6): received, stay, unsub, createEntityProxy(), getPoster(), publishChange()
+### Community 202 - "Claude Opus 4.5"
+Cohesion: 0.67
+Nodes (3): Claude Opus 4.5, January 18, 2026, November 24, 2025
 
 ### Community 203 - "Tools"
 Cohesion: 0.08
@@ -1609,10 +1588,6 @@ Nodes (23): Artifact, AskUserQuestion, CronDelete, CronList, DesignSync, Edit, M
 Cohesion: 0.09
 Nodes (23): Artifact, AskUserQuestion, CronDelete, CronList, DesignSync, Edit, Monitor, NotebookEdit (+15 more)
 
-### Community 210 - "probe-repo-root.mjs"
-Cohesion: 0.20
-Nodes (6): asUrl, failures, offenders, PREVIOUSLY_BROKEN, scriptFiles, SCRIPTS_DIR
-
 ### Community 215 - "Tools"
 Cohesion: 0.09
 Nodes (23): Artifact, AskUserQuestion, CronDelete, CronList, DesignSync, Edit, Monitor, NotebookEdit (+15 more)
@@ -1621,21 +1596,13 @@ Nodes (23): Artifact, AskUserQuestion, CronDelete, CronList, DesignSync, Edit, M
 Cohesion: 0.09
 Nodes (22): Breaking Up Work — Ship Progress Incrementally, Bullet and Numbered Lists, Citing Locations in Your Response, Comments — Read, Reply, Anchor, Custom Skills, Error Handling, Headers and Footers, How You Communicate (+14 more)
 
-### Community 217 - "navigation-menu.jsx"
-Cohesion: 0.29
-Nodes (7): NavigationMenu, NavigationMenuContent, NavigationMenuIndicator, NavigationMenuList, NavigationMenuTrigger, navigationMenuTriggerStyle, NavigationMenuViewport
-
-### Community 218 - "22. SUITES THAT COULD NOT FAIL (verification integrity)"
-Cohesion: 0.09
-Nodes (22): 14. KNOWN PROBLEMS (Status Tracker), 🚨 19. EMERGENCY PLAYBOOK (For Humans), 20. DANGEROUS ONE-SHOT SCRIPTS AT THE REPO ROOT (DO NOT RUN), 21.1 The pattern: two modules, one number, two routes, 21.2 The same pattern, four more times, 21.3 Why the capacity fallback mattered more than it looks, 21. WHY THE MONEY MATH DRIFTED (root cause behind known problem #6), 22.1 Every fix was mutation-tested (+14 more)
+### Community 218 - "BRAIN_TROUBLESHOOTING.md"
+Cohesion: 0.07
+Nodes (26): 14. KNOWN PROBLEMS (Status Tracker), 🚨 19. EMERGENCY PLAYBOOK (For Humans), 20. DANGEROUS ONE-SHOT SCRIPTS AT THE REPO ROOT (DO NOT RUN), 21.1 The pattern: two modules, one number, two routes, 21.2 The same pattern, four more times, 21.3 Why the capacity fallback mattered more than it looks, 21. WHY THE MONEY MATH DRIFTED (root cause behind known problem #6), 22.1 Every fix was mutation-tested (+18 more)
 
 ### Community 230 - "carousel.jsx"
 Cohesion: 0.39
 Nodes (7): Carousel, CarouselContent, CarouselContext, CarouselItem, CarouselNext, CarouselPrevious, useCarousel()
-
-### Community 304 - "sheet.jsx"
-Cohesion: 0.29
-Nodes (7): SheetContent, SheetDescription, SheetFooter(), SheetHeader(), SheetOverlay, SheetTitle, sheetVariants
 
 ### Community 305 - "base44 auth password-login"
 Cohesion: 0.33
@@ -1681,13 +1648,13 @@ Nodes (20): Create an Agent (required first step), Create an Environment, Delete
 Cohesion: 0.10
 Nodes (20): 1password, Action categories, claude-in-chrome, Communicating with the user, computer-use, Context management, Copyright, Environment (+12 more)
 
-### Community 349 - "alert.jsx"
-Cohesion: 0.60
-Nodes (4): Alert, AlertDescription, AlertTitle, alertVariants
+### Community 349 - "MFASetup.jsx"
+Cohesion: 0.18
+Nodes (14): Alert, AlertDescription, AlertTitle, alertVariants, Card, CardContent, CardDescription, CardFooter (+6 more)
 
-### Community 350 - "PieDonut.jsx"
-Cohesion: 0.12
-Nodes (29): checkInvariants(), failures, money(), ok(), plan(), donutInnerFor(), PieDonut(), fmt() (+21 more)
+### Community 350 - "Reviews.jsx"
+Cohesion: 0.07
+Nodes (48): agg, reviews, checkInvariants(), failures, money(), ok(), plan(), Reviews (+40 more)
 
 ### Community 351 - "Base44 Coder"
 Cohesion: 0.10
@@ -1697,13 +1664,9 @@ Nodes (20): Authentication - WRONG vs CORRECT, Backend Function Call, Base44 Cod
 Cohesion: 0.10
 Nodes (19): Add a chord binding, Available Actions, Available Contexts, Behavioral Rules, Common Issues and Fixes, Common Patterns, CRITICAL: Read Before Write, Example /doctor Output (+11 more)
 
-### Community 353 - "7. ALL 16 DATABASE TABLES (Entities)"
-Cohesion: 0.10
-Nodes (19): 10. ALL TEST SCRIPTS — counts CORRECTED 2026-08-20, 7. ALL 16 DATABASE TABLES (Entities), 8. ALL 19 BACKEND FUNCTIONS (The Server Brain), 9. ALL CONFIG FILES, Audit Trail (4 functions), Authentication (8 functions), Base44 Config, Build & Deploy (+11 more)
-
-### Community 354 - "base44 auth pull"
-Cohesion: 0.40
-Nodes (4): base44 auth pull, Examples, Notes, Syntax
+### Community 353 - "8. ALL 19 BACKEND FUNCTIONS (The Server Brain)"
+Cohesion: 0.09
+Nodes (21): 10. ALL TEST SCRIPTS — counts RE-MEASURED 2026-08-22, 7. ALL 16 DATABASE TABLES (Entities), 8. ALL 19 BACKEND FUNCTIONS (The Server Brain), 9. ALL CONFIG FILES, Audit Trail (4 functions), Authentication (8 functions), Base44 Config, Build & Deploy (+13 more)
 
 ### Community 355 - "Creating Functions"
 Cohesion: 0.11
@@ -1735,7 +1698,7 @@ Nodes (18): auto memory, Before recommending from memory, claudeMd, Communicatin
 
 ### Community 362 - "all.md"
 Cohesion: 0.09
-Nodes (21): April 16, 2026, August 5, 2025, Claude Fable 5, Claude Haiku 3, Claude Opus 3, Claude Opus 4.1, Claude Opus 4.5, Claude Opus 4.6 (+13 more)
+Nodes (22): April 16, 2026, August 5, 2025, August 5, 2025, Claude Fable 5, Claude Haiku 3, Claude Opus 3, Claude Opus 4, Claude Opus 4.1 (+14 more)
 
 ### Community 363 - "claude-3.7-full-system-message-with-all-tools.md"
 Cohesion: 0.11
@@ -1841,10 +1804,6 @@ Nodes (16): additional_skills_reminder, artifact_usage_criteria, computer_use, C
 Cohesion: 0.12
 Nodes (16): anthropic_api_in_artifacts, api_details, context_window_management, conversation_management, critical_ui_requirements, error_handling, handling_files, handling_tool_responses (+8 more)
 
-### Community 390 - "request_evaluation_checklist"
-Cohesion: 0.40
-Nodes (5): request_evaluation_checklist, Step 0 — Does the request need a visual at all?, Step 1 — Is a connected MCP tool a fit?, Step 2 — Did the person ask for a file?, Step 3 — Visualizer (default inline visual)
-
 ### Community 391 - "Remotely develop a Base44 app over MCP"
 Cohesion: 0.13
 Nodes (14): 10. Local agents via the `base44 sandbox` CLI, 11. Connectors (OAuth integrations), 1. Connect the MCP server, 2. Authenticate, 3. Pick the app and orient yourself, 4. Make changes, 5. Preview and verify (the edit → check loop), 6. How your changes persist (+6 more)
@@ -1870,8 +1829,8 @@ Cohesion: 0.13
 Nodes (14): Check 0 — setup health (installation, settings, agent definitions), Check 1 — unused skills, MCP servers, and plugins, Check 2 — LOCAL CLAUDE.md dedup and contradictions, Check 3 — trim derivable content from checked-in CLAUDE.md files, Check 4 — migrate always-loaded CLAUDE.md content to lazy loading, Check 5 — slow hooks, Check 6 — context-heavy extensions, Check 7 — Claude Code version (+6 more)
 
 ### Community 397 - "claude-fable-5.md"
-Cohesion: 0.12
-Nodes (16): Addressing potential self-harm or violent harm to others, After search, available_skills, Connector directory first, end_conversation_tool_info, mcp_app_suggestions, network_configuration, past_chats_tools (+8 more)
+Cohesion: 0.13
+Nodes (14): Addressing potential self-harm or violent harm to others, available_skills, end_conversation_tool_info, network_configuration, past_chats_tools, preferences_info, request_evaluation_checklist, Rules for use of the `<end_conversation>` tool: (+6 more)
 
 ### Community 398 - "claude-mobile-ios.md"
 Cohesion: 0.13
@@ -1910,8 +1869,8 @@ Cohesion: 0.36
 Nodes (8): eq(), failures, main(), near(), ok(), section(), __storage, __store
 
 ### Community 407 - "base44 agent-skills push"
-Cohesion: 0.15
-Nodes (13): Agent Skill File Format, Agent Skill Synchronization, Authentication, base44 agent-skills push, Confirmation Prompt, Error Handling, Notes, Options (+5 more)
+Cohesion: 0.08
+Nodes (22): Agent Skill Synchronization, Authentication, base44 agent-skills pull, Notes, Output, Prerequisites, Syntax, Use Cases (+14 more)
 
 ### Community 408 - "base44 deploy"
 Cohesion: 0.15
@@ -2042,12 +2001,8 @@ Cohesion: 0.17
 Nodes (12): 6. PRODUCTION-READY SYSTEM PROMPTS & TRAINING INPUTS (50 PROMPTS), Benchmark Conversation: Multi-Turn Financial Context (3-Turn Flow), Category 10: Predictive Forecasting & Actionable Insights, Category 1: Executive P&L, Flow-Through & Net Profit ("Money Kept"), Category 2: Revenue Management, RevPAR & Yield Optimization, Category 3: Channel Distribution & OTA Net Commission Analysis, Category 4: Forensic Ledger Auditing & Anomaly Detection, Category 5: Operational Expenses, Payroll & Labor Efficiency (+4 more)
 
 ### Community 440 - "12. THE MONEY MATH (Formulas)"
-Cohesion: 0.15
-Nodes (12): 12.1 The Golden Benchmark — CORRECTED 2026-08-20, 12.2 Component vocabulary (names, not values), 12.3 Capacity is per day, never per row, 12.4 The card-processing fee basis, 12.5.1 Money Kept sign and cache units — ADDED 2026-08-21, 12.5 Why integer cents, with measured evidence, 12.6 Real Numbers — RESOLVED 2026-08-20, 12.7 Occupancy: which column is authoritative — ADDED 2026-08-20 (+4 more)
-
-### Community 441 - "test-parser.mjs"
-Cohesion: 0.25
-Nodes (6): all, deduped, rawRows, result, scanAdjustmentsRefunds(), seen
+Cohesion: 0.14
+Nodes (13): 12.1 The Golden Benchmark — CORRECTED 2026-08-20, 12.2 Component vocabulary (names, not values), 12.3 Capacity is per day, never per row, 12.4 The card-processing fee basis, 12.5.1 Money Kept sign and cache units — ADDED 2026-08-21, 12.5.2 The headline figure itself — FIXED 2026-08-22, 12.5 Why integer cents, with measured evidence, 12.6 Real Numbers — RESOLVED 2026-08-20 (+5 more)
 
 ### Community 442 - "base44 connectors initiate"
 Cohesion: 0.18
@@ -2146,8 +2101,8 @@ Cohesion: 0.20
 Nodes (9): Agent Synchronization, Authentication, base44 agents pull, Notes, Output, Prerequisites, Syntax, Use Cases (+1 more)
 
 ### Community 466 - "base44 create"
-Cohesion: 0.11
-Nodes (16): Arguments & Options, base44 create, Critical: Non-Interactive Mode Required, Examples, Syntax, Template Selection (CRITICAL - Choose Appropriately), The `--path` Flag, What It Does (+8 more)
+Cohesion: 0.20
+Nodes (10): Arguments & Options, base44 create, Critical: Non-Interactive Mode Required, Examples, Syntax, Template Selection (CRITICAL - Choose Appropriately), The `--path` Flag, What It Does (+2 more)
 
 ### Community 467 - "base44 dev"
 Cohesion: 0.20
@@ -2240,10 +2195,6 @@ Nodes (9): 1.1 Certificates, 1.2 HTTP to HTTPS Redirects, 1. TLS & Transport Sec
 ### Community 489 - "Rule: Verified Work — Do Not Silently Rewrite"
 Cohesion: 0.20
 Nodes (6): Rule: Protected Files — No AI Modification, Deliberate non-changes, Files and their proofs, Invariants that must not be weakened, Proposed addition to `PROTECTED_FILES.md` (owner action), Rule: Verified Work — Do Not Silently Rewrite
-
-### Community 490 - "base44 agent-skills pull"
-Cohesion: 0.22
-Nodes (9): Agent Skill Synchronization, Authentication, base44 agent-skills pull, Notes, Output, Prerequisites, Syntax, Use Cases (+1 more)
 
 ### Community 491 - "base44 auth sso"
 Cohesion: 0.22
@@ -2360,10 +2311,6 @@ Nodes (7): Arguments & Options, base44 workspace move, Examples, Non-Interactive
 ### Community 520 - "Best Practices"
 Cohesion: 0.25
 Nodes (8): 1. Always Handle Errors, 2. Verify Authentication Before Protected Actions, 3. Use Type Safety with TypeScript, 4. Don't Hardcode Credentials, 5. Provide User Feedback, 6. Handle Token Expiration Gracefully, 7. Build Custom Login UI (Recommended), Best Practices
-
-### Community 522 - "Claude Opus 4"
-Cohesion: 0.50
-Nodes (4): August 5, 2025, Claude Opus 4, July 31st, 2025, May 22nd, 2025
 
 ### Community 523 - "Tool Use — C#"
 Cohesion: 0.25
@@ -3418,24 +3365,24 @@ Cohesion: 0.67
 Nodes (3): 9.1 Dependency Management, 9.2 Supply Chain Security, 9. Dependency Security ✅
 
 ## Knowledge Gaps
-- **5350 isolated node(s):** `$schema`, `.opencode/plugins/graphify.js`, `Claude`, `downloads`, `DownloadsError` (+5345 more)
+- **5385 isolated node(s):** `$schema`, `.opencode/plugins/graphify.js`, `Claude`, `downloads`, `DownloadsError` (+5380 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **162 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **164 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `cn()` connect `cn` to `sidebar.jsx`, `toast.jsx`, `form.jsx`, `Users.jsx`, `Dashboard.jsx`, `chart.jsx`, `utils.js`, `Settings.jsx`, `sheet.jsx`, `command.jsx`, `GlobalControlBar.jsx`, `accordion.jsx`, `alert-dialog.jsx`, `useGlobalFilters`, `avatar.jsx`, `toggle-group.jsx`, `ResponsiveSelect.jsx`, `navigation-menu.jsx`, `alert.jsx`, `carousel.jsx`, `image.jsx`, `menubar.jsx`?**
-  _High betweenness centrality (0.018) - this node is a cross-community bridge._
 - **Why does `rel()` connect `probe-no-real-credentials.mjs` to `probe-calendar-day-modal.mjs`, `probe-audit-write-failure.mjs`, `probe-audit-chain.mjs`, `package-build.mjs`, `common.mjs`?**
-  _High betweenness centrality (0.016) - this node is a cross-community bridge._
+  _High betweenness centrality (0.018) - this node is a cross-community bridge._
+- **Why does `cn()` connect `cn` to `utils.js`, `securityUtils.js`, `use-toast.jsx`, `carousel.jsx`, `Dashboard.jsx`, `tabs.jsx`, `Users.jsx`, `ResponsiveSelect.jsx`, `Import.jsx`, `toggle-group.jsx`, `money2`, `image.jsx`, `chart.jsx`, `MFASetup.jsx`, `accordion.jsx`, `alert-dialog.jsx`?**
+  _High betweenness centrality (0.014) - this node is a cross-community bridge._
 - **Why does `file()` connect `probe-upload-guard.mjs` to `pricingEngine.js`, `probe-password-policy.mjs`, `probe-property-isolation.mjs`, `probe-delete-guard.mjs`, `probe-ui-feedback.mjs`, `probe-app-config.mjs`, `probe-db-mock-rls.mjs`, `verify-all.mjs`?**
-  _High betweenness centrality (0.008) - this node is a cross-community bridge._
+  _High betweenness centrality (0.011) - this node is a cross-community bridge._
 - **Are the 3 inferred relationships involving `money2()` (e.g. with `EmployeeCompare.jsx` and `Dashboard()`) actually correct?**
   _`money2()` has 3 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `$schema`, `.opencode/plugins/graphify.js`, `Claude` to the rest of the system?**
-  _5350 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _5385 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `aiEngine.js` be split into smaller, more focused modules?**
   _Cohesion score 0.13197586726998492 - nodes in this community are weakly interconnected._
 - **Should `base44Client.js` be split into smaller, more focused modules?**
-  _Cohesion score 0.031192660550458717 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.035232212308396245 - nodes in this community are weakly interconnected._

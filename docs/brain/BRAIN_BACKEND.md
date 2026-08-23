@@ -175,6 +175,64 @@ node --import ./scripts/_loader-boot.mjs scripts/probe-audit-chain.mjs   # 36/0
 npx vitest run tests/backend                                            # 24/24
 ```
 
+### Fixed 2026-08-22: `base44/lib/corsConfig.js` — two defects in a file nothing imports
+
+`python -m graphify query "corsConfig"` returns **6 nodes, all inside this one file, and
+no inbound edge from anywhere in the repository.** It is an orphan. Both defects below
+were therefore latent, never observed at runtime — which is precisely why they needed a
+static guard rather than a bug report. An unused file generates no runtime evidence, so
+the person who discovers its defects is whoever wires it into a function first.
+
+**Defect 1 — `process.env` at module scope.** Line 19 was
+`const productionOrigins = process.env.ALLOWED_ORIGINS ? ... : []`. A bare `process`
+reference throws `ReferenceError` **at import time** in any host that does not define it:
+a browser/Vite bundle, or a Deno function running without the Node compatibility global.
+For a CORS module that is the worst available failure mode — it takes down the endpoint it
+was added to protect, before a single request is inspected. Now read lazily and memoised
+through `readEnv()`, which tries `Deno.env.get` first (base44 functions run on Deno),
+falls back to `process.env`, and treats a `Deno.env.get` permission throw as "unset"
+rather than propagating it.
+
+`allowedOrigins` and `productionOrigins` are now **getters** on `module.exports`. Exporting
+them as plain arrays would have re-introduced the module-scope evaluation the fix removes,
+while looking harmless.
+
+**Defect 2 — the preflight wildcarded unauthorized origins.** The `OPTIONS` branch read
+`res.header('Access-Control-Allow-Origin', isAllowedOrigin(origin) ? origin : '*')`, so an
+origin the module was about to reject got a wildcard grant plus the full
+`GET, PUT, POST, DELETE, OPTIONS` method list. That contradicts the file's own header
+contract ("Rejects unauthorized origins with HTTP 403"). Practical exposure was limited —
+the follow-up request was still 403'd below, and browsers refuse `*` together with
+credentials — but it failed safe by *browser behaviour*, not by design. Unauthorized
+preflights now get the same 403 as unauthorized requests.
+
+**Deliberately NOT changed**, so nobody "finishes the job" by accident:
+
+- The `else if (isProductionOrigin(origin))` branch is **unreachable**. `allowedOrigins`
+  already contains every production origin, so `isAllowedOrigin` is true first. Pre-existing
+  dead code, harmless, left alone.
+- The file is **CommonJS** (`module.exports`) and **Express-shaped** (`res.header`,
+  `next()`). A Deno serverless function under `base44/functions/` cannot import it as-is.
+  That is the real reason it is dead, and converting it is a port, not a fix — do that only
+  when something actually needs it.
+
+`scripts/probe-cors-config.mjs` guards both defects, 35 assertions. It loads the module
+inside a bare `vm` context rather than with `import()`, because Node always defines
+`process` and an `import()`-based test therefore *cannot* observe the crash the fix
+prevents. Its static assertions run against comment-stripped source: the fix documents
+itself by quoting the defective lines, and a naive substring search finds the old wildcard
+in the comment saying it is gone (the same trap produced a false FAIL in
+`verify-money-kept.mjs` the same day).
+
+Both halves were mutation-tested, so no assertion is vacuous: against `HEAD`'s pre-fix
+source **7 assertions fail** (including "module evaluates without throwing", which is
+direct proof the `ReferenceError` was real); against a mutant restoring **only** the
+preflight wildcard, **5 fail**.
+
+```
+node scripts/probe-cors-config.mjs        # 35/0, standalone — no loader needed
+```
+
 ---
 
 # 9. ALL CONFIG FILES
@@ -211,22 +269,27 @@ npx vitest run tests/backend                                            # 24/24
 
 ---
 
-# 10. ALL TEST SCRIPTS — counts CORRECTED 2026-08-20
+# 10. ALL TEST SCRIPTS — counts RE-MEASURED 2026-08-22
 
 Measured, not estimated. The heading here previously read "106 Files", which matched
-nothing countable:
+nothing countable. Re-counted 2026-08-22; the 2026-08-20 set (117 / 95 / 73 / 71 / 34)
+had gone stale as suites were added during the launch remediation, so **re-run the
+one-liners rather than trusting these numbers**:
 
 ```
-scripts/ on disk, all files incl. subdirs   117
-  .mjs at the top level of scripts/          95
-  named probe-*.mjs / verify-*.mjs           73
-  auto-discovered as suites by verify:all    71   <- the number that matters
-vitest .test/.spec files elsewhere in repo   34
+scripts/ on disk, all files incl. subdirs   132
+  .mjs at the top level of scripts/         110
+  named probe-*.mjs / verify-*.mjs           85
+  auto-discovered as suites by verify:all    83   <- the number that matters
+vitest .test/.spec files elsewhere in repo   36
 ```
 
-71, not 73, because `verify-all.mjs` (the runner) and `verify-brain.mjs` (a docs gate) are
+83, not 85, because `verify-all.mjs` (the runner) and `verify-brain.mjs` (a docs gate) are
 suite-named but excluded by name. Run `npm run verify:all -- --list` for the live list and
 the exclusion reasons; every run also prints a `list <id> (<n> discovered)` fingerprint.
+The fingerprint is `list 0c624d13 (83 discovered)` as of 2026-08-22. It changes
+legitimately whenever a suite is added, so compare it **across shards of a single run** —
+never against a number copied out of a document.
 
 ### Test Infrastructure
 | File | What It Does |
@@ -244,7 +307,7 @@ the exclusion reasons; every run also prints a `list <id> (<n> discovered)` fing
 
 ### How To Run Tests
 ```powershell
-# EVERYTHING. Start here -- auto-discovers all 72 suites, distinguishes PASS / FAIL /
+# EVERYTHING. Start here -- auto-discovers all 83 suites, distinguishes PASS / FAIL /
 # BROKEN (could not start) / TIMEOUT (could not finish) / BAD-EXIT / SKIP.
 npm run verify:all
 npm run verify:all -- --list            # the live list + why anything is excluded

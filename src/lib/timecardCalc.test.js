@@ -4,6 +4,7 @@ import {
   minutesBetween,
   weekBounds,
   normalisePunch,
+  shiftDurationMinutes,
   applyBreaks,
   reconcileTimecards,
   weeksToPayrollRuns,
@@ -33,6 +34,25 @@ describe("parseTime", () => {
     expect(parseTime("not-a-time")).toBeNull();
     expect(parseTime("25:99")).toBeNull();
     expect(parseTime(null)).toBeNull();
+  });
+
+  // The AM/PM branch used to validate nothing: "11:99 PM" returned 1479 and
+  // "25:00 AM" returned 60, because the hour was reduced mod 12 before any
+  // range check. A minute-of-day above 1439 is what let a shift measure >24h.
+  it("rejects an out-of-range AM/PM time instead of wrapping it", () => {
+    expect(parseTime("11:99 PM")).toBeNull();
+    expect(parseTime("25:00 AM")).toBeNull();
+    expect(parseTime("99:99 PM")).toBeNull();
+    expect(parseTime("13:30 AM")).toBe(90); // in-contract: hour mod 12, unchanged
+  });
+
+  it("rejects a numeric minute-of-day outside one day", () => {
+    expect(parseTime(0)).toBe(0);
+    expect(parseTime(1439)).toBe(1439);
+    expect(parseTime(1440)).toBeNull();
+    expect(parseTime(3000)).toBeNull();
+    expect(parseTime(-60)).toBeNull();
+    expect(parseTime(Number.POSITIVE_INFINITY)).toBeNull();
   });
 });
 
@@ -78,6 +98,80 @@ describe("normalisePunch", () => {
   it("flags shifts that wrap a full 24h (two days mislabeled as one)", () => {
     const p = normalisePunch({ date: "2026-03-04", employee_name: "Moin", clock_in: "08:00", clock_out: "08:00" });
     expect(p.flags).toContain("shift_exceeds_24h");
+  });
+
+  // Two times of day can only describe 0..1439 minutes. When the punches carry
+  // their own dates, the span is measured from them instead — a 49-hour shift
+  // used to read as 60 paid minutes with no flag at all.
+  it("measures a multi-day span from the punch dates and refuses it", () => {
+    const p = normalisePunch({
+      date: "2026-03-07",
+      employee_name: "Moin",
+      clock_in: "2026-03-07 09:00",
+      clock_out: "2026-03-09 10:00",
+    });
+    expect(p.durationMinutes).toBe(2940);
+    expect(shiftDurationMinutes(p)).toBe(2940);
+    expect(p.flags).toContain("shift_exceeds_24h");
+  });
+
+  it("flags a clock-out dated before the clock-in", () => {
+    const p = normalisePunch({
+      date: "2026-03-07",
+      employee_name: "Moin",
+      clock_in: "2026-03-07 22:00",
+      clock_out: "2026-03-06 06:00",
+    });
+    expect(p.flags).toContain("negative_shift_duration");
+    expect(shiftDurationMinutes(p)).toBe(0);
+  });
+
+  it("leaves a legitimate dated overnight shift at 8 hours", () => {
+    const p = normalisePunch({
+      date: "2026-03-07",
+      employee_name: "Moin",
+      clock_in: "2026-03-07 22:00",
+      clock_out: "2026-03-08 06:00",
+    });
+    expect(shiftDurationMinutes(p)).toBe(480);
+    expect(p.flags).not.toContain("shift_exceeds_24h");
+    expect(p.flags).not.toContain("negative_shift_duration");
+  });
+});
+
+describe("impossible shifts are never paid", () => {
+  // The flag existed before and was decorative: reconcileTimecards skipped only
+  // shifts with a MISSING punch, so a pair measuring 1,449 minutes was paid
+  // 24.15h ($362.25 at $15/h) with "shift_exceeds_24h" attached. The backend
+  // copy always skipped it, so the cron and the Payroll page disagreed.
+  it("pays 0 for a >24h shift but keeps it visible", () => {
+    const weeks = reconcileTimecards(
+      [{
+        employee_name: "Moin",
+        shift_date: "2026-03-07",
+        clock_in: "2026-03-07 09:00",
+        clock_out: "2026-03-09 10:00",
+      }],
+      { rates: { Moin: { base_rate: 15 } } }
+    );
+    expect(weeks[0].paid_minutes).toBe(0);
+    expect(weeks[0].total_pay).toBe(0);
+    expect(weeks[0].shifts).toHaveLength(1);
+    expect(weeks[0].flags).toContain("shift_exceeds_24h");
+  });
+
+  it("still pays the sound shifts in a week that holds a broken one", () => {
+    const weeks = reconcileTimecards(
+      [
+        { employee_name: "Moin", shift_date: "2026-03-02", clock_in: "08:00", clock_out: "16:00" },
+        { employee_name: "Moin", shift_date: "2026-03-03", clock_in: "08:00", clock_out: "16:00" },
+        { employee_name: "Moin", shift_date: "2026-03-04", clock_in: "2026-03-04 09:00", clock_out: "2026-03-06 09:00" },
+      ],
+      { rates: { Moin: { base_rate: 15 } } }
+    );
+    expect(weeks[0].paid_minutes).toBe(900); // 2 x (480 - 30)
+    expect(weeks[0].total_pay).toBe(225);
+    expect(weeks[0].flags).toContain("shift_exceeds_24h");
   });
 });
 

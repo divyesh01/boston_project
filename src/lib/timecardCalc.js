@@ -25,26 +25,57 @@ import { toCents, fromCents } from '@/lib/decimal';
  *     module used to underpay 2,243 minutes at $15.00/h by 5 cents (it paid
  *     $560.70 instead of $560.75). See scripts/probe-payroll-minute-rounding.mjs.
  *
- * Time format accepted by `parseTime`: "HH:MM" 24h, "H:MM AM/PM", or a full
- * ISO datetime string whose time part is read.
+ *   * A DURATION IS A MEASUREMENT WHERE THE DATA ALLOWS ONE. Two times of day
+ *     can only describe a span of 0..1439 minutes, so when a punch carries its
+ *     own date the date is used: a 2026-03-07 09:00 -> 2026-03-09 10:00 pair is
+ *     2,940 minutes, not 60. A span that is impossible (>= 24h, or negative) is
+ *     flagged and paid nothing — see UNPAYABLE_FLAGS and
+ *     scripts/probe-timecard-shift-span.mjs.
+ *
+ * Time format accepted by `parseTime`: "HH:MM" 24h, "H:MM AM/PM", "HH", or a
+ * full datetime "YYYY-MM-DD[T ]<time>" whose time part it reads. It returns a
+ * minute of a real day (0..1439) or null, never anything else. The date half of
+ * a full datetime is read separately, by `normalisePunch`.
  */
 
 const MS_PER_MIN = 60 * 1000;
 const MIN_PER_HOUR = 60;
+const MIN_PER_DAY = 24 * 60;
 const DEFAULT_WEEKLY_OT_HOURS = 40;
 const DEFAULT_OT_MULTIPLIER = 1.5;
 const DEFAULT_BREAK_MINUTES = 30;
 const DEFAULT_BREAK_AFTER_HOURS = 6;
 
 /**
+ * Flags that describe a duration no pay can be derived from. A shift carrying
+ * one is listed and flagged for review but contributes no minutes.
+ */
+const UNPAYABLE_FLAGS = ["shift_exceeds_24h", "negative_shift_duration"];
+
+/**
  * Parse a clock time into minutes since local midnight.
+ *
+ * The return value is a minute of a real day — an integer in [0, 1439] — or
+ * null. Every branch enforces that, because a caller cannot tell a bad minute
+ * from a good one and `minutesBetween` will happily turn 1479 into a shift
+ * longer than a day. The AM/PM branch used to validate neither field, so
+ * "11:99 PM" returned 1479 and "25:00 AM" silently became 01:00; that is how a
+ * 24.15-hour shift reached payroll and was paid $362.25 despite being flagged
+ * impossible. See scripts/probe-timecard-shift-span.mjs.
+ *
+ * A full datetime is accepted and only its time part is read here. The DATE
+ * part matters too — see `datePartOf` and `normalisePunch`.
+ *
  * @param {string|number} value
- * @returns {number|null} minutes since midnight, or null if unparseable.
+ * @returns {number|null} minutes since midnight in [0, 1439], or null if
+ *   unparseable or not a time that exists.
  */
 export function parseTime(value) {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value === "number") {
-    return Number.isFinite(value) ? Math.round(value) : null;
+    if (!Number.isFinite(value)) return null;
+    const n = Math.round(value);
+    return n >= 0 && n < MIN_PER_DAY ? n : null;
   }
   const s = String(value).trim();
   if (!s) return null;
@@ -57,9 +88,18 @@ export function parseTime(value) {
   // "HH:MM AM/PM" or "H:MM am"
   let m = timePart.match(/^(\d{1,2}):(\d{2})\s*([AaPp][Mm])$/);
   if (m) {
-    let h = Number(m[1]) % 12;
+    // Range-check BEFORE the mod, or an impossible hour becomes a plausible
+    // one: 25 % 12 is 1, so "25:00 AM" would read as 01:00 rather than being
+    // refused. 13..23 with a meridiem is contradictory but resolves to exactly
+    // one real time ("13:30 PM" -> 13:30), and exporters do emit it, so it is
+    // accepted here as it always has been.
+    const raw = Number(m[1]);
+    if (raw < 0 || raw > 23) return null;
+    const min = Number(m[2]);
+    if (min < 0 || min > 59) return null;
+    let h = raw % 12;
     if (/p/i.test(m[3])) h += 12;
-    return h * MIN_PER_HOUR + Number(m[2]);
+    return h * MIN_PER_HOUR + min;
   }
   // "HH:MM" 24h
   m = timePart.match(/^(\d{1,2}):(\d{2})$/);
@@ -83,11 +123,44 @@ export function parseTime(value) {
 /**
  * Minutes between two times-of-day, handling an overnight crossing.
  * If `out < in`, the shift crossed midnight (+24h).
+ *
+ * This can only ever return 0..1439 (verified exhaustively over all 2,073,600
+ * legal pairs), so a shift longer than a day is NOT representable here. When the
+ * punches carry their own dates, `normalisePunch` measures the real span
+ * instead; this function is the reading of last resort, for punches that are
+ * bare times of day.
  */
 export function minutesBetween(inMin, outMin) {
   let delta = outMin - inMin;
-  if (delta < 0) delta += 24 * MIN_PER_HOUR;
+  if (delta < 0) delta += MIN_PER_DAY;
   return delta;
+}
+
+/**
+ * The date a punch value states for itself, or "" if it is a bare time of day.
+ * `parseTime` accepts "YYYY-MM-DD HH:MM" and reads only the time; this reads the
+ * other half, so the two together describe an instant rather than a clock face.
+ */
+function datePartOf(value) {
+  if (typeof value !== "string") return "";
+  const m = value.trim().match(/^(\d{4}-\d{2}-\d{2})[T ]/);
+  return m ? m[1] : "";
+}
+
+/**
+ * A day (YYYY-MM-DD) as a count of days, for subtracting one date from another.
+ *
+ * Deliberately built with `Date.UTC` and never converted back: the difference of
+ * two UTC midnights is exact and immune to DST, whereas `new Date("2026-03-07")`
+ * is parsed as UTC and then reports the PREVIOUS day through the local getters
+ * in any zone behind UTC. Only the difference is ever used, so no local calendar
+ * date is derived from this.
+ */
+function dayIndex(day) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day || ""));
+  if (!m) return null;
+  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Number.isFinite(ms) ? Math.round(ms / 86400000) : null;
 }
 
 /**
@@ -122,10 +195,14 @@ export function weekBounds(day, weekStart = 0) {
 
 /**
  * Normalise a raw punch row into { employeeKey, employeeName, department,
- * date, clockIn, clockOut, flags }.
+ * date, clockIn, clockOut, durationMinutes, flags }.
  *
  * `clockIn`/`clockOut` are minutes since midnight. A missing clock-out leaves
  * clockOut null; the shift is flagged (never silently paid).
+ *
+ * `durationMinutes` is the shift's real span when both punches state a date and
+ * those dates differ, and null otherwise — see the comment on the calculation.
+ * It can exceed a day, and it can be negative; either is flagged and unpayable.
  *
  * @param {any} [p]  a raw punch row (any shape; only the known fields are read).
  *   Recognised: p.date or p.shift_date (YYYY-MM-DD the shift started),
@@ -138,24 +215,61 @@ export function normalisePunch(p = /** @type {Object} */ ({})) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return { date: "", clockIn: null, clockOut: null, employeeKey: keyOf(p), employeeName: nameOf(p), department: p.department || "", flags: ["missing_date"] };
   }
-  const clockIn = parseTime(p.clock_in ?? p.time_in ?? p.start_time);
-  const clockOut = parseTime(p.clock_out ?? p.time_out ?? p.end_time);
+  const rawIn = p.clock_in ?? p.time_in ?? p.start_time;
+  const rawOut = p.clock_out ?? p.time_out ?? p.end_time;
+  const clockIn = parseTime(rawIn);
+  const clockOut = parseTime(rawOut);
   const flags = [];
   if (clockIn === null) flags.push("missing_clock_in");
   if (clockOut === null) flags.push("missing_clock_out");
 
-  // A shift that comes back as a full 24h is two days mislabeled as one —
-  // flag it rather than pay an impossible duration. Same-time punches can only
-  // be a 24h double-day or a keying error; either way it needs review.
+  // How long was the shift? Two different questions, depending on what the data
+  // actually says.
+  //
+  // If the punches carry their own dates, the span is a measurement:
+  // (days apart × 1440) + (out − in). This is the only way a shift longer than a
+  // day can be seen at all — `minutesBetween` tops out at 1439, so a 2026-03-07
+  // 09:00 -> 2026-03-09 10:00 pair (2,940 real minutes) used to read as 60
+  // minutes with no flag, because the dates were matched by parseTime's regex
+  // and then thrown away.
+  //
+  // The clock-in's date may come from `shift_date`, which is documented as the
+  // day the shift STARTS on. The clock-out's must be explicit in the value: if
+  // only a time of day is given, which day it belongs to is unknown, and
+  // guessing it is what this block exists to stop.
+  //
+  // Two dates that are EQUAL are treated as no information beyond `shift_date`,
+  // so 22:00 -> 06:00 both stamped 2026-03-07 still reads as an 8-hour overnight
+  // rather than a contradiction. An exporter that fails to advance the date is
+  // common; the alternative reading (an out before the in) is incoherent, and
+  // refusing to pay a legitimate overnight shift is a worse failure than the one
+  // being fixed. Dates that DIFFER are believed — including when they run
+  // backwards, which is a contradiction no reading can repair.
+  let durationMinutes = null;
   if (clockIn !== null && clockOut !== null) {
-    const dur = clockOut === clockIn ? 24 * MIN_PER_HOUR : minutesBetween(clockIn, clockOut);
-    if (dur >= 24 * MIN_PER_HOUR) flags.push("shift_exceeds_24h");
+    const inIdx = dayIndex(datePartOf(rawIn) || date);
+    const outIdx = dayIndex(datePartOf(rawOut));
+    if (inIdx !== null && outIdx !== null && outIdx !== inIdx) {
+      durationMinutes = (outIdx - inIdx) * MIN_PER_DAY + (clockOut - clockIn);
+    }
+
+    if (durationMinutes === null) {
+      // Bare times of day. A same-time pair can only be a 24h double-day or a
+      // keying error; either way it needs review rather than pay.
+      const dur = clockOut === clockIn ? MIN_PER_DAY : minutesBetween(clockIn, clockOut);
+      if (dur >= MIN_PER_DAY) flags.push("shift_exceeds_24h");
+    } else if (durationMinutes < 0) {
+      flags.push("negative_shift_duration");
+    } else if (durationMinutes >= MIN_PER_DAY) {
+      flags.push("shift_exceeds_24h");
+    }
   }
 
   return {
     date,
     clockIn,
     clockOut,
+    durationMinutes,
     employeeKey: keyOf(p),
     employeeName: nameOf(p),
     department: p.department || "",
@@ -179,9 +293,18 @@ function nameOf(p) {
 /**
  * Round a shift's duration to a workable clock precision. Shifts are counted to
  * the minute; a 0-min shift is dropped unless it was flagged.
+ *
+ * `durationMinutes` is the measured span when `normalisePunch` could read one
+ * from the punch dates, and is preferred over the time-of-day reading — which
+ * cannot represent anything longer than a day. A negative span is a
+ * contradiction in the data (it carries `negative_shift_duration` and
+ * `reconcileTimecards` refuses to pay it); it is reported as 0 rather than as a
+ * plausible positive number. Shifts built by hand, without the field, are
+ * unaffected.
  */
 export function shiftDurationMinutes(shift) {
   if (shift.clockIn === null || shift.clockOut === null) return 0;
+  if (Number.isFinite(shift.durationMinutes)) return Math.max(0, shift.durationMinutes);
   return minutesBetween(shift.clockIn, shift.clockOut);
 }
 
@@ -273,6 +396,11 @@ export function payCentsForMinutes(rateCents, minutes) {
  *   any consumer that only understands hours should multiply. Multiplying a
  *   rate by `paid_minutes` would pay overtime minutes at the base rate, which
  *   is why the split is exposed rather than left to the caller.
+ *
+ *   A shift with a missing punch, or with a duration that is impossible
+ *   (UNPAYABLE_FLAGS), is listed in `shifts` and contributes its flags to the
+ *   week, but contributes NO minutes. A week can therefore be flagged and still
+ *   pay correctly for its sound shifts.
  */
 export function reconcileTimecards(punches = [], options = {}) {
   const {
@@ -321,6 +449,18 @@ export function reconcileTimecards(punches = [], options = {}) {
 
     // Only pay shifts with both punches. A missing punch is reviewed, not paid.
     if (shift.clockIn === null || shift.clockOut === null) continue;
+
+    // Nor is a shift whose duration is impossible. `normalisePunch` flagged it,
+    // and until now that flag was decorative here: a pair that measured 1,449
+    // minutes was paid 24.15 hours ($362.25 at $15/h) with the flag attached.
+    // The backend copy (base44/functions/autoPayroll/entry.ts) has always
+    // skipped it, so the cron and the Payroll page paid different amounts for
+    // identical rows. Nothing in the data says what the real span was, so any
+    // paid number would be a guess — and this module's rule is to never guess a
+    // punch into real pay. The shift stays in `shifts` and its flag stays on the
+    // week, and the import path raises a high-severity AnomalyAlert per flag
+    // (reportParsers.js), so a human is told rather than a wrong number booked.
+    if (UNPAYABLE_FLAGS.some((f) => shift.flags.includes(f))) continue;
 
     const paid = applyBreaks(shift, { deductBreaks, breakMinutes, breakAfterHours });
     row.unpaid_break_minutes += paid.breakMinutes;

@@ -11,8 +11,10 @@ import * as crypto from 'node:crypto';
 //
 // Policy: weekly overtime after 40h, unpaid 30-min break per shift over 6h
 // (an explicit punch.break_minutes wins), overnight shifts span midnight, and
-// punches missing in/out are flagged and NEVER paid.
+// punches missing in/out — or with a duration that is impossible — are flagged
+// and NEVER paid.
 const MIN_PER_HOUR = 60;
+const MIN_PER_DAY = 24 * 60;
 const WEEKLY_OT_HOURS = 40;
 const OT_MULTIPLIER = 1.5;
 const BREAK_MINUTES = 30;
@@ -38,18 +40,30 @@ const fromCents = (cents: number) => cents / 100;
 const payCentsForMinutes = (rateCents: number, minutes: number) =>
   Math.round((rateCents * minutes) / MIN_PER_HOUR);
 
+// Returns a minute of a real day (0..1439) or null — never anything else. The
+// AM/PM branch used to range-check neither field, so "11:99 PM" returned 1479
+// and "25:00 AM" became 01:00 (25 % 12 = 1). See the same note in
+// src/lib/timecardCalc.js and scripts/probe-timecard-shift-span.mjs.
 function parseTime(value: any): number | null {
   if (value === null || value === undefined || value === "") return null;
-  if (typeof value === "number") return Number.isFinite(value) ? Math.round(value) : null;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return null;
+    const n = Math.round(value);
+    return n >= 0 && n < MIN_PER_DAY ? n : null;
+  }
   const s = String(value).trim();
   if (!s) return null;
   const iso = s.match(/^\d{4}-\d{2}-\d{2}[T ](.*)$/);
   const timePart = (iso ? iso[1] : s).trim();
   let m = timePart.match(/^(\d{1,2}):(\d{2})\s*([AaPp][Mm])$/);
   if (m) {
-    let h = Number(m[1]) % 12;
+    const raw = Number(m[1]);
+    if (raw < 0 || raw > 23) return null;
+    const min = Number(m[2]);
+    if (min < 0 || min > 59) return null;
+    let h = raw % 12;
     if (/p/i.test(m[3])) h += 12;
-    return h * MIN_PER_HOUR + Number(m[2]);
+    return h * MIN_PER_HOUR + min;
   }
   m = timePart.match(/^(\d{1,2}):(\d{2})$/);
   if (m) {
@@ -68,9 +82,29 @@ function parseTime(value: any): number | null {
   return null;
 }
 
+// The date a punch value states for itself, or "" if it is a bare time of day.
+// parseTime reads the time half; a shift longer than a day is only visible in
+// the other half.
+function datePartOf(value: any): string {
+  if (typeof value !== "string") return "";
+  const m = value.trim().match(/^(\d{4}-\d{2}-\d{2})[T ]/);
+  return m ? m[1] : "";
+}
+
+// A day as a count of days, for subtracting one date from another. Built with
+// Date.UTC and never converted back: the difference of two UTC midnights is
+// exact and immune to DST, while `new Date("2026-03-07")` reports the previous
+// day through the local getters in any zone behind UTC.
+function dayIndex(day: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day || ""));
+  if (!m) return null;
+  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Number.isFinite(ms) ? Math.round(ms / 86400000) : null;
+}
+
 function minutesBetween(inMin: number, outMin: number): number {
   let delta = outMin - inMin;
-  if (delta < 0) delta += 24 * MIN_PER_HOUR;
+  if (delta < 0) delta += MIN_PER_DAY;
   return delta;
 }
 
@@ -95,8 +129,10 @@ function reconcileTimecards(punches: any[]): any[] {
   for (const p of punches || []) {
     const date = String(p.date || p.shift_date || "").slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-    const clockIn = parseTime(p.clock_in ?? p.time_in ?? p.start_time);
-    const clockOut = parseTime(p.clock_out ?? p.time_out ?? p.end_time);
+    const rawIn = p.clock_in ?? p.time_in ?? p.start_time;
+    const rawOut = p.clock_out ?? p.time_out ?? p.end_time;
+    const clockIn = parseTime(rawIn);
+    const clockOut = parseTime(rawOut);
     const employeeKey = String(p.employee_name ?? "").trim();
     if (!employeeKey) continue;
     const bounds = weekBounds(date, 0);
@@ -120,8 +156,27 @@ function reconcileTimecards(punches: any[]): any[] {
       row.flags.add(clockIn === null ? "missing_clock_in" : "missing_clock_out");
       continue;
     }
-    let dur = clockOut === clockIn ? 24 * MIN_PER_HOUR : minutesBetween(clockIn, clockOut);
-    if (dur >= 24 * MIN_PER_HOUR) {
+    // How long was the shift? When both punches state a date and those dates
+    // differ, the span is a measurement: (days apart × 1440) + (out − in). Two
+    // times of day can only describe 0..1439 minutes, so this is the only way a
+    // shift longer than a day can be seen — a 2026-03-07 09:00 -> 2026-03-09
+    // 10:00 pair (2,940 real minutes) used to read as 60 minutes with no flag.
+    // Equal dates are treated as no information beyond the shift date, so an
+    // overnight pair an exporter failed to advance still reads as 8 hours.
+    // Parity with normalisePunch in src/lib/timecardCalc.js.
+    let dur: number;
+    const inIdx = dayIndex(datePartOf(rawIn) || date);
+    const outIdx = dayIndex(datePartOf(rawOut));
+    if (inIdx !== null && outIdx !== null && outIdx !== inIdx) {
+      dur = (outIdx - inIdx) * MIN_PER_DAY + (clockOut - clockIn);
+      if (dur < 0) {
+        row.flags.add("negative_shift_duration");
+        continue;
+      }
+    } else {
+      dur = clockOut === clockIn ? MIN_PER_DAY : minutesBetween(clockIn, clockOut);
+    }
+    if (dur >= MIN_PER_DAY) {
       row.flags.add("shift_exceeds_24h");
       continue;
     }

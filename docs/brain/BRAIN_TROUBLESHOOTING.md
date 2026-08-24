@@ -55,6 +55,7 @@
 | 51 | "Require password change at next login" was a decorative switch: `handleCreate` sent `must_change_password: true` hard-coded, so turning it OFF changed nothing — the account still needed a change, the roster still drew the amber badge, and the success toast promised the admin the exact behaviour they had just switched off | MEDIUM | FIXED 2026-08-24 | `src/pages/Users.jsx` — one `const mustChange = form.must_change_password !== false` used by the create call, the toast wording and the `<Switch checked>`; the probe asserts the expression COUNT so the three cannot drift. Default stays ON. See section 30.3 | (This commit) |
 | 52 | **No toast this application has ever shown could be dismissed, or could expire.** Three independent sufficient causes: `toaster.jsx` rendered `<ToastClose />` with no `onClick` (it is a hand-rolled `<button>` — the Radix primitives had been replaced with plain divs); **nothing anywhere dispatched `DISMISS_TOAST`**, so the whole auto-expiry path was unreachable code; and `TOAST_REMOVE_DELAY` was `1_000_000`. Plus `TOAST_LIMIT = 20` as a permanent ceiling (~1800px in a `max-h-screen` container with no scroll, so the oldest were clipped out of the viewport), and `ToastProvider`/`ToastViewport` carrying BYTE-IDENTICAL fixed class strings — the toasts lived in the provider, so the empty viewport was a 32px invisible strip **swallowing clicks on every page in the app**. A page reload was the only way to clear a toast | HIGH | FIXED 2026-08-24 | `src/components/ui/use-toast.jsx` — the missing `dismissTimers` map, `DEFAULT_DURATION_MS` (5s / 10s destructive), `TOAST_LIMIT` 3, `TOAST_REMOVE_DELAY` 200 (measured: the exit animation compiles to 150ms); `toaster.jsx` — `onClick={() => dismiss(id)}`, `open`/`onOpenChange` out of the spread; `toast.jsx` — one `pointer-events-none` viewport, `open`→`data-state`, `type="button"`, variant-split ARIA. `src/components/ui/toast.test.jsx` (NEW, 17 vitest cases) + `scripts/probe-toast-lifecycle.mjs` (NEW, 68 assertions), 8 mutations. See section 30.4 | (This commit) |
 | 53 | **Payroll paid people from a display rounding, and lost cents every week.** A punch pair is an integer number of minutes, but `reconcileTimecards` rounded `hours` to 2 decimals *for a label* and then multiplied the rate by that label. Measured against the shipped code: 2,243 paid minutes at $15.00/h paid **$560.70 instead of $560.75**, and 140 overtime minutes at $22.50/h paid **$52.43 instead of $52.50**. Systematic and always downward, because the intermediate had already been truncated. Three copies of the arithmetic existed and the one that actually pays people — `runLocalAutoPayroll` in `src/api/base44Client.js` — is **protected**; `base44/functions/autoPayroll/entry.ts` was worse still, doing raw float dollar math (`baseRate * hours`, `Math.round(totalPay * 100) / 100`) that CLAUDE.md's BUSINESS mandate forbids outright, in a file that **no lint or typecheck gate covers** | HIGH | FIXED 2026-08-24 | `src/lib/timecardCalc.js` — rows carry `paid_minutes`/`regular_minutes`/`overtime_minutes` as integers, the 40h cap is compared in minutes, `hours` is the **exact quotient** `minutes / 60` and is never rounded, and pay goes through a new exported `payCentsForMinutes(rateCents, minutes)`. The protected file was **not touched**: it recomputes pay from `hours` itself, so an exact multiplicand puts its existing integer-cent math on the right cent (measured 224300c, where the 2-dp path gave 224280c). `base44/functions/autoPayroll/entry.ts` — inlined `toCents`/`fromCents`/`payCentsForMinutes`; `byEmployee` sums minutes and divides once. `src/pages/Expenses.jsx` — both hours render sites go through `formatNumber(x, 'auto')`, since `hours` is now `37.38333333333333`. `eslint.config.js` + `jsconfig.json` — the ignore note claiming typecheck gated these `.ts` files was false and now says so. `scripts/probe-payroll-minute-rounding.mjs` (NEW, 61 assertions, 6 mutations, incl. a 25,929-pair determinism sweep). See section 31 | (This commit) |
+| 54 | **A shift longer than a day was paid as if it were an hour, and the flag that was supposed to stop it did nothing.** Three independent defects stacked. (1) `parseTime`'s AM/PM branch validated **nothing**: it reduced the hour mod 12 *before* any range check, so `"11:99 PM"` returned **1479** and `"25:00 AM"` returned **60** — a minute-of-day above the legal 1439 maximum. The numeric branch was unchecked too (`3000`→3000, `-60`→-60). (2) `shift_exceeds_24h` was **decorative** in the client path: `reconcileTimecards` skipped only shifts with a *missing* punch, so `"12:00 AM"`→`"11:99 PM"` came out as `paid_minutes 1449, hours 24.15, total_pay 362.25` **with the flag attached**, while `base44/functions/autoPayroll/entry.ts` always skipped it — the cron and the Payroll page paid different amounts for identical rows. (3) A full-datetime punch had its date **parsed and then discarded**: `clock_in "2026-03-07 09:00"` → `clock_out "2026-03-09 10:00"` is 2,940 real minutes and read as `paid_minutes 60, total_pay 15, flags []`; a backwards-dated pair paid 450 minutes with no flag at all | HIGH | FIXED 2026-08-24 | `src/lib/timecardCalc.js` — `parseTime` range-checks **before** the mod (`raw > 23` and `min > 59` both reject) and bounds the numeric branch to `0..1439`; new private `datePartOf`/`dayIndex` measure the span from the punch dates *when both are known and differ*, via exact `Date.UTC` midnight arithmetic; `normalisePunch` publishes `durationMinutes` and adds `negative_shift_duration`; `reconcileTimecards` refuses to pay any shift carrying an `UNPAYABLE_FLAGS` member, while still listing it and keeping the flag on the week. Same three fixes inlined in `base44/functions/autoPayroll/entry.ts`. `src/api/base44Client.js` is **protected and untouched** — it imports `reconcileTimecards`, so the live payroll path inherits the fix. `scripts/probe-timecard-shift-span.mjs` (NEW, 73 assertions, 11 mutations) + 7 new vitest cases in `src/lib/timecardCalc.test.js` (21→28) so CI gates it, since CI does not run `verify:all`. See section 32 | (This commit) |
 
 ---
 
@@ -1830,11 +1831,258 @@ protected `base44Client.js`.
   gone; this is a ≤1c tie-break. Fixing it needs ~6 lines in a **protected**
   file, so it is prepared and reported, not applied.
 * **`entry.ts` never pays a `shift_exceeds_24h` shift (it `continue`s) while
-  `timecardCalc.js` does pay it.** A real divergence between the two copies, but
-  it is tracker V2 / #75, not this defect.
+  `timecardCalc.js` does pay it.** A real divergence between the two copies, and
+  it was left for tracker V2 / #75 rather than folded in here. **Closed the same
+  day — see section 32**, which makes `timecardCalc.js` match `entry.ts` (refuse
+  to pay) rather than the other way round.
 * **`payroll_status: "pending"` (backend) vs `"approved"` (local mirror).**
   Pre-existing, unrelated to money.
 * **`payrollCalc.js:44-46` `calculatePay`.** The tracker text said to thread
   minutes through here too. It receives hand-typed form hours; **no minute basis
   exists at that boundary**, so it is not a defect site.
+
+---
+
+# 32. A 49-HOUR SHIFT PAID ONE HOUR, AND ITS OWN FLAG WAS DECORATIVE (tracker #54)
+
+> [!CAUTION]
+> Three defects stacked in one code path, each sufficient on its own to book a
+> wrong number. All figures below were **measured against the shipped code**
+> before the fix, not reasoned about.
+
+## 32.1 What the audit said, and what was actually there
+
+The audit item was one line: *"a >24h shift silently computes as minutes and
+evades its own flag."* That described the middle defect. Probing it turned up two
+more, one on each side of it.
+
+**Defect 1 — `parseTime` validated nothing on the AM/PM branch.** The branch did
+`h = Number(m[1]) % 12` and only then used the value. Reducing mod 12 *before*
+range-checking turns an impossible hour into a plausible one, and the minutes
+were never checked at all:
+
+| input | returned | legal max |
+|---|---|---|
+| `"11:99 PM"` | **1479** | 1439 |
+| `"25:00 AM"` | **60** (25 % 12 = 1 → 01:00) | — |
+| `"99:99 PM"` | **999** | 1439 |
+| `3000` (number) | **3000** | 1439 |
+| `-60` (number) | **-60** | 0 |
+| `1e9` (number) | **1e9** | 1439 |
+
+An exhaustive sweep of every `HH:MM[ AM|PM]` with HH, MM ∈ 0..99 — 50,000 inputs
+— returned a maximum of **1479**. The 24h branch (`"25:99"`) was already correct;
+only the AM/PM and numeric branches were open.
+
+**Defect 2 — `shift_exceeds_24h` was decorative in the client path.**
+`reconcileTimecards` skipped a shift only when a punch was *missing*. So
+`"12:00 AM"` → `"11:99 PM"` produced:
+
+```
+flags        ["shift_exceeds_24h", "unpaid_break_applied"]
+paid_minutes 1449
+hours        24.15
+total_pay    362.25      // at $15.00/h
+```
+
+It flagged the shift and **paid it anyway**. `base44/functions/autoPayroll/entry.ts`
+`continue`d on the same flag, so the nightly cron and the Payroll page paid
+different amounts for byte-identical rows.
+
+**Defect 3 — a dated punch had its date parsed, then thrown away.** `parseTime`
+accepts `"2026-03-07 09:00"` by taking the time part, which is correct for a
+minute-of-day. Nothing then looked at the **date** part:
+
+| punches | real span | read as | flags |
+|---|---|---|---|
+| `2026-03-07 09:00` → `2026-03-09 10:00` | 2,940 min (49h) | `paid_minutes 60, total_pay 15` | `[]` |
+| `2026-03-07 22:00` → `2026-03-06 06:00` | impossible (backwards) | `paid_minutes 450, total_pay 112.50` | `[]` |
+
+A two-day shift was paid one hour, silently, with no flag raised.
+
+## 32.2 The causal chain (why defect 2 was unreachable on its own)
+
+An exhaustive sweep of `minutesBetween(a, b)` over **all 2,073,600** legal pairs
+a, b ∈ 0..1439 returns a maximum of **1439**. So `dur >= 1440` cannot be reached
+from two legal minutes-of-day. The only two ways in were:
+
+1. **Defect 1** handing it an out-of-range minute (1479), and
+2. the deliberate `clockOut === clockIn → 1440` synthesis, which pays 0 anyway
+   and is harmless — it exists precisely to catch "two days mislabeled as one".
+
+That is why fixing `parseTime` and fixing the pay-skip had to happen together:
+either alone leaves a hole. Defect 3 was independent of both.
+
+## 32.3 The design rule that keeps the fix from breaking real shifts
+
+Two times of day can only ever describe 0..1439 minutes. A longer span is
+**unrepresentable** in that pair, so it has to come from somewhere else — and the
+only other source in the row is the punch dates.
+
+The rule chosen, and the reason:
+
+> **Measure the span from the punch dates only when both days are known and they
+> differ.** Equal dates carry no information beyond `shift_date`, so
+> `22:00 → 06:00` stamped with the same day still reads as an 8-hour overnight
+> and still pays.
+
+This was decided *after* reading `scanTimecard` (`src/lib/reportParsers.js`
+~1300-1400) and measuring that it copies the CSV cell **verbatim** and never
+composes "date + time" itself:
+
+```js
+const inTime = String(out.clock_in || "").trim();
+const outTime = String(out.clock_out || "").trim();
+```
+
+So a dated punch's date is the *exporter's own statement*, not something this
+codebase synthesised — which is what makes it trustworthy enough to measure
+from. Recorded in-code as: *"refusing to pay a legitimate overnight shift is a
+worse failure than the one being fixed."* Nothing that used to pay stops paying
+unless the data itself proves the span impossible.
+
+## 32.4 The fix
+
+`src/lib/timecardCalc.js`:
+
+```js
+const MIN_PER_DAY = 24 * 60;
+/** Flags that describe a duration no pay can be derived from. */
+const UNPAYABLE_FLAGS = ["shift_exceeds_24h", "negative_shift_duration"];
+```
+
+`parseTime` — the order of the two statements is the whole fix:
+
+```js
+// Range-check BEFORE the mod, or an impossible hour becomes a plausible one...
+const raw = Number(m[1]);
+if (raw < 0 || raw > 23) return null;
+const min = Number(m[2]);
+if (min < 0 || min > 59) return null;
+let h = raw % 12;
+```
+
+and the numeric branch is bounded to one day:
+
+```js
+if (!Number.isFinite(value)) return null;
+const n = Math.round(value);
+return n >= 0 && n < MIN_PER_DAY ? n : null;
+```
+
+Two new private helpers measure the span:
+
+```js
+function datePartOf(value) { /* "^YYYY-MM-DD" followed by T or space */ }
+function dayIndex(day)     { /* Date.UTC(...) / 86400000, rounded */ }
+```
+
+`dayIndex` builds a **UTC** midnight and is never converted back, so the
+difference of two day indices is exact and DST-immune. Using
+`new Date("2026-03-07")` and local getters instead would name the **previous**
+day in every zone behind UTC — the trap documented in section 27.2.
+
+`normalisePunch` now publishes the measurement and adds one flag:
+
+```js
+const inIdx = dayIndex(datePartOf(rawIn) || date);
+const outIdx = dayIndex(datePartOf(rawOut));
+if (inIdx !== null && outIdx !== null && outIdx !== inIdx) {
+  durationMinutes = (outIdx - inIdx) * MIN_PER_DAY + (clockOut - clockIn);
+}
+```
+
+and `reconcileTimecards` stops paying what it flagged — one line, placed right
+after the existing missing-punch skip:
+
+```js
+if (UNPAYABLE_FLAGS.some((f) => shift.flags.includes(f))) continue;
+```
+
+The shift **stays** in `row.shifts` and its flag **stays** on the week, so the
+review surface is unchanged; only the money stops.
+
+The same three fixes are inlined in `base44/functions/autoPayroll/entry.ts`,
+which has its own copy of `parseTime`/`reconcileTimecards` and cannot share a
+module (Deno serverless, section 31.10).
+
+## 32.5 The new flag needed no UI work
+
+`src/lib/reportParsers.js` loops **every** flag `normalisePunch` emits into a
+high-severity `AnomalyAlert`:
+
+```js
+for (const flag of n.flags) { /* ... severity: "high" ... */ }
+```
+
+Confirmed by grep that **no file outside the two engines enumerates timecard flag
+names** — the only hardcoded names live in the vitest file. So
+`negative_shift_duration` surfaces to a human on import for free, and a future
+flag will too.
+
+## 32.6 Blast radius (Observed)
+
+Exactly **two** importers of `timecardCalc`:
+
+* `src/api/base44Client.js:4` — imports `reconcileTimecards` and calls it inside
+  `runLocalAutoPayroll`. That file is **PROTECTED** and was **not touched**: the
+  live production payroll path inherits the fix through the import. This is
+  CLAUDE.md Phase 5 (fix upstream), not a PROTECTED_FILES.md Rule 2/3 wrapper.
+* `src/lib/reportParsers.js:22` — imports `normalisePunch` (32.5).
+
+## 32.7 Verification
+
+| gate | result |
+|---|---|
+| `scripts/probe-timecard-shift-span.mjs` (NEW, 73 assertions) | **73 passed, 0 failed** (before the fix: **50 passed, 19 failed**) |
+| `scripts/verify-timecard.mjs` | **47 passed, 0 failed** |
+| `src/lib/timecardCalc.test.js` (vitest) | **28 passed** (21 before; 7 new cases) |
+| `src/api/autoPayroll.test.js` (vitest) | **6 passed** |
+| `npm run lint` | rc=0, **0 errors** |
+| `npm run typecheck` | rc=0, **0 errors** |
+| per-file `tsc` on `entry.ts` (31.10 recipe) | **exactly 3 TS2307** on Deno specifiers — unchanged from baseline |
+| mutation testing, 11 mutations | **11 killed, 0 survived**, both files restored md5-identical |
+| mutation testing of the **vitest** cases, 3 mutations | **3 killed** — `expected 1479 to be null`, `expected 2910 to be +0`, `expected null to be 2940` |
+
+The vitest cases were added deliberately: the probe runs under
+`npm run verify:all`, which **CI does not run**, while `npm test` does. Without
+them the money-relevant behaviour had no CI cover.
+
+The most informative mutation: removing the `UNPAYABLE_FLAGS` skip *while the
+span is correctly measured* makes the 49-hour shift pay **$791.25 (2,910 paid
+minutes)** — so that one line is more load-bearing after the fix than before it.
+
+## 32.8 A probe assertion that could not fail
+
+Section 10 of the new probe statically asserts that `entry.ts` carries the same
+guards. The first draft used:
+
+```js
+/m\[2\]\)\s*;[\s\S]{0,400}?/
+```
+
+which matches almost any text, and reported **PASS against unfixed code**. It was
+replaced with nine precise patterns scoped to a `parseTime`-only slice of the
+file:
+
+```js
+const entryParse = entry.split("function datePartOf")[0];
+```
+
+**A static assertion that cannot fail is worse than no assertion** — it converts
+an unverified claim into a green tick. Same class of hole as section 30's
+"asserted nothing = PASS".
+
+## 32.9 Deliberately left alone
+
+* **A multi-day shift with no date on the clock-out is undetectable.** If the
+  exporter gives only `"09:00"` → `"10:00"` for a 49-hour shift, nothing in the
+  row says so. That needs a schema column, not a code change.
+* **An exporter that stamps the shift date on *both* punches of an overnight
+  shift** is read as an 8-hour wrap, by the rule in 32.3. Deliberate.
+* **`"13:30 AM"` still returns 90.** Contradictory input, but in-contract (hour
+  mod 12) and it has always behaved this way; the vitest case pins it so the
+  behaviour cannot drift silently.
+* **`MS_PER_MIN` at `timecardCalc.js:32` is declared and never referenced.**
+  Pre-existing dead code, unrelated to this defect.
 

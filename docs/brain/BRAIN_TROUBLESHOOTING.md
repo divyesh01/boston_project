@@ -42,6 +42,11 @@
 | 38 | The Staff delete dialog asserted in prose that "payroll runs already recorded for this person are kept". True, but it could not say whether that meant one run or forty, and nothing kept the sentence honest if the schema changed | MEDIUM | FIXED 2026-08-20 | `src/lib/deleteGuard.js` — new `dependents` option folds the count and its integer-cent money value into the dialog; `src/pages/Payroll.jsx#handleDeleteStaff` supplies them. Guarded by `scripts/probe-delete-guard.mjs` (78/0), both branches mutation-tested | (Uncommitted) |
 | 39 | The CI `verify` job's typecheck step ran bare `npx tsc --noEmit`. With no root `tsconfig.json` that finds no input files, so it printed tsc's help text and exited 1 on **every** run — the step was simultaneously red and vacuous, and it had never type-checked anything | HIGH | FIXED 2026-08-21 | `.github/workflows/security.yml` — now `npm run typecheck`. See section 24 | (This commit) |
 | 40 | The same job's `npm audit --audit-level=high` could not pass while `xlsx` carries two high advisories SheetJS publishes no npm fix for, so the job was unpassable regardless of code quality | HIGH | FIXED 2026-08-21 | `scripts/audit-gate.mjs` (NEW) + `npm run audit:gate`. See section 24 | (This commit) |
+| 41 | The whole hotel database lived only in one browser's IndexedDB with **no backup of any kind**. Clearing site data destroyed every financial record permanently | CRITICAL | FIXED 2026-08-24 | `src/lib/dbArchive.js` (NEW) + "Backup & restore" in `src/pages/Settings.jsx`. 216 assertions. See BRAIN_FRONTEND.md 7.6 | (This commit) |
+| 42 | The base44 SDK's analytics module is `enabled: true` by default and `serverUrl` resolves to our own origin, so the live site POSTed to `analytics/track/batch` on a 60s heartbeat and every tab hide — a permanent `405` in the console. Latent worse case: setting `VITE_BASE44_BACKEND_URL` starts shipping page views to a third party while `PrivacyPolicy.jsx` promises data stays local | MEDIUM | FIXED 2026-08-24 | `src/lib/sdkAnalyticsOff.js` (NEW), imported **first** in `src/main.jsx`. 53 assertions. See section 26 | (This commit) |
+| 43 | `MonthlyCalendar.jsx` derived its grids from `period`/`month`/`year` while its KPIs aggregated `dateRange`, so six of seven periods drew ONE grid — a header reading "for August 2026" above cards summing 214 days | HIGH | FIXED 2026-08-24 | `src/lib/calendarGrids.js` (NEW) + `src/pages/MonthlyCalendar.jsx`. See section 25 and BRAIN_FRONTEND.md 16 | (This commit) |
+| 44 | The same page coloured cells by `room_revenue` but classified tiers and rendered the day modal from `total_revenue`, which the CSV importer never writes — every imported day grouped "low" behind a green cell, and tapping a $12,000 cell opened a panel reading $0.00 | HIGH | FIXED 2026-08-24 | `src/pages/MonthlyCalendar.jsx` — both now read `room_revenue`. See BRAIN_FINANCE.md 12.8 | (This commit) |
+| 45 | `MtdGrowth.jsx` headline card is labelled "Total Revenue" and reads the bare `total_revenue` field, which is populated by `ManualEntry.jsx` only — the card reads **$0.00 on every imported day** | HIGH | **OPEN** | `src/pages/MtdGrowth.jsx:14`, `:107`. Fix via `grossRevenueForPeriod()` and honour its `basis`, or relabel to room revenue. Needs its own probe | — |
 
 ---
 
@@ -688,4 +693,125 @@ file, ~40 minutes for 36 files, against a ~178s per-command ceiling. Pushed hard
 > falling on exactly the files that share the mutated resource. Before reporting any
 > mass failure, ask what all the failures have in common and whether the harness change
 > is that thing.
+
+---
+
+# 25. A PAGE THAT DESCRIBED ONE MONTH AND MEASURED EIGHT (tracker #43, #44)
+
+**Symptom the owner saw.** The live `/calendar` page under the default YTD filter: header
+"…for August 2026", one August grid, and directly beneath it KPI cards reading
+TOTAL MONTHLY REVENUE **$1,011,258** / **214 days with data**, AVERAGE OCCUPANCY 57.8%,
+ADR $81.80, REVPAR $47.26. Every number was correct. Every label was wrong.
+
+**Root cause.** One line in `MonthlyCalendar.jsx`:
+
+```js
+const isMultiMonth = period === "monthly" && months.length > 1;
+```
+
+`months` is only populated by the multi-month picker, so this is `false` for **ytd,
+yearly, quarterly, weekly, daily and custom** — six of seven periods drew a single grid
+while the KPIs beneath aggregated the whole `dateRange`. The derivation now lives in
+`src/lib/calendarGrids.js` and reads the same `dateRange` the KPIs do. Full rules and the
+two traps inside that derivation are in **BRAIN_FRONTEND.md section 16**; the field-choice
+half is in **BRAIN_FINANCE.md 12.8**.
+
+## 25.1 Two probe-authoring traps this one hit
+
+Both are reusable, and both produced a *passing* probe against a *broken* page.
+
+**A negative assertion can match the comment that explains the defect.** The page's
+comments quote the defective expressions on purpose, so a regex over the raw file text
+matched the *explanation* and every negative assertion passed vacuously. Fixed with a
+comment-stripping `code()` reader **plus** an assertion that comments were actually
+stripped — a non-vacuity check on the non-vacuity check.
+
+**An under-anchored pattern can match the wrong occurrence.**
+`/label=\{?["'][^"']*Room Revenue/` was meant to assert the KPI card's new label, but it
+also matched the day modal's own `label="Room Revenue"` — so it passed against the unfixed
+page. Re-anchored to `<KpiCard label="Total Room Revenue"`.
+
+> [!CAUTION]
+> **Always run a new probe against the UNFIXED file first and read the failure count.**
+> This one measured **53 PASS / 11 FAIL** before any edit. A probe written after the fix
+> and never shown a broken input is an assertion about nothing. Both traps above were
+> caught by that step and by nothing else.
+
+## 25.2 `= {}` parameter defaults fail the typecheck gate
+
+```js
+export function calendarMonths({ period, months } = {}) { }   // 4x TS2339
+```
+
+Under `npm run typecheck` (`tsc -p ./jsconfig.json`, `checkJs` on) an empty-object default
+makes the parameter infer as `{}`, so every destructured property is
+`TS2339 Property 'x' does not exist on type '{}'`. Take a named parameter with a JSDoc
+`@param {{...}} [filter]` and destructure in the body instead.
+
+---
+
+# 26. THE LIVE CONSOLE 405 (tracker #42)
+
+**Symptom.** On the deployed Worker, a repeating
+`POST /api/apps/<appId>/analytics/track/batch → 405 ()` in the browser console, with no
+visible effect on the app.
+
+**Cause.** `node_modules/@base44/sdk/dist/modules/analytics.js` ships `enabled: true`.
+`base44Client.js` (PROTECTED) passes `serverUrl: import.meta.env?.VITE_BASE44_BACKEND_URL || ""`,
+which is unset in this deployment, so the SDK builds a **same-origin** URL and POSTs to our
+own static-asset Worker, which answers 405. `createAnalyticsModule()` enqueues an
+`__initialization_event__`, arms a 60-second `setInterval` heartbeat that is never cleared,
+and registers a `visibilitychange` listener that `sendBeacon()`s on every tab hide.
+`flush()` ends in `catch { /* do nothing */ }`, so the console line is the *only* symptom
+the app will ever produce.
+
+**There is no supported off-switch.** `CreateClientOptions` has exactly one field
+(`onError`). The only documented control is the URL parameter `?analytics-enable=false`,
+which `getAnalyticsConfigFromUrlParams()` strips via `history.replaceState` and never
+persists. Hence `src/lib/sdkAnalyticsOff.js`, imported as the **first** statement of
+`src/main.jsx`.
+
+> [!CAUTION]
+> **The fix must MUTATE the shared config in place, not seed it.** `enabled` is read
+> exactly **once**, inside `createAnalyticsModule()`; neither `track()` nor `flush()`
+> re-checks it. `getSharedInstance(name, factory)` stores at
+> `window.base44SharedInstances[name]` and skips the factory when the slot already exists.
+> In the production bundle the SDK lands in the hoisted vendor chunk, whose body runs
+> before **any** entry-chunk code — measured in the real `dist/`: the entry imports it at
+> offset 3,772 of 382,057 while `main.jsx`'s own body is last at 380,560. So by the time
+> our module runs, `analytics.js` has already created its state at module scope with
+> `enabled: true`, and the SDK's module-level `const` points at that exact object.
+>
+> **My first version only created the slot when absent.** It passed a probe that modelled
+> only the unbundled (vite dev / node harness) ordering, and **would have done nothing on
+> the live site.** Caught by measuring byte offsets in `dist/`, not by any test.
+> A green probe is not evidence about production module ordering unless the probe models
+> the bundle. Mutation M1 (create-only) now produces 9 FAILs including a real network send.
+
+**The misordered case is only partly mitigable, and says so out loud.** If
+`createAnalyticsModule()` has already run, its closures cannot be recalled. Setting
+`isProcessing = true` claims the processor slot permanently so `startAnalyticsProcessor()`
+bails and no timed drain flushes — but a `visibilitychange` beacon calls `flush()`
+directly and still fires. So the module `console.warn`s.
+
+> [!WARNING]
+> **Two build settings would delete this fix silently. Both are now asserted.**
+> `"sideEffects": false` in `package.json` would license Rollup to drop a
+> side-effect-only import (currently absent, and there is no `moduleSideEffects` override
+> in `vite.config.js`). And `vite.config.js`'s
+> `esbuild.pure: ['console.log','console.debug','console.info']` must **never** gain
+> `console.warn` — that warning is the only symptom of a misordered import.
+
+`heartBeatInterval: 0` and `maxQueueSize: 0` are deliberate defence in depth, and the
+mutations prove they carry weight: flipping only `enabled` back to true still blocked every
+network send (5 FAILs), while restoring all three SDK defaults produced 12 FAILs including
+live sends and session-id writes.
+
+> [!NOTE]
+> **Not Run: live-site confirmation.** `vite build` cannot execute in the Linux VM
+> (`Cannot find module '@rollup/rollup-linux-x64-gnu'` — `node_modules` here was installed
+> on Windows). The deployed bundle therefore still predates this fix, and tracker #41–#44
+> with it. The owner must rebuild on Windows and redeploy before any of these four can be
+> confirmed against the live site.
+
 

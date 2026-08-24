@@ -10,13 +10,14 @@ import { useGlobalFilters, MONTHS_LONG } from "@/lib/useGlobalFilters";
 import { Link } from "react-router-dom";
 import { money, money2, pct, num, inRange, C, occupancyStats, commissionFor, formatDayLabel } from "@/lib/hotel";
 import { getRevenueThresholds, getRevenueColor, getRevenueGroup, getRevenueGroupLabel } from "@/lib/revenueThresholds";
+import { calendarMonths, daysInMonth, MAX_GRIDS } from "@/lib/calendarGrids";
 import { getEventsInRange, DEMAND_ORDER, DEMAND_COLORS, peakDemand, distanceColor } from "@/lib/eventSchedule";
 import { ErrorState } from "@/components/ui/status";
 
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function MonthlyCalendar() {
-  const { dateRange, property, properties, month, year, months, period } = useGlobalFilters();
+  const { dateRange, property, properties, year, months, period } = useGlobalFilters();
   const occQ = useOccupancy(dateRange, property, months);
   const sourcesQ = useSources(dateRange, property, months);
   const { data: occ = [] } = occQ;
@@ -50,55 +51,64 @@ export default function MonthlyCalendar() {
     return map;
   }, [sources]);
 
+  // Build calendar grids from the SAME date range the KPIs are computed from.
+  // This used to be `period === "monthly" && months.length > 1`, which is false for
+  // ytd, yearly, quarterly, weekly, daily and custom — so all six fell into a
+  // single-month branch and the page drew, titled and labelled ONE month while the
+  // KPIs below aggregated the whole range (observed on the live site: "for August
+  // 2026" over "214 days with data"). calendarMonths() returns {year, month} pairs;
+  // the year travels with the month because a weekly or custom range can straddle a
+  // year boundary, and a grid titled from a single hardcoded year cannot.
+  const allMonths = useMemo(
+    () => calendarMonths({ period, months, year, dateRange }),
+    [period, months, year, dateRange]
+  );
+  // Rendering is capped, the selection is not: a range longer than MAX_GRIDS months
+  // still drives the KPIs and the label, and the surplus is stated below the grids
+  // rather than silently dropped.
+  const displayMonths = useMemo(() => allMonths.slice(0, MAX_GRIDS), [allMonths]);
+  const hiddenGrids = allMonths.length - displayMonths.length;
+  const isMultiMonth = allMonths.length > 1;
+
   // Events for the displayed calendar months. Expanded from the shared schedule
   // (one-time + recurring), keyed by date so each calendar cell can badge demand.
-
-  // Build calendar grids. When the owner picks several months (e.g. Apr–Jul),
-  // render one grid per selected month instead of silently clamping to the first.
-  const isMultiMonth = period === "monthly" && months.length > 1;
-  const displayMonths = useMemo(() => {
-    if (isMultiMonth) return [...months].sort((a, b) => a - b);
-    const m = month !== null ? month : new Date().getMonth();
-    return [m];
-  }, [isMultiMonth, months, month]);
-
-  const calYear = year || new Date().getFullYear();
   const eventsByDate = useMemo(() => {
+    const first = displayMonths[0];
+    const last = displayMonths[displayMonths.length - 1];
     const map = new Map();
     getEventsInRange({
-      from: `${calYear}-${String(displayMonths[0] + 1).padStart(2, "0")}-01`,
-      to: `${calYear}-${String(displayMonths[displayMonths.length - 1] + 1).padStart(2, "0")}-${new Date(calYear, displayMonths[displayMonths.length - 1] + 1, 0).getDate()}`,
+      from: `${first.year}-${String(first.month + 1).padStart(2, "0")}-01`,
+      to: `${last.year}-${String(last.month + 1).padStart(2, "0")}-${daysInMonth(last.year, last.month)}`,
     }).forEach((e) => {
       if (!map.has(e.date)) map.set(e.date, []);
       map.get(e.date).push(e);
     });
     return map;
-  }, [calYear, displayMonths]);
+  }, [displayMonths]);
 
   const selectedEvents = selectedDay ? (eventsByDate.get(selectedDay) || []) : [];
   const eventPopupEvents = eventPopupDay ? (eventsByDate.get(eventPopupDay) || []) : [];
 
   const grids = useMemo(() => {
-    return displayMonths.map((m) => {
-      const firstDay = new Date(calYear, m, 1);
-      const lastDayNum = new Date(calYear, m + 1, 0).getDate();
-      const startDow = firstDay.getDay();
+    return displayMonths.map(({ year: gridYear, month: m }) => {
+      const startDow = new Date(gridYear, m, 1).getDay();
+      const lastDayNum = daysInMonth(gridYear, m);
       const cells = [];
       for (let i = 0; i < startDow; i++) cells.push(null);
       for (let d = 1; d <= lastDayNum; d++) {
-        const dateStr = `${calYear}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+        const dateStr = `${gridYear}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
         cells.push({ date: dateStr, day: d, data: byDate.get(dateStr) });
       }
-      return { month: m, cells };
+      return { year: gridYear, month: m, cells };
     });
-  }, [displayMonths, calYear, byDate]);
+  }, [displayMonths, byDate]);
 
   const periodLabel = useMemo(() => {
-    if (isMultiMonth) {
-      return `${MONTHS_LONG[displayMonths[0]]} ${calYear} - ${MONTHS_LONG[displayMonths[displayMonths.length - 1]]} ${calYear}`;
-    }
-    return `${MONTHS_LONG[displayMonths[0]]} ${calYear}`;
-  }, [isMultiMonth, displayMonths, calYear]);
+    const name = (p) => `${MONTHS_LONG[p.month]} ${p.year}`;
+    const first = allMonths[0];
+    const last = allMonths[allMonths.length - 1];
+    return isMultiMonth ? `${name(first)} - ${name(last)}` : name(first);
+  }, [allMonths, isMultiMonth]);
 
   // KPIs describe the whole selected period — not just the first drawn month.
   // Previously they were computed from a single-month slice, so selecting
@@ -123,7 +133,12 @@ export default function MonthlyCalendar() {
       grid.cells.forEach((c) => {
         if (!c) return;
         if (!c.data) { g.nodata.push(c); return; }
-        const group = getRevenueGroup(c.data.total_revenue || 0);
+        // Classified by the same field the cells are coloured by, and against the
+        // same thresholds the card subtitle prints. This used to read
+        // `c.data.total_revenue`, which the CSV importer never writes (the export's
+        // "Total Revenue" column is stored as total_revenue_with_misc), so every
+        // imported day was grouped "low" while its cell was painted green.
+        const group = getRevenueGroup(c.data.room_revenue || 0);
         g[group].push(c);
       });
     });
@@ -198,18 +213,23 @@ export default function MonthlyCalendar() {
       )}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        <KpiCard label={isMultiMonth ? "Total Period Revenue" : "Total Monthly Revenue"} value={money(kpis.revenue)} sub={`${kpis.days} days with data`} accent={C.purple} icon={DollarSign} />
+        {/* Labelled "Room Revenue" because that is what it is: occupancyStats()
+            sums room_revenue only. It used to read "Total Monthly Revenue", which
+            invited a comparison with the Dashboard's $1,020,598.17 ledger total —
+            a figure that is larger by exactly the ancillary lines (see
+            RevenueReconciliation.js:46-59). */}
+        <KpiCard label="Total Room Revenue" value={money(kpis.revenue)} sub={`${kpis.days} days with data`} accent={C.purple} icon={DollarSign} />
         <KpiCard label="Average Occupancy" value={pct(kpis.occupancy)} accent={C.cyan} icon={Percent} />
         <KpiCard label="Average ADR" value={money2(kpis.adr)} accent={C.amber} icon={Gauge} />
         <KpiCard label="Average RevPAR" value={money2(kpis.revpar)} accent={C.green} icon={Gauge} />
-        <KpiCard label="Highest Day" value={money(kpis.highest)} sub="Peak revenue day" accent="#4ade80" icon={TrendingUp} />
-        <KpiCard label="Lowest Day" value={money(kpis.lowest)} sub="Minimum revenue day" accent="#ff6b6b" icon={TrendingDown} />
+        <KpiCard label="Highest Day" value={money(kpis.highest)} sub="Peak room revenue" accent="#4ade80" icon={TrendingUp} />
+        <KpiCard label="Lowest Day" value={money(kpis.lowest)} sub="Lowest room revenue" accent="#ff6b6b" icon={TrendingDown} />
       </div>
 
       {grids.map((grid) => (
         <Card
-          key={grid.month}
-          title={`${MONTHS_LONG[grid.month]} ${calYear} Calendar`}
+          key={`${grid.year}-${grid.month}`}
+          title={`${MONTHS_LONG[grid.month]} ${grid.year} Calendar`}
           subtitle={`Green ≥ ${money(revThresholds.highRevenueThreshold)} · Gray ${money(revThresholds.mediumRevenueThreshold)}–${money(revThresholds.highRevenueThreshold)} · Red < ${money(revThresholds.mediumRevenueThreshold)} (editable in Settings)`}
         >
           <div className="mb-3 flex flex-wrap items-center gap-3 text-[10px] text-slate-400">
@@ -294,6 +314,19 @@ export default function MonthlyCalendar() {
           </div>
         </Card>
       ))}
+
+      {/* Truncation is stated, not hidden. The KPIs and the period label above cover
+          the whole selection, so a silently capped grid list would put the page back
+          into exactly the state this page was fixed out of: describing one span while
+          measuring another. */}
+      {hiddenGrids > 0 && (
+        <div className="rounded-xl border border-[#FFB547]/20 bg-[#FFB547]/[0.06] p-4">
+          <p className="text-sm text-[#FFB547]">
+            ⚠ Only the first {MAX_GRIDS} months of {periodLabel} are drawn above. The KPIs cover the full
+            range, including {hiddenGrids} further month{hiddenGrids > 1 ? "s" : ""}. Narrow the date range to see them.
+          </p>
+        </div>
+      )}
 
       {/* Performance Groups */}
       <div className="grid gap-4 lg:grid-cols-3">
@@ -398,7 +431,11 @@ export default function MonthlyCalendar() {
               {selectedData ? (
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-3">
-                  <Metric label="Total Room Revenue" current={selectedData.total_revenue || 0} previous={prevDayData?.total_revenue || 0} fmt={money} />
+                  {/* room_revenue, the same number the cell that opened this dialog
+                      printed. It used to read `total_revenue` — a field the CSV
+                      importer never writes — so tapping a cell showing $12,000
+                      opened a panel reading $0.00 with an N/A change. */}
+                  <Metric label="Room Revenue" current={selectedData.room_revenue || 0} previous={prevDayData?.room_revenue || 0} fmt={money} />
                   <Metric label="Occupancy" current={selectedData.occupancy > 1 ? selectedData.occupancy / 100 : selectedData.occupancy || 0} previous={prevDayData?.occupancy > 1 ? prevDayData.occupancy / 100 : prevDayData?.occupancy || 0} fmt={pct} suffix=" pts" />
                   <Metric label="ADR" current={selectedData.adr || 0} previous={prevDayData?.adr || 0} fmt={money2} />
                   <Metric label="RevPAR" current={selectedData.revpar || 0} previous={prevDayData?.revpar || 0} fmt={money2} />

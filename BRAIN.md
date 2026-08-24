@@ -12,7 +12,7 @@
 | [FRONTEND] | `docs/brain/BRAIN_FRONTEND.md` | React UI, pages, components, or hooks. |
 | [BACKEND] | `docs/brain/BRAIN_BACKEND.md` | Base44 entities, serverless functions, configs. |
 | [FIXES] | `docs/brain/BRAIN_TROUBLESHOOTING.md` | Diagnosing known problems or emergency playbook. |
-| [INDEX] | `docs/brain/BRAIN_INDEX.md` | Verify file paths (418-file complete catalog). |
+| [INDEX] | `docs/brain/BRAIN_INDEX.md` | Verify file paths (422-file complete catalog). |
 | [MAP] | `docs/brain/BRAIN_DEPENDENCIES.md`| See what breaks if you edit a file (Auto-Generated). |
 
 ## SYSTEM ARCHITECTURE
@@ -63,7 +63,8 @@ the wrong package — always use `npm run typecheck`.**
 
 > [!CAUTION]
 > **If your shell caps a command's wall clock, shard the LIST — never lower
-> `--timeout`.** The 70 suites run serially and take 12-25 minutes total; the Linux
+> `--timeout`.** The suites run serially and take 12-25 minutes at 70 files, longer at
+> the current 100; the Linux
 > sandbox agents use here kills any single command at ~178s. Lowering `--timeout` to
 > fit does not shorten the run, it kills slow suites and labels them `TIMEOUT`. That
 > is exactly how this file came to claim "7 broken suites" on 2026-08-20 — six of the
@@ -92,16 +93,19 @@ the wrong package — always use `npm run typecheck`.**
 > exactly this reason. Before trusting a repaired assertion, break the product on
 > purpose and confirm the suite objects. See BRAIN_TROUBLESHOOTING.md section 22.
 
-## CURRENT STATE (2026-08-20)
+## CURRENT STATE (2026-08-24)
 
 | Area | Status |
 |------|--------|
-| Known problems tracker | 38 filed, 38 fixed, 0 PENDING — BRAIN_TROUBLESHOOTING.md section 14. Problem #30 covered 12 suites that could not fail; **all 12 are closed.** **This tracker is not the owner’s 30-item review playbook.** They are two separate lists, and a closed tracker says nothing about the playbook. Per-item playbook verdicts: BRAIN_TROUBLESHOOTING.md section 23. |
-| `npm run verify:all` | **72 suites, 70 PASS / 0 FAIL / 0 BROKEN / 0 TIMEOUT / 0 BAD-EXIT / 2 SKIP** as of 2026-08-20, from an 8-shard run whose per-shard logs were each read and which all printed the same list fingerprint `53aa539e`. An earlier run the same day measured **71 suites at `8c09a3eb`**; `probe-csrf-default-closed.mjs` was added after it, and the id moving is exactly the change the fingerprint exists to make visible — do not sum shards across the two. The two SKIPs are the row below. |
+| Known problems tracker | 45 filed, 44 fixed, **1 OPEN (#45, `MtdGrowth.jsx` headline reads a field the importer never writes)** — BRAIN_TROUBLESHOOTING.md section 14. Problem #30 covered 12 suites that could not fail; **all 12 are closed.** **This tracker is not the owner’s 30-item review playbook.** They are two separate lists, and a closed tracker says nothing about the playbook. Per-item playbook verdicts: BRAIN_TROUBLESHOOTING.md section 23. |
+| `npm run verify:all` — discovery | **100 discovered, list fingerprint `466f06d8`** (measured 2026-08-24 via `--list`). Three suites were added that day: `probe-db-archive`, `probe-monthly-calendar`, `probe-sdk-analytics-off`. |
+| `npm run verify:all` — full sweep | **Not Run at the current file set.** The last complete green run was **72 suites, 70 PASS / 0 FAIL / 0 BROKEN / 0 TIMEOUT / 0 BAD-EXIT / 2 SKIP** on 2026-08-20 at fingerprint `53aa539e`, from an 8-shard run whose per-shard logs were each read and which all printed the same id. **Do not sum shards across `53aa539e` and `466f06d8`** — the list changed, so every slice boundary moved. That is precisely what the fingerprint exists to make visible. A full sweep at `466f06d8` needs a Windows run. |
+| Targeted slices at `466f06d8` (2026-08-24) | All Observed green: `probe-monthly-calendar` 67/0 · `probe-db-archive` 216/0 · `probe-sdk-analytics-off` 53/0 · `--filter calendar` 2/2 · `verify-revenue` 50/0 · `verify-statistics` 84/0 · `probe-premium-surfaces` 131/0 · `probe-ui-feedback` 83/0. |
 | `npm run lint` | 0 errors (warnings pre-existing) |
 | `npm run typecheck` | 0 errors |
 | Cannot run in a Linux VM (SKIP, = **Not Run**, not verified) | `verify-harness.mjs` — `import('vite')`, and `node_modules` here was installed on Windows, so Rollup's native binding is missing. `acceptance-harness.mjs` has the same dependency and is not even auto-discovered (its name matches neither `probe-*` nor `verify-*`). `probe-config-exposure.mjs` needs a dev server on `localhost:5173`. Run all three on Windows or in CI. |
-| YTD gross benchmark | RESOLVED 2026-08-20 — total $1,020,598.17 = room $1,011,258.67 + ancillary $9,339.50, measured by `probe-money-kept-gross.mjs`. BRAIN_FINANCE.md 12.6 |
+| **Deployed bundle is STALE** | `dist/index.html` dates from 2026-08-23 21:16 and at least 12 tracked files are newer. `vite build` **cannot** run in the Linux VM (`Cannot find module '@rollup/rollup-linux-x64-gnu'`), so the live Worker does not contain tracker #41–#44. The owner must build on Windows and redeploy before any live-site claim is made. |
+| YTD gross benchmark | RESOLVED 2026-08-20 — total $1,020,598.17 = room $1,011,258.67 + ancillary $9,339.50, measured by `probe-money-kept-gross.mjs`. BRAIN_FINANCE.md 12.6. Which occupancy field carries which figure: **12.8**. |
 
 > [!NOTE]
 > **Correction, 2026-08-20.** An earlier revision of this table listed 7 suites as

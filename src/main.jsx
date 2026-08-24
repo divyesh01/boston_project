@@ -1,3 +1,8 @@
+// MUST STAY FIRST. The base44 SDK arms its analytics heartbeat inside
+// createClient(), and reads its enabled flag exactly once at that moment, so this
+// side-effect import has to be evaluated before anything that reaches
+// base44Client.js. Asserted by scripts/probe-sdk-analytics-off.mjs section 3.
+import '@/lib/sdkAnalyticsOff.js'
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from '@/App.jsx'

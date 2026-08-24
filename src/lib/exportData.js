@@ -303,6 +303,36 @@ export function stampFilename(base, ext = "csv", now = new Date()) {
 }
 
 /**
+ * Hand a Blob to the browser as a download.
+ *
+ * Shared rather than inlined per caller because both details below were found the
+ * hard way and a second copy of this logic is one copy that will be missing one
+ * of them:
+ *
+ *  - the anchor is APPENDED to the document, because Firefox ignores `.click()`
+ *    on a detached element;
+ *  - the object URL is revoked on a LATER task, because revoking it synchronously
+ *    races the browser's own read of the blob and yields an empty file.
+ *
+ * @param {Blob} blob
+ * @param {string} filename used verbatim — stamp it before calling
+ */
+export function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+    a.remove();
+  }, 0);
+}
+
+/**
  * Trigger a download. Returns the number of data rows written so the caller can
  * report "Exported 412 rows" instead of a silent no-op — a click that appears to
  * do nothing is indistinguishable from a broken button.
@@ -319,21 +349,7 @@ export function downloadCsv(rows, { filename = "export", columns, bom = true } =
   if (!list.length) throw new Error("Nothing to export — no rows match the current filters.");
   const csv = buildCsv(list, { columns, bom });
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename.endsWith(".csv") ? filename : stampFilename(filename, "csv");
-  a.rel = "noopener";
-  a.style.display = "none";
-  // Attached to the document on purpose: a detached anchor's .click() is ignored
-  // by Firefox. Revoked on a later task, not this one — revoking synchronously
-  // races the browser's own read of the blob URL and produces an empty file.
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => {
-    URL.revokeObjectURL(url);
-    a.remove();
-  }, 0);
+  downloadBlob(blob, filename.endsWith(".csv") ? filename : stampFilename(filename, "csv"));
   return list.length;
 }
 

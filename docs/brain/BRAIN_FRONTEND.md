@@ -18,7 +18,7 @@ Every page in the app, what it does, and what files it depends on.
 | **ManualEntry** | `src/pages/ManualEntry.jsx` | Enter data by hand, copy-paste from spreadsheets | `manualEntryImport.js` |
 | **Housekeeping** | `src/pages/Housekeeping.jsx` | Room status board (clean/dirty/inspected), maid assignment | `housekeepingService.js`, `housekeepingConfig.js`, `laborOptimization.js` |
 | **RoomBoard** | `src/pages/RoomBoard.jsx` | Visual room grid: check-in/out, real-time CRDT sync | `roomBoard.js`, `crdtSync.js`, `pricingEngine.js` |
-| **MonthlyCalendar** | `src/pages/MonthlyCalendar.jsx` | Heatmap calendar: daily occupancy + revenue tiers | `revenueThresholds.js`, `hotel.js` |
+| **MonthlyCalendar** | `src/pages/MonthlyCalendar.jsx` | Heatmap calendar: daily occupancy + revenue tiers | `calendarGrids.js`, `revenueThresholds.js`, `hotel.js` |
 
 ### Finance
 | Page | File | What It Does | Key Dependencies |
@@ -170,6 +170,9 @@ These are the files in `src/lib/` -- the brains of the app. Grouped by what they
 | `utils.js` | General utility functions | Many things break subtly. |
 | `employeeId.js` | Employee ID generation | Employee IDs wrong. |
 | `uploadRetention.js` | Manages uploaded file cleanup | Old uploads never cleaned up. |
+| `calendarGrids.js` | Decides WHICH months a calendar page draws, from the same `dateRange` the KPIs aggregate. `calendarMonths()`, `monthsInRange()`, `daysInMonth()`, `MAX_GRIDS` | MonthlyCalendar's header, grid count and KPIs stop agreeing. See section 16. |
+| `dbArchive.js` | Whole-database backup and restore across all three storage layers | Owner loses the only off-device copy of the data. See section 7.6. |
+| `sdkAnalyticsOff.js` | Mutates the shared SDK config in place to stop the vendor analytics beacon | The live console fills with `405` on `analytics/track/batch`. |
 
 ### Custom Hooks
 | File | What It Does | If You Edit This... |
@@ -280,6 +283,12 @@ These are the files in `src/lib/` -- the brains of the app. Grouped by what they
 Every one is `(isExcel ? downloadExcel : downloadCsv)(rows, { filename, columns, sheetName })`.
 Both return the row count and both **throw** on an empty set.
 
+There is a sixth download — the whole-database archive in `dbArchive.js` (section 7.6) —
+which is deliberately **not** in the table above. These five export a *filtered, columnar
+view for a human to read*; the archive serialises *raw storage for a machine to restore*.
+Giving the archive a column spec would silently drop any field not named in it, which is
+defect 1 below reintroduced at the one place it would be unrecoverable.
+
 ## 7.2 The contract, and the four defects it closes
 
 ```js
@@ -366,5 +375,144 @@ Deleting `downloadExcel` from `hotel.js` also removed `import * as XLSX` from it
 is the largest dependency in the bundle and `hotel.js` is imported by nearly every
 page, so it was being pulled into almost every route. It now loads only with the export
 module that uses it.
+
+## 7.6 The whole-database archive — the only backup that exists
+
+Added 2026-08-24: `src/lib/dbArchive.js`, a "Backup & restore" card in `Settings.jsx`, and
+a shared `downloadBlob()` lifted into `exportData.js`. Proved by
+`scripts/probe-db-archive.mjs` (216 assertions, 9 sections). No protected file was touched.
+
+The entire hotel database lives only in this browser's IndexedDB. Clearing site data
+destroyed everything, with no recovery path of any kind. This card is the whole recovery
+story — treat it accordingly.
+
+> [!CAUTION]
+> **A backup that only walks Dexie loses real money configuration.** The archive carries
+> **three** layers, and the third is the one every reasonable implementation forgets:
+> `stores` (Dexie tables), `secure_slots` (decrypted `secureStore` values), and
+> `local_slots` (plain `localStorage` strings). Hand-entered money settings live in
+> *plain* localStorage — `rri_commission_rates_v2`, `rri_cc_fee_rate`,
+> `rri_cc_fee_refunds_v1`, `rri_tax_config_v1`, `rri_tax_settings_v1`,
+> `rri_alert_thresholds`, `rri_revenue_thresholds`, `rri_pricing_config`,
+> `rri_weather_config`, `rri_housekeeping_config_<propId>`, `rri_filters_<page>`,
+> `rri_automationRules`, `rri_reportHistory` — plus `manual_draft_<propId>_<reportType>`,
+> which carries **no `rri_` prefix at all**. `LOCAL_SLOT_PREFIXES` must keep both
+> prefixes. Dropping this layer produces 8 probe FAILs naming every lost setting.
+
+**Encrypted slots travel DECRYPTED, on purpose.** `getOrGenerateCryptoKey()` creates a
+**non-extractable** AES-GCM key in a separate IndexedDB, so ciphertext copied to another
+machine can never be opened again — a backup of `rri_enc_*` blobs is not a backup. Only
+`rri_import_sessions` is a secure slot worth carrying (`SECURE_SLOT_KEYS`), and the probe
+asserts the literal string `rri_enc_` never appears in the archive. Three keys can never
+be found by a localStorage prefix scan and must be named explicitly if ever needed:
+`rr_local_session` and `rri_rate_limits_v1` are `secureStore` slots (persisted as
+`rri_enc_*`), and `rri_csrf_token` lives in **sessionStorage**.
+
+**Restore invariants.**
+
+- All 29 archived stores have **inbound** primary keys (28× `++id`, `IdSequence` on
+  `prefix`). That is what lets one uniform `bulkPut(rows)` preserve ids and every
+  cross-store reference. §3 asserts `schema.primKey.keyPath !== null` for every store; an
+  outbound key reads as `null`.
+- `LocalSession` and `PasswordResetRequest` are excluded deliberately — they are
+  credentials, not data.
+- Restore is **ONE** `localDb.transaction("rw", ...)` doing clear + bulkPut across all
+  stores, so a partial failure rolls back whole. Per-store transactions instead of one
+  produces a probe FAIL reading `Property: length 2 vs 1` — a half-failed restore that had
+  already destroyed a row. localStorage and secureStore writes happen only **after** the
+  Dexie commit, because a non-Dexie `await` inside the transaction breaks the zone.
+- **The audit entry for a restore is written AFTER the restore**, not before. The AuditLog
+  table has just been replaced by the backup's rows, so an entry written first is erased by
+  the very action it records. A byte-faithful restore keeps `verifyAuditChain()` green
+  because the chain tip is read from the table itself.
+
+**Known characteristic, not a defect:** `serializeArchive` uses
+`JSON.stringify(archive, null, 2)`, so 40k–100k transaction rows produce tens of MB,
+roughly doubled by the indentation (cap 300 MB). The indentation is deliberate — opening
+the file in a text editor is a legitimate recovery path.
+
+> [!WARNING]
+> `src/lib/uploadGuard.js`'s `ALLOWED_EXT = /\.(csv|xlsx|xls)$/i` must **NOT** be widened
+> to admit `.json` to make restore work. The archive file input is its own
+> `<input accept>` and never passes through the upload gate. §9 asserts this.
+
+---
+
+# 16. PAGE PERIOD COHERENCE (a page must describe the span it measures)
+
+Added 2026-08-24 after `MonthlyCalendar.jsx` was found describing one month while its KPIs
+measured 214 days. This section exists because the defect is a *class*, not an incident:
+any page that renders both a period **label** and period **KPIs** can drift apart, and the
+drift is invisible in code review because each half is correct on its own.
+
+## 16.1 The rule
+
+**Derive the label from the same source the KPIs aggregate.** The KPIs aggregate
+`dateRange`. Therefore the header, the grid count, the card titles and the empty-state
+notice must all derive from `dateRange` too — never from `month`/`year` alone.
+
+`src/lib/calendarGrids.js` is that derivation for calendar pages:
+
+```js
+calendarMonths({ period, months, year, dateRange })  // -> [{ year, month }, ...] UNCAPPED
+monthsInRange(from, to)                              // every {year, month} an ISO range touches
+daysInMonth(year, month)                             // numeric construction, no string parsing
+MAX_GRIDS = 24                                       // render cap; surplus must be STATED
+```
+
+The old inline expression was:
+
+```js
+const isMultiMonth = period === "monthly" && months.length > 1;
+```
+
+false for ytd, yearly, quarterly, weekly, daily **and** custom — so six of seven periods
+drew exactly ONE grid. The live site showed a header reading "for August 2026" above one
+August grid, over KPI cards summing all 214 imported days. YTD now draws 8 grids, not 1.
+
+## 16.2 Two traps inside that derivation
+
+**The year must travel with the month.** A weekly or custom range straddles a year
+boundary. The old single `calYear` made Dec 2025 – Jan 2026 render as two grids *both*
+titled 2026, and `key={grid.month}` collided between them. The probe asserts `calYear`
+never returns.
+
+**`monthly` is the ONE period where `months[]` stays authoritative over the range.**
+`computeRangeFromMonths()` in `useGlobalFilters.jsx` turns a non-contiguous pick
+(April + July) into a **contiguous** range (Apr 1 – Jul 31), while the row filter keeps
+only the picked months. Deriving grids from the range there would draw empty May and June
+grids the owner never selected — mutation-tested: removing that branch yields 4 grids
+instead of 2.
+
+## 16.3 Never cap silently
+
+Rendering is capped at `MAX_GRIDS` and the surplus is reported in an amber notice. A
+silent cap recreates the original defect exactly: a page showing fewer months than it
+measures.
+
+## 16.4 The non-calendar pattern
+
+`Expenses.jsx:118` is the correct shape for a page with no grid: picked month names when
+`period === "monthly"`, otherwise the raw `from → to`. Copy that, not the old calendar.
+
+## 16.5 Three numbers, three measures, one page
+
+The same fix closed a second defect worth generalising. Calendar cells were coloured by
+`room_revenue` against the thresholds the card subtitle prints, but `getRevenueGroup()`
+classified by `total_revenue` and the day modal displayed it. **The CSV importer never
+writes `total_revenue`** (0 of 214 parsed rows — see BRAIN_FINANCE.md 12.8), so every
+imported day was grouped "low" while its cell was painted green, and tapping a $12,000
+cell opened a panel reading $0.00.
+
+> [!TIP]
+> **BEST OUTCOME NOTE.** When a page shows a value three ways — a colour, a KPI and a
+> detail panel — assert that all three read the **same field**, not merely that each one
+> renders. All three were individually "working". Proved by
+> `scripts/probe-monthly-calendar.mjs` (67 assertions, 6 sections); reproduction measured
+> **53 PASS / 11 FAIL** against the unedited page before any fix was written.
+
+The KPI is now labelled **"Total Room Revenue"** precisely so nobody compares it against
+the Dashboard's $1,020,598.17 ledger total. The $9,339.50 difference is real ancillary
+income, not a bug — BRAIN_FINANCE.md 12.6.
 
 ---

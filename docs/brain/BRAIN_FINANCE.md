@@ -332,3 +332,47 @@ makes a double import invisible. See 12.3.
 > Silencing it by mapping them all hands the decision to CSV column order.
 
 ---
+
+## 12.8 Which occupancy revenue field is populated — MEASURED 2026-08-24
+
+Three field names on `OccupancyDay` look interchangeable and are not. Measured by running
+the real `scanReport("occupancy", …, { csvText })` over
+`scripts/data/Occupancy Summary midelboro.csv` — 214 rows, 2026-01-01 … 2026-08-02:
+
+| Field | Populated? | Sum over 214 rows |
+|-------|-----------|-------------------|
+| `room_revenue` | all 214 rows | **$1,011,258.67** |
+| `total_revenue_with_misc` | all 214 rows | **$1,011,258.67** |
+| `other_room_revenue` | all 214 rows | $0.00 |
+| `total_revenue` (no suffix) | **0 of 214 rows — never written by the CSV path** | — |
+
+**Rows where `total_revenue_with_misc` differs from `room_revenue`: zero.**
+
+> [!CAUTION]
+> **The Occupancy Summary's column literally headed "Total Revenue" is a ROOM total.**
+> `reportParsers.js:160` maps it to `total_revenue_with_misc` deliberately, to keep the
+> misleading name out of the codebase. Reading it as "total revenue" does **not** produce
+> an obvious $0 — it produces a plausible-looking figure that understates the
+> $1,020,598.17 ledger by exactly the $9,339.50 ancillary income. A wrong number that
+> looks right is more dangerous than a zero, because nobody investigates it.
+
+**The bare `total_revenue` field is written only by `ManualEntry.jsx`.** Any page reading
+it shows **$0.00 on every imported day**. That was the second defect fixed in
+`MonthlyCalendar.jsx` (BRAIN_FRONTEND.md 16.5) and, as of 2026-08-24, is still open in
+`MtdGrowth.jsx:14`/`:107`, whose headline card is labelled "Total Revenue".
+
+**How to apply.** Do not reach for a field name. Call
+`grossRevenueForPeriod({ grossRows, occRows })` in `hotel.js`: it sums the
+`GrossRevenueDay` components when they cover the period, falls back to the occupancy room
+ledger when they do not, and **returns `basis: "total" | "room"` so the UI can label a
+room-only figure honestly.** If you must display the occupancy ledger directly, label it
+"Room Revenue" — see 12.6 for why the two figures legitimately differ.
+
+> [!NOTE]
+> An earlier revision of this repo's notes claimed `total_revenue_with_misc` was "$0.00 on
+> all 214 days — the occupancy CSV never populates them". That was wrong, and it was wrong
+> in the direction that invites a bad fix: believing the field is empty makes swapping to
+> it look harmless. It is populated, and it is room-only. Re-measured through the real
+> parser rather than by reading the mapping table.
+
+---

@@ -1,4 +1,4 @@
-# ðŸ—ƒï¸ 20. APPENDIX: ALL 418 FILES
+# 🗃️ 20. APPENDIX: ALL 422 FILES
 
 > [!NOTE]
 > For complete reference, here is the exhaustive list of every single file in the project. Use this to verify existence before creating new files.
@@ -87,6 +87,7 @@ scripts\probe-csrf-secure-flag.mjs
 scripts\probe-csv-data-loss.mjs
 scripts\probe-csvParser-data-loss.mjs
 scripts\probe-date-validation.mjs
+scripts\probe-db-archive.mjs
 scripts\probe-delete-guard.mjs
 scripts\probe-deploy-config.mjs
 scripts\probe-financial-invariant.mjs
@@ -101,6 +102,7 @@ scripts\probe-manual-entry-import.mjs
 scripts\probe-money-kept.mjs
 scripts\probe-money-kept-fix.mjs
 scripts\probe-money-kept-float.mjs
+scripts\probe-monthly-calendar.mjs
 scripts\probe-ota-sync.mjs
 scripts\probe-parse-amount.mjs
 scripts\probe-pricing.mjs
@@ -113,6 +115,7 @@ scripts\probe-red8.mjs
 scripts\probe-revenue-reconciliation.mjs
 scripts\probe-reviews.mjs
 scripts\probe-roomboard.mjs
+scripts\probe-sdk-analytics-off.mjs
 scripts\probe-session-expiry.mjs
 scripts\probe-session-noop.mjs
 scripts\probe-session-slide.mjs
@@ -306,6 +309,7 @@ src\lib\authHelpers.js
 src\lib\authHelpers.test.js
 src\lib\authReturnTo.js
 src\lib\calculationService.js
+src\lib\calendarGrids.js
 src\lib\chartExport.js
 src\lib\columnarAnalytics.js
 src\lib\commissionRates.js
@@ -314,6 +318,7 @@ src\lib\csvParser.js
 src\lib\dailyAggregates.js
 src\lib\dataScanner.js
 src\lib\dataScanner.test.js
+src\lib\dbArchive.js
 src\lib\decimal.js
 src\lib\deleteGuard.js
 src\lib\donutLabelLayout.js
@@ -352,6 +357,7 @@ src\lib\reputationService.js
 src\lib\RevenueReconciliation.js
 src\lib\revenueThresholds.js
 src\lib\roomBoard.js
+src\lib\sdkAnalyticsOff.js
 src\lib\security.js
 src\lib\securityUtils.js
 src\lib\securityUtils.test.js

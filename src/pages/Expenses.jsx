@@ -10,6 +10,11 @@ import { useRef } from "react";
 import { useGlobalFilters, MONTHS_LONG } from "@/lib/useGlobalFilters";
 import { useOccupancy, usePaymentData } from "@/lib/useHotelData";
 import { sum, inRange, pct, C, money2 } from "@/lib/hotel";
+// `hours` on a timecard-derived PayrollRun is an exact quotient of worked minutes
+// (2,243 min renders as 37.38333333333333), because the money is computed from the
+// minutes and rounding the hours first is what used to lose cents. Hours are a
+// reading for humans, so they are formatted here rather than at the source.
+import { formatNumber } from "@/lib/decimal";
 import { calculatePay, filterCommittedPay } from "@/lib/payrollCalc";
 import { refundTotal } from "@/lib/paymentNorm";
 import { toast } from "sonner";
@@ -323,7 +328,7 @@ export default function Expenses() {
     const gate = guardDestructiveAction({
       title: `Delete the payroll run for ${p?.employee_name || "this employee"}?`,
       lines: [
-        `${money2(p?.total_pay || 0)} · ${p?.department || "no department"} · ${p?.hours || 0}h · marked ${p?.payroll_status || "draft"}`,
+        `${money2(p?.total_pay || 0)} · ${p?.department || "no department"} · ${formatNumber(p?.hours || 0, 'auto')}h · marked ${p?.payroll_status || "draft"}`,
         committed
           ? `This run is ${p.payroll_status}, so deleting it removes the record of pay already committed and will increase reported Money Kept by ${money2(p?.total_pay || 0)}.`
           : "This run is not approved or paid, so Money Kept does not change.",
@@ -669,7 +674,7 @@ export default function Expenses() {
                   >
                     <div>
                       <p className="text-sm text-white">{p.employee_name}</p>
-                      <p className="text-xs text-slate-500">{p.department} · {p.pay_type} · {p.hours || 0}h</p>
+                      <p className="text-xs text-slate-500">{p.department} · {p.pay_type} · {formatNumber(p.hours || 0, 'auto')}h</p>
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="text-sm tabular-nums text-slate-300">{money2(p.total_pay || 0)}</span>

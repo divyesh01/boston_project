@@ -17,6 +17,13 @@ import { toCents, fromCents } from '@/lib/decimal';
  *   * Overtime is computed per workweek (a shift can straddle two weeks; the
  *     hour is attributed to the day it STARTS on).
 *  * All money math goes through integer cents (see src/lib/decimal).
+ *   * MINUTES ARE THE BASIS OF RECORD, hours are a derived reading. A punch
+ *     pair is an integer number of minutes, so every total up to the pay
+ *     computation stays an exact integer; `hours` is only ever
+ *     `minutes / 60`, and it is never rounded before money is derived from it.
+ *     Rounding hours to 2 decimals and multiplying the rate by THAT is how this
+ *     module used to underpay 2,243 minutes at $15.00/h by 5 cents (it paid
+ *     $560.70 instead of $560.75). See scripts/probe-payroll-minute-rounding.mjs.
  *
  * Time format accepted by `parseTime`: "HH:MM" 24h, "H:MM AM/PM", or a full
  * ISO datetime string whose time part is read.
@@ -214,6 +221,34 @@ export function applyBreaks(shift, options = {}) {
 }
 
 /**
+ * Pay, in integer cents, for an exact number of worked MINUTES.
+ *
+ * This is the only correct shape for hourly pay in this codebase, and the
+ * ordering of the operations is the whole point:
+ *
+ *   payCentsForMinutes(1500, 2243)  ->  Math.round(1500 * 2243 / 60)  =  56075
+ *   Math.round(1500 * (2243 / 60))                                    =  56075
+ *   Math.round(1500 * 37.38)                                          =  56070   WRONG
+ *
+ * `rateCents * minutes` is an exact integer for every rate and shift length
+ * this business can produce (a $10,000/h rate over a 24h shift is 1.4e9, far
+ * inside 2^53), so the single division-and-round is the ONLY place precision is
+ * lost, and it loses it deterministically. The middle form is correct to within
+ * a cent but is not deterministic: when `rateCents * minutes` is exactly 30 mod
+ * 60 the true value sits on a half cent, and one unit in the last place of
+ * `minutes / 60` decides which way it goes. Measured over 25,929 (rate, minute)
+ * pairs, that is the only case where the two disagree, and never by more than a
+ * cent — see section 7 of scripts/probe-payroll-minute-rounding.mjs.
+ *
+ * @param {number} rateCents  hourly rate in integer cents (use toCents()).
+ * @param {number} minutes    exact worked minutes (an integer).
+ * @returns {number} pay in integer cents, rounded half up.
+ */
+export function payCentsForMinutes(rateCents, minutes) {
+  return Math.round((rateCents * minutes) / MIN_PER_HOUR);
+}
+
+/**
  * Reconcile a set of shifts into per-employee, per-week totals.
  *
  * @param {Array<Object>} punches  raw punch rows (see normalisePunch)
@@ -228,8 +263,16 @@ export function applyBreaks(shift, options = {}) {
  *
  * @returns {Array<Object>} one row per (employee, workweek):
  *   { employeeKey, employeeName, department, weekStart, weekEnd,
- *     shifts, flags, hours, overtime_hours, unpaid_break_minutes,
+ *     shifts, flags, paid_minutes, regular_minutes, overtime_minutes,
+ *     hours, overtime_hours, unpaid_break_minutes,
  *     regular_pay, overtime_pay, total_pay }
+ *
+ *   `paid_minutes` is the exact integer basis and equals
+ *   `regular_minutes + overtime_minutes`. `hours` and `overtime_hours` are the
+ *   unrounded quotients of the latter two — a reading for humans, and the value
+ *   any consumer that only understands hours should multiply. Multiplying a
+ *   rate by `paid_minutes` would pay overtime minutes at the base rate, which
+ *   is why the split is exposed rather than left to the caller.
  */
 export function reconcileTimecards(punches = [], options = {}) {
   const {
@@ -263,6 +306,9 @@ export function reconcileTimecards(punches = [], options = {}) {
         weekEnd: bounds.weekEnd,
         shifts: [],
         flags: new Set(),
+        paid_minutes: 0,
+        regular_minutes: 0,
+        overtime_minutes: 0,
         hours: 0,
         overtime_hours: 0,
         unpaid_break_minutes: 0,
@@ -278,25 +324,38 @@ export function reconcileTimecards(punches = [], options = {}) {
 
     const paid = applyBreaks(shift, { deductBreaks, breakMinutes, breakAfterHours });
     row.unpaid_break_minutes += paid.breakMinutes;
-    row.hours += paid.hours;
+    // Integer addition, so a week's basis is exact no matter how many shifts it
+    // holds. `paid.hours` is the same quantity divided by 60 and is deliberately
+    // NOT accumulated: summing quotients drifts (five shifts of 480 min summed
+    // as hours gave 42.333333333333336, whose overtime remainder came out as
+    // 2.3333333333333357 rather than 2.3333333333333335).
+    row.paid_minutes += paid.paidMinutes;
     for (const f of paid.flags) row.flags.add(f);
   }
 
   const out = [];
   for (const row of rows.values()) {
-    // Regular vs overtime: hours above the weekly cap are overtime, paid at the
-    // OT multiplier. Split per week so a 50h week gets 40 regular + 10 OT rather
-    // than paying everything as OT.
-    const otHours = Math.max(0, row.hours - weeklyOvertimeHours);
-    row.overtime_hours = Math.round(otHours * 100) / 100;
-    row.hours = Math.round((row.hours - otHours) * 100) / 100;
+    // Regular vs overtime: minutes above the weekly cap are overtime, paid at
+    // the OT multiplier. Split per week so a 50h week gets 40 regular + 10 OT
+    // rather than paying everything as OT. The cap is converted to minutes so
+    // the comparison and the remainder are both exact integers.
+    const capMinutes = Math.max(0, Math.round(weeklyOvertimeHours * MIN_PER_HOUR));
+    row.overtime_minutes = Math.max(0, row.paid_minutes - capMinutes);
+    row.regular_minutes = row.paid_minutes - row.overtime_minutes;
+
+    // Hours are the derived reading. Exact quotients, never rounded — money is
+    // computed from the minutes below, and the one consumer that recomputes pay
+    // from `hours` alone (runLocalAutoPayroll, a protected file) can only land
+    // on the right cent if this value is exact. Render sites format it.
+    row.hours = row.regular_minutes / MIN_PER_HOUR;
+    row.overtime_hours = row.overtime_minutes / MIN_PER_HOUR;
 
     const r = rates[row.employeeKey] || {};
     const baseRate = Number(r.base_rate) || 0;
     const otRate = Number(r.overtime_rate) || baseRate * DEFAULT_OT_MULTIPLIER;
 
-    row.regular_pay = fromCents(Math.round(toCents(baseRate) * row.hours));
-    row.overtime_pay = fromCents(Math.round(toCents(otRate) * row.overtime_hours));
+    row.regular_pay = fromCents(payCentsForMinutes(toCents(baseRate), row.regular_minutes));
+    row.overtime_pay = fromCents(payCentsForMinutes(toCents(otRate), row.overtime_minutes));
     row.total_pay = fromCents(toCents(row.regular_pay) + toCents(row.overtime_pay));
     row.rate = { base_rate: baseRate, overtime_rate: otRate };
     row.flags = [...row.flags];

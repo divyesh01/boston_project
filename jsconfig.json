@@ -62,6 +62,17 @@
   ]
 
   // Deliberately NOT included, with reasons:
+  //   **/*.ts              — the `include` globs above end in .js/.jsx, so NO
+  //                          TypeScript file is in this program: not
+  //                          src/utils/index.ts, not base44/.types/types.d.ts,
+  //                          not the 7 base44 function entry.ts files. eslint
+  //                          ignores them too (see eslint.config.js), so those 9
+  //                          files have no automated gate at all. Recorded here
+  //                          because eslint.config.js used to point at this file
+  //                          as their gate, which was false. A per-file
+  //                          `tsc --noEmit --noResolve` run does work on them:
+  //                          base44/functions/autoPayroll/entry.ts measured 3
+  //                          errors, all TS2307 on Deno specifiers, 2026-08-24.
   //   scripts/**            — 239 errors. These are Node harnesses, not app
   //                           code; eslint is the correct gate for them.
   //   backend/**, base44/** — 21 errors, nearly all TS2307 against Deno-style

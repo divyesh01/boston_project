@@ -18,6 +18,26 @@ const OT_MULTIPLIER = 1.5;
 const BREAK_MINUTES = 30;
 const BREAK_AFTER_HOURS = 6;
 
+// ─── Money (parity with src/lib/decimal.js and src/lib/timecardCalc.js) ───
+// Same isolation reason as the reconciler above: no shared import is possible,
+// so the three functions this file needs are inlined. They must stay
+// byte-equivalent in behaviour to their client-side originals, because this
+// function and runLocalAutoPayroll write to the same PayrollRun table.
+//
+// This block replaced raw floating-point dollar math (`baseRate * hours`,
+// `otHours * otRate`, `Math.round(totalPay * 100) / 100`), which CLAUDE.md's
+// BUSINESS mandate forbids outright and which disagreed with the offline path
+// even though the header above claimed parity.
+const toCents = (value: any) => Math.round((Number(value) || 0) * 100);
+const fromCents = (cents: number) => cents / 100;
+
+// Pay for an exact number of worked MINUTES. `rateCents * minutes` is an exact
+// integer, so the single division is the only place precision is lost — see the
+// long note on payCentsForMinutes in src/lib/timecardCalc.js and section 7 of
+// scripts/probe-payroll-minute-rounding.mjs.
+const payCentsForMinutes = (rateCents: number, minutes: number) =>
+  Math.round((rateCents * minutes) / MIN_PER_HOUR);
+
 function parseTime(value: any): number | null {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value === "number") return Number.isFinite(value) ? Math.round(value) : null;
@@ -86,6 +106,9 @@ function reconcileTimecards(punches: any[]): any[] {
     if (!row) {
       row = {
         employeeKey: employeeKey.toLowerCase(),
+        paid_minutes: 0,
+        regular_minutes: 0,
+        overtime_minutes: 0,
         hours: 0,
         overtime_hours: 0,
         unpaid_break_minutes: 0,
@@ -110,14 +133,21 @@ function reconcileTimecards(punches: any[]): any[] {
         : 0;
     const paidMinutes = Math.max(0, dur - applied);
     if (applied > 0) row.flags.add("unpaid_break_applied");
-    row.hours += paidMinutes / MIN_PER_HOUR;
+    // Integer addition. Accumulating `paidMinutes / MIN_PER_HOUR` instead drifts,
+    // and the drifted remainder is what used to be rounded to 2 decimals and
+    // multiplied by the rate.
+    row.paid_minutes += paidMinutes;
     row.unpaid_break_minutes += applied;
   }
   const out = [];
   for (const row of (rows.values() as any)) {
-    const otHours = Math.max(0, row.hours - WEEKLY_OT_HOURS);
-    row.overtime_hours = Math.round(otHours * 100) / 100;
-    row.hours = Math.round((row.hours - otHours) * 100) / 100;
+    const capMinutes = Math.max(0, Math.round(WEEKLY_OT_HOURS * MIN_PER_HOUR));
+    row.overtime_minutes = Math.max(0, row.paid_minutes - capMinutes);
+    row.regular_minutes = row.paid_minutes - row.overtime_minutes;
+    // Exact quotients. Rounding these to 2 decimals underpaid 2,243 minutes at
+    // $15.00/h by 5 cents ($560.70 instead of $560.75).
+    row.hours = row.regular_minutes / MIN_PER_HOUR;
+    row.overtime_hours = row.overtime_minutes / MIN_PER_HOUR;
     row.flags = [...row.flags];
     out.push(row);
   }
@@ -270,13 +300,22 @@ export default async function runAutoPayroll(req) {
     const byEmployee = (low: string) => {
       const weeks = timecardWeeks.filter((w) => String(w.employeeKey || "").toLowerCase() === low);
       if (!weeks.length) return null;
-      return weeks.reduce(
+      // Sum the MINUTES, then divide once. Summing the per-week `hours` quotients
+      // instead would drift: five 8h shifts summed as hours came out as
+      // 42.333333333333336, and the pay derived from that misses the cent.
+      const summed = weeks.reduce(
         (acc: any, w: any) => ({
-          hours: acc.hours + (Number(w.hours) || 0),
-          overtime_hours: acc.overtime_hours + (Number(w.overtime_hours) || 0),
+          regular_minutes: acc.regular_minutes + (Number(w.regular_minutes) || 0),
+          overtime_minutes: acc.overtime_minutes + (Number(w.overtime_minutes) || 0),
         }),
-        { hours: 0, overtime_hours: 0 }
+        { regular_minutes: 0, overtime_minutes: 0 }
       );
+      return {
+        regular_minutes: summed.regular_minutes,
+        overtime_minutes: summed.overtime_minutes,
+        hours: summed.regular_minutes / MIN_PER_HOUR,
+        overtime_hours: summed.overtime_minutes / MIN_PER_HOUR,
+      };
     };
 
     // 3. Generate an approved payroll run per active staff member
@@ -301,9 +340,21 @@ export default async function runAutoPayroll(req) {
       const otRate = Number(s.overtime_rate) || baseRate * OT_MULTIPLIER;
       const bonus = Number(s.bonus) || 0;
       const deductions = Number(s.deductions) || 0;
-      const regularPay = s.pay_type === "salary" ? baseRate : baseRate * hours;
-      const overtimePay = otHours * otRate;
-      const totalPay = regularPay + overtimePay + bonus - deductions;
+      const baseRateCents = toCents(baseRate);
+      const otRateCents = toCents(otRate);
+      // Pay from the exact minute basis whenever punches cover the period. With no
+      // punches the hand-typed Staff.hours IS the input of record, so it is
+      // multiplied as given — a typed 37.38 pays $560.70 because 37.38 is what the
+      // manager asserted, not a rounding of something more precise.
+      const regularPayCents = s.pay_type === "salary"
+        ? baseRateCents
+        : tc
+          ? payCentsForMinutes(baseRateCents, Number(tc.regular_minutes) || 0)
+          : Math.round(baseRateCents * hours);
+      const overtimePayCents = tc
+        ? payCentsForMinutes(otRateCents, Number(tc.overtime_minutes) || 0)
+        : Math.round(otRateCents * otHours);
+      const totalPayCents = regularPayCents + overtimePayCents + toCents(bonus) - toCents(deductions);
 
       const record = {
         property_id: s.property_id || "",
@@ -313,13 +364,13 @@ export default async function runAutoPayroll(req) {
         pay_type: s.pay_type || "hourly",
         base_rate: baseRate,
         hours,
-        regular_pay: Math.round(regularPay * 100) / 100,
+        regular_pay: fromCents(regularPayCents),
         overtime_hours: otHours,
         overtime_rate: otRate,
-        overtime_pay: Math.round(overtimePay * 100) / 100,
+        overtime_pay: fromCents(overtimePayCents),
         bonus,
         deductions,
-        total_pay: Math.round(totalPay * 100) / 100,
+        total_pay: fromCents(totalPayCents),
         pay_period_start: periodStart,
         pay_period_end: periodEnd,
         payroll_date: periodEnd,

@@ -12,8 +12,8 @@ graph TD
   base44Client[base44Client<br/>(42 imports)]
   Card[Card<br/>(39 imports)]
   useGlobalFilters[useGlobalFilters<br/>(29 imports)]
+  decimal[decimal<br/>(26 imports)]
   securityUtils[securityUtils<br/>(26 imports)]
-  decimal[decimal<br/>(25 imports)]
   useHotelData[useHotelData<br/>(25 imports)]
   status[status<br/>(24 imports)]
   button[button<br/>(16 imports)]
@@ -37,8 +37,8 @@ graph TD
 | base44Client | 42 | [CRITICAL] |
 | Card | 39 | [CRITICAL] |
 | useGlobalFilters | 29 | [CRITICAL] |
+| decimal | 26 | [CRITICAL] |
 | securityUtils | 26 | [CRITICAL] |
-| decimal | 25 | [CRITICAL] |
 | useHotelData | 25 | [CRITICAL] |
 | status | 24 | [CRITICAL] |
 | button | 16 | [CRITICAL] |

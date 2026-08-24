@@ -54,6 +54,7 @@
 | 50 | The create dialog's description promised "A temporary password will be generated" and nothing generated one, while the field's placeholder described a 7-rule policy as *"At least 8 characters with upper/lowercase and a number"* — 3 rules, and the wrong minimum, against a `validatePasswordStrength` enforcing 12 chars + 4 classes + no-triple-repeat. The admin had to guess the password rules by being refused | HIGH | FIXED 2026-08-24 | `src/lib/userFormValidation.js` exports one `PASSWORD_HELP` rendered in **3** places (create dialog, reset dialog, `src/pages/ChangePassword.jsx`, whose placeholder carried the identical understatement); `handleGeneratePassword` in `src/pages/Users.jsx` wires the existing `generateTemporaryPassword()` into the create dialog and reveals the result. "No line breaks" is omitted deliberately — unreachable in a single-line `<input type="password">` — and the probe asserts the omission. See section 30.2 | (This commit) |
 | 51 | "Require password change at next login" was a decorative switch: `handleCreate` sent `must_change_password: true` hard-coded, so turning it OFF changed nothing — the account still needed a change, the roster still drew the amber badge, and the success toast promised the admin the exact behaviour they had just switched off | MEDIUM | FIXED 2026-08-24 | `src/pages/Users.jsx` — one `const mustChange = form.must_change_password !== false` used by the create call, the toast wording and the `<Switch checked>`; the probe asserts the expression COUNT so the three cannot drift. Default stays ON. See section 30.3 | (This commit) |
 | 52 | **No toast this application has ever shown could be dismissed, or could expire.** Three independent sufficient causes: `toaster.jsx` rendered `<ToastClose />` with no `onClick` (it is a hand-rolled `<button>` — the Radix primitives had been replaced with plain divs); **nothing anywhere dispatched `DISMISS_TOAST`**, so the whole auto-expiry path was unreachable code; and `TOAST_REMOVE_DELAY` was `1_000_000`. Plus `TOAST_LIMIT = 20` as a permanent ceiling (~1800px in a `max-h-screen` container with no scroll, so the oldest were clipped out of the viewport), and `ToastProvider`/`ToastViewport` carrying BYTE-IDENTICAL fixed class strings — the toasts lived in the provider, so the empty viewport was a 32px invisible strip **swallowing clicks on every page in the app**. A page reload was the only way to clear a toast | HIGH | FIXED 2026-08-24 | `src/components/ui/use-toast.jsx` — the missing `dismissTimers` map, `DEFAULT_DURATION_MS` (5s / 10s destructive), `TOAST_LIMIT` 3, `TOAST_REMOVE_DELAY` 200 (measured: the exit animation compiles to 150ms); `toaster.jsx` — `onClick={() => dismiss(id)}`, `open`/`onOpenChange` out of the spread; `toast.jsx` — one `pointer-events-none` viewport, `open`→`data-state`, `type="button"`, variant-split ARIA. `src/components/ui/toast.test.jsx` (NEW, 17 vitest cases) + `scripts/probe-toast-lifecycle.mjs` (NEW, 68 assertions), 8 mutations. See section 30.4 | (This commit) |
+| 53 | **Payroll paid people from a display rounding, and lost cents every week.** A punch pair is an integer number of minutes, but `reconcileTimecards` rounded `hours` to 2 decimals *for a label* and then multiplied the rate by that label. Measured against the shipped code: 2,243 paid minutes at $15.00/h paid **$560.70 instead of $560.75**, and 140 overtime minutes at $22.50/h paid **$52.43 instead of $52.50**. Systematic and always downward, because the intermediate had already been truncated. Three copies of the arithmetic existed and the one that actually pays people — `runLocalAutoPayroll` in `src/api/base44Client.js` — is **protected**; `base44/functions/autoPayroll/entry.ts` was worse still, doing raw float dollar math (`baseRate * hours`, `Math.round(totalPay * 100) / 100`) that CLAUDE.md's BUSINESS mandate forbids outright, in a file that **no lint or typecheck gate covers** | HIGH | FIXED 2026-08-24 | `src/lib/timecardCalc.js` — rows carry `paid_minutes`/`regular_minutes`/`overtime_minutes` as integers, the 40h cap is compared in minutes, `hours` is the **exact quotient** `minutes / 60` and is never rounded, and pay goes through a new exported `payCentsForMinutes(rateCents, minutes)`. The protected file was **not touched**: it recomputes pay from `hours` itself, so an exact multiplicand puts its existing integer-cent math on the right cent (measured 224300c, where the 2-dp path gave 224280c). `base44/functions/autoPayroll/entry.ts` — inlined `toCents`/`fromCents`/`payCentsForMinutes`; `byEmployee` sums minutes and divides once. `src/pages/Expenses.jsx` — both hours render sites go through `formatNumber(x, 'auto')`, since `hours` is now `37.38333333333333`. `eslint.config.js` + `jsconfig.json` — the ignore note claiming typecheck gated these `.ts` files was false and now says so. `scripts/probe-payroll-minute-rounding.mjs` (NEW, 61 assertions, 6 mutations, incl. a 25,929-pair determinism sweep). See section 31 | (This commit) |
 
 ---
 
@@ -1601,4 +1602,239 @@ pristine copy:
   nothing sets. Both are pre-existing dead code, left in place deliberately.
 * **"Local fallback does not support action: create"** is the toast that actually
   blocked the owner. `src/api/base44Client.js` is protected; see the tracker.
+
+---
+
+## 31. PAYROLL PAID FROM A DISPLAY ROUNDING, AND LOST CENTS EVERY WEEK (tracker #53)
+
+Fixed 2026-08-24. Probe: `scripts/probe-payroll-minute-rounding.mjs` (**61
+assertions**). Tracker item V3.
+
+### 31.1 What was measured
+
+Both timecard-driven payroll paths were asked to pay one real week. Output of the
+shipped code, printed straight from `reconcileTimecards`:
+
+```
+A: hours 37.38  regular_pay 560.7   regular_minutes undefined
+B: hours 40  ot_hours 2.33  reg_pay 600  ot_pay 52.43  total 652.43
+```
+
+Ground truth:
+
+| basis | rate | correct | shipped | loss |
+|---|---|---|---|---|
+| 2,243 paid minutes | $15.00/h | **$560.75** | $560.70 | −$0.05 |
+| 140 overtime minutes | $22.50/h | **$52.50** | $52.43 | −$0.07 |
+
+The loss is systematic and always downward, because the intermediate that money
+was derived from had already been truncated.
+
+### 31.2 Root cause, in one sentence
+
+**Money was computed from an hours figure that had been rounded to 2 decimals for
+display, instead of from the exact integer minute count `applyBreaks` already
+returns.**
+
+A punch pair is an integer number of minutes. 2,243 minutes is `37.38333…` hours,
+and `Math.round(2243 / 60 * 100) / 100` is `37.38` — a number invented for a
+label. Multiplying `1500` cents by that label gives `56070`; multiplying by the
+minutes gives `Math.round(1500 * 2243 / 60) = 56075`. Nothing else about the
+engine was wrong. The 40-hour overtime cap, the unpaid-break policy and the
+missing-punch flags were all already correct.
+
+### 31.3 Three copies of the same arithmetic, and only two are editable
+
+| # | file | role | editable |
+|---|---|---|---|
+| 1 | `src/lib/timecardCalc.js:290-300` | the reconciler the app imports | yes |
+| 2 | `base44/functions/autoPayroll/entry.ts` | the backend cron copy | yes |
+| 3 | `src/api/base44Client.js` `runLocalAutoPayroll` | **the live production path** | **NO — protected** |
+
+Copy 3 is the one that actually pays people. `base44Client.js:2108-2110` routes
+`autoPayroll` to `runLocalAutoPayroll` **above** the `if (!USE_LOCAL_AUTH) return
+invokeBackend(...)` gate at `:2115-2117`, so `Payroll.jsx:176`'s
+`db.functions.invoke("autoPayroll", …)` always lands on the local mirror. The
+backend `entry.ts` is reachable only through the base44 cron trigger.
+
+### 31.4 How a protected file was made correct without being touched
+
+> [!IMPORTANT]
+> This is the part to read before "fixing" this again. `runLocalAutoPayroll` is
+> item 1 in `PROTECTED_FILES.md`. It was **not** wrapped, mirrored, patched or
+> overridden — Rules 2 and 3 forbid all four.
+
+Both `byEmployee` reducers sum only `w.hours` / `w.overtime_hours` and **discard**
+the reconciler's `regular_pay` / `overtime_pay` / `total_pay`, then recompute pay
+themselves. The protected copy's own arithmetic is already integer-cents and
+already correct:
+
+```js
+const regularPayCents = s.pay_type === "salary"
+  ? baseRateCents
+  : Math.round(baseRateCents * hours);
+```
+
+It was being fed a bad multiplicand, not doing bad math. So the repair is the
+CLAUDE.md Phase 5 one — fix the earliest broken boundary — and it is upstream of
+the protected file entirely: **stop rounding `hours`.** Keep it as the exact
+quotient `minutes / 60` and the protected consumer lands on the right cent by
+itself. Measured over 4 weeks × 2,243 min at $15.00/h, replicating the protected
+file's two lines verbatim (probe section 6):
+
+| multiplicand fed to the protected code | result |
+|---|---|
+| exact `2243/60` per week | **224300c** ✓ |
+| the old 2-dp `37.38` | 224280c (20c short) |
+
+### 31.5 Minutes are the basis of record; hours are a reading
+
+The whole fix is that inversion, and it shows up in four places in
+`src/lib/timecardCalc.js`:
+
+1. Rows carry `paid_minutes`, `regular_minutes`, `overtime_minutes` — integers.
+2. Shifts accumulate `row.paid_minutes += paid.paidMinutes`. Integer addition, so
+   a week's basis is exact no matter how many shifts it holds. `paid.hours` is
+   deliberately **not** accumulated: five 8-hour shifts summed as hours came out
+   as `42.333333333333336`, whose overtime remainder was `2.3333333333333357`
+   rather than `2.3333333333333335`.
+3. The overtime cap is converted to minutes (`40 * 60`), so the comparison and
+   the remainder are both exact integers.
+4. `row.hours = row.regular_minutes / 60` — one division, never rounded.
+
+`weeksToPayrollRuns` persists **exactly the fields it always did** (23 keys,
+pinned by probe section 9). The minute fields are not written: nothing reads them,
+and `PayrollRun.jsonc` tolerating extra properties is not a reason to add some.
+
+### 31.6 `payCentsForMinutes`, and why the operation order is the whole point
+
+```js
+export function payCentsForMinutes(rateCents, minutes) {
+  return Math.round((rateCents * minutes) / MIN_PER_HOUR);
+}
+```
+
+Three forms, for `1500` cents and `2243` minutes:
+
+```
+Math.round(1500 * 2243 / 60)      = 56075   correct, deterministic
+Math.round(1500 * (2243 / 60))    = 56075   correct here, NOT deterministic
+Math.round(1500 * 37.38)          = 56070   the defect
+```
+
+`rateCents * minutes` is an exact integer for anything this business can produce
+(a $10,000/h rate over a 24h shift is 1.4e9, far inside 2^53), so the single
+division-and-round is the only place precision is lost, and it loses it
+predictably. The middle form was swept against a BigInt round-half-up reference
+over **25,929 (rate, minute) pairs** (probe section 7):
+
+* exact-integer-numerator form: **0 mismatches**
+* divide-first form: **221 divergences**, every one a case where
+  `rateCents * minutes % 60 === 30` — i.e. the true value sits exactly on a half
+  cent and one unit in the last place of `minutes / 60` decides the direction.
+  Never off by more than 1c.
+
+### 31.7 The render sites had to be fixed in the same turn
+
+Un-rounding `hours` is only safe because it is formatted where it is displayed.
+Both record builders write `hours` **raw** (shorthand `hours,`), so
+`src/pages/Expenses.jsx` would otherwise have printed `37.38333333333333h` in two
+places: the delete-confirmation line (`:326`) and the payroll list row (`:672`).
+
+Both now go through `formatNumber(value, 'auto')` from `@/lib/decimal`
+(`maximumFractionDigits: 3`, **no minimum**), chosen over `formatNumber(x, 2)` so
+that `80h` and `42.5h` render exactly as they did before and only the 15-digit
+tail is cut. Precedent: `chart.jsx:337`, `ChartBuilder.jsx:206`.
+
+### 31.8 `entry.ts` was violating the BUSINESS mandate outright
+
+The backend copy was not merely rounding early, it was doing raw floating-point
+dollar math — `baseRate * hours`, `otHours * otRate`,
+`Math.round(totalPay * 100) / 100` — which CLAUDE.md forbids without
+qualification, while its own header claimed parity with the offline path. It now
+inlines `toCents` / `fromCents` / `payCentsForMinutes` (no shared import is
+possible across the Deno boundary) and its `byEmployee` sums **minutes** and
+divides once.
+
+One deliberate asymmetry: with **no** punches for the period, the hand-typed
+`Staff.hours` is the input of record, so it is multiplied as given. A manager who
+types `37.38` gets `$560.70`, because `37.38` is what they asserted — not a
+rounding of something more precise.
+
+### 31.9 Verification
+
+| command | result |
+|---|---|
+| `node --import ./scripts/_loader-boot.mjs scripts/probe-payroll-minute-rounding.mjs` | **61 passed, 0 failed**, rc=0 |
+| `npm run lint` | 0 errors |
+| `npm run typecheck` | 0 errors |
+| `node --import ./scripts/_loader-boot.mjs scripts/verify-timecard.mjs` | **47 passed, 0 failed** |
+| `npx vitest run src/lib/timecardCalc.test.js` | **21 passed** |
+| `npx vitest run src/api/autoPayroll.test.js` | **6 passed** |
+
+`src/api/autoPayroll.test.js` is an end-to-end test of the **live protected
+path**, and every figure in it is an exact multiple of 0.5h
+(`expect(run.hours).toBe(80)`, `.toBe(72)`, `.toBe(112.5)`), so un-rounding cannot
+move it — which is exactly why it stayed green without a single assertion being
+touched.
+
+**Mutation-tested, 6 of 6 killed** (each mutation applied to the real file, probe
+run, file restored, restoration confirmed by md5):
+
+| mutation | killed by |
+|---|---|
+| re-round `hours` to 2 dp | 4 assertions incl. the protected-mirror replication |
+| `payCentsForMinutes` divides first | the 25,929-pair sweep, 221 mismatches |
+| derive `regular_pay` from 2-dp hours (the original defect) | 5 assertions, `56070c` named |
+| `entry.ts` multiplies dollars again | the BUSINESS-mandate assertion |
+| render site interpolates raw hours | 3 assertions |
+| `byEmployee` stops accumulating minutes | 2 assertions |
+
+### 31.10 A gate hole found on the way, and closed as documentation
+
+`base44/functions/autoPayroll/entry.ts` — the file holding the payroll money math
+**and** the `AUDIT_CANONICAL_V1` audit write — is covered by **no automated gate
+at all**:
+
+* `eslint.config.js` ignores `**/*.ts` (no typescript-eslint installed). Measured:
+  `npx eslint base44/functions/autoPayroll/entry.ts` →
+  `File ignored because of a matching ignore pattern`.
+* `jsconfig.json`'s `include` is `["src/**/*.js", "src/**/*.jsx"]` — no `.ts`
+  extension and no `base44/` path, so tsc never loads it either.
+
+The eslint ignore block claimed "`npm run typecheck` is their gate instead". That
+was **false**, and it is the reason float dollar math survived in a money path
+through several audits. Both comments now state the truth, and both record the
+per-file command that *does* work:
+
+```bash
+./node_modules/.bin/tsc --noEmit --noResolve --skipLibCheck \
+  --target esnext --module esnext --moduleResolution bundler <file>
+```
+
+For `entry.ts` that measured **3 errors, all TS2307** against
+`npm:@base44/sdk@^0.8.41`, `base44:runtime` and `node:crypto` — i.e. the file is
+type-clean apart from Deno specifiers tsc can never resolve. Nine files sit in
+this blind spot: `src/utils/index.ts`, `base44/.types/types.d.ts` and 7 base44
+`entry.ts` files. Until typescript-eslint exists here, static assertions inside a
+probe are their only gate — sections 10 and 12 of
+`probe-payroll-minute-rounding.mjs` are that gate for `entry.ts` and for the
+protected `base44Client.js`.
+
+### 31.11 Deliberately left alone
+
+* **`runLocalAutoPayroll`'s residual half-cent nondeterminism.** It computes
+  `Math.round(baseRateCents * hours)` from a float, which is the middle form in
+  31.6: correct to the cent except on exact half-cent ties, where it can differ by
+  1c from `Math.round(rateCents * minutes / 60)`. The systematic 5c/7c loss is
+  gone; this is a ≤1c tie-break. Fixing it needs ~6 lines in a **protected**
+  file, so it is prepared and reported, not applied.
+* **`entry.ts` never pays a `shift_exceeds_24h` shift (it `continue`s) while
+  `timecardCalc.js` does pay it.** A real divergence between the two copies, but
+  it is tracker V2 / #75, not this defect.
+* **`payroll_status: "pending"` (backend) vs `"approved"` (local mirror).**
+  Pre-existing, unrelated to money.
+* **`payrollCalc.js:44-46` `calculatePay`.** The tracker text said to thread
+  minutes through here too. It receives hand-typed form hours; **no minute basis
+  exists at that boundary**, so it is not a defect site.
 

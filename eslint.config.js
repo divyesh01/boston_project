@@ -111,8 +111,26 @@ export default [
       // typescript-eslint, and the npm registry is unreachable from the build
       // VM, so it cannot be added here. The 9 affected files are
       // src/utils/index.ts, base44/.types/types.d.ts and 7 base44 function
-      // entry.ts files; `npm run typecheck` is their gate instead. Revisit if
-      // typescript-eslint is ever installed.
+      // entry.ts files.
+      //
+      // CORRECTED 2026-08-24: this note used to claim "`npm run typecheck` is
+      // their gate instead". It is not. jsconfig.json's `include` is
+      // ["src/**/*.js", "src/**/*.jsx"] — no .ts extension anywhere and no
+      // base44/ path — so tsc never loads a single one of these 9 files either.
+      // They are gated by NOTHING automated. That mattered: the payroll money
+      // path in base44/functions/autoPayroll/entry.ts was doing raw float dollar
+      // math in violation of CLAUDE.md BUSINESS, and neither gate could see it.
+      // Until typescript-eslint exists here, per-file static assertions in a
+      // probe are the only gate these files have (entry.ts is covered by
+      // section 10 of scripts/probe-payroll-minute-rounding.mjs). Measured for
+      // that file with the local tsc:
+      //   ./node_modules/.bin/tsc --noEmit --noResolve --skipLibCheck \
+      //     --target esnext --module esnext --moduleResolution bundler <file>
+      // -> 3 errors, all TS2307 against "npm:@base44/sdk@^0.8.41",
+      // "base44:runtime" and "node:crypto". Nothing else. So a per-file
+      // `--noResolve` run IS a usable syntax-and-types gate for these files if
+      // the TS2307 floor is ever filtered out; adding path shims to resolve
+      // those three specifiers would be checking a fiction (see jsconfig.json).
       "**/*.ts",
       "**/*.tsx",
 

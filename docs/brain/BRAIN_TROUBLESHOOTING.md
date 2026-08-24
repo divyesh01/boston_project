@@ -48,7 +48,7 @@
 | 44 | The same page coloured cells by `room_revenue` but classified tiers and rendered the day modal from `total_revenue`, which the CSV importer never writes — every imported day grouped "low" behind a green cell, and tapping a $12,000 cell opened a panel reading $0.00 | HIGH | FIXED 2026-08-24 | `src/pages/MonthlyCalendar.jsx` — both now read `room_revenue`. See BRAIN_FINANCE.md 12.8 | (This commit) |
 | 45 | `MtdGrowth.jsx` headline card is labelled "Total Revenue" and reads the bare `total_revenue` field, which is populated by `ManualEntry.jsx` only — the card read **$0.00 on every imported day**, and because `pctCh` is 0 whenever `prev` is 0 the Owner's Snapshot narrated "Revenue is up 0.0% to $0" and could rank that $0 as the period's top driver | HIGH | FIXED 2026-08-24 | `src/pages/MtdGrowth.jsx` — the entry is flagged `derived: true`, assembled by `grossRevenueForPeriod()` from both ledgers, subtracted in integer cents, and relabelled "Total Revenue (room only)" when the basis is room. Measured: 0 of 214 real rows carry the field. See section 27 | (This commit) |
 | 46 | The same page's previous-period window was `prevToDate.setDate(prevFrom.getDate() + elapsedDays - 1)` — a UTC-midnight parse read through LOCAL calendar accessors. In every zone behind UTC the window ended a day early, so a day of prior-period revenue dropped out and **every growth percentage on the page was inflated** — the direction nobody questions | HIGH | FIXED 2026-08-24 | `src/lib/hotel.js` — new `isoEpochDay`/`epochDayToIso` built on `Date.UTC`; `src/pages/MtdGrowth.jsx` consumes them. Measured in `America/New_York`: the live filter's window ended `2025-08-01`, not `2025-08-02`. See section 27 | (This commit) |
-| 47 | The three `RECURRING_EVENTS` loops parse a date-only `startDate` (UTC midnight) and then test `d.getDay()` — a LOCAL accessor — while stamping the row with `d.toISOString()`. The weekday of the **previous** day is matched against the **current** day's date, so every recurring event lands one day late | HIGH | **OPEN** | `src/lib/eventSchedule.js:183`, `src/pages/ActionCenter.jsx:258`, `:298`. Measured in `America/New_York`: King Richard's Faire (`dayOfWeek: [6, 0]`, Sat/Sun) emits `2026-09-06 09-07 09-13 09-14`; the truth is `09-05 09-06 09-12 09-13`. Fix with `isoEpochDay` + a **UTC** weekday. Needs its own probe. See 27.4 for the sites adjudicated safe | — |
+| 47 | The three `RECURRING_EVENTS` loops parsed a date-only `startDate` (UTC midnight) and then tested `d.getDay()` — a LOCAL accessor — while stamping the row with `d.toISOString()`. The weekday of the **previous** day was matched against the **current** day's date, so every recurring event landed one day late. Measured in `America/New_York`: King Richard's Faire (`dayOfWeek: [6, 0]`) emitted `2026-09-06 09-07 09-13 09-14`; the truth is `09-05 09-06 09-12 09-13`. Two further symptoms the same parse caused: the spring-forward window emitted **7 distinct days out of 8** with `2026-03-08` duplicated, and `ActionCenter`'s horizon compared a UTC-midnight `Date` against a LOCAL-midnight `Date`, excluding today's own events in every US zone | HIGH | FIXED 2026-08-24 | `src/lib/hotel.js` — new `epochDayWeekday`/`localTodayIso`; `src/lib/eventSchedule.js` — expander rewritten on integer epoch days, new `getUpcomingEventDays` export; `src/pages/ActionCenter.jsx` — **505 → 342 lines** (`git diff --numstat`: 10 insertions, 173 deletions), both byte-identical duplicate datasets and both duplicated loops deleted in favour of two delegations. `scripts/probe-recurring-events.mjs` (NEW, 107 assertions, 7 mutations). See section 29 | (This commit) |
 | 48 | CI pinned `node-version: '20'`, on which jsdom@30's transitive undici@8 throws at **import** time. All 36 vitest files failed to START, so "Security and Quality Assurance" failed on **32 consecutive runs** (2026-08-13 → 2026-08-24) and **not one test had ever executed in CI**. Upstream cause: `package.json` declared no `engines` field, so nothing in the repo stated the floor | HIGH | FIXED 2026-08-24 | `package.json` gained `engines.node`; `.github/workflows/security.yml` pins `'24'`; `scripts/probe-ci-node-version.mjs` (NEW, 61 assertions) keeps the two in lockstep. See section 28 | (This commit) |
 
 ---
@@ -941,7 +941,7 @@ is whether the parse and the accessors belong to the same frame of reference.
 
 | Site(s) | Parse | Output | Verdict |
 |---|---|---|---|
-| `eventSchedule.js:183`, `ActionCenter.jsx:258`, `:298` | `new Date("2026-09-05")` → **UTC** midnight | `getDay()` **local**, `toISOString()` **UTC** | **DEFECTIVE — tracker #47** |
+| `eventSchedule.js:183`, `ActionCenter.jsx:258`, `:298` | `new Date("2026-09-05")` → **UTC** midnight | `getDay()` **local**, `toISOString()` **UTC** | was **DEFECTIVE**; fixed — tracker #47, section 29 |
 | `aiEngine.js` ×6 (173, 175, 213, 241, 248, 250) | `` new Date(`${s}T00:00:00`) `` → local | `iso()` = `getFullYear`/`getMonth`/`getDate`, local | consistent — **leave alone** |
 | `useGlobalFilters.jsx:129`, `:131` | `new Date(y, m, d)` → local constructor | local field accessors | consistent — **leave alone** |
 | `Import.jsx:225` | `new Date()` → a real instant | `toISOString()` | a timestamp, not a date-only key — **leave alone** |
@@ -955,12 +955,15 @@ day. Measured: `2026-08-24` buckets to `2026-08-24` in `America/New_York` and to
 but do not copy the idiom.
 
 > [!CAUTION]
-> **Tracker #47 is a live defect in the owner's zone, not a latent one.** The loop tests
-> the weekday of the day *before* the one it stamps. `2026-09-05` is a Saturday;
-> `new Date("2026-09-05").getDay()` in `America/New_York` says **Friday**. King Richard's
-> Faire (`dayOfWeek: [6, 0]`, Sat/Sun) is emitted on `2026-09-06 09-07 09-13 09-14` when
-> the truth is `09-05 09-06 09-12 09-13` — every recurring event on the calendar is one
-> day late. Fix it with `isoEpochDay` plus a **UTC** weekday, under its own probe.
+> **Tracker #47 was a live defect in the owner's zone, not a latent one** — fixed
+> 2026-08-24, see section 29. The loop tested the weekday of the day *before* the one it
+> stamped. `2026-09-05` is a Saturday; `new Date("2026-09-05").getDay()` in
+> `America/New_York` says **Friday**. King Richard's Faire (`dayOfWeek: [6, 0]`, Sat/Sun)
+> was emitted on `2026-09-06 09-07 09-13 09-14` when the truth is
+> `09-05 09-06 09-12 09-13`. The fix is `isoEpochDay` plus a **UTC** weekday
+> (`epochDayWeekday`), under `scripts/probe-recurring-events.mjs`. Three call sites carried
+> the same defect because two of them were copy-pasted; de-duplicating them was part of the
+> fix, not a separate cleanup.
 
 ## 27.4 Verification
 
@@ -1129,3 +1132,175 @@ be closed, not merged; the Node pin has no bearing on them.
 
 
 
+---
+
+## 29. THE CALENDAR WAS ONE DAY LATE IN THREE PLACES AT ONCE (tracker #47)
+
+### 29.1 The defect
+
+`src/lib/eventSchedule.js` expanded each `RECURRING_EVENTS` series with this loop, and
+`src/pages/ActionCenter.jsx` carried two byte-identical copies of it:
+
+```js
+for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+  if (r.dayOfWeek.includes(d.getDay())) out.push({ ...r, date: d.toISOString().slice(0, 10) });
+}
+```
+
+`new Date("2026-09-05")` is parsed as **UTC** midnight. `getDay()` reads the **LOCAL**
+calendar. `toISOString()` writes the **UTC** one. In any zone behind UTC those two frames
+name different days, so the loop tested the weekday of the day *before* the one it stamped.
+Measured on this machine: `new Date("2026-09-05").getDate()` returns **4**.
+
+### 29.2 Three symptoms, all measured before the fix
+
+**Symptom 1 — every recurring event one day late.** King Richard's Faire declares
+`dayOfWeek: [6, 0]` (Sat/Sun) and runs 2026-09-05 → 2026-10-19. The shipped loop emitted
+`2026-09-06 09-07 09-13 09-14`; the truth is `09-05 09-06 09-12 09-13`. Printed side by
+side, the shipped dates fall on `Sun Mon Sun Mon Sun Mon Sun Mon` where the fixed dates
+fall on `Sat Sun Sat Sun Sat Sun Sat Sun`.
+
+> [!IMPORTANT]
+> **The damage was half-invisible, which is why it shipped.** Shifting a `[6, 0]` series by
+> one day maps Sat→Sun — still a member of the series — and only Sun→Mon leaves it. So of
+> the 8 September occurrences, **4 landed on an impossible weekday** (Monday) and the other
+> 4 were wrong-but-plausible. The page looked like it was listing weekend events, and it
+> was; just the wrong ones. Across the whole 2026 schedule the old algorithm put
+> **15 of 164** occurrences on a weekday the series does not declare.
+
+**Symptom 2 — DST loses a day, silently, in both directions.** `setDate()` walks local
+calendar days, so a 23-hour or 25-hour day desynchronises the walk from the UTC stamp:
+
+| Window | Shipped output | Truth |
+|---|---|---|
+| spring forward, 2026-03-05 → 03-12, all days | 8 iterations, **7 distinct dates** — `2026-03-08` emitted **twice**, `03-12` never | 8 distinct dates |
+| fall back, 2026-10-29 → 11-05, all days | **7 of 8 days**; `2026-11-05` silently dropped | 8 distinct dates |
+
+It loses a day; it does not overshoot. Nothing in the UI could reveal this — a missing day
+renders as a day with no events, which is indistinguishable from a day that has none.
+
+**Symptom 3 — today's own events were excluded from the horizon.** The upcoming-events
+lane compared `new Date(e.date)` (UTC midnight) against a `new Date(y, m, d)` built from
+local fields (local midnight). Proved live in the probe:
+`2026-09-05T00:00:00.000Z >= 2026-09-05T04:00:00.000Z` is **false**. In every US timezone
+the owner's own event day disappeared from the "next 5 event dates ahead" card on the
+morning it mattered.
+
+### 29.3 The fix: integer epoch days, one expander
+
+Two new primitives in `src/lib/hotel.js`, next to the existing `isoEpochDay` /
+`epochDayToIso` pair from tracker #46:
+
+```js
+export function epochDayWeekday(day) {
+  if (!Number.isFinite(day)) return NaN;
+  return ((Math.trunc(day) + 4) % 7 + 7) % 7;
+}
+```
+
+Epoch day 0 is 1970-01-01, a **Thursday**, which is `4` in `Date`'s 0=Sunday numbering —
+hence the `+ 4` phase. The second `+ 7` keeps pre-1970 (negative) days in range. Verified
+against ICU (`Intl.DateTimeFormat` with `timeZone: "UTC"`) over **4000 consecutive days**:
+0 mismatches. There is no `Date` object anywhere in the path, so there is no zone to get
+wrong and no DST to desynchronise.
+
+`localTodayIso()` is the companion for "today" as the operator's calendar sees it. Its
+doc comment forbids the idiom it replaces: `new Date().toISOString().slice(0, 10)` is
+today **in UTC**, which in Middleborough rolls over at 8pm.
+
+`src/lib/eventSchedule.js` now owns the only expander. `getEventsInRange` converts the
+window to epoch days once and compares integers; `expandRecurring` steps `day += 1`;
+a private `occurrence()` builds each row. `getUpcomingEventDays` is new and exported, so
+the page no longer needs a loop at all.
+
+> [!NOTE]
+> `occurrence()` names all twelve fields explicitly rather than spreading `{ ...r }`. The
+> spread would leak `startDate`, `endDate` and `dayOfWeek` onto a single-day row, where
+> they are meaningless and invite exactly the kind of consumer that re-derives a weekday
+> from them. `NaN >= fromDay` is false, so a malformed date filters itself out instead of
+> passing.
+
+**The triplication was the root cause of the triplication.** `ActionCenter.jsx` held
+byte-identical copies of both datasets — measured at **22,922** and **10,753** characters,
+64 and 24 entries, matching `eventSchedule.js` exactly — *and* two copies of the loop.
+De-duplicating was therefore behaviour-preserving, not a refactor: the page went from
+**505 to 342 lines** (`git diff --numstat`: 10 insertions, 173 deletions). One defect could
+only ship in three places because the code shipped in three places.
+
+### 29.4 The probe
+
+`scripts/probe-recurring-events.mjs` — **107 assertions, 12 sections, exit 0**. Two
+things about it are worth copying:
+
+**It keeps the deleted algorithm as a live defect vector.** `shippedExpand()` reproduces
+the removed loop verbatim, so every symptom above is re-measured on each run rather than
+quoted from this document. A fix that regressed would have to make the old and new
+algorithms agree, which they cannot.
+
+**It pins its own timezone by re-exec, not by assignment.** `process.env.TZ = ...` in a
+module body runs *after* hoisted static imports have already been evaluated, so it cannot
+affect them. The probe instead re-execs itself with `spawnSync(process.execPath,
+[...process.execArgv, SELF], { env: { ...process.env, TZ: PIN, PROBE_EVENTS_PINNED: "1" } })`.
+Passing `process.execArgv` through is what carries the `--import ./scripts/_loader-boot.mjs`
+flag into the child.
+
+### 29.5 Two traps found while writing it
+
+> [!CAUTION]
+> **ICU canonicalizes timezone links, so never assert on a zone *name*.** A snapshot
+> comparison across five zones initially asserted `resolvedOptions().timeZone === "Asia/Kolkata"`
+> and failed: this Node build resolves it to **`Asia/Calcutta`**. That is an ICU version
+> talking, not a defect. The assertion now compares **UTC offsets** computed from
+> `formatToParts`, and a separate check asserts the five children really did run in five
+> *distinct* offsets — otherwise the byte-identity assertions could pass vacuously.
+
+> [!CAUTION]
+> **A clock-dependent assertion is only load-bearing part of the day.** Mutation M6
+> reverted `localTodayIso` to `toISOString()` and tripped only the *source contract* check.
+> The behavioural check passed, because in New York local fields and UTC fields differ for
+> roughly four hours out of twenty-four — and the mutation ran outside that window. Fixed
+> by having the zone children report both `today` and `utcToday`, and asserting at least one
+> of the five zones is on a different date from UTC. `Pacific/Kiritimati` (UTC+14) and
+> `Pacific/Honolulu` (UTC-10) are 24 hours apart, so that holds at **every** instant.
+> Re-running M6 then produced 2 FAILs. Assertion count 104 → 107.
+
+### 29.6 Mutation results
+
+Seven mutations, each applied to an off-mount mirror (`/tmp/evmirror`, with `node_modules`
+symlinked back to the mount) so the tracked tree was never written to; md5s of the real
+files matched before and after.
+
+| Mutation | Result |
+|---|---|
+| `epochDayWeekday` phase `+ 4` → `+ 3` | **12 FAILs** |
+| reinstate the local-accessor loop in `expandRecurring` | **15 FAILs** |
+| `getUpcomingEventDays` excludes today (`>` instead of `>=`) | 1 FAIL |
+| drop the `endDate` clamp | 2 FAILs |
+| `occurrence()` spreads `{ ...r }` | 1 FAIL |
+| `localTodayIso` → `toISOString().slice(0, 10)` | 1 FAIL → **2 FAILs** after 29.5 |
+| `ActionCenter.jsx` re-declares its own `EVENT_SCHEDULE` | 2 FAILs |
+
+The last row is the anti-regression guard that matters most: the probe asserts the page
+does **not** carry its own dataset, so the copy-paste that caused this defect cannot
+reappear without turning the suite red.
+
+> [!IMPORTANT]
+> **Three of the probe's first-run assertions failed, and all three were my own
+> overstatements — not product defects.** "Every shipped date is the wrong weekday" was
+> really 4 of 8. "The fall-back window names a day outside the range" was really "drops
+> `2026-11-05`" — I had carried an assertion shaped by a *different* window measured
+> earlier. And the `Asia/Kolkata` name equality above. Each was replaced with what the
+> measurement actually said. An assertion written from memory of a previous measurement is
+> a fabricated result even when the code under it is correct.
+
+### 29.7 Verification
+
+| Gate | Observed |
+|---|---|
+| `probe-recurring-events.mjs` | **107 PASS / 0 FAIL**, exit 0 |
+| `npm run typecheck` | **0 errors** |
+| `npm run lint` | **0 errors** |
+| downstream consumers | `probe-monthly-calendar` 67/0 · `probe-calendar-day-modal` 30/0 · `verify-actioncenter` 39/0 · `probe-hotel` 40/0 · `probe-money-kept-gross` 49/0 · `probe-capacity-per-day` 68/0 · `probe-cents-unit-mismatch` 38/0 · `verify-transactions` 115/0 · `probe-mtd-growth` 58/0 · `probe-money-kept-double-count` 65/0 |
+| `verify:all --list` | **103 discovered**, list fingerprint `d3091dab` (was 102 at `82bc3362`) |
+
+**Not run:** the full 103-suite `verify:all` at `d3091dab` — that needs a Windows run.

@@ -42,7 +42,7 @@ Every page in the app, what it does, and what files it depends on.
 | **DataTemplate** | `src/pages/DataTemplate.jsx` | CSV template reference + sample generator | None |
 | **ChartBuilder** | `src/pages/ChartBuilder.jsx` | Custom chart creator (grouping, aggregation, multi-chart) | `chartExport.js`, `UniversalChart` |
 | **Pricing** | `src/pages/Pricing.jsx` | Dynamic pricing recommendations + overrides | `pricingEngine.js`, `pricingOverride.js`, `pricingSettings.js` |
-| **ActionCenter** | `src/pages/ActionCenter.jsx` | Automated alerts: Fix Today / Investigate / Opportunity | `actionCenter.js`, `alertEngine.js`, `anomalyDetector.js` |
+| **ActionCenter** | `src/pages/ActionCenter.jsx` | Automated alerts: Fix Today / Investigate / Opportunity, plus the next 5 event days | `actionCenter.js`, `eventSchedule.js`, `hotel.js`, `useHotelData.js` |
 | **Reviews** | `src/pages/Reviews.jsx` | Guest review sentiment scoring + reputation | `reputationService.js` |
 
 ### Admin & Security

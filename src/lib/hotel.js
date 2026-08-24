@@ -203,6 +203,61 @@ export function epochDayToIso(day) {
 }
 
 /**
+ * The weekday of an epoch day, as `Date.prototype.getUTCDay` numbers them:
+ * 0 = Sunday … 6 = Saturday.
+ *
+ * WHY THIS EXISTS. `getDay()` reads a LOCAL calendar field, and a date-only
+ * string parses as UTC midnight — so in every zone behind UTC, `new
+ * Date("2026-09-05").getDay()` answers for September **4th**. The recurring
+ * event expander tested that local weekday and then stamped the UTC date, so
+ * every weekend event landed on Sunday and Monday instead of Saturday and
+ * Sunday. Measured on King Richard's Faire (`dayOfWeek: [6, 0]`, from
+ * 2026-09-05): it emitted 09-06, 09-07, 09-13, 09-14 where the truth is 09-05,
+ * 09-06, 09-12, 09-13. See BRAIN_TROUBLESHOOTING.md 29.
+ *
+ * Iterating whole epoch days and deriving the weekday arithmetically also
+ * removes the DST damage that `setDate(getDate() + 1)` caused on a UTC-midnight
+ * instant: measured, spring-forward emitted 2026-03-08 **twice** and dropped
+ * 03-12, and fall-back skipped 2026-11-18 while stamping 11-30, a Monday, for a
+ * Wednesday-to-Sunday event.
+ *
+ * Epoch day 0 is 1970-01-01, which was a Thursday, hence the +4 phase. The extra
+ * `+ 7` keeps the result in 0..6 for dates before 1970, where `%` would
+ * otherwise yield a negative.
+ *
+ * @param {number} day whole days since 1970-01-01, as {@link isoEpochDay} returns
+ * @returns {number} 0..6 with 0 = Sunday, or NaN when `day` is not finite
+ */
+export function epochDayWeekday(day) {
+  if (!Number.isFinite(day)) return NaN;
+  return ((Math.trunc(day) + 4) % 7 + 7) % 7;
+}
+
+/**
+ * Today's date in the OPERATOR's calendar, as a "YYYY-MM-DD" key.
+ *
+ * Do NOT substitute `new Date().toISOString().slice(0, 10)`. That is today in
+ * UTC, which in Middleborough rolls over at 8pm (7pm in winter) — so between
+ * 8pm and midnight a "from today onward" horizon silently starts tomorrow and
+ * drops the evening the owner is standing in.
+ *
+ * The inverse mistake is just as easy: comparing this key's parse against a
+ * date-only event key. `new Date(y, m, d)` is LOCAL midnight while
+ * `new Date("2026-08-24")` is UTC midnight, so `eventDate >= localMidnight` is
+ * false for an event dated today and today's own events vanish. That is exactly
+ * what the Action Center's upcoming-events horizon did. Compare the KEYS, or
+ * compare epoch days — never a mix of the two frames.
+ *
+ * @returns {string} date-only key for the host's current local day
+ */
+export function localTodayIso() {
+  const now = new Date();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${m}-${d}`;
+}
+
+/**
  * Format a date-only key ("YYYY-MM-DD") for display — "Thursday, August 6".
  *
  * Use this for ANY date that came from a business-date column or an event

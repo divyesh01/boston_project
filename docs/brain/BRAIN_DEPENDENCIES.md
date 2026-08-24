@@ -8,7 +8,7 @@ These files are imported the most across the codebase. Editing them has a massiv
 ```mermaid
 graph TD
   utils[utils<br/>(50 imports)]
-  hotel[hotel<br/>(45 imports)]
+  hotel[hotel<br/>(46 imports)]
   base44Client[base44Client<br/>(42 imports)]
   Card[Card<br/>(39 imports)]
   useGlobalFilters[useGlobalFilters<br/>(29 imports)]
@@ -33,7 +33,7 @@ graph TD
 | File Base Name | Import Count | Danger Level |
 |----------------|--------------|--------------|
 | utils | 50 | [CRITICAL] |
-| hotel | 45 | [CRITICAL] |
+| hotel | 46 | [CRITICAL] |
 | base44Client | 42 | [CRITICAL] |
 | Card | 39 | [CRITICAL] |
 | useGlobalFilters | 29 | [CRITICAL] |

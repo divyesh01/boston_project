@@ -1,6 +1,17 @@
 // Event schedule data for demand-based pricing intelligence.
 // Shared by the Action Center and Monthly Calendar views.
 // Motel base: 30 East Clark Street, Middleborough, MA
+//
+// DATE RULE FOR THIS FILE. Every date here is a date-only "YYYY-MM-DD" key -- a
+// square on a wall calendar, not an instant. All comparison and iteration goes
+// through the epoch-day integers from hotel.js. Do not reach for `new Date(str)`
+// with a local accessor (`getDay`, `getDate`, `setDate`, `getMonth`): a date-only
+// string parses as UTC midnight, so those accessors answer for the PREVIOUS day
+// in every zone behind UTC, and `setDate` re-anchors the clock across a DST
+// boundary. Both defects shipped here; see BRAIN_TROUBLESHOOTING.md 29 and
+// scripts/probe-recurring-events.mjs.
+
+import { isoEpochDay, epochDayToIso, epochDayWeekday } from "@/lib/hotel";
 
 export const EVENT_SCHEDULE = [
   { date: "2026-08-21", name: "Kesha", venue: "The Xfinity Center", address: "885 S Main St, Mansfield, MA 02048", time: "7:00 PM", type: "Pop / Dance Concert", holiday: "Summer Tour Season", demand: "High", priceRange: "$60-$220+", distance: 22, audience: "Adults (21-35), pop fans, regional concertgoers across SE Mass & RI" },
@@ -160,46 +171,100 @@ export function peakDemand(events) {
   return events.reduce((max, e) => Math.max(max, DEMAND_ORDER[e.demand] || 0), 0);
 }
 
+// One materialised day of a recurring series. Every field the UI reads is named
+// explicitly: a `{ ...r }` spread would also carry `startDate`, `endDate` and
+// `dayOfWeek`, which are meaningless on a single occurrence, and the Action
+// Center's own copy of this loop did exactly that before it was deleted.
+function occurrence(r, day) {
+  return {
+    date: epochDayToIso(day),
+    name: r.name,
+    venue: r.venue,
+    address: r.address,
+    time: r.time,
+    type: r.type,
+    holiday: r.holiday,
+    demand: r.demand,
+    priceRange: r.priceRange,
+    distance: r.distance,
+    audience: r.audience,
+    recurring: true,
+  };
+}
+
+// Append every day of `r` that falls inside [fromDay, toDay] -- all three are
+// inclusive epoch-day integers. Iterating integers, not Date objects, is what
+// makes this immune to the operator's timezone and to DST.
+function expandRecurring(r, fromDay, toDay, out) {
+  const startDay = isoEpochDay(r.startDate);
+  const endDay = isoEpochDay(r.endDate);
+  if (!Number.isFinite(startDay) || !Number.isFinite(endDay)) return;
+  const first = Math.max(startDay, fromDay);
+  const last = Math.min(endDay, toDay);
+  for (let day = first; day <= last; day += 1) {
+    if (r.dayOfWeek.includes(epochDayWeekday(day))) out.push(occurrence(r, day));
+  }
+}
+
 // Expand recurring events and return every event (one-time + recurring) whose date
 // falls inside [from, to]. Each entry carries a `recurring` boolean so the UI can
-// badge it.
+// badge it. Both bounds are inclusive date-only keys.
 export function getEventsInRange({ from = "", to = "" } = {}) {
   if (!from || !to) return [];
-  const fromD = new Date(from);
-  const toD = new Date(to);
+  const fromDay = isoEpochDay(from);
+  const toDay = isoEpochDay(to);
+  if (!Number.isFinite(fromDay) || !Number.isFinite(toDay)) return [];
   const events = [];
 
   EVENT_SCHEDULE.forEach((e) => {
-    const d = new Date(e.date);
-    if (d >= fromD && d <= toD) events.push({ ...e, recurring: false });
+    const day = isoEpochDay(e.date);
+    if (day >= fromDay && day <= toDay) events.push({ ...e, recurring: false });
   });
 
-  RECURRING_EVENTS.forEach((r) => {
-    const rStart = new Date(r.startDate);
-    const rEnd = new Date(r.endDate);
-    if (rEnd < fromD || rStart > toD) return;
-    const start = rStart > fromD ? rStart : fromD;
-    const end = rEnd < toD ? rEnd : toD;
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      if (r.dayOfWeek.includes(d.getDay())) {
-        const dateStr = d.toISOString().slice(0, 10);
-        events.push({
-          date: dateStr,
-          name: r.name,
-          venue: r.venue,
-          address: r.address,
-          time: r.time,
-          type: r.type,
-          holiday: r.holiday,
-          demand: r.demand,
-          priceRange: r.priceRange,
-          distance: r.distance,
-          audience: r.audience,
-          recurring: true,
-        });
-      }
-    }
-  });
+  RECURRING_EVENTS.forEach((r) => expandRecurring(r, fromDay, toDay, events));
 
   return events.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// The last epoch day any event in this file can land on. Derived on each call so
+// editing the data above cannot leave a stale horizon behind.
+function lastScheduledDay() {
+  let last = -Infinity;
+  EVENT_SCHEDULE.forEach((e) => {
+    const day = isoEpochDay(e.date);
+    if (Number.isFinite(day) && day > last) last = day;
+  });
+  RECURRING_EVENTS.forEach((r) => {
+    const day = isoEpochDay(r.endDate);
+    if (Number.isFinite(day) && day > last) last = day;
+  });
+  return last;
+}
+
+/**
+ * The next `limit` distinct days from `from` onward that have at least one event,
+ * grouped as `[dateKey, events[]]` pairs in ascending date order. Days with no
+ * events are skipped, so five pairs can span any number of calendar days.
+ *
+ * `from` is INCLUSIVE: an event dated today is upcoming. The Action Center used
+ * to compare a UTC-midnight event date against a LOCAL-midnight `today`, which
+ * made today's own events disappear in every US timezone -- pass a date-only key
+ * (`localTodayIso()`) and the comparison stays in one frame.
+ *
+ * @param {{ from?: string, limit?: number }} [opts]
+ * @returns {Array<[string, object[]]>}
+ */
+export function getUpcomingEventDays({ from = "", limit = 5 } = {}) {
+  const fromDay = isoEpochDay(from);
+  if (!Number.isFinite(fromDay) || !(limit > 0)) return [];
+  const last = lastScheduledDay();
+  if (!Number.isFinite(last) || last < fromDay) return [];
+
+  const byDate = new Map();
+  getEventsInRange({ from, to: epochDayToIso(last) }).forEach((e) => {
+    if (!byDate.has(e.date)) byDate.set(e.date, []);
+    byDate.get(e.date).push(e);
+  });
+
+  return [...byDate.entries()].sort(([a], [b]) => a.localeCompare(b)).slice(0, limit);
 }

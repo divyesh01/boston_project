@@ -605,6 +605,124 @@ check('the root-script scan actually had files to read',
   rootScripts.length > 3,
   `only ${rootScripts.length} matched, so a clean result here would mean nothing`);
 
+// ── Section 10: wrangler.jsonc (Cloudflare Workers) ────────────────────
+//
+// This file was completely ungated until 2026-08-23, and every defect in it is
+// invisible until someone loads the deployed site:
+//
+//   · `name` selects which Worker `wrangler deploy` overwrites. A wrong name does
+//     not error - it CREATES a second worker on a different URL and leaves the
+//     real site serving the old build. The file said "divyesh" while the deployed
+//     worker was "divyeshpro".
+//   · `assets.not_found_handling` is the SPA fallback. Without it this app uses
+//     BrowserRouter, so every deep link and every hard refresh on a non-root
+//     route returns 404 - and the dev server rewrites for you, so it cannot be
+//     reproduced locally. Same failure class as the vercel.json rewrite in §1.
+//   · `assets.directory` must be the Vite outDir, or a green build deploys nothing.
+const wranglerRaw = read('wrangler.jsonc');
+let wrangler = null;
+try {
+  wrangler = JSON.parse(stripComments(wranglerRaw));
+} catch (e) {
+  check('wrangler.jsonc parses after comment-stripping', false, e.message);
+}
+check('wrangler.jsonc parses', wrangler !== null,
+  wrangler ? 'valid JSONC' : 'wrangler deploy would refuse to run');
+if (wrangler) {
+  check('wrangler.jsonc declares a worker name',
+    typeof wrangler.name === 'string' && wrangler.name.length > 0,
+    `name=${JSON.stringify(wrangler.name)} — an absent name makes the deploy target ambiguous`);
+  check('the asset directory is the Vite outDir',
+    wrangler.assets?.directory === './dist',
+    `directory=${JSON.stringify(wrangler.assets?.directory)}`);
+  check('the SPA fallback is configured',
+    wrangler.assets?.not_found_handling === 'single-page-application',
+    `not_found_handling=${JSON.stringify(wrangler.assets?.not_found_handling)} — without this every hard refresh off / returns 404`);
+  check('a compatibility_date is pinned',
+    /^\d{4}-\d{2}-\d{2}$/.test(String(wrangler.compatibility_date || '')),
+    `compatibility_date=${JSON.stringify(wrangler.compatibility_date)}`);
+}
+
+// -- Section 12: the production HTML must contain no inline <script> ---------
+// These two facts are only safe TOGETHER, so they are asserted together.
+// @base44/vite-plugin injects an inline <script type="module"> into the built
+// index.html when `analyticsTracker` is on (it is the only injection with
+// mode:"production" and the only one carrying inlineContent). A CSP whose
+// script-src omits 'unsafe-inline' then blocks it on every page load. That went
+// unnoticed for as long as no host actually served the CSP; Cloudflare does.
+// Flip either one of these and this section fails.
+section('no inline script vs script-src');
+{
+  const vite = read('vite.config.js');
+
+  const scriptSrc = /script-src([^;]*);/.exec(vite);
+  check("the production CSP script-src does not allow 'unsafe-inline'",
+    scriptSrc !== null && !scriptSrc[1].includes("'unsafe-inline'"),
+    `script-src=${JSON.stringify(scriptSrc && scriptSrc[1].trim())}`);
+
+  check('the base44 analyticsTracker injection is disabled',
+    /analyticsTracker:\s*false\b/.test(vite),
+    'it injects an inline <script> that the CSP above forbids, and its appId is hardcoded empty so it reports nothing');
+}
+
+// -- Section 11: public/_headers parity with vercel.json ---------------------
+// Cloudflare does not read vercel.json. The deployed site gets its response
+// headers from public/_headers (Vite copies public/ verbatim into dist/). Two
+// files describing the same policy is a drift hazard, so rather than trust a
+// human to keep them aligned this section parses BOTH and demands equality.
+section('public/_headers <-> vercel.json');
+{
+  const raw = read('public/_headers');
+  check('public/_headers exists and is non-empty',
+    raw.trim().length > 0,
+    'without it Cloudflare serves the app with no CSP, no HSTS and no X-Frame-Options');
+
+  // A trailing \r would be captured inside the header value, not stripped.
+  check('public/_headers uses LF line endings',
+    !raw.includes('\r'),
+    'a CR would end up inside every header value');
+
+  // The LF check above is defeated by a fresh clone on Windows unless git is
+  // told to leave this one file alone (.gitattributes sets `* text=auto`).
+  check('.gitattributes pins public/_headers to LF',
+    /^public\/_headers\s+text\s+eol=lf\s*$/m.test(read('.gitattributes')),
+    'without the pin a Windows checkout rewrites it to CRLF and every header value gains a CR');
+
+  // Parse the Cloudflare _headers format: an unindented path, then indented
+  // "Key: value" lines belonging to it.
+  const blocks = {};
+  let current = null;
+  for (const line of raw.split('\n')) {
+    if (!line.trim() || line.trim().startsWith('#')) continue;
+    if (!/^\s/.test(line)) { current = line.trim(); blocks[current] = {}; continue; }
+    if (!current) continue;
+    const i = line.indexOf(':');
+    if (i === -1) continue;
+    blocks[current][line.slice(0, i).trim()] = line.slice(i + 1).trim();
+  }
+
+  check('a catch-all /* block is declared',
+    Object.prototype.hasOwnProperty.call(blocks, '/*'),
+    `paths found: ${JSON.stringify(Object.keys(blocks))}`);
+
+  const vercel = JSON.parse(read('vercel.json'));
+  const groupFor = (src) => (vercel.headers || []).find((g) => g.source === src);
+
+  const catchAll = groupFor('/(.*)');
+  for (const { key, value } of catchAll?.headers || []) {
+    check(`/* sends ${key} exactly as vercel.json does`,
+      blocks['/*']?.[key] === value,
+      `_headers=${JSON.stringify(blocks['/*']?.[key])} vercel=${JSON.stringify(value)}`);
+  }
+
+  const assets = groupFor('/assets/(.*)');
+  for (const { key, value } of assets?.headers || []) {
+    check(`/assets/* sends ${key} exactly as vercel.json does`,
+      blocks['/assets/*']?.[key] === value,
+      `_headers=${JSON.stringify(blocks['/assets/*']?.[key])} vercel=${JSON.stringify(value)}`);
+  }
+}
+
 // ── Result ─────────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(60)}`);
 console.log(`probe-deploy-config: ${pass} passed, ${fail} failed`);

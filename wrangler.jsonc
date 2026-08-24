@@ -1,6 +1,11 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "divyesh",
+  // MUST match the deployed Worker name shown in the Cloudflare dashboard.
+  // `wrangler deploy` targets the worker named here: a mismatch does not error,
+  // it silently CREATES a second worker on a different URL and leaves the real
+  // site untouched. Observed 2026-08-23: the worker is "divyeshpro" while this
+  // file said "divyesh".
+  "name": "divyeshpro",
   "compatibility_date": "2024-09-23",
   "assets": {
     "directory": "./dist",

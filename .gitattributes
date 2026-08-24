@@ -1,2 +1,8 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Cloudflare parses public/_headers line-by-line at the edge, so a CR would be
+# captured inside every header VALUE instead of being discarded as whitespace.
+# `* text=auto` above would otherwise check this file out as CRLF on Windows.
+# Asserted by scripts/probe-deploy-config.mjs section 11.
+public/_headers text eol=lf

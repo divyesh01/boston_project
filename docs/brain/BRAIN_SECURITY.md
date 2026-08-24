@@ -101,12 +101,84 @@ property, and looks completely normal in the UI. `scripts/probe-db-mock-rls.mjs`
 that exact negative case on every shipped rule.
 
 ### Content Security Policy (CSP)
-Defined in both `base44/config.jsonc` and `vercel.json`:
+The same policy is written in THREE places, and only one of them is live:
+
+| File | Read by | Live? |
+|---|---|---|
+| `public/_headers` | Cloudflare (Vite copies public/ into dist/, which wrangler uploads) | YES - this is the deployed site |
+| `vercel.json` | Vercel only. Cloudflare never reads it | No |
+| `base44/config.jsonc` | the base44 platform | No - base44 is no longer used |
+
+Before `public/_headers` existed the Cloudflare deployment shipped with NO security
+headers at all - no CSP, no HSTS, no X-Frame-Options - because the only copies of the
+policy were in files that host does not read. `scripts/probe-deploy-config.mjs`
+section 11 parses `public/_headers` and `vercel.json` and asserts every key and value
+is byte-identical, so the two cannot drift; it also asserts `.gitattributes` pins
+`public/_headers` to `text eol=lf`, because Cloudflare parses that file line-by-line
+and a CRLF checkout on Windows would capture a CR inside every header value.
+
+`script-src` has no `'unsafe-inline'`, so the build must emit no inline <script>.
+`@base44/vite-plugin` used to inject one (its `analyticsTracker` option is the only
+injection with `mode:"production"`), which every page load then violated once a host
+finally served the header. It is `analyticsTracker: false` in vite.config.js and
+probe-deploy-config.mjs section 12 asserts the flag and the directive together.
+
+Policy contents:
 - script-src: self only
 - style-src: self + Google Fonts
 - connect-src: self + Base44 backend + WebSocket
 - frame-ancestors: none (no iframe embedding)
 - Subresource Integrity (SRI) hashes via sriPlugin.js
+
+### Subresource Integrity (SRI)
+`sriPlugin.js` stamps a `sha384-` digest onto every `<script>`/`<link>` in the built
+`index.html` that points under `/assets/`. CSP and SRI are a pair: the policy says which
+origins may serve code, the digest says the bytes arrived unaltered.
+
+A WRONG digest is strictly worse than no digest. The browser does not degrade the page, it
+refuses to execute the file. On 2026-08-23 the deployed site rendered a blank dark page and
+Chrome said only:
+
+    Failed to find a valid digest in the 'integrity' attribute for resource
+    '.../assets/index-Bbji4Ay-.js' ... The resource has been blocked.
+
+The blocked file was the ENTRY chunk -- the module that mounts React -- so nothing rendered
+at all. The stylesheet's digest was correct, which is why the page painted its background
+and then stopped.
+
+Root cause: the plugin hashed `ctx.bundle[file].code` from inside `transformIndexHtml`.
+Vite invokes that hook from `vite:build-html`'s `generateBundle`, and
+`vite:build-import-analysis`'s `generateBundle` runs AFTER it and does
+`chunk.code = s.toString()`, substituting the real preload dependency array for the
+`__VITE_PRELOAD__` marker (76 entries, ~3.4 kB in this app). The bytes were rewritten after
+they had been hashed. Only chunks containing that marker are touched -- i.e. only chunks
+with dynamic imports -- which is exactly why the entry chunk, the one that lazy-loads the
+pages, was the single mismatch while five static vendor chunks and the CSS were fine.
+`enforce: 'post'` does not help: it orders the hook among other HTML hooks, not against
+another plugin's `generateBundle`.
+
+The fix is entirely about which hook does the hashing:
+
+| Hook | Runs | Does |
+|---|---|---|
+| `writeBundle` | after rollup has written every file | hashes the file ON DISK, rewrites index.html |
+| `closeBundle` | after EVERY plugin's writeBundle | recomputes each digest, throws if one drifted |
+
+Hashing in `writeBundle` means the bytes hashed are the bytes the browser fetches. The
+`closeBundle` pass is what makes the build self-verifying: a mutation test in which a later
+plugin appended bytes to the entry chunk failed the build with `[simple-sri] the shipped
+digests do not match the shipped files`, instead of shipping another blank page. Every
+unexpected condition throws (no output dir, no HTML emitted, referenced asset missing,
+nothing injected) rather than skipping a tag, because a silent skip ships an unprotected
+subresource and a silent stale hash ships an outage.
+
+This failure shape is invisible to every other gate: `vite dev` serves unhashed modules,
+lint and typecheck never read build output, and the build exits 0 while the deploy
+succeeds. `scripts/probe-sri-integrity.mjs` is the only thing that catches it. It asserts
+the plugin still hashes from disk and does NOT use `transformIndexHtml` or `chunk.code`,
+that the `__VITE_PRELOAD__` rewrite still exists in the installed vite (so nobody
+"simplifies" the plugin back into the html hook), and -- when `dist/` is present --
+recomputes every declared digest against the file on disk.
 
 ---
 

@@ -15,7 +15,21 @@ import { createContext, useContext, useEffect, useRef } from 'react';
 // Unset means single-device: the Y.Doc and its localStorage cache below work
 // unchanged, which is exactly what this app has actually been doing in
 // production all along.
-const ENDPOINT = import.meta.env?.VITE_WEBSOCKET_ENDPOINT || '';
+// A value that is not a websocket URL is treated as unset. Some hosting
+// dashboards (Cloudflare's setup wizard among them) require a value for every
+// variable they discover and refuse to accept an empty one, so "off" has to be
+// expressible as a placeholder string. Without this check any such placeholder
+// would reach `new WebsocketProvider()` and restart exactly the doomed backoff
+// loop described above. Setting this is only meaningful once a real y-websocket
+// server is actually reachable at the address.
+const RAW_ENDPOINT = (import.meta.env?.VITE_WEBSOCKET_ENDPOINT || '').trim();
+const ENDPOINT = /^wss?:\/\/./i.test(RAW_ENDPOINT) ? RAW_ENDPOINT : '';
+if (RAW_ENDPOINT && !ENDPOINT) {
+  // Never ignore a configured value in silence - say which value was discarded.
+  console.warn(
+    `[crdt] VITE_WEBSOCKET_ENDPOINT is set to a non-websocket value (${RAW_ENDPOINT}); realtime sync stays OFF. Expected ws:// or wss://.`
+  );
+}
 
 export const YDocContext = createContext(null);
 

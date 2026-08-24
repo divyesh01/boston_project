@@ -43,7 +43,16 @@ export default defineConfig({
       legacySDKImports: process.env.BASE44_LEGACY_SDK_IMPORTS === 'true',
       hmrNotifier: true,
       navigationNotifier: true,
-      analyticsTracker: true,
+      // OFF deliberately. This injected an inline <script type="module"> into the
+      // built index.html, and CSP_PROD above sets script-src WITHOUT 'unsafe-inline',
+      // so every production page load raised a CSP violation the moment a host
+      // actually served that header (Cloudflare does, via public/_headers; Vercel
+      // never ran). The injected script was also provably inert - it hardcoded
+      // `const appId = ""` and returned on `if (!appId) return`, so it reported
+      // nothing and only monkey-patched history.pushState for no effect. The
+      // alternative fixes were to add 'unsafe-inline' (weakens the policy for dead
+      // code) or to pin a sha256 hash (re-breaks on every plugin version bump).
+      analyticsTracker: false,
       visualEditAgent: true
     }),
     react(),

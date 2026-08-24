@@ -810,9 +810,16 @@ section("17. The TOTP seed never leaves the server except once, for enrolment");
   // plaintext and TOTP verified client-side". For production that is false, and
   // the evidence is mechanical: src/api/base44Client.js returns
   // invokeBackend(functionName, params) at the top of the local-auth block when
-  // VITE_USE_LOCAL_AUTH is not 'true', and it is 'false' in .env.production and
-  // .env.local — so every browser-side MFA branch the item points at is dev-only
-  // dead weight in a shipped build. Verification is verifyTotpToken() in
+  // VITE_USE_LOCAL_AUTH is not 'true'. For the server-backed shape that was
+  // guaranteed by .env.production and .env.local, which made every browser-side
+  // MFA branch dev-only dead weight in a shipped build.
+  //
+  // CAUTION (2026-08-23): the STANDALONE deployment sets VITE_USE_LOCAL_AUTH=true
+  // in production, because the base44 backend was removed and there is no
+  // custom_auth_* left to call. In that build the browser-side MFA branch IS live
+  // and IS bypassable, and the boundary is the upstream identity proxy rather than
+  // this code. The assertions below hold in both modes - they pin what
+  // publicUser() strips on the way out. Verification is verifyTotpToken() in
   // custom_user_admin/entry.js: HMAC-SHA1 over a server-held seed, a ±1 window,
   // timingSafeEqual, and a spent-counter lower bound. Sections 3, 4 and 8 cover
   // it.

@@ -1,0 +1,27 @@
+# Response headers for Cloudflare. Cloudflare does NOT read vercel.json, so
+# without this file the deployed site ships with no security headers at all:
+# no CSP, no HSTS, no X-Frame-Options. Vite copies public/ verbatim into dist/,
+# and dist/ is what wrangler.jsonc `assets.directory` uploads.
+#
+# Every header here is a byte-for-byte mirror of the vercel.json `headers`
+# block. They are asserted equal by scripts/probe-deploy-config.mjs section 11 —
+# edit one and the probe fails until the other matches, so the two hosting
+# configs cannot silently drift apart.
+#
+# LF line endings deliberately (the repo is otherwise CRLF): this file is parsed
+# line-by-line by Cloudflare's edge, and a trailing \r would be captured inside
+# the header VALUE rather than discarded as whitespace.
+/*
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  X-XSS-Protection: 1; mode=block
+  Referrer-Policy: strict-origin-when-cross-origin
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' blob: https://base44.app https://*.base44.app; worker-src 'self' blob:; manifest-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+
+# Hashed filenames: safe to cache forever.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

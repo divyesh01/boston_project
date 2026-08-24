@@ -257,7 +257,14 @@ node scripts/probe-cors-config.mjs        # 35/0, standalone — no loader neede
 | `.env.example` | **committed template** | The only place the required variable names are written down, each annotated with the file:line that reads it. `.gitignore` has an explicit `!.env.example` negation so `.env.*` cannot swallow it. | Deleting it leaves a new deploy nothing to copy |
 | `.env.local` | `VITE_USE_LOCAL_AUTH=false` | Default: use real serverless auth | Loaded by Vite in **every** mode including `vite build` — never put `true` here |
 | `.env.development` | `VITE_USE_LOCAL_AUTH=true` | Dev: use local IndexedDB auth shim | - |
-| `.env.production` | `VITE_USE_LOCAL_AUTH=false` | Prod: MUST use real auth | Setting to true = SECURITY DISASTER |
+| `.env.production` | `VITE_USE_LOCAL_AUTH=true` + `VITE_STANDALONE_LOCAL=true` | **STANDALONE shape, 2026-08-23.** base44 is gone, so there is no server left to authenticate against: a production build MUST run the in-browser auth path or nobody can log in at all. | **This file is gitignored (`.gitignore:41`)** — git tracks only `.env.example`. A host that builds from GitHub never sees it, so the hosting dashboard's variables are the only source of values there |
+| `VITE_STANDALONE_LOCAL` | `true` in the standalone shape only | The SECOND flag `src/main.jsx` requires. A PROD build with `VITE_USE_LOCAL_AUTH=true` and this one absent, `false` or empty still refuses to boot, so a stray build cannot ship the untrusted auth path by accident. | Setting this on a build that can be reached anonymously = SECURITY DISASTER. Browser-side login and MFA are bypassable by anyone who loads the page; the upstream identity proxy (e.g. Cloudflare Access) is then the ONLY real boundary |
+| `VITE_WEBSOCKET_ENDPOINT` | unset, or a `ws://` / `wss://` URL | Realtime CRDT sync (`src/crdt.jsx`). Only a ws/wss URL enables it; **any** other value (`disabled`, `off`, an `https://` URL, whitespace) resolves to unset and is warned about, so a hosting dashboard that refuses an empty value can still express "off". | Before 2026-08-23 any non-empty value reached `new WebsocketProvider()` and started a backoff loop that retried for as long as the tab stayed open |
+
+Gate: `scripts/probe-standalone-deploy.mjs` (32/0) evaluates the boot condition and the
+endpoint resolution **extracted verbatim from `src/main.jsx` and `src/crdt.jsx`** against a
+table of environments. Reimplementing either rule inside the probe would only prove the
+probe agrees with itself, and would keep passing after the real guard was deleted.
 
 ### Base44 Config
 | File | What It Does |

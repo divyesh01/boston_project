@@ -20,8 +20,8 @@ import { db } from "@/api/base44Client";
 import { useProperties } from "@/lib/useHotelData";
 import { ROLES, PERMISSIONS, PERMISSION_KEYS, defaultPermissionsForRole } from "@/lib/permissions";
 import { isCryptoAvailable, validatePasswordStrength, generateTemporaryPassword } from "@/lib/security";
-import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeEmail, sanitizeAlphanumeric, sanitizeText, sanitizeCsvCell } from "@/lib/securityUtils";
-import { isValidEmail, isValidUsername } from "@/lib/validator";
+import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
+import { validateUserForm, PASSWORD_HELP } from "@/lib/userFormValidation";
 import PasswordConfirmDialog from "@/components/PasswordConfirmDialog";
 
 const ROLE_BADGE = {
@@ -131,33 +131,29 @@ export default function Users() {
       rotateCsrfToken();
       return;
     }
-    if (password !== confirmPassword) {
-      toast({ variant: "destructive", title: "Error", description: "Passwords do not match." });
-      return;
-    }
+    // Every problem with the form is reported in ONE toast. Five separate early
+    // returns meant five submit attempts to learn five things, and because each
+    // attempt pushed its own toast the screen filled with a stack of them. The
+    // three checks above stay as early returns on purpose: missing Web Crypto, a
+    // rate limit and a stale CSRF token are not things the admin can fix by
+    // editing a field. See BRAIN_TROUBLESHOOTING.md section 30.
+    const { errors, values } = validateUserForm(form);
+    const problems = [...errors];
+    if (password !== confirmPassword) problems.push("Passwords do not match.");
     const strength = validatePasswordStrength(password);
-    if (strength) {
-      toast({ variant: "destructive", title: "Error", description: strength });
+    if (strength) problems.push(strength);
+    if (problems.length > 0) {
+      toast({ variant: "destructive", title: "Check the form", description: problems.join(" ") });
       return;
     }
-    // Input sanitization
-    const sanitizedUsername = sanitizeAlphanumeric(form.username);
-    const sanitizedEmail = sanitizeEmail(form.email);
-    const sanitizedFullName = sanitizeCsvCell(sanitizeText(form.full_name));
-    if (sanitizedUsername !== form.username || sanitizedEmail !== form.email) {
-      toast({ variant: "destructive", title: "Error", description: "Invalid characters in username or email." });
-      return;
-    }
-    if (!isValidUsername(sanitizedUsername)) {
-      toast({ variant: "destructive", title: "Error", description: "Username must be 3-30 alphanumeric or underscore characters." });
-      return;
-    }
-    if (!isValidEmail(sanitizedEmail)) {
-      toast({ variant: "destructive", title: "Error", description: "Invalid email address." });
-      return;
-    }
+    const { username: sanitizedUsername, email: sanitizedEmail, full_name: sanitizedFullName } = values;
     setActionBusy(true);
     try {
+      // The dialog's "Require password change at next login" switch used to be
+      // decorative: this call hard-coded `true`, so turning it off changed
+      // nothing and the roster still showed "Password change required". Send
+      // what the admin actually chose. Default stays ON (EMPTY_FORM).
+      const mustChange = form.must_change_password !== false;
       await db.users.create(me, {
         username: sanitizedUsername,
         email: sanitizedEmail,
@@ -167,9 +163,14 @@ export default function Users() {
         property_access: form.property_mode === "all" ? "all" : form.property_ids,
         is_active: true,
         password,
-        must_change_password: true,
+        must_change_password: mustChange,
       });
-      toast({ title: "User created", description: `${sanitizedUsername} can now log in. They will be asked to set a password on first login.` });
+      toast({
+        title: "User created",
+        description: mustChange
+          ? `${sanitizedUsername} can now log in. They will be asked to set a new password on first login.`
+          : `${sanitizedUsername} can now log in with the password you set.`,
+      });
       setCreateOpen(false);
       setForm({ ...EMPTY_FORM, permissions: defaultPermissionsForRole("front_desk") });
       setPassword(""); setConfirmPassword(""); setShowPassword(false);
@@ -179,6 +180,29 @@ export default function Users() {
       toast({ variant: "destructive", title: "Error", description: e.message });
     } finally {
       setActionBusy(false);
+    }
+  };
+
+  // The Add User dialog promised "A temporary password will be generated." and
+  // then made the admin invent one that satisfies a seven-rule policy the
+  // placeholder described wrongly. `generateTemporaryPassword` already existed
+  // and was wired only into the reset dialog, so the promise is now kept here
+  // instead of being deleted. It draws until the result satisfies
+  // validatePasswordStrength, so a generated password is never refused.
+  const handleGeneratePassword = () => {
+    try {
+      const generated = generateTemporaryPassword();
+      setPassword(generated);
+      setConfirmPassword(generated);
+      // Reveal it. A password the admin cannot read is one they cannot pass on,
+      // and this dialog is the only place it is ever shown.
+      setShowPassword(true);
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Cannot generate a password",
+        description: "This browser does not expose the Web Crypto API. Type a password instead, or open the site over HTTPS.",
+      });
     }
   };
 
@@ -204,22 +228,15 @@ export default function Users() {
       rotateCsrfToken();
       return;
     }
-    // Input sanitization
-    const sanitizedUsername = sanitizeAlphanumeric(editForm.username);
-    const sanitizedEmail = sanitizeEmail(editForm.email);
-    const sanitizedFullName = sanitizeCsvCell(sanitizeText(editForm.full_name));
-    if (sanitizedUsername !== editForm.username || sanitizedEmail !== editForm.email) {
-      toast({ variant: "destructive", title: "Error", description: "Invalid characters in username or email." });
+    // Same one-toast rule as handleCreate. `previousUsername` grandfathers the
+    // stored name so an admin can fix somebody's email without first being
+    // forced to rename an account created under an older rule.
+    const { errors, values } = validateUserForm(editForm, { previousUsername: editUser.username });
+    if (errors.length > 0) {
+      toast({ variant: "destructive", title: "Check the form", description: errors.join(" ") });
       return;
     }
-    if (sanitizedUsername !== String(editUser.username || "") && !isValidUsername(sanitizedUsername)) {
-      toast({ variant: "destructive", title: "Error", description: "Username must be 3-30 alphanumeric or underscore characters." });
-      return;
-    }
-    if (!isValidEmail(sanitizedEmail)) {
-      toast({ variant: "destructive", title: "Error", description: "Invalid email address." });
-      return;
-    }
+    const { username: sanitizedUsername, email: sanitizedEmail, full_name: sanitizedFullName } = values;
     setActionBusy(true);
     try {
       const isSelf = me && String(me.id) === String(editUser.id);
@@ -505,7 +522,7 @@ export default function Users() {
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Add User</DialogTitle>
-            <DialogDescription>Create a new login. A temporary password will be generated.</DialogDescription>
+            <DialogDescription>Create a new login. Set a password below, or generate a strong one.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="grid grid-cols-2 gap-3">
@@ -533,13 +550,19 @@ export default function Users() {
               <p className="text-xs text-muted-foreground">Permissions default to the role and can be fine-tuned after creating.</p>
             </div>
             <div className="space-y-1.5">
-              <Label>Temporary password *</Label>
+              <div className="flex items-center justify-between gap-2">
+                <Label>Temporary password *</Label>
+                <button type="button" onClick={handleGeneratePassword} className="text-xs font-medium text-[#9D9AFF] hover:underline">
+                  Generate a strong one
+                </button>
+              </div>
               <div className="relative">
-                <Input type={showPassword ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 8 characters, upper/lowercase + number" />
+                <Input type={showPassword ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Type or generate a password" />
                 <button type="button" onClick={() => setShowPassword((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" tabIndex={-1}>
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
+              <p className="text-xs text-muted-foreground">{PASSWORD_HELP}</p>
             </div>
             <div className="space-y-1.5">
               <Label>Confirm password *</Label>
@@ -703,11 +726,12 @@ export default function Users() {
                 <div className="space-y-1.5">
                   <Label>New password</Label>
                   <div className="relative">
-                    <Input type={resetShow ? "text" : "password"} value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} placeholder="At least 8 characters, upper/lowercase + number" />
+                    <Input type={resetShow ? "text" : "password"} value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} placeholder="Type a password" />
                     <button type="button" onClick={() => setResetShow((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" tabIndex={-1}>
                       {resetShow ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </button>
                   </div>
+                  <p className="text-xs text-muted-foreground">{PASSWORD_HELP}</p>
                 </div>
               )}
             </div>

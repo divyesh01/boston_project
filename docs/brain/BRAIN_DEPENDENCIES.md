@@ -12,15 +12,15 @@ graph TD
   base44Client[base44Client<br/>(42 imports)]
   Card[Card<br/>(39 imports)]
   useGlobalFilters[useGlobalFilters<br/>(29 imports)]
+  securityUtils[securityUtils<br/>(26 imports)]
   decimal[decimal<br/>(25 imports)]
-  securityUtils[securityUtils<br/>(25 imports)]
   useHotelData[useHotelData<br/>(25 imports)]
   status[status<br/>(24 imports)]
   button[button<br/>(16 imports)]
   KpiCard[KpiCard<br/>(13 imports)]
   input[input<br/>(12 imports)]
+  usetoast[use-toast<br/>(12 imports)]
   AuthContext[AuthContext<br/>(11 imports)]
-  usetoast[use-toast<br/>(11 imports)]
   localDb[localDb<br/>(10 imports)]
   label[label<br/>(10 imports)]
   payrollCalc[payrollCalc<br/>(9 imports)]
@@ -37,15 +37,15 @@ graph TD
 | base44Client | 42 | [CRITICAL] |
 | Card | 39 | [CRITICAL] |
 | useGlobalFilters | 29 | [CRITICAL] |
+| securityUtils | 26 | [CRITICAL] |
 | decimal | 25 | [CRITICAL] |
-| securityUtils | 25 | [CRITICAL] |
 | useHotelData | 25 | [CRITICAL] |
 | status | 24 | [CRITICAL] |
 | button | 16 | [CRITICAL] |
 | KpiCard | 13 | [HIGH] |
 | input | 12 | [HIGH] |
+| use-toast | 12 | [HIGH] |
 | AuthContext | 11 | [HIGH] |
-| use-toast | 11 | [HIGH] |
 | localDb | 10 | [HIGH] |
 | label | 10 | [HIGH] |
 | payrollCalc | 9 | [HIGH] |

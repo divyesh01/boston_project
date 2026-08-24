@@ -315,15 +315,33 @@ function App() {
             <Toaster />
             {/*
               Two toast systems are mounted deliberately. The app has both:
-              `useToast` (radix, used by Users and Settings) and sonner's
-              `toast` (used by Expenses and DataIntelligence — 22 calls). Only
-              the radix one was ever mounted, and `src/components/ui/sonner.jsx`
-              is imported by nothing, so every sonner call dispatched into a
-              store with no subscriber and rendered nothing at all: a failed
-              expense delete, a rate-limit refusal and an invalid-CSRF refusal
-              were all completely silent. Mounting sonner here is two lines
-              against rewriting 22 call sites. Top-right because the radix
-              viewport sits bottom-right on sm and up.
+              `useToast` from src/components/ui/use-toast.jsx (10 files: Users,
+              Settings, Transactions, Statistics, AuditLog, ChartBuilder,
+              ChangePassword, ForgotPassword, ResetPassword, MFASetup) and
+              sonner's `toast` (31 calls across Expenses, DataIntelligence and
+              Payroll). Only the first was ever mounted, and
+              `src/components/ui/sonner.jsx` is imported by nothing — measured:
+              its only mention anywhere under src/ is this comment — so every
+              sonner call dispatched into a store with no subscriber and rendered
+              nothing at all: a failed expense delete, a rate-limit refusal and
+              an invalid-CSRF refusal were all completely silent. Mounting sonner
+              here is two lines against rewriting 31 call sites.
+
+              NOT radix, despite what this comment used to say, and the earlier
+              counts here ("22 calls", "Expenses and DataIntelligence") were both
+              short. Someone replaced the @radix-ui/react-toast primitives in
+              toast.jsx with plain divs and buttons, which silently removed the
+              close behaviour, open-state handling and auto-duration the
+              primitives had provided. Believing radix was still doing that work
+              is exactly how tracker #52 shipped: no toast this app ever showed
+              could be dismissed or expired, and a page reload was the only way
+              to clear one. Fixed — see the note at the top of toast.jsx.
+
+              Sonner sits top-right because the useToast viewport sits
+              bottom-right from sm up. Below sm that viewport is top-0 and full
+              width, so on a phone the two overlap. Survivable rather than
+              correct: the viewport is now pointer-events-none so only its own
+              toasts take clicks. Worth revisiting as a layout question.
             */}
             <SonnerToaster theme="dark" position="top-right" richColors closeButton />
 

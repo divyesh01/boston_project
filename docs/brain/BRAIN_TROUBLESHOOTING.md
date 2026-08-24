@@ -50,6 +50,10 @@
 | 46 | The same page's previous-period window was `prevToDate.setDate(prevFrom.getDate() + elapsedDays - 1)` — a UTC-midnight parse read through LOCAL calendar accessors. In every zone behind UTC the window ended a day early, so a day of prior-period revenue dropped out and **every growth percentage on the page was inflated** — the direction nobody questions | HIGH | FIXED 2026-08-24 | `src/lib/hotel.js` — new `isoEpochDay`/`epochDayToIso` built on `Date.UTC`; `src/pages/MtdGrowth.jsx` consumes them. Measured in `America/New_York`: the live filter's window ended `2025-08-01`, not `2025-08-02`. See section 27 | (This commit) |
 | 47 | The three `RECURRING_EVENTS` loops parsed a date-only `startDate` (UTC midnight) and then tested `d.getDay()` — a LOCAL accessor — while stamping the row with `d.toISOString()`. The weekday of the **previous** day was matched against the **current** day's date, so every recurring event landed one day late. Measured in `America/New_York`: King Richard's Faire (`dayOfWeek: [6, 0]`) emitted `2026-09-06 09-07 09-13 09-14`; the truth is `09-05 09-06 09-12 09-13`. Two further symptoms the same parse caused: the spring-forward window emitted **7 distinct days out of 8** with `2026-03-08` duplicated, and `ActionCenter`'s horizon compared a UTC-midnight `Date` against a LOCAL-midnight `Date`, excluding today's own events in every US zone | HIGH | FIXED 2026-08-24 | `src/lib/hotel.js` — new `epochDayWeekday`/`localTodayIso`; `src/lib/eventSchedule.js` — expander rewritten on integer epoch days, new `getUpcomingEventDays` export; `src/pages/ActionCenter.jsx` — **505 → 342 lines** (`git diff --numstat`: 10 insertions, 173 deletions), both byte-identical duplicate datasets and both duplicated loops deleted in favour of two delegations. `scripts/probe-recurring-events.mjs` (NEW, 107 assertions, 7 mutations). See section 29 | (This commit) |
 | 48 | CI pinned `node-version: '20'`, on which jsdom@30's transitive undici@8 throws at **import** time. All 36 vitest files failed to START, so "Security and Quality Assurance" failed on **32 consecutive runs** (2026-08-13 → 2026-08-24) and **not one test had ever executed in CI**. Upstream cause: `package.json` declared no `engines` field, so nothing in the repo stated the floor | HIGH | FIXED 2026-08-24 | `package.json` gained `engines.node`; `.github/workflows/security.yml` pins `'24'`; `scripts/probe-ci-node-version.mjs` (NEW, 61 assertions) keeps the two in lockstep. See section 28 | (This commit) |
+| 49 | The Add User dialog validated as a chain of early returns, one toast per rule, so the admin learned exactly ONE problem per submit — and the username/email check tested the RAW field, reporting ` Divyesh ` and `Owner@Hotel.COM` as "Invalid characters" when the only thing wrong was whitespace and case. Combined with #52 the owner's five submits produced the five stacked toasts in the screenshot | HIGH | FIXED 2026-08-24 | `src/lib/userFormValidation.js` (NEW) — normalize FIRST (trim, lowercase email, `sanitizeText`+`sanitizeCsvCell` the name), then collect every failure into one list; `{ previousUsername }` grandfathers a stored name. `src/pages/Users.jsx` reports one toast; the 3 non-field checks at `:117-133` stay early returns on purpose. `scripts/probe-user-form-validation.mjs` (NEW, 95 assertions). See section 30.1 | (This commit) |
+| 50 | The create dialog's description promised "A temporary password will be generated" and nothing generated one, while the field's placeholder described a 7-rule policy as *"At least 8 characters with upper/lowercase and a number"* — 3 rules, and the wrong minimum, against a `validatePasswordStrength` enforcing 12 chars + 4 classes + no-triple-repeat. The admin had to guess the password rules by being refused | HIGH | FIXED 2026-08-24 | `src/lib/userFormValidation.js` exports one `PASSWORD_HELP` rendered in **3** places (create dialog, reset dialog, `src/pages/ChangePassword.jsx`, whose placeholder carried the identical understatement); `handleGeneratePassword` in `src/pages/Users.jsx` wires the existing `generateTemporaryPassword()` into the create dialog and reveals the result. "No line breaks" is omitted deliberately — unreachable in a single-line `<input type="password">` — and the probe asserts the omission. See section 30.2 | (This commit) |
+| 51 | "Require password change at next login" was a decorative switch: `handleCreate` sent `must_change_password: true` hard-coded, so turning it OFF changed nothing — the account still needed a change, the roster still drew the amber badge, and the success toast promised the admin the exact behaviour they had just switched off | MEDIUM | FIXED 2026-08-24 | `src/pages/Users.jsx` — one `const mustChange = form.must_change_password !== false` used by the create call, the toast wording and the `<Switch checked>`; the probe asserts the expression COUNT so the three cannot drift. Default stays ON. See section 30.3 | (This commit) |
+| 52 | **No toast this application has ever shown could be dismissed, or could expire.** Three independent sufficient causes: `toaster.jsx` rendered `<ToastClose />` with no `onClick` (it is a hand-rolled `<button>` — the Radix primitives had been replaced with plain divs); **nothing anywhere dispatched `DISMISS_TOAST`**, so the whole auto-expiry path was unreachable code; and `TOAST_REMOVE_DELAY` was `1_000_000`. Plus `TOAST_LIMIT = 20` as a permanent ceiling (~1800px in a `max-h-screen` container with no scroll, so the oldest were clipped out of the viewport), and `ToastProvider`/`ToastViewport` carrying BYTE-IDENTICAL fixed class strings — the toasts lived in the provider, so the empty viewport was a 32px invisible strip **swallowing clicks on every page in the app**. A page reload was the only way to clear a toast | HIGH | FIXED 2026-08-24 | `src/components/ui/use-toast.jsx` — the missing `dismissTimers` map, `DEFAULT_DURATION_MS` (5s / 10s destructive), `TOAST_LIMIT` 3, `TOAST_REMOVE_DELAY` 200 (measured: the exit animation compiles to 150ms); `toaster.jsx` — `onClick={() => dismiss(id)}`, `open`/`onOpenChange` out of the spread; `toast.jsx` — one `pointer-events-none` viewport, `open`→`data-state`, `type="button"`, variant-split ARIA. `src/components/ui/toast.test.jsx` (NEW, 17 vitest cases) + `scripts/probe-toast-lifecycle.mjs` (NEW, 68 assertions), 8 mutations. See section 30.4 | (This commit) |
 
 ---
 
@@ -1303,4 +1307,298 @@ reappear without turning the suite red.
 | downstream consumers | `probe-monthly-calendar` 67/0 · `probe-calendar-day-modal` 30/0 · `verify-actioncenter` 39/0 · `probe-hotel` 40/0 · `probe-money-kept-gross` 49/0 · `probe-capacity-per-day` 68/0 · `probe-cents-unit-mismatch` 38/0 · `verify-transactions` 115/0 · `probe-mtd-growth` 58/0 · `probe-money-kept-double-count` 65/0 |
 | `verify:all --list` | **103 discovered**, list fingerprint `d3091dab` (was 102 at `82bc3362`) |
 
-**Not run:** the full 103-suite `verify:all` at `d3091dab` — that needs a Windows run.
+**Not run:** the full 103-suite `verify:all` at `d3091dab` — that needs a Windows run. The
+row above is left at the figure that was MEASURED for this section rather than rewritten;
+section 30 supersedes it at **105 discovered / `25ba9bcf`**, and the full sweep is still
+Not Run at that id for the same reason.
+
+---
+
+## 30. THE ADD USER DIALOG REFUSED FIVE TIMES AND COULD NOT BE DISMISSED (tracker #49–#52)
+
+The evidence for this entire section is one screenshot. The owner opened `/users`
+on the deployed site, filled in the Add User dialog, clicked **Create User**, and
+photographed the result: five red toasts stacked over the dialog.
+
+```
+Local fallback does not support action: create
+Local fallback does not support action: create
+Invalid characters in username or email.
+Password must include at least one uppercase letter.
+Password must be at least 12 characters.
+```
+
+Five toasts. Four separate defects, plus a fifth that cannot be fixed from here.
+Read them in the order they were produced and each one names its own bug:
+
+| Toast | Defect | Tracker |
+|---|---|---|
+| "Invalid characters in username or email." | The form complained about input that only needed trimming and lowercasing | #49 |
+| "Password must be at least 12 characters." | The field's own hint said **8**, and promised a password the dialog never generated | #50 |
+| (not visible — the switch above it) | "Require password change at next login" was decorative | #51 |
+| **all five still on screen** | No toast this application ever showed could be dismissed or could expire | #52 |
+| "Local fallback does not support action: create" ×2 | `base44Client.js` has no local `create` for users, and it is a PROTECTED file | owner-blocked |
+
+That last one is the reason the dialog could not create a user at all, and it is
+listed in `PROTECTED_FILES.md`, so it is left for the owner. Everything else in
+this section is fixed and pinned.
+
+### 30.1 #49 — five refusals for one click, and a complaint about normalizing
+
+`handleCreate` validated the form as a chain of early returns, one per rule. Each
+return pushed its own toast and stopped, so the admin learned exactly one problem
+per submit. Five problems meant five clicks, and because nothing removed a toast
+(#52) each click added to the pile — that is why the screenshot has a stack rather
+than a single current message.
+
+Worse than the count was the wording. The username and email checks tested the RAW
+field value against a character rule, so ` Divyesh ` and `Owner@Hotel.COM` were
+reported as "Invalid characters" when the only thing wrong with them was whitespace
+and case — corrections the system was already willing to make everywhere else.
+
+The fix is a new `src/lib/userFormValidation.js` that **normalizes first and
+complains second**: trim, lowercase the email, `sanitizeText` + `sanitizeCsvCell`
+the display name, and only then apply the rules to the normalized value. It returns
+`{ ok, errors, values }` — `errors` in field order, `values` always populated — so
+every caller reports the whole list in ONE toast and then writes the normalized
+form. `validateUserForm` also takes `{ previousUsername }`, which grandfathers an
+already-stored name: the edit dialog must not refuse to save a new email address
+just because the account's existing username predates the current rule.
+
+Three checks deliberately stayed early returns, and `Users.jsx:134-139` says so in
+place: missing Web Crypto, a rate-limit refusal and a stale CSRF token are not
+things the admin can fix by editing a field, so collecting them into a
+"here is everything wrong with your form" toast would be actively misleading.
+
+### 30.2 #50 — a promise of a generated password, and a hint naming 3 of 7 rules
+
+The dialog's description read "A temporary password will be generated." Nothing in
+the dialog generated one. The admin had to invent a password that satisfied a
+seven-rule policy which the field's placeholder described as
+*"At least 8 characters with upper/lowercase and a number"* — three rules, and the
+wrong minimum, against a `validatePasswordStrength` that actually enforces seven:
+
+| # | Rule enforced by `security.js:147-156` | Named in the old hint | Named in `PASSWORD_HELP` |
+|---|---|---|---|
+| 1 | at least 12 characters | ✗ (said 8) | ✓ |
+| 2 | a lowercase letter | ✓ | ✓ |
+| 3 | an uppercase letter | ✓ | ✓ |
+| 4 | a number | ✓ | ✓ |
+| 5 | a special character | ✗ | ✓ |
+| 6 | no character three times in a row | ✗ | ✓ |
+| 7 | no line breaks | ✗ | ✗ — deliberate |
+
+Rule 7 is the one omission, and it is on purpose: the password fields are
+`<input type="password">`, a single-line control that cannot hold `\n` or `\r`
+either by typing or by pasting. Naming a rule the admin cannot trip is noise, and
+`probe-user-form-validation.mjs` asserts the omission so a later pass does not
+"complete" the list.
+
+Both halves are now kept rather than deleted. `PASSWORD_HELP` is a single exported
+constant rendered in **three** places — the create dialog, the reset dialog and
+`ChangePassword.jsx`, whose own placeholder carried the identical understated
+sentence. And `generateTemporaryPassword`, which already existed and was wired only
+into the reset dialog, is now behind a "Generate a strong one" button in the create
+dialog. It reveals the result, because a password the admin cannot read is one they
+cannot pass on, and this dialog is the only place it is ever shown.
+
+### 30.3 #51 — the switch that changed nothing
+
+The dialog has a "Require password change at next login" switch. `handleCreate`
+sent `must_change_password: true` hard-coded, so turning the switch OFF changed
+nothing: the account was still created needing a password change, and the roster
+still drew the amber "Password change required" badge. The success toast then
+promised the admin the very behaviour they had just switched off.
+
+`const mustChange = form.must_change_password !== false` is now the single
+expression used in three places — the create call, the success toast's wording, and
+the `<Switch checked={…}>` itself. The probe asserts the count of that expression
+rather than its presence, so the Switch and the payload cannot drift apart again.
+Default stays ON, from `EMPTY_FORM`.
+
+### 30.4 #52 — no toast this app ever showed could be dismissed, or could expire
+
+This is the defect that turned four one-line mistakes into the screenshot. It has
+three independent causes, each sufficient on its own, and two more that made the
+pile worse.
+
+The setup: someone had replaced the `@radix-ui/react-toast` primitives in
+`src/components/ui/toast.jsx` with plain `<div>`s and `<button>`s. That silently
+removed the close behaviour, the open-state handling, the swipe and the auto-
+duration that the primitives had been providing, while leaving the `use-toast.jsx`
+state machine intact and talking to nothing. **Believing Radix was still doing that
+work is exactly how this shipped** — the `App.jsx` comment describing the two toast
+systems said "radix" until this fix corrected it.
+
+| # | Cause | Why it alone was enough |
+|---|---|---|
+| 1 | `toaster.jsx` rendered `<ToastClose />` with **no props** | `ToastClose` is a hand-rolled `<button>` with no `onClick` of its own. The X was decoration. |
+| 2 | **Nothing anywhere dispatched `DISMISS_TOAST`** | The reducer had the branch and `addToRemoveQueue` existed to schedule the unmount, but no timer was ever armed to call it. The whole auto-expiry path was unreachable code. |
+| 3 | `TOAST_REMOVE_DELAY = 1_000_000` (16.7 min) | That number is the upstream react-hot-toast placeholder for the DISMISS→REMOVE gap, not a lifetime. It never mattered, because of cause 2. |
+| 4 | `TOAST_LIMIT = 20` | With nothing ever removing a toast that is not a burst allowance, it is a permanent ceiling. Twenty toasts is ~1800px in a `max-h-screen` container with no scroll, so the oldest were clipped out of the viewport and could not be read even in principle. Now **3**, and `ADD_TOAST` prepends-then-slices so the three KEPT are the three NEWEST. |
+| 5 | `ToastProvider` and `ToastViewport` carried **byte-identical** fixed-position class strings | The toasts were children of the provider; the viewport rendered empty. An empty `fixed … z-[100] p-4` div is still 32px tall and still accepts pointer events, so **every page in the app carried an invisible strip that swallowed clicks.** The giveaway: the toast items already had `pointer-events-auto`, which is only meaningful if the container has `pointer-events-none` — and neither of the two had it. |
+
+The fix, in three files. `use-toast.jsx` gained a second timer map: `dismissTimers`
+(ADD→DISMISS, the one that did not exist) alongside `removeTimers`
+(DISMISS→REMOVE), a shared `clearTimer`, and per-variant defaults —
+`DEFAULT_DURATION_MS = { default: 5000, destructive: 10000 }`. Errors get twice as
+long as confirmations because they carry more text and acting on them requires
+reading them. A caller can override with `toast({ duration })`, and `Infinity`,
+`null` or `0` means "stays until the admin closes it", which is right for a failure
+they must act on and never for a success. `duration` is destructured out of the
+prop bag so it can never be spread onto a DOM node.
+
+`toaster.jsx` passes `<ToastClose onClick={() => dismiss(id)} />` — `dismiss` from
+the hook, deliberately **not** the toast object's own `onOpenChange`, because a
+caller who passes their own `onOpenChange` to `toast()` would overwrite the store's
+and silently break the X again. It also destructures `open` and `onOpenChange` out
+of the spread: `open` was being rendered onto the div as a literal DOM attribute,
+and `onOpenChange` produced a React "Unknown event handler property" warning for
+every toast the app showed.
+
+`toast.jsx` now has one fixed container. `ToastViewport` owns the positioning and
+carries `pointer-events-none`, `role="region"` and `aria-label="Notifications"`;
+`ToastProvider` is demoted to `({ children }) => <>{children}</>` and stays
+exported only because it is part of the shadcn API surface. `Toast` translates
+`open` into `data-state`, which is what every animation class in `toastVariants`
+keys off — before this, **no element in the app ever carried a `data-state`
+attribute**, so all of those classes were dead. Role and `aria-live` split by
+variant: a destructive toast interrupts (`alert`/`assertive`) because it is the only
+feedback an admin gets when a save is refused; a confirmation waits for a pause
+(`status`/`polite`). `ToastClose` gained `type="button"` — a typeless `<button>`
+defaults to `submit`, and this toast renders over an open form — plus an `sr-only`
+accessible name and an `aria-hidden` icon, and it lost `opacity-0
+group-hover:opacity-100`, which had made the X invisible-but-clickable on any
+touch screen.
+
+### 30.5 The 200ms unmount delay is measured, not chosen by feel
+
+`toastVariants` carries `data-[state=closed]:animate-out`. Running the Tailwind CLI
+against this repo's config compiles that to `animation-name: exit;
+animation-duration: .15s`. The exit takes 150ms, so the element must outlive it or
+it vanishes mid-transition. `TOAST_REMOVE_DELAY = 200` gives 50ms of headroom, and
+the probe asserts both `> 150` and `<= 500` so neither bound can drift silently.
+The same CLI run confirmed `pointer-events-none` and `sr-only` emit.
+
+### 30.6 Two typecheck traps this fix walked into itself
+
+Both were caught only by `npm run typecheck`, both are invisible to eslint, and
+both look like removable noise to a later pass. They are asserted in probe section
+11 for exactly that reason.
+
+**Trap 1 — a destructured parameter with no annotation.** Writing
+`function toast({ duration, ...props })` made tsc infer the parameter as
+`{ [x: string]: any; duration: any }` with `duration` **REQUIRED**, so all 20-odd
+existing `toast({ variant, title, description })` call sites in `Users.jsx` failed
+with `TS2345: Property 'duration' is missing`.
+
+**Trap 2 — the obvious repair made it worse.** Adding `@param {object} props` plus
+a dotted `@param {number|null} [props.duration]` gives tsc a *closed* object type
+`{ duration?: number }`, which rejects every other property as excess: the error
+count went from 4 `TS2345` to **10 `TS2353`** — *"Object literal may only specify
+known properties, and 'variant' does not exist in type '{ duration?: number; }'"*.
+The working form is a single inline annotation that keeps an index signature:
+
+```js
+@param {{ duration?: number|null, [key: string]: any }} props
+```
+
+**Trap 3 — the same class of thing in `toast.jsx`.** Rewriting `ToastViewport`,
+`Toast` and `ToastClose` replaced their `/** @type
+{React.ForwardRefExoticComponent<any>} */` annotations with descriptive prose.
+`React.forwardRef` gives tsc no prop type to work from in a `.jsx` file, so the
+destructured parameter was inferred as `{}` and every prop became
+`TS2339: Property 'className' does not exist on type '{}'` — 8 errors. The prose and
+the `@type` tag have to coexist in the same block.
+
+### 30.7 Why the vitest file copies the constants instead of importing them
+
+`src/components/ui/toast.test.jsx` re-declares `TOAST_LIMIT`, `REMOVE_DELAY`,
+`DEFAULT_MS` and `DESTRUCTIVE_MS` as literals. That looks like duplication and it is
+load-bearing. A test that imported `TOAST_REMOVE_DELAY` from the module and then
+advanced its fake clock by exactly that much would pass for **any** value including
+a regression back to `1_000_000` — it would be measuring the source against itself.
+Copying the numbers makes them falsifiable; probe section 2 then pins the copies to
+the originals, so drift fails the gate. Mutation-proven: changing the test's mirror
+alone fails one assertion.
+
+The behaviour lives in vitest and not in a probe for a hard reason. **Node cannot
+import a `.jsx` file** — `scripts/resolve-alias.mjs` rewrites specifiers but
+installs no `load` hook — so every probe in this repo reads `.jsx` as text. The
+probe therefore pins the constants and the wiring as source facts; the 17 vitest
+cases under jsdom drive the real close button and the real timers.
+
+> [!WARNING]
+> Two toast systems are mounted in `App.jsx` **on purpose**, and the numbers in that
+> comment were wrong twice before being measured. Observed: 10 files import
+> `useToast` (`MFASetup`, `AuditLog`, `ChangePassword`, `ChartBuilder`,
+> `ForgotPassword`, `ResetPassword`, `Settings`, `Statistics`, `Transactions`,
+> `Users`); **31** calls import sonner's `toast` — `DataIntelligence` 10,
+> `Expenses` 15, `Payroll` 6. `DataIntelligence.jsx:19` uses SINGLE quotes, so a
+> `from "sonner"` grep misses it and reports 21 across 2 pages. `src/components/ui/sonner.jsx`
+> is imported by nothing: its only mention anywhere under `src/` is the App.jsx
+> comment itself. Sonner was previously unmounted, so all 31 of those calls
+> dispatched into a store with no subscriber and rendered **nothing** — a failed
+> expense delete and a rate-limit refusal were both completely silent.
+
+### 30.8 Verification
+
+| Gate | Observed |
+|---|---|
+| `scripts/probe-toast-lifecycle.mjs` (NEW) | **68 PASS / 0 FAIL**, exit 0 |
+| `src/components/ui/toast.test.jsx` (NEW, 17 cases) | **17 passed / 0 failed**, exit 0, under `vitest run` |
+| `scripts/probe-user-form-validation.mjs` (NEW) | **95 PASS / 0 FAIL**, exit 0 |
+| `npm run typecheck` | **0 errors** |
+| `npm run lint` | **0 errors** |
+| `verify:all --list` | **105 discovered**, list fingerprint `25ba9bcf` (was 103 at `d3091dab`) |
+
+`probe-user-form-validation.mjs` **imports** `@/lib/userFormValidation`, so it must be run
+the way `verify:all` runs it — `node --import ./scripts/_loader-boot.mjs scripts/probe-user-form-validation.mjs`.
+Bare `node scripts/probe-user-form-validation.mjs` dies with
+`ERR_MODULE_NOT_FOUND: Cannot find package '@/lib'`, which reads like a broken suite and is
+not one. Measured during this batch — it cost a run. `probe-toast-lifecycle.mjs` needs no
+loader because it reads its four `.jsx` files as TEXT and imports nothing from `src/`.
+
+Mutation testing, all reverted afterwards with `md5sum` re-checked against the
+pristine copy:
+
+| Mutation | Expected to fail | Observed |
+|---|---|---|
+| `<ToastClose onClick={…} />` → `<ToastClose />` | the dismissal cases | **2** vitest failures |
+| `if (Number.isFinite(ms) && ms > 0)` → `if (false)` | the expiry cases | **5** vitest failures |
+| `TOAST_REMOVE_DELAY` 200 → `1000000` | the constant + both bounds + the test mirror | **4** probe failures |
+| drop `pointer-events-none` from the viewport | cause 5 | **1** probe failure |
+| drop `type="button"` from `ToastClose` | the submit trap | **1** probe failure |
+| drift the test file's mirrored constant | section 2's pinning | **1** probe failure |
+| strip `ToastViewport`'s `@type` annotation | trap 3 | **1** probe failure |
+| close `toast()`'s props type to `{object}` | traps 1 and 2 | **3** probe failures |
+
+> [!CAUTION]
+> A first draft of the props-type assertion searched the WHOLE FILE for
+> `duration?:` and so matched the JSDoc prose that *quotes* the broken
+> `{ duration?: number }` form in order to explain it. It passed with the real
+> annotation deleted. Measured, then fixed by extracting the `@param` annotation
+> first and asserting only against that. This is the same trap the probe's own
+> header warns about for the anti-regression searches, which is why every one of
+> those runs through a `codeOnly()` filter that drops comment lines — all four
+> files quote the code they replaced.
+
+### 30.9 Still open, and owner-side
+
+* **`src/pages/Setup.jsx:159` still carries the understated placeholder** —
+  `"At least 8 characters with upper/lowercase and a number"`, the identical
+  sentence removed from `ChangePassword.jsx` here. `Setup.jsx` is item 8 in
+  `PROTECTED_FILES.md`, so it needs the owner's authorization. It is the FIRST
+  password anyone sets on a new deployment.
+* **Duplicate username / email on create is unverified.** The dialog does no
+  client-side duplicate check; whether `db.users.create` refuses one is **Unknown**.
+* **Below `sm` the two toast viewports overlap.** The shadcn viewport is `top-0`
+  and full width there, sonner's is top-right. Survivable rather than correct, and
+  only because the viewport is now `pointer-events-none` — a layout question, not a
+  bug.
+* **`ToastAction` has zero call sites**, and `toastVariants` still carries
+  `data-[swipe=…]` rules referencing `--radix-toast-swipe-*` CSS variables that
+  nothing sets. Both are pre-existing dead code, left in place deliberately.
+* **"Local fallback does not support action: create"** is the toast that actually
+  blocked the owner. `src/api/base44Client.js` is protected; see the tracker.
+

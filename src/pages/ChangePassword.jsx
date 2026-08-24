@@ -10,6 +10,7 @@ import { useAuth } from "@/lib/AuthContext";
 import { db } from "@/api/base44Client";
 import { isCryptoAvailable, validatePasswordStrength } from "@/lib/security";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
+import { PASSWORD_HELP } from "@/lib/userFormValidation";
 
 export default function ChangePassword() {
   const navigate = useNavigate();
@@ -98,7 +99,8 @@ export default function ChangePassword() {
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="next">New password</Label>
-              <Input id="next" type={show ? "text" : "password"} value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" placeholder="At least 8 characters, upper/lowercase + number" required className="h-11" />
+              <Input id="next" type={show ? "text" : "password"} value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" placeholder="Choose a new password" required className="h-11" />
+              <p className="text-xs text-muted-foreground">{PASSWORD_HELP}</p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="confirm">Confirm new password</Label>

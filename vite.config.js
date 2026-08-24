@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import base44 from '@base44/vite-plugin'
 import sri from './sriPlugin.js'
+import envGuard from './envGuardPlugin.js'
 
 // Security headers for production-like preview.
 //
@@ -38,6 +39,7 @@ const devHeaders = {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
+    envGuard(),
     sri(),
     base44({
       legacySDKImports: process.env.BASE44_LEGACY_SDK_IMPORTS === 'true',

@@ -5,3 +5,16 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    # vite and @vitejs/plugin-react are peer-coupled: plugin-react 4.x declares
+    # peer vite "^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0". A solo major bump of
+    # either one is therefore UNINSTALLABLE with plain `npm clean-install`, and
+    # that is not theoretical: Cloudflare build #2576feba (2026-08-23) failed
+    # with ERESOLVE on the dependabot/npm_and_yarn/vite-8.2.2 branch, which had
+    # bumped vite to 8.2.2 on its own. Majors for this pair are ignored so the
+    # bot stops re-opening a branch that cannot install; upgrade them together,
+    # by hand, and delete these two entries when you do.
+    ignore:
+      - dependency-name: "vite"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@vitejs/plugin-react"
+        update-types: ["version-update:semver-major"]

@@ -211,6 +211,100 @@ check('.env.example does not ship the standalone flag switched ON',
 check('.env.example still documents the websocket endpoint',
   /VITE_WEBSOCKET_ENDPOINT/.test(example));
 
+// ── Section 5: the build-time guard in envGuardPlugin.js ────────────────────
+console.log('\nSection 5: build-time guard (envGuardPlugin.js)');
+
+// The runtime guard above only fires when local auth is ON without the
+// standalone flag. When BOTH flags are absent — which is exactly what a hosting
+// or CI checkout sees, because .env.production is gitignored — main.jsx boots
+// happily and base44Client.js routes login to a backend that no longer exists.
+// Measured 2026-08-23: Cloudflare's Git build reported "Build variables: None".
+// So the build itself has to refuse. This section RUNS the real plugin.
+const guardPluginPath = 'envGuardPlugin.js';
+check('envGuardPlugin.js exists', existsSync(path.join(ROOT, guardPluginPath)));
+
+if (existsSync(path.join(ROOT, guardPluginPath))) {
+  const mod = await import(new URL(`../${guardPluginPath}`, import.meta.url));
+  const plugin = mod.default();
+
+  check('the guard runs on builds only',
+    plugin.apply === 'build',
+    `apply=${JSON.stringify(plugin.apply)} — the dev server must stay usable without production flags`);
+
+  check('the guard runs in configResolved, before any asset is written',
+    typeof plugin.configResolved === 'function',
+    'a later hook would waste a full build to report a one-line config mistake');
+
+  // true = REFUSES to build.  false = build proceeds.
+  const BUILD_CASES = [
+    ['the deployed standalone config builds',
+      { mode: 'production', env: { VITE_USE_LOCAL_AUTH: 'true', VITE_STANDALONE_LOCAL: 'true' } }, false],
+    ['a production build with NO flags refuses (the Cloudflare/CI case)',
+      { mode: 'production', env: {} }, true],
+    ['a production build with only VITE_USE_LOCAL_AUTH refuses',
+      { mode: 'production', env: { VITE_USE_LOCAL_AUTH: 'true' } }, true],
+    ['a production build with only VITE_STANDALONE_LOCAL refuses',
+      { mode: 'production', env: { VITE_STANDALONE_LOCAL: 'true' } }, true],
+    ['"TRUE" is not "true" — refuses rather than half-enabling',
+      { mode: 'production', env: { VITE_USE_LOCAL_AUTH: 'TRUE', VITE_STANDALONE_LOCAL: 'TRUE' } }, true],
+    ['a missing env object refuses instead of throwing TypeError',
+      { mode: 'production' }, true],
+    ['a non-production mode is left alone',
+      { mode: 'development', env: {} }, false],
+  ];
+
+  let message = '';
+  for (const [name, config, expectRefuse] of BUILD_CASES) {
+    let refused = false;
+    try {
+      plugin.configResolved(config);
+    } catch (e) {
+      refused = true;
+      message = e.message;
+    }
+    check(name, refused === expectRefuse, `refused=${refused} (expected ${expectRefuse})`);
+  }
+
+  check('the refusal names both variables and where to set them',
+    /VITE_USE_LOCAL_AUTH/.test(message) &&
+    /VITE_STANDALONE_LOCAL/.test(message) &&
+    /Cloudflare/.test(message),
+    'a build failure that does not say which knob to turn costs an hour');
+}
+
+// ── Section 6: the guard is wired into every build path ────────────────────
+console.log('\nSection 6: the guard is actually in the pipeline');
+
+const viteConfig = read('vite.config.js');
+check('vite.config.js imports the guard',
+  /import\s+\w+\s+from\s+['"]\.\/envGuardPlugin\.js['"]/.test(viteConfig),
+  'a guard outside the plugins array protects nothing');
+check('vite.config.js invokes the guard in its plugins array',
+  /\benvGuard\s*\(\s*\)/.test(viteConfig));
+
+// The CI job builds from a checkout with no .env.production, so without these
+// two lines the guard turns a passing job red. That is the correct failure —
+// but the job is supposed to verify the shipped shape, so it must supply them.
+const workflowPath = '.github/workflows/security.yml';
+if (existsSync(path.join(ROOT, workflowPath))) {
+  const wf = read(workflowPath);
+  const stepIdx = wf.indexOf('Verify Production Build');
+  const step = stepIdx >= 0 ? wf.slice(stepIdx, stepIdx + 900) : '';
+  check('the CI production-build step exists', stepIdx >= 0);
+  check('the CI production-build step sets VITE_USE_LOCAL_AUTH=true',
+    /VITE_USE_LOCAL_AUTH:\s*'?true'?/.test(step),
+    'otherwise the build the pipeline verifies is one that can never be deployed');
+  check('the CI production-build step sets VITE_STANDALONE_LOCAL=true',
+    /VITE_STANDALONE_LOCAL:\s*'?true'?/.test(step));
+} else {
+  check('.github/workflows/security.yml exists', false, 'the CI gate went missing');
+}
+
+// The whole premise of the guard is that the flags do NOT travel with the repo.
+check('.env.production is still gitignored',
+  /^\s*\.env\.production\s*$/m.test(read('.gitignore')),
+  'if it were committed, the flags would ship to every checkout — including any fork');
+
 // ── Result ─────────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(60)}`);
 console.log(`probe-standalone-deploy: ${pass} passed, ${fail} failed`);

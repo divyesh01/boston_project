@@ -241,15 +241,38 @@ node scripts/probe-cors-config.mjs        # 35/0, standalone — no loader neede
 | File | What It Does | If You Edit This... |
 |------|-------------|-------------------|
 | `package.json` | NPM deps (React 18, Base44 SDK, Recharts, Dexie, Tailwind, Radix, Framer Motion), scripts (dev, build, test, lint, ws) | Build fails, tests fail, everything |
-| `vite.config.js` | Vite build: React plugin, Base44 plugin, SRI hash generator, dev security headers, console stripping, vendor chunk splitting | Production build fails |
+| `vite.config.js` | Vite build: React plugin, Base44 plugin, standalone env guard, SRI hash generator, dev security headers, console stripping, vendor chunk splitting | Production build fails |
 | `vercel.json` | Vercel deploy: SPA routing (/* -> /index.html), 1-year immutable caching for /assets/*, production security headers | 404 on refresh, security headers lost |
-| `sriPlugin.js` | Post-build: generates SHA-384 integrity hashes for all scripts/styles in index.html | Browsers block all scripts (SRI mismatch) |
+| `sriPlugin.js` | Hashes every `/assets/` subresource in the built index.html. Digests are taken in `writeBundle` (the file ON DISK) and re-verified in `closeBundle`, after every other plugin has written | Move the hashing back into `transformIndexHtml` and the browser blocks the entry chunk: blank page, whole app down. See BRAIN_SECURITY "Subresource Integrity" |
+| `envGuardPlugin.js` | Fails a **production** build whose resolved `import.meta.env` does not have BOTH `VITE_USE_LOCAL_AUTH=true` and `VITE_STANDALONE_LOCAL=true` | Without it a checkout that has no `.env.production` (every CI and hosting build) silently ships a bundle whose login can never succeed |
 | `eslint.config.js` | ESLint 9: React + Hooks rules, unused import removal | Linting breaks in CI |
 | `vitest.config.js` | Test runner: JSDOM env, @/ path alias, setup hooks, coverage | Tests cannot run |
 | `tailwind.config.js` | Design tokens: HSL color vars, chart colors 1-5, sidebar colors, fonts, accordion animations | ALL styling breaks |
 | `components.json` | Shadcn UI: component paths, utility path, icon library | New UI components scaffolded wrong |
 | `jsconfig.json` | IDE: @/* -> ./src/* path alias, strict JSX, type definitions | Autocomplete and type-checking break |
 | `postcss.config.js` | PostCSS: loads Tailwind and autoprefixer | CSS processing fails |
+
+### Deploying: two paths, and only one of them currently works
+
+The Cloudflare worker `divyeshpro` can be updated two ways, and they behave very
+differently.
+
+**Local upload (the working path).** `npm run build` on a machine that has `.env.production`, then `npx wrangler deploy`, which uploads whatever is in `dist/`.
+The flags are present, the guard passes, the bundle can log in.
+
+**Cloudflare Workers Builds from GitHub (broken as configured, measured 2026-08-23 on
+build #2576feba).** Four separate defects, all visible in the dashboard:
+
+| What the dashboard said | Why it breaks the deploy |
+|---|---|
+| Repo `divyesh01/divyeshpro` | The code lives in `divyesh01/boston_project`. Pushing a fix to the repo you are reading does not reach that pipeline at all |
+| Branch `dependabot/npm_and_yarn/vite-8.2.2` | `npm clean-install` died with ERESOLVE: that branch bumps vite to 8.2.2 while `@vitejs/plugin-react@4.7.0` declares peer vite `^4.2.0 \|\| ^5.0.0 \|\| ^6.0.0 \|\| ^7.0.0`. A dependabot branch is not a deployable branch |
+| Build variables: None | `.env.production` is gitignored, so a Git build sees neither auth flag. Before `envGuardPlugin.js` that produced a green build and a bundle nobody could log into; now it fails the build and says which variables to set |
+| Deploy command `npx wrangler versions upload` | That uploads a version WITHOUT routing production traffic to it. A "successful" build then changes nothing a visitor sees. `npx wrangler deploy` is what promotes it |
+
+`.github/dependabot.yml` now ignores semver-major bumps of `vite` and
+`@vitejs/plugin-react` so the bot stops re-opening a branch that cannot install. They are
+peer-coupled and have to move together, by hand.
 
 ### Environment Variables
 | File | Key Setting | What It Controls | DANGER |
@@ -261,10 +284,13 @@ node scripts/probe-cors-config.mjs        # 35/0, standalone — no loader neede
 | `VITE_STANDALONE_LOCAL` | `true` in the standalone shape only | The SECOND flag `src/main.jsx` requires. A PROD build with `VITE_USE_LOCAL_AUTH=true` and this one absent, `false` or empty still refuses to boot, so a stray build cannot ship the untrusted auth path by accident. | Setting this on a build that can be reached anonymously = SECURITY DISASTER. Browser-side login and MFA are bypassable by anyone who loads the page; the upstream identity proxy (e.g. Cloudflare Access) is then the ONLY real boundary |
 | `VITE_WEBSOCKET_ENDPOINT` | unset, or a `ws://` / `wss://` URL | Realtime CRDT sync (`src/crdt.jsx`). Only a ws/wss URL enables it; **any** other value (`disabled`, `off`, an `https://` URL, whitespace) resolves to unset and is warned about, so a hosting dashboard that refuses an empty value can still express "off". | Before 2026-08-23 any non-empty value reached `new WebsocketProvider()` and started a backoff loop that retried for as long as the tab stayed open |
 
-Gate: `scripts/probe-standalone-deploy.mjs` (32/0) evaluates the boot condition and the
+Gate: `scripts/probe-standalone-deploy.mjs` (49/0) evaluates the boot condition and the
 endpoint resolution **extracted verbatim from `src/main.jsx` and `src/crdt.jsx`** against a
 table of environments. Reimplementing either rule inside the probe would only prove the
-probe agrees with itself, and would keep passing after the real guard was deleted.
+probe agrees with itself, and would keep passing after the real guard was deleted. Sections
+5 and 6 do the same for the BUILD-time guard: they import `envGuardPlugin.js` and call its
+real `configResolved` hook against a table of environments, then assert the guard is wired
+into `vite.config.js` and that the CI build step supplies both flags.
 
 ### Base44 Config
 | File | What It Does |

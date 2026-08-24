@@ -52,3 +52,10 @@ jobs:
         run: npm run build
         env:
           NODE_ENV: production
+          # This step verifies the SHIPPED shape, so it must build the same one the
+          # deploy builds: standalone (in-browser auth behind an identity proxy).
+          # .env.production is gitignored and never reaches a CI checkout, so
+          # envGuardPlugin.js fails the build unless both flags are set right here.
+          # Removing either line turns this step from a check into a false negative.
+          VITE_USE_LOCAL_AUTH: 'true'
+          VITE_STANDALONE_LOCAL: 'true'

@@ -357,9 +357,11 @@ the real `scanReport("occupancy", …, { csvText })` over
 > looks right is more dangerous than a zero, because nobody investigates it.
 
 **The bare `total_revenue` field is written only by `ManualEntry.jsx`.** Any page reading
-it shows **$0.00 on every imported day**. That was the second defect fixed in
-`MonthlyCalendar.jsx` (BRAIN_FRONTEND.md 16.5) and, as of 2026-08-24, is still open in
-`MtdGrowth.jsx:14`/`:107`, whose headline card is labelled "Total Revenue".
+it shows **$0.00 on every imported day**. Two pages did. It was the second defect fixed in
+`MonthlyCalendar.jsx` (BRAIN_FRONTEND.md 16.5), and as of 2026-08-24 it is also fixed in
+`MtdGrowth.jsx`, whose headline card was labelled "Total Revenue" — see
+BRAIN_TROUBLESHOOTING.md 27.1. Measured through the real parser: **0 of these 214 rows
+carry the field, and `sum(rows, "total_revenue")` is exactly 0.**
 
 **How to apply.** Do not reach for a field name. Call
 `grossRevenueForPeriod({ grossRows, occRows })` in `hotel.js`: it sums the

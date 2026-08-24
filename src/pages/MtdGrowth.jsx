@@ -5,13 +5,23 @@ import KpiCard from "@/components/ui-exec/KpiCard";
 import {
   AreaChart, Area, BarChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
-import { useOccupancy } from "@/lib/useHotelData";
+import { useOccupancy, useGrossRevenue } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
-import { money, money2, num, pct, sum, inRange, C, occupancyStats } from "@/lib/hotel";
+import {
+  money, money2, num, pct, sum, inRange, C, occupancyStats,
+  grossRevenueForPeriod, isoEpochDay, epochDayToIso,
+} from "@/lib/hotel";
 import { ErrorState } from "@/components/ui/status";
 
 const METRICS = [
-  { key: "total_revenue", label: "Total Revenue", fmt: money, color: C.green, icon: DollarSign },
+  // `derived` means the value is assembled from two ledgers by
+  // grossRevenueForPeriod, NOT read off a row by `calc`. OccupancyDay has no
+  // bare `total_revenue` field — the CSV importer never writes one (only
+  // ManualEntry.jsx does), so summing this key returned exactly $0 on every
+  // imported day and the Owner's Snapshot narrated "Revenue is up 0.0% to $0".
+  // The key is kept as the card's identifier; it is not a field read.
+  // BRAIN_FINANCE.md 12.8.
+  { key: "total_revenue", label: "Total Revenue", fmt: money, color: C.green, icon: DollarSign, derived: true },
   { key: "room_revenue", label: "Room Revenue", fmt: money, color: C.cyan, icon: Wallet },
   { key: "rooms_sold", label: "Rooms Sold", fmt: num, color: C.purple, icon: BedDouble },
   { key: "adr", label: "ADR", fmt: money2, color: C.amber, icon: Gauge },
@@ -43,6 +53,14 @@ export default function MtdGrowth() {
   const { data: occ = [] } = occQ;
   const { data: prevOcc = [] } = prevOccQ;
 
+  // The ancillary ledger. The headline card states a TOTAL, and a total cannot
+  // be assembled from the occupancy ledger alone — that one is room-only by
+  // design (BRAIN_FINANCE.md 12.6).
+  const grossQ = useGrossRevenue(dateRange, property, months);
+  const prevGrossQ = useGrossRevenue(compareOn ? compareDateRange : { from: "", to: "" }, property, compareOn ? compareMonths : [], compareOn);
+  const { data: gross = [] } = grossQ;
+  const { data: prevGross = [] } = prevGrossQ;
+
   const curRows = useMemo(
     () => occ.filter((r) => inRange(r.date, dateRange.from, dateRange.to)),
     [occ, dateRange]
@@ -52,27 +70,69 @@ export default function MtdGrowth() {
     [prevOcc, compareDateRange]
   );
 
-  // For incomplete month comparison, only compare equivalent elapsed days
-  const curElapsed = useMemo(() => {
-    if (!dateRange.from) return curRows;
-    const from = new Date(dateRange.from);
-    const to = new Date(dateRange.to);
-    const elapsedDays = Math.round((to.getTime() - from.getTime()) / 86400000) + 1;
-    return curRows;
-  }, [curRows, dateRange]);
+  // The comparison period handed over by the global filter is the FULL prior
+  // period, so a month-to-date current range would otherwise be measured
+  // against a whole month and every metric would read as a collapse. Truncate
+  // it to the same number of elapsed days.
+  //
+  // isoEpochDay, never Date#getDate/#setDate. A date-only string parses as UTC
+  // midnight while those accessors read and write LOCAL fields, so in any zone
+  // behind UTC the day-of-month is already the previous day, and the shift also
+  // absorbs any DST offset change between the endpoints. Measured in
+  // America/New_York, the YTD filter live on this page (2026-01-01 → 2026-08-02)
+  // produced a window ending 2025-08-01 instead of 2025-08-02: the prior period
+  // silently lost its last day, which INFLATES every percentage here — the
+  // direction nobody questions. See hotel.js#isoEpochDay and
+  // BRAIN_FRONTEND.md 16.
+  const prevWindow = useMemo(() => {
+    if (!compareOn || !compareDateRange.from) return null;
+    const days = isoEpochDay(dateRange.to) - isoEpochDay(dateRange.from) + 1;
+    const startDay = isoEpochDay(compareDateRange.from);
+    if (!Number.isFinite(days) || !Number.isFinite(startDay) || days < 1) return null;
+    return { from: compareDateRange.from, to: epochDayToIso(startDay + days - 1), days };
+  }, [compareOn, dateRange, compareDateRange]);
 
-  const prevElapsed = useMemo(() => {
-    if (!compareOn || !compareDateRange.from) return prevRows;
-    // Match same number of days from previous period start
-    const from = new Date(dateRange.from);
-    const to = new Date(dateRange.to);
-    const elapsedDays = Math.round((to.getTime() - from.getTime()) / 86400000) + 1;
-    const prevFrom = new Date(compareDateRange.from);
-    const prevToDate = new Date(prevFrom);
-    prevToDate.setDate(prevFrom.getDate() + elapsedDays - 1);
-    const prevToIso = prevToDate.toISOString().slice(0, 10);
-    return prevRows.filter((r) => inRange(r.date, compareDateRange.from, prevToIso));
-  }, [prevRows, compareOn, dateRange, compareDateRange]);
+  // Nothing to truncate on the current side — every day in the current range
+  // has already elapsed. Kept as a named alias so the symmetry with
+  // `prevElapsed` below stays readable at the ~10 call sites that consume it.
+  const curElapsed = curRows;
+
+  const prevElapsed = useMemo(
+    () => (prevWindow ? prevRows.filter((r) => inRange(r.date, prevWindow.from, prevWindow.to)) : prevRows),
+    [prevRows, prevWindow]
+  );
+
+  // Both ledgers must be cut to the same two windows, or the total for one
+  // period would cover more days than its room leg.
+  const curGrossRows = useMemo(
+    () => gross.filter((r) => inRange(r.date, dateRange.from, dateRange.to)),
+    [gross, dateRange]
+  );
+  const prevGrossRows = useMemo(
+    () => (prevWindow ? prevGross.filter((r) => inRange(r.date, prevWindow.from, prevWindow.to)) : []),
+    [prevGross, prevWindow]
+  );
+
+  const curTotal = useMemo(
+    () => grossRevenueForPeriod({ grossRows: curGrossRows, occRows: curElapsed }),
+    [curGrossRows, curElapsed]
+  );
+  const prevTotal = useMemo(
+    () => grossRevenueForPeriod({ grossRows: prevGrossRows, occRows: prevElapsed }),
+    [prevGrossRows, prevElapsed]
+  );
+
+  // grossRevenueForPeriod returns its provenance so the caller can label the
+  // figure honestly instead of overstating it. Two cases collapse to room-only:
+  // no ancillary ledger covers the current period, or one period has an
+  // ancillary ledger and the other does not — comparing a total against a
+  // room-only prior would report the missing ancillary income as growth. The
+  // room leg exists for every period, so falling back to it compares like with
+  // like, and the card label says which it is.
+  const basis =
+    compareOn && prevElapsed.length > 0 && curTotal.basis !== prevTotal.basis
+      ? "room"
+      : curTotal.basis;
 
   // Shared engine: capacity is summed per property (portfolio-safe), and ADR /
   // RevPAR are properly weighted.
@@ -83,6 +143,9 @@ export default function MtdGrowth() {
   // were `sum(rows, key) / rows.length` — the unweighted mean of daily rates,
   // which is not ADR: a 10-room day at $200 and a 90-room day at $100 averaged
   // to $150 instead of the true $110.
+  // Only reached for metrics read off a row. Derived metrics are handled below
+  // and must never arrive here — `sum` on a field the importer never writes is
+  // exactly the defect this page shipped with.
   const calc = (rows, key) => {
     if (key === "occupancy" || key === "adr" || key === "revpar") {
       return occupancyStats(rows, properties)[key];
@@ -91,6 +154,21 @@ export default function MtdGrowth() {
   };
 
   const comparisons = METRICS.map((m) => {
+    if (m.derived) {
+      // Integer cents through the subtraction. This is the figure the owner
+      // reconciles against a bank statement; BRAIN_FINANCE.md 12.5 has the
+      // measured drift from doing it in dollars.
+      const curCents = basis === "room" ? curTotal.roomCents : curTotal.cents;
+      const prevCents = basis === "room" ? prevTotal.roomCents : prevTotal.cents;
+      return {
+        ...m,
+        label: basis === "room" ? `${m.label} (room only)` : m.label,
+        cur: curCents / 100,
+        prev: prevCents / 100,
+        diff: (curCents - prevCents) / 100,
+        pctCh: prevCents > 0 ? ((curCents - prevCents) / prevCents) * 100 : 0,
+      };
+    }
     const cur = calc(curElapsed, m.key);
     const prev = calc(prevElapsed, m.key);
     const diff = cur - prev;
@@ -113,7 +191,10 @@ export default function MtdGrowth() {
     const worst = ranked[ranked.length - 1];
     const phrase = (m) => `${m.pctCh >= 0 ? "up" : "down"} ${Math.abs(m.pctCh).toFixed(1)}%`;
     const sentence =
-      `Revenue is ${phrase(rev)} to ${rev.fmt(rev.cur)} ` +
+      // `rev.label` rather than the word "Revenue": when only the room ledger
+      // covers a period the label carries "(room only)", and the sentence must
+      // not promise a total it did not measure.
+      `${rev.label} is ${phrase(rev)} to ${rev.fmt(rev.cur)} ` +
       `(${rev.diff >= 0 ? "+" : ""}${rev.fmt(rev.diff)} vs prior period). ` +
       `ADR ${phrase(adrM)} and RevPAR ${phrase(revparM)}, while occupancy ${phrase(occM)}. ` +
       `Top driver: ${best.label} (${phrase(best)})${worst.key !== best.key ? ` · lagging: ${worst.label} (${phrase(worst)})` : ""}.`;
@@ -179,16 +260,16 @@ export default function MtdGrowth() {
         <h1 className="relative mt-2 font-heading text-3xl font-semibold text-white">MTD Growth</h1>
         <p className="relative mt-1 text-sm text-slate-400">
           Current: {dateRange.from || "—"} → {dateRange.to || "—"} · {curElapsed.length} days
-          {compareOn && <> · vs Previous: {compareDateRange.from || "—"} → {compareDateRange.to || "—"} · {prevElapsed.length} days</>}
+          {compareOn && <> · vs Previous: {prevWindow?.from || "—"} → {prevWindow?.to || "—"} · {prevElapsed.length} days</>}
         </p>
       </header>
 
-      {(occQ.isError || prevOccQ.isError) && (
+      {(occQ.isError || prevOccQ.isError || grossQ.isError || prevGrossQ.isError) && (
         <ErrorState
           title="Could not load the comparison"
           description="Growth is the difference between two reads, and at least one failed. A 0.0% delta below would be indistinguishable from a genuinely flat period."
-          error={occQ.error || prevOccQ.error}
-          onRetry={() => { occQ.refetch(); prevOccQ.refetch(); }}
+          error={occQ.error || prevOccQ.error || grossQ.error || prevGrossQ.error}
+          onRetry={() => { occQ.refetch(); prevOccQ.refetch(); grossQ.refetch(); prevGrossQ.refetch(); }}
         />
       )}
 
@@ -234,7 +315,7 @@ export default function MtdGrowth() {
           </div>
           <p className="relative mt-2 max-w-3xl text-sm leading-relaxed text-slate-300">{summary.sentence}</p>
           <div className="relative mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <MiniStat label="Revenue" value={summary.rev.fmt(summary.rev.cur)} pctCh={summary.rev.pctCh} />
+            <MiniStat label={summary.rev.label} value={summary.rev.fmt(summary.rev.cur)} pctCh={summary.rev.pctCh} />
             <MiniStat label={summary.adrM.label} value={summary.adrM.fmt(summary.adrM.cur)} pctCh={summary.adrM.pctCh} />
             <MiniStat label={summary.revparM.label} value={summary.revparM.fmt(summary.revparM.cur)} pctCh={summary.revparM.pctCh} />
             <MiniStat label={summary.occM.label} value={summary.occM.fmt(summary.occM.cur)} pctCh={summary.occM.pctCh} />
@@ -245,7 +326,7 @@ export default function MtdGrowth() {
       {compareOn && (
         <div className="rounded-2xl border border-[#00D4FF]/20 bg-[#00D4FF]/[0.04] p-4">
           <p className="text-xs uppercase tracking-widest text-[#00D4FF]">
-            Comparison · {compareDateRange.from || "—"} → {compareDateRange.to || "—"} ({prevElapsed.length} elapsed days)
+            Comparison · {prevWindow?.from || "—"} → {prevWindow?.to || "—"} ({prevElapsed.length} elapsed days)
           </p>
           <div className="mt-3 overflow-x-auto">
             <table className="w-full text-sm">

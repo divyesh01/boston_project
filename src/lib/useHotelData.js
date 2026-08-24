@@ -122,9 +122,15 @@ export function useSources(dateRange, propertyId, months = []) {
   });
 }
 
-export function useGrossRevenue(dateRange, propertyId, months = []) {
+// `enabled` mirrors useOccupancy above. Without it, a caller that gates on a
+// compare toggle has to pass an empty range instead — and an empty range makes
+// buildFilter produce no `filter.date`, which falls to the unfiltered
+// GrossRevenueDay.list() branch: a full-table read whose rows are then thrown
+// away. Defaulted true so the existing 3-argument callers are unaffected.
+export function useGrossRevenue(dateRange, propertyId, months = [], enabled = true) {
   return useQuery({
     queryKey: ["gross", dateRange?.from, dateRange?.to, propertyId, (months || []).join(",")],
+    enabled,
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
       const limit = getDynamicLimit(dateRange, propertyId);

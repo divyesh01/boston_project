@@ -152,6 +152,57 @@ export function grossRevenueForPeriod({ grossRows = [], occRows = [] } = {}) {
 }
 
 /**
+ * Convert a date-only key ("YYYY-MM-DD") to its epoch day number, and back.
+ *
+ * These two are inverses and exist so that **date arithmetic never touches the
+ * host calendar**. `formatDayLabel` below defuses the same ECMA-262 trap on the
+ * display side; this pair defuses it on the arithmetic side.
+ *
+ * The trap: `new Date("2026-08-02")` is parsed as UTC midnight, but `getDate()`
+ * and `setDate()` read and write LOCAL calendar fields. Every US zone is behind
+ * UTC, so the day-of-month is already the previous day before any arithmetic
+ * happens, and shifting by N days additionally absorbs any DST offset change
+ * between the two endpoints. Measured in America/New_York, the expression
+ *
+ *     prevToDate.setDate(prevFrom.getDate() + elapsedDays - 1)
+ *
+ * turned a 214-day window starting 2025-01-01 into one ending 2025-08-01
+ * instead of 2025-08-02 — the comparison period silently lost a day, which
+ * inflates every growth percentage derived from it. Measured over the eight
+ * windows `scripts/probe-mtd-growth.mjs` drives: wrong in 2, right in the other
+ * 6 — and, run in UTC, wrong in 0 of 8. That is why it survived. A spot-check of
+ * a single month finds nothing, and so does any test run in a UTC container.
+ *
+ * `Date.UTC` never consults the host zone, so `isoEpochDay` is timezone-
+ * independent by construction rather than by careful use. Do NOT reimplement
+ * either of these with a local accessor.
+ *
+ * Returns `NaN` for empty or unparseable input rather than 0 — day 0 is a real
+ * date (1970-01-01), so a silent 0 would arithmetic-away into a plausible
+ * window instead of failing.
+ *
+ * @param {string} dateStr date-only key; any trailing time component is ignored
+ * @returns {number} whole days since 1970-01-01, or NaN
+ */
+export function isoEpochDay(dateStr) {
+  if (!dateStr) return NaN;
+  const [y, m, d] = String(dateStr).slice(0, 10).split("-").map(Number);
+  if (!y || !m || !d) return NaN;
+  return Math.floor(Date.UTC(y, m - 1, d) / 86400000);
+}
+
+/**
+ * Inverse of {@link isoEpochDay}: an epoch day number back to "YYYY-MM-DD".
+ *
+ * @param {number} day whole days since 1970-01-01
+ * @returns {string} date-only key, or "" when `day` is not a finite number
+ */
+export function epochDayToIso(day) {
+  if (!Number.isFinite(day)) return "";
+  return new Date(day * 86400000).toISOString().slice(0, 10);
+}
+
+/**
  * Format a date-only key ("YYYY-MM-DD") for display — "Thursday, August 6".
  *
  * Use this for ANY date that came from a business-date column or an event

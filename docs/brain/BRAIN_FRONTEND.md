@@ -515,4 +515,36 @@ The KPI is now labelled **"Total Room Revenue"** precisely so nobody compares it
 the Dashboard's $1,020,598.17 ledger total. The $9,339.50 difference is real ancillary
 income, not a bug — BRAIN_FINANCE.md 12.6.
 
+## 16.6 The same two defects, on a second page
+
+`MtdGrowth.jsx` carried both failure modes 16.5 describes, independently discovered
+(tracker #45, #46 — full write-up in BRAIN_TROUBLESHOOTING.md 27).
+
+Its headline card was keyed on the same never-written `total_revenue`, so it read **$0** and
+the Owner's Snapshot narrated *"Revenue is up 0.0% to $0"* in prose. And it violated 16.1
+in the comparison direction: the header printed the **full** prior period while the numbers
+beneath it were computed over a window truncated to the elapsed day count. Two spans, one
+label.
+
+> [!IMPORTANT]
+> **A period label is not the only thing that must match the measurement — so must the
+> comparison window.** `compareDateRange` is the full prior period by design
+> (`computeRange(comparePeriod, compareYear, …)`), so any page comparing "so far this
+> period" against it *must* truncate, *and must say so*. The page now derives
+> `prevWindow` and prints that in both places a range is shown.
+
+The truncation itself was the bug that mattered. It was computed as
+`prevToDate.setDate(prevFrom.getDate() + elapsedDays - 1)` — a UTC-midnight parse read
+through local calendar accessors — which lost a day in the owner's zone and **inflated
+every growth percentage on the page**. Date arithmetic on a `"YYYY-MM-DD"` key now goes
+through `hotel.js#isoEpochDay` / `#epochDayToIso`, which are built on `Date.UTC` and never
+consult the host calendar. `formatDayLabel` in the same file defuses the identical trap on
+the display side.
+
+> [!CAUTION]
+> **Do not reimplement either helper with a local accessor**, and do not trust a green
+> suite here: run in `TZ=UTC` the defective expression is correct in **0 of 8** probed
+> windows and wrong in 2 under `America/New_York`. Every CI runner is UTC.
+> `scripts/probe-mtd-growth.mjs` pins the zone on its first executable line.
+
 ---

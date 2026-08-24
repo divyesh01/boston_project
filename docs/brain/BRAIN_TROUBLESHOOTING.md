@@ -46,7 +46,9 @@
 | 42 | The base44 SDK's analytics module is `enabled: true` by default and `serverUrl` resolves to our own origin, so the live site POSTed to `analytics/track/batch` on a 60s heartbeat and every tab hide — a permanent `405` in the console. Latent worse case: setting `VITE_BASE44_BACKEND_URL` starts shipping page views to a third party while `PrivacyPolicy.jsx` promises data stays local | MEDIUM | FIXED 2026-08-24 | `src/lib/sdkAnalyticsOff.js` (NEW), imported **first** in `src/main.jsx`. 53 assertions. See section 26 | (This commit) |
 | 43 | `MonthlyCalendar.jsx` derived its grids from `period`/`month`/`year` while its KPIs aggregated `dateRange`, so six of seven periods drew ONE grid — a header reading "for August 2026" above cards summing 214 days | HIGH | FIXED 2026-08-24 | `src/lib/calendarGrids.js` (NEW) + `src/pages/MonthlyCalendar.jsx`. See section 25 and BRAIN_FRONTEND.md 16 | (This commit) |
 | 44 | The same page coloured cells by `room_revenue` but classified tiers and rendered the day modal from `total_revenue`, which the CSV importer never writes — every imported day grouped "low" behind a green cell, and tapping a $12,000 cell opened a panel reading $0.00 | HIGH | FIXED 2026-08-24 | `src/pages/MonthlyCalendar.jsx` — both now read `room_revenue`. See BRAIN_FINANCE.md 12.8 | (This commit) |
-| 45 | `MtdGrowth.jsx` headline card is labelled "Total Revenue" and reads the bare `total_revenue` field, which is populated by `ManualEntry.jsx` only — the card reads **$0.00 on every imported day** | HIGH | **OPEN** | `src/pages/MtdGrowth.jsx:14`, `:107`. Fix via `grossRevenueForPeriod()` and honour its `basis`, or relabel to room revenue. Needs its own probe | — |
+| 45 | `MtdGrowth.jsx` headline card is labelled "Total Revenue" and reads the bare `total_revenue` field, which is populated by `ManualEntry.jsx` only — the card read **$0.00 on every imported day**, and because `pctCh` is 0 whenever `prev` is 0 the Owner's Snapshot narrated "Revenue is up 0.0% to $0" and could rank that $0 as the period's top driver | HIGH | FIXED 2026-08-24 | `src/pages/MtdGrowth.jsx` — the entry is flagged `derived: true`, assembled by `grossRevenueForPeriod()` from both ledgers, subtracted in integer cents, and relabelled "Total Revenue (room only)" when the basis is room. Measured: 0 of 214 real rows carry the field. See section 27 | (This commit) |
+| 46 | The same page's previous-period window was `prevToDate.setDate(prevFrom.getDate() + elapsedDays - 1)` — a UTC-midnight parse read through LOCAL calendar accessors. In every zone behind UTC the window ended a day early, so a day of prior-period revenue dropped out and **every growth percentage on the page was inflated** — the direction nobody questions | HIGH | FIXED 2026-08-24 | `src/lib/hotel.js` — new `isoEpochDay`/`epochDayToIso` built on `Date.UTC`; `src/pages/MtdGrowth.jsx` consumes them. Measured in `America/New_York`: the live filter's window ended `2025-08-01`, not `2025-08-02`. See section 27 | (This commit) |
+| 47 | The three `RECURRING_EVENTS` loops parse a date-only `startDate` (UTC midnight) and then test `d.getDay()` — a LOCAL accessor — while stamping the row with `d.toISOString()`. The weekday of the **previous** day is matched against the **current** day's date, so every recurring event lands one day late | HIGH | **OPEN** | `src/lib/eventSchedule.js:183`, `src/pages/ActionCenter.jsx:258`, `:298`. Measured in `America/New_York`: King Richard's Faire (`dayOfWeek: [6, 0]`, Sat/Sun) emits `2026-09-06 09-07 09-13 09-14`; the truth is `09-05 09-06 09-12 09-13`. Fix with `isoEpochDay` + a **UTC** weekday. Needs its own probe. See 27.4 for the sites adjudicated safe | — |
 
 ---
 
@@ -813,5 +815,179 @@ live sends and session-id writes.
 > on Windows). The deployed bundle therefore still predates this fix, and tracker #41–#44
 > with it. The owner must rebuild on Windows and redeploy before any of these four can be
 > confirmed against the live site.
+
+---
+
+
+# 27. A HEADLINE THAT READ $0 AND A WINDOW THAT LOST A DAY (tracker #45, #46, #47)
+
+Two independent defects sat on `src/pages/MtdGrowth.jsx`. The first was filed and visible.
+The second was found while fixing the first, was never filed, and was the more dangerous of
+the two — because it did not produce a zero, it produced a plausible number that was too
+high.
+
+Both are guarded by `scripts/probe-mtd-growth.mjs`, which reproduced them at
+**25 PASS / 9 FAIL, exit 1** before any edit and reports **58 PASS / 0 FAIL, exit 0** after.
+
+## 27.1 The card that read a field the importer never writes
+
+`METRICS[0]` was `{ key: "total_revenue", label: "Total Revenue", … }`, and every metric
+went through one generic reader, `calc(rows, key) => sum(rows, key)`. `OccupancyDay` has no
+bare `total_revenue`: the Occupancy Summary's column headed "Total Revenue" is mapped to
+`total_revenue_with_misc` on purpose, because it is a **room** total (BRAIN_FINANCE.md 12.8).
+Only `ManualEntry.jsx` writes the unsuffixed name.
+
+Driving the real parser over the owner's real 214-row export:
+
+| Measurement | Observed |
+|---|---|
+| rows carrying a bare `total_revenue` | **0 of 214** |
+| `sum(rows, "total_revenue")` | **exactly 0** |
+| `sum(rows, "room_revenue")` | $1,011,258.67 |
+
+So the card labelled "Total Revenue" rendered **$0**. And because `pctCh` is coded
+`prev > 0 ? … : 0`, a metric that is 0 on both sides reports 0.0% growth rather than
+"no data" — the Owner's Snapshot narrated *"Revenue is up 0.0% to $0"* in prose, and the
+`best`/`worst` ranking could name that $0 metric the period's top driver.
+
+**The fix is not a field swap.** Swapping to `total_revenue_with_misc` is the trap 12.8
+warns about: it yields a figure that looks right and understates the ledger by exactly the
+$9,339.50 of ancillary income. The metric is now flagged `derived: true` and the comparison
+map branches on that flag **before** it can reach `calc()`:
+
+```js
+const comparisons = METRICS.map((m) => {
+  if (m.derived) { /* grossRevenueForPeriod, integer cents */ }
+  const cur = calc(curElapsed, m.key);   // unreachable for a derived metric
+```
+
+The total comes from `grossRevenueForPeriod({ grossRows, occRows })` — the same helper
+`Dashboard.jsx` and `calculationService.js` use, so there is one implementation of "what is
+total revenue". Both sides are subtracted **in integer cents** and divided by 100 only to
+display. Measured against the CLAUDE.md section 10 benchmark:
+
+| Leg | Cents | Dollars |
+|---|---|---|
+| room (occupancy ledger) | 101125867 | $1,011,258.67 |
+| ancillary (gross ledger) | 933950 | $9,339.50 |
+| **total** | **102059817** | **$1,020,598.17 — exact** |
+
+The helper returns `basis: "total" \| "room"` precisely so the UI can be honest, and the
+page now uses it: with no gross rows the label becomes **"Total Revenue (room only)"**
+rather than overstating a room figure as a total. When the two periods resolve to
+*different* bases — current has a gross ledger, prior does not — both sides fall back to
+the room leg, because comparing a total against a room-only prior reports the prior's
+missing ancillary income as growth.
+
+## 27.2 The window that lost a day
+
+```js
+const prevFrom = new Date(compareDateRange.from);          // UTC midnight
+prevToDate.setDate(prevFrom.getDate() + elapsedDays - 1);  // LOCAL calendar fields
+```
+
+`compareDateRange` is the **full** prior period, not the equivalent window
+(`computeRange(comparePeriod, compareYear, …)`), so truncating it to the elapsed day count
+is load-bearing, not cosmetic. That truncation was computed by mixing two frames of
+reference. Measured in the owner's own zone:
+
+| Window | Correct | Shipped | |
+|---|---|---|---|
+| **live filter** 2026-01-01…2026-08-02 vs 2025 | `2025-08-02` | `2025-08-01` | **WRONG** |
+| March 2026 vs 2025 | `2025-03-31` | `2025-03-30` | **WRONG** |
+| January only · August only · full year · November · single day · leap-year February | — | — | ok |
+
+**Wrong in 2 of 8 probed windows in `America/New_York`; wrong in 0 of 8 under `TZ=UTC`.**
+That is the whole reason it survived to production twice over: a spot-check of one month
+finds nothing, and neither does any test suite run in a UTC container — which is every CI
+runner and this repo's own Linux sandbox. `probe-mtd-growth.mjs` therefore sets
+`process.env.TZ = "America/New_York"` on its **first executable line**, before any `Date`
+is constructed.
+
+The error direction matters. A comparison window one day short means less prior-period
+revenue, so **every growth percentage on the page was inflated.** Nobody files a bug about
+numbers that look better than expected.
+
+`src/lib/hotel.js` now exports an inverse pair built on `Date.UTC`, which never consults the
+host zone — timezone-independent by construction rather than by careful use:
+
+```js
+export function isoEpochDay(dateStr)   // "YYYY-MM-DD" -> whole days since 1970-01-01, or NaN
+export function epochDayToIso(day)     // and back, or "" for a non-finite day
+```
+
+`NaN`/`""` rather than `0`/`"Invalid Date"` is deliberate: day 0 is a real date
+(1970-01-01), so a silent 0 would arithmetic away into a plausible window instead of
+failing. The header used to print the **full** prior period next to a truncated day count;
+it now prints `prevWindow`, the span actually measured — the same class of defect as
+section 25, and the reason BRAIN_FRONTEND.md 16 exists.
+
+## 27.3 The 15 other `setDate(` call sites, adjudicated
+
+`grep -rn "\.setDate(" src/` returns 16 lines; one is the doc comment in `hotel.js` that
+quotes the defect. Of the remaining 15, **the pattern alone proves nothing** — what matters
+is whether the parse and the accessors belong to the same frame of reference.
+
+| Site(s) | Parse | Output | Verdict |
+|---|---|---|---|
+| `eventSchedule.js:183`, `ActionCenter.jsx:258`, `:298` | `new Date("2026-09-05")` → **UTC** midnight | `getDay()` **local**, `toISOString()` **UTC** | **DEFECTIVE — tracker #47** |
+| `aiEngine.js` ×6 (173, 175, 213, 241, 248, 250) | `` new Date(`${s}T00:00:00`) `` → local | `iso()` = `getFullYear`/`getMonth`/`getDate`, local | consistent — **leave alone** |
+| `useGlobalFilters.jsx:129`, `:131` | `new Date(y, m, d)` → local constructor | local field accessors | consistent — **leave alone** |
+| `Import.jsx:225` | `new Date()` → a real instant | `toISOString()` | a timestamp, not a date-only key — **leave alone** |
+| `MoneyKept.jsx:58` | `` `${s}T00:00:00` `` → local | **`toISOString()`** | correct behind UTC; see below |
+| `aiEngine.test.js:13`, `:15` | — | — | test fixture |
+
+`MoneyKept.jsx#bucketKey` in week mode parses local midnight and then serialises through
+`toISOString()`. Behind UTC the two agree; ahead of UTC local midnight is the previous UTC
+day. Measured: `2026-08-24` buckets to `2026-08-24` in `America/New_York` and to
+**`2026-08-23`** in `Asia/Tokyo`. Latent for this deployment and not filed as a defect,
+but do not copy the idiom.
+
+> [!CAUTION]
+> **Tracker #47 is a live defect in the owner's zone, not a latent one.** The loop tests
+> the weekday of the day *before* the one it stamps. `2026-09-05` is a Saturday;
+> `new Date("2026-09-05").getDay()` in `America/New_York` says **Friday**. King Richard's
+> Faire (`dayOfWeek: [6, 0]`, Sat/Sun) is emitted on `2026-09-06 09-07 09-13 09-14` when
+> the truth is `09-05 09-06 09-12 09-13` — every recurring event on the calendar is one
+> day late. Fix it with `isoEpochDay` plus a **UTC** weekday, under its own probe.
+
+## 27.4 Verification
+
+| Gate | Observed |
+|---|---|
+| `probe-mtd-growth.mjs` before the fix | 25 PASS / **9 FAIL**, exit 1 |
+| `probe-mtd-growth.mjs` after | **58 PASS / 0 FAIL**, exit 0 |
+| `eslint` on the 4 touched files | **0 errors**; warnings **11 at HEAD → 10** |
+| `npm run typecheck` | exit 0 |
+| `hotel.js` consumers | `probe-money-kept-gross` 49/0 · `probe-hotel` 40/0 · `probe-capacity-per-day` 68/0 · `probe-cents-unit-mismatch` 38/0 · `probe-monthly-calendar` 67/0 · `probe-money-kept-double-count` 65/0 · `probe-calendar-day-modal` 30/0 · `verify-transactions` 115/0 |
+
+The warning delta is **negative**, and measured rather than inferred: the HEAD blobs were
+linted under the same config as temporary files created and removed inside one command. The
+single warning that disappeared is `'elapsedDays' is assigned a value but never used` at
+HEAD line 60.
+
+> [!IMPORTANT]
+> **`npm run lint` had been printing the defect's own fingerprint as a passing warning.**
+> `elapsedDays` was computed, left unused, and the window was derived from a second,
+> broken expression instead. The lint gate named the exact variable and exited 0, because
+> `eslint . --quiet` reports unused variables as warnings. A warning nobody reads is not a
+> gate.
+
+Three mutations, each applied to a pristine copy and each restored md5-identical in the
+same command:
+
+| Mutation | Result |
+|---|---|
+| drop `derived: true` from the metric entry | 1 FAIL |
+| declare `enabled` on `useGrossRevenue` but stop passing it to `useQuery` | 1 FAIL |
+| rewrite `isoEpochDay` with the naive local-calendar form | **12 FAILs**, reproducing `2025-08-01`, `2025-03-30` and `1970-01-01 → -1` |
+
+The second mutation is the one worth keeping in mind: a declared-but-unwired parameter is
+worse than no parameter, because every call site reads as if it were gated. An empty range
+makes `buildFilter` emit no `filter.date`, which falls through to the unfiltered
+`GrossRevenueDay.list()` branch — a full-table read whose rows are then discarded. That is
+why `useGrossRevenue` gained `enabled = true` mirroring `useOccupancy`, rather than the page
+passing an empty range when the compare toggle is off.
+
 
 

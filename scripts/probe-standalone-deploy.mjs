@@ -23,6 +23,7 @@
 // Run: node scripts/probe-standalone-deploy.mjs
 
 import { readFileSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -172,8 +173,8 @@ if (evalEndpoint) {
     'a set-but-ignored variable must say so');
 }
 
-// ── Section 3: the local production env file agrees with the guard ──────────
-console.log('\nSection 3: .env.production (LOCAL builds only — it is gitignored)');
+// ── Section 3: the production env file agrees with the guard ────────────────
+console.log('\nSection 3: .env.production values (committed — see section 7)');
 
 // Print key presence and value length only. Never the values.
 const envProdPath = '.env.production';
@@ -199,7 +200,7 @@ if (existsSync(path.join(ROOT, envProdPath))) {
 }
 
 // ── Section 4: the dashboard-discoverable template ─────────────────────────
-console.log('\nSection 4: .env.example (the ONLY env file git tracks)');
+console.log('\nSection 4: .env.example (the template a dashboard seeds from)');
 
 const example = read('.env.example');
 check('.env.example declares VITE_STANDALONE_LOCAL',
@@ -282,9 +283,11 @@ check('vite.config.js imports the guard',
 check('vite.config.js invokes the guard in its plugins array',
   /\benvGuard\s*\(\s*\)/.test(viteConfig));
 
-// The CI job builds from a checkout with no .env.production, so without these
-// two lines the guard turns a passing job red. That is the correct failure —
-// but the job is supposed to verify the shipped shape, so it must supply them.
+// The CI job clones the repo, so since 2026-08-24 it gets .env.production and the
+// guard stays quiet. These two lines are belt-and-braces: they keep the job green
+// if that file is ever renamed or re-ignored, and they state the required shape at
+// the one place a reader of the workflow looks. Asserted so a tidy-up cannot drop
+// them — losing them would only be noticed by a red build weeks later.
 const workflowPath = '.github/workflows/security.yml';
 if (existsSync(path.join(ROOT, workflowPath))) {
   const wf = read(workflowPath);
@@ -300,10 +303,97 @@ if (existsSync(path.join(ROOT, workflowPath))) {
   check('.github/workflows/security.yml exists', false, 'the CI gate went missing');
 }
 
-// The whole premise of the guard is that the flags do NOT travel with the repo.
-check('.env.production is still gitignored',
-  /^\s*\.env\.production\s*$/m.test(read('.gitignore')),
-  'if it were committed, the flags would ship to every checkout — including any fork');
+// ── Section 7: .env.production travels with the repo, and holds no secrets ──
+console.log('\nSection 7: .env.production is committed, LF-only and flag-only');
+
+// Both values in that file are PUBLIC by construction — vite folds every
+// VITE_-prefixed variable into the shipped JavaScript, so anyone who loads the
+// site can read them. Keeping it untracked therefore bought no secrecy, and cost
+// two dead Cloudflare builds (#2576feba shipped a bundle that could never log in;
+// #159d05dc failed at the guard). A host build clones this repo; if the flags are
+// not IN the repo, every deploy depends on a dashboard staying correct by hand.
+//
+// The trade is that this file is now the one place in version control where a
+// careless `echo SECRET=... >> .env.production` would be silently committed. So
+// the rule "never put a secret here" is enforced below as a key ALLOWLIST rather
+// than left as a comment nobody re-reads.
+const ENV_PROD = '.env.production';
+const ENV_PROD_ALLOWED = ['VITE_USE_LOCAL_AUTH', 'VITE_STANDALONE_LOCAL'];
+
+check(`${ENV_PROD} exists`, existsSync(path.join(ROOT, ENV_PROD)),
+  'without it, a cloned checkout builds a bundle that cannot authenticate anyone');
+
+const git = (...args) => spawnSync('git', args, { cwd: ROOT, encoding: 'utf8' });
+
+// Two measured gotchas in `git check-ignore`, both of which made an earlier
+// version of this assertion useless (2026-08-24):
+//
+//   1. Without `--no-index` git skips any path already in the index, so this
+//      check silently degraded into a duplicate of the "is tracked" one below
+//      and kept passing after `.env.production` was re-added to .gitignore.
+//   2. With `-v`, exit status 0 means "some pattern MATCHED", not "is ignored" —
+//      a negation matches too. Observed: `.env.production` -> rc=0,
+//      `.gitignore:21:!.env.production`, and `.env.example` behaves identically.
+//      So the exit code alone is not the predicate; the matched pattern is.
+//
+// Verdict: not ignored means either no pattern matched (rc=1) or the winning
+// pattern is a negation. Anything else means a clone would not carry the flags.
+// `-v` output shape: <source>:<line>:<pattern>\t<pathname>
+const ignore = git('check-ignore', '--no-index', '-v', '--', ENV_PROD);
+const ignoreLine = (ignore.stdout || '').trim().split('\n')[0] || '';
+const matchedPattern = ignoreLine
+  ? ignoreLine.split('\t')[0].split(':').slice(2).join(':')
+  : '';
+check(`${ENV_PROD} is NOT excluded by any .gitignore rule`,
+  ignore.status === 1 || (ignore.status === 0 && matchedPattern.startsWith('!')),
+  ignore.status === 1
+    ? 'no pattern matches it at all'
+    : `winning pattern is ${JSON.stringify(matchedPattern)} (${ignoreLine.split('\t')[0].split(':').slice(0, 2).join(':')})${matchedPattern.startsWith('!') ? '' : ' — a cloned build would get no flags'}`);
+
+const tracked = git('ls-files', '--error-unmatch', '--', ENV_PROD);
+check(`${ENV_PROD} is tracked (or staged)`,
+  tracked.status === 0,
+  'un-ignoring it is not enough — it has to be in the index to reach a clone');
+
+const envProdRaw = existsSync(path.join(ROOT, ENV_PROD)) ? read(ENV_PROD) : '';
+
+// dotenv keeps a trailing CR inside the VALUE, so a CRLF checkout would yield
+// "true\r" and the guard — which compares against the exact string "true" — would
+// fail the build. Pinned by .gitattributes; asserted here because a build that
+// breaks only on Windows is the kind of trap that survives for months.
+check(`${ENV_PROD} is LF-only`, !envProdRaw.includes('\r'),
+  'a captured CR turns "true" into "true\\r" and the guard rejects it');
+check('.gitattributes pins that file to LF',
+  /^\.env\.production\s+text\s+eol=lf\s*$/m.test(read('.gitattributes')),
+  'without the pin, `* text=auto` hands Windows a CRLF copy');
+check('.gitignore carries the negation that keeps it tracked',
+  /^!\.env\.production\s*$/m.test(read('.gitignore')),
+  'the `.env.*` glob on line 3 swallows it otherwise');
+
+const envProdKeys = envProdRaw
+  .split(/\n/)
+  .map((line) => line.trim())
+  .filter((line) => line && !line.startsWith('#'))
+  .map((line) => (line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/) || [])[1])
+  .filter(Boolean);
+
+const unexpected = envProdKeys.filter((k) => !ENV_PROD_ALLOWED.includes(k));
+check(`${ENV_PROD} contains ONLY the two public flags`,
+  unexpected.length === 0,
+  unexpected.length
+    ? `unexpected key(s): ${unexpected.join(', ')} — this file is committed; secrets belong in the hosting dashboard`
+    : `keys: ${envProdKeys.join(', ')}`);
+
+// Values, not just presence: "TRUE", "1" and "yes" are all falsy to the guard.
+const envProdValue = (key) => {
+  const m = envProdRaw.match(new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=\\s*(.*)$`, 'm'));
+  return m ? m[1].trim().replace(/^['"]|['"]$/g, '') : undefined;
+};
+for (const key of ENV_PROD_ALLOWED) {
+  check(`${ENV_PROD} sets ${key} to the exact string "true"`,
+    envProdValue(key) === 'true',
+    `value=${JSON.stringify(envProdValue(key))}`);
+}
 
 // ── Result ─────────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(60)}`);

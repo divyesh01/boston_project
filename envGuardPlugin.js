@@ -2,8 +2,8 @@
 //
 // ── WHAT WENT WRONG, measured 2026-08-23 ───────────────────────────────────
 // Cloudflare's Git build (Workers Builds) runs `npm run build` on its own
-// machine with "Build variables: None". `.env.production` is gitignored, so
-// that build sees NEITHER VITE_USE_LOCAL_AUTH nor VITE_STANDALONE_LOCAL.
+// machine with "Build variables: None". `.env.production` was gitignored, so
+// that build saw NEITHER VITE_USE_LOCAL_AUTH nor VITE_STANDALONE_LOCAL.
 //
 // The build then exits 0 and deploys a bundle that CANNOT AUTHENTICATE ANYONE:
 // with VITE_USE_LOCAL_AUTH unset, base44Client.js:2033 resolves USE_LOCAL_AUTH
@@ -16,6 +16,14 @@
 // auth is on WITHOUT the standalone flag; it says nothing when BOTH are absent,
 // because that combination is a legitimate server-backed build — for a server
 // this deployment does not have.
+//
+// ── WHY THIS GUARD STILL MATTERS AFTER 2026-08-24 ──────────────────────────
+// `.env.production` is now COMMITTED (both values are public — Vite folds every
+// VITE_-prefixed variable into the shipped JS), so a fresh checkout carries the
+// flags and this guard normally stays silent. It is not redundant: it still
+// fails a build whose env file was deleted, renamed, emptied, re-ignored, or
+// whose values drifted to "TRUE"/"1"/"yes", and it is what turned two silent
+// Cloudflare deploys into a one-second build failure that names the fix.
 //
 // ── THE RULE ───────────────────────────────────────────────────────────────
 // With base44 gone there is exactly one production shape that works: local auth
@@ -58,10 +66,18 @@ export default function standaloneEnvGuard() {
           '  With base44 retired, the only working production shape is the standalone one:',
           '  in-browser auth behind an identity proxy. Both flags must be "true".',
           '',
-          '  Local build:        set them in .env.production (gitignored, so it never',
-          '                      reaches a CI or hosting checkout).',
-          '  Cloudflare build:   Workers -> Settings -> Build -> Variables and Secrets.',
-          '  GitHub Actions:     the env: block of the "Verify Production Build" step.',
+          '  Normally .env.production carries both flags and this never fires. If you are',
+          '  seeing it, that file is missing, renamed, emptied, re-gitignored, or holds a',
+          '  value other than the exact lowercase string "true". Check it first:',
+          '',
+          '    git check-ignore -v .env.production   (must print NOTHING)',
+          '    cat .env.production                   (must contain both flags = true)',
+          '',
+          '  A host can also supply them instead — vite merges VITE_-prefixed process.env',
+          '  over the .env files, so a dashboard variable wins:',
+          '    Cloudflare build:   Workers -> Settings -> Build -> Variables and Secrets',
+          '                        (the BUILD section — Runtime variables do not apply).',
+          '    GitHub Actions:     the env: block of the "Verify Production Build" step.',
         ].join('\n'),
       );
     },

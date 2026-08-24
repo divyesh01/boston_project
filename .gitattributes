@@ -6,3 +6,10 @@
 # `* text=auto` above would otherwise check this file out as CRLF on Windows.
 # Asserted by scripts/probe-deploy-config.mjs section 11.
 public/_headers text eol=lf
+
+# .env.production is committed (see .gitignore) and is parsed by dotenv inside
+# Vite's loadEnv. Pinned to LF so a Windows checkout cannot hand the parser
+# `true\r`: the env guard compares against the exact string "true", so a captured
+# CR would fail the build instead of shipping anything wrong — but a build that
+# fails only on Windows is still a trap worth removing.
+.env.production text eol=lf

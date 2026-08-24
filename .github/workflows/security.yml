@@ -54,8 +54,11 @@ jobs:
           NODE_ENV: production
           # This step verifies the SHIPPED shape, so it must build the same one the
           # deploy builds: standalone (in-browser auth behind an identity proxy).
-          # .env.production is gitignored and never reaches a CI checkout, so
-          # envGuardPlugin.js fails the build unless both flags are set right here.
-          # Removing either line turns this step from a check into a false negative.
+          # Since 2026-08-24 .env.production is committed, so the checkout already
+          # carries both flags and envGuardPlugin.js stays quiet. These two lines
+          # are belt-and-braces, not decoration: they keep this step honest if that
+          # file is ever renamed, emptied or re-gitignored, and they state the
+          # required shape where a reader of this workflow will actually see it.
+          # Asserted by scripts/probe-standalone-deploy.mjs section 6.
           VITE_USE_LOCAL_AUTH: 'true'
           VITE_STANDALONE_LOCAL: 'true'

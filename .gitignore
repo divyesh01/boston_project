@@ -6,6 +6,19 @@
 # it and a new deploy has nothing to copy. Verify with:
 #   git check-ignore -v .env.example   ->  must print nothing
 !.env.example
+# ...and so must the PRODUCTION file. It holds exactly two PUBLIC feature flags
+# (VITE_USE_LOCAL_AUTH, VITE_STANDALONE_LOCAL). Vite folds every VITE_-prefixed
+# variable into the shipped JavaScript, so those values are readable by anyone who
+# loads the site — ignoring the file bought no secrecy. What it did buy was two
+# dead deploys: Cloudflare's Git build and GitHub Actions clone this repo, saw
+# neither flag, and produced a bundle that loads and can never log anybody in
+# (Cloudflare builds #2576feba and #159d05dc, 2026-08-24). With base44 retired
+# those two flags describe the ONLY deployment shape that works, so they belong
+# with the code, not in a hosting dashboard that has to be kept correct by hand.
+# NEVER put a secret in that file — scripts/probe-standalone-deploy.mjs section 6
+# fails if any other key appears in it. Verify with:
+#   git check-ignore -v .env.production   ->  must print nothing
+!.env.production
 
 # Logs
 /logs
@@ -37,8 +50,8 @@ dist-ssr
 base44/.app.jsonc
 
 # Secrets / credentials — never commit
-# Production env (contains sensitive values)
-.env.production
+# (.env.production is deliberately NOT listed here any more — see the negation
+# near the top of this file. It contains two public build flags and no secrets.)
 *.pem
 *.key
 *.secret

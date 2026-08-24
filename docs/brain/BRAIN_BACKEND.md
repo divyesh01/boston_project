@@ -244,7 +244,7 @@ node scripts/probe-cors-config.mjs        # 35/0, standalone — no loader neede
 | `vite.config.js` | Vite build: React plugin, Base44 plugin, standalone env guard, SRI hash generator, dev security headers, console stripping, vendor chunk splitting | Production build fails |
 | `vercel.json` | Vercel deploy: SPA routing (/* -> /index.html), 1-year immutable caching for /assets/*, production security headers | 404 on refresh, security headers lost |
 | `sriPlugin.js` | Hashes every `/assets/` subresource in the built index.html. Digests are taken in `writeBundle` (the file ON DISK) and re-verified in `closeBundle`, after every other plugin has written | Move the hashing back into `transformIndexHtml` and the browser blocks the entry chunk: blank page, whole app down. See BRAIN_SECURITY "Subresource Integrity" |
-| `envGuardPlugin.js` | Fails a **production** build whose resolved `import.meta.env` does not have BOTH `VITE_USE_LOCAL_AUTH=true` and `VITE_STANDALONE_LOCAL=true` | Without it a checkout that has no `.env.production` (every CI and hosting build) silently ships a bundle whose login can never succeed |
+| `envGuardPlugin.js` | Fails a **production** build whose resolved `import.meta.env` does not have BOTH `VITE_USE_LOCAL_AUTH=true` and `VITE_STANDALONE_LOCAL=true` | It is the reason a broken deploy is now a 1-second build failure instead of a site nobody can log into. Since `.env.production` is committed it normally stays silent; it still catches that file being deleted, renamed, emptied, re-ignored, or holding a value other than the exact string `true` |
 | `eslint.config.js` | ESLint 9: React + Hooks rules, unused import removal | Linting breaks in CI |
 | `vitest.config.js` | Test runner: JSDOM env, @/ path alias, setup hooks, coverage | Tests cannot run |
 | `tailwind.config.js` | Design tokens: HSL color vars, chart colors 1-5, sidebar colors, fonts, accordion animations | ALL styling breaks |
@@ -259,9 +259,9 @@ The site is the Cloudflare Worker **`boston-project`**
 `wrangler.jsonc` is the single line that makes them agree -- read the comment in that file
 before touching it.
 
-**Local upload.** `npm run build` on a machine that has `.env.production`, then
-`npx wrangler deploy`, which uploads whatever is in `dist/`. The flags are present, the guard
-passes, the bundle can log in.
+**Local upload.** `npm run build`, then `npx wrangler deploy`, which uploads whatever is in
+`dist/`. `.env.production` is part of the checkout, so the flags are present, the guard passes,
+and the bundle can log in.
 
 **Cloudflare Workers Builds from GitHub.** Five defects have been measured in this pipeline.
 Four came from build #2576feba (2026-08-23, on the abandoned `divyeshpro` worker); the fifth
@@ -272,7 +272,7 @@ only became visible once the first four were addressed, on build #159d05dc (2026
 | Repo was `divyesh01/divyeshpro` | The code lives in `divyesh01/boston_project`. Pushing a fix to the repo you are reading did not reach that pipeline at all | fixed in dashboard: now `divyesh01/boston_project`, branch `main` |
 | Branch was `dependabot/npm_and_yarn/vite-8.2.2` | `npm clean-install` died with ERESOLVE: that branch bumps vite to 8.2.2 while `@vitejs/plugin-react@4.7.0` declares peer vite `^4.2.0 \|\| ^5.0.0 \|\| ^6.0.0 \|\| ^7.0.0`. A dependabot branch is not a deployable branch | fixed in dashboard, and `.github/dependabot.yml` now prevents the branch existing |
 | Deploy command was `npx wrangler versions upload` | Uploads a version WITHOUT routing production traffic to it, so a "successful" build changes nothing a visitor sees | fixed in dashboard: `npx wrangler deploy` |
-| **Build variables: None** | `.env.production` is gitignored, so a Git build sees neither auth flag. Before `envGuardPlugin.js` that produced a green build and a bundle nobody could log into | now FAILS the build in ~1s naming both variables. Owner must set them under Settings -> Build -> Variables and Secrets |
+| **Build variables: None** | While `.env.production` was gitignored a Git build saw neither auth flag. Before `envGuardPlugin.js` that produced a green build and a bundle nobody could log into; after it, three builds failed in ~1s. Two dashboard attempts changed nothing -- Cloudflare has a **Runtime** "Variables and Secrets" section as well as a **Build** one, and only the Build one reaches `npm run build` | fixed here, upstream of the dashboard: `.env.production` is now committed (see Environment Variables below), so any clone builds the working shape. Build variables are no longer required for a deploy; if set, they still win (`loadEnv` merges `process.env` last) |
 | `wrangler.jsonc` `name` was `divyeshpro` | The build belongs to the `boston-project` service but its deploy command reads this file, so the two deploy paths pointed at two different workers | fixed here: `name` is `boston-project` |
 
 Build #159d05dc is the useful evidence: Initializing / Cloning / Installing all succeeded and
@@ -298,7 +298,7 @@ can only be verified against the dashboard by eye, since nothing in the repo can
 | `.env.example` | **committed template** | The only place the required variable names are written down, each annotated with the file:line that reads it. `.gitignore` has an explicit `!.env.example` negation so `.env.*` cannot swallow it. | Deleting it leaves a new deploy nothing to copy |
 | `.env.local` | `VITE_USE_LOCAL_AUTH=false` | Default: use real serverless auth | Loaded by Vite in **every** mode including `vite build` — never put `true` here |
 | `.env.development` | `VITE_USE_LOCAL_AUTH=true` | Dev: use local IndexedDB auth shim | - |
-| `.env.production` | `VITE_USE_LOCAL_AUTH=true` + `VITE_STANDALONE_LOCAL=true` | **STANDALONE shape, 2026-08-23.** base44 is gone, so there is no server left to authenticate against: a production build MUST run the in-browser auth path or nobody can log in at all. | **This file is gitignored (`.gitignore:41`)** — git tracks only `.env.example`. A host that builds from GitHub never sees it, so the hosting dashboard's variables are the only source of values there |
+| `.env.production` | `VITE_USE_LOCAL_AUTH=true` + `VITE_STANDALONE_LOCAL=true` | **STANDALONE shape, 2026-08-23.** base44 is gone, so there is no server left to authenticate against: a production build MUST run the in-browser auth path or nobody can log in at all. | **This file is COMMITTED (2026-08-24), on purpose** -- `.gitignore` carries a `!.env.production` negation, `.gitattributes` pins it `text eol=lf`. Both values are public: vite folds every `VITE_`-prefixed variable into the shipped JS, so tracking them loses no secrecy, while NOT tracking them cost two dead Cloudflare deploys. **NEVER add a secret to it** -- `probe-standalone-deploy.mjs` section 7 fails on any key outside those two |
 | `VITE_STANDALONE_LOCAL` | `true` in the standalone shape only | The SECOND flag `src/main.jsx` requires. A PROD build with `VITE_USE_LOCAL_AUTH=true` and this one absent, `false` or empty still refuses to boot, so a stray build cannot ship the untrusted auth path by accident. | Setting this on a build that can be reached anonymously = SECURITY DISASTER. Browser-side login and MFA are bypassable by anyone who loads the page; the upstream identity proxy (e.g. Cloudflare Access) is then the ONLY real boundary |
 | `VITE_WEBSOCKET_ENDPOINT` | unset, or a `ws://` / `wss://` URL | Realtime CRDT sync (`src/crdt.jsx`). Only a ws/wss URL enables it; **any** other value (`disabled`, `off`, an `https://` URL, whitespace) resolves to unset and is warned about, so a hosting dashboard that refuses an empty value can still express "off". | Before 2026-08-23 any non-empty value reached `new WebsocketProvider()` and started a backoff loop that retried for as long as the tab stayed open |
 

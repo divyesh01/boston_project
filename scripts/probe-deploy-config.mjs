@@ -632,6 +632,15 @@ if (wrangler) {
   check('wrangler.jsonc declares a worker name',
     typeof wrangler.name === 'string' && wrangler.name.length > 0,
     `name=${JSON.stringify(wrangler.name)} — an absent name makes the deploy target ambiguous`);
+  // Pinned deliberately. Nothing in this repo can read the Cloudflare dashboard, so
+  // this literal is the only record of which Worker both deploy paths must hit, and
+  // "divyeshpro" is the abandoned worker the setup wizard built from the wrong repo
+  // (see the comment block in wrangler.jsonc). If the deployed Worker is ever
+  // genuinely renamed, this line has to be edited in the same commit — which is the
+  // point: the alternative is the two paths drifting apart in silence again.
+  check('the worker name is the one both deploy paths target',
+    wrangler.name === 'boston-project',
+    `name=${JSON.stringify(wrangler.name)} — expected "boston-project"; the laptop's \`wrangler deploy\` and Cloudflare's Git build both read this line`);
   check('the asset directory is the Vite outDir',
     wrangler.assets?.directory === './dist',
     `directory=${JSON.stringify(wrangler.assets?.directory)}`);

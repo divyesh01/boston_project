@@ -252,27 +252,45 @@ node scripts/probe-cors-config.mjs        # 35/0, standalone — no loader neede
 | `jsconfig.json` | IDE: @/* -> ./src/* path alias, strict JSX, type definitions | Autocomplete and type-checking break |
 | `postcss.config.js` | PostCSS: loads Tailwind and autoprefixer | CSS processing fails |
 
-### Deploying: two paths, and only one of them currently works
+### Deploying: two paths, one worker
 
-The Cloudflare worker `divyeshpro` can be updated two ways, and they behave very
-differently.
+The site is the Cloudflare Worker **`boston-project`**
+(`boston-project.divyesh-boston.workers.dev`). Two things can update it, and the `name` in
+`wrangler.jsonc` is the single line that makes them agree -- read the comment in that file
+before touching it.
 
-**Local upload (the working path).** `npm run build` on a machine that has `.env.production`, then `npx wrangler deploy`, which uploads whatever is in `dist/`.
-The flags are present, the guard passes, the bundle can log in.
+**Local upload.** `npm run build` on a machine that has `.env.production`, then
+`npx wrangler deploy`, which uploads whatever is in `dist/`. The flags are present, the guard
+passes, the bundle can log in.
 
-**Cloudflare Workers Builds from GitHub (broken as configured, measured 2026-08-23 on
-build #2576feba).** Four separate defects, all visible in the dashboard:
+**Cloudflare Workers Builds from GitHub.** Five defects have been measured in this pipeline.
+Four came from build #2576feba (2026-08-23, on the abandoned `divyeshpro` worker); the fifth
+only became visible once the first four were addressed, on build #159d05dc (2026-08-24).
 
-| What the dashboard said | Why it breaks the deploy |
-|---|---|
-| Repo `divyesh01/divyeshpro` | The code lives in `divyesh01/boston_project`. Pushing a fix to the repo you are reading does not reach that pipeline at all |
-| Branch `dependabot/npm_and_yarn/vite-8.2.2` | `npm clean-install` died with ERESOLVE: that branch bumps vite to 8.2.2 while `@vitejs/plugin-react@4.7.0` declares peer vite `^4.2.0 \|\| ^5.0.0 \|\| ^6.0.0 \|\| ^7.0.0`. A dependabot branch is not a deployable branch |
-| Build variables: None | `.env.production` is gitignored, so a Git build sees neither auth flag. Before `envGuardPlugin.js` that produced a green build and a bundle nobody could log into; now it fails the build and says which variables to set |
-| Deploy command `npx wrangler versions upload` | That uploads a version WITHOUT routing production traffic to it. A "successful" build then changes nothing a visitor sees. `npx wrangler deploy` is what promotes it |
+| Defect | Why it breaks the deploy | State |
+|---|---|---|
+| Repo was `divyesh01/divyeshpro` | The code lives in `divyesh01/boston_project`. Pushing a fix to the repo you are reading did not reach that pipeline at all | fixed in dashboard: now `divyesh01/boston_project`, branch `main` |
+| Branch was `dependabot/npm_and_yarn/vite-8.2.2` | `npm clean-install` died with ERESOLVE: that branch bumps vite to 8.2.2 while `@vitejs/plugin-react@4.7.0` declares peer vite `^4.2.0 \|\| ^5.0.0 \|\| ^6.0.0 \|\| ^7.0.0`. A dependabot branch is not a deployable branch | fixed in dashboard, and `.github/dependabot.yml` now prevents the branch existing |
+| Deploy command was `npx wrangler versions upload` | Uploads a version WITHOUT routing production traffic to it, so a "successful" build changes nothing a visitor sees | fixed in dashboard: `npx wrangler deploy` |
+| **Build variables: None** | `.env.production` is gitignored, so a Git build sees neither auth flag. Before `envGuardPlugin.js` that produced a green build and a bundle nobody could log into | now FAILS the build in ~1s naming both variables. Owner must set them under Settings -> Build -> Variables and Secrets |
+| `wrangler.jsonc` `name` was `divyeshpro` | The build belongs to the `boston-project` service but its deploy command reads this file, so the two deploy paths pointed at two different workers | fixed here: `name` is `boston-project` |
 
-`.github/dependabot.yml` now ignores semver-major bumps of `vite` and
-`@vitejs/plugin-react` so the bot stops re-opening a branch that cannot install. They are
-peer-coupled and have to move together, by hand.
+Build #159d05dc is the useful evidence: Initializing / Cloning / Installing all succeeded and
+the build then failed at `configResolved` in one second with
+`[standalone-env-guard] refusing to build a production bundle that cannot log anybody in.`
+That is the pipeline failing for the right reason for the first time. Cloudflare's build
+variables reach the bundle because `loadEnv` merges `process.env` keys carrying the `VITE_`
+prefix over the ones parsed from `.env` files (observed in
+`node_modules/vite/dist/node/chunks/dep-Dm0c1Wj2.js:16932`), so a dashboard variable and a
+line in `.env.production` are equivalent as far as the guard and the bundle are concerned.
+
+`.github/dependabot.yml` ignores semver-major bumps of `vite` and `@vitejs/plugin-react` so
+the bot stops re-opening a branch that cannot install. They are peer-coupled and have to move
+together, by hand.
+
+Two known-and-accepted weaknesses in this path: `wrangler` is not a declared dependency, so
+`npx wrangler deploy` resolves whatever version is newest at build time; and the Worker name
+can only be verified against the dashboard by eye, since nothing in the repo can observe it.
 
 ### Environment Variables
 | File | Key Setting | What It Controls | DANGER |

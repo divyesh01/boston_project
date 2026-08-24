@@ -1,11 +1,23 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   // MUST match the deployed Worker name shown in the Cloudflare dashboard.
-  // `wrangler deploy` targets the worker named here: a mismatch does not error,
-  // it silently CREATES a second worker on a different URL and leaves the real
-  // site untouched. Observed 2026-08-23: the worker is "divyeshpro" while this
-  // file said "divyesh".
-  "name": "divyeshpro",
+  // `wrangler deploy` targets the worker named here, and BOTH deploy paths read
+  // this one line: the laptop (`npx wrangler deploy`) and Cloudflare's own Git
+  // build (its deploy command is `npx wrangler deploy`, run in the repo root).
+  //
+  // A mismatch is silent in the laptop path: it does not error, it CREATES a
+  // second worker on a different URL and leaves the real site serving the old
+  // build. Observed 2026-08-23: this said "divyesh" while the worker was
+  // "divyeshpro".
+  //
+  // Observed 2026-08-24 (build #159d05dc): the Git build now belongs to the
+  // Worker service "boston-project", connected to divyesh01/boston_project on
+  // main — the correct repo. This name was still "divyeshpro", the leftover
+  // worker the setup wizard made from the wrong repo, so the two deploy paths
+  // pointed at two different sites. They are one site now. The live URL is
+  // therefore boston-project.divyesh-boston.workers.dev; "divyeshpro" is an
+  // orphan and can be deleted in the dashboard.
+  "name": "boston-project",
   "compatibility_date": "2024-09-23",
   "assets": {
     "directory": "./dist",

@@ -543,8 +543,10 @@ the display side.
 
 > [!CAUTION]
 > **Do not reimplement either helper with a local accessor**, and do not trust a green
-> suite here: run in `TZ=UTC` the defective expression is correct in **0 of 8** probed
-> windows and wrong in 2 under `America/New_York`. Every CI runner is UTC.
-> `scripts/probe-mtd-growth.mjs` pins the zone on its first executable line.
+> suite here: the defective expression is wrong in **2 of 8** probed windows under
+> `America/New_York` and wrong in **0 of 8** under `TZ=UTC`, so a UTC run exonerates it
+> completely. Every CI runner is UTC; an agent sandbox inherits `TZ` from its host and can
+> be either (BRAIN_TROUBLESHOOTING.md 27.2). `scripts/probe-mtd-growth.mjs` pins the zone
+> on its first executable line so the verdict does not depend on where it ran.
 
 ---

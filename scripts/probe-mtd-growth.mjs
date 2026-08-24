@@ -38,9 +38,12 @@
 //
 // Run: node --import ./scripts/_loader-boot.mjs scripts/probe-mtd-growth.mjs
 
-// Set BEFORE any Date is constructed. The Linux sandbox runs in UTC, where the
-// defective expression in D2 happens to be correct — so a probe that did not pin a
-// zone would report the page as fine. America/New_York is the owner's zone (and the
+// Set BEFORE any Date is constructed, because the ambient zone is NOT dependable.
+// A CI runner is UTC, and in UTC the defective expression in D2 happens to be correct
+// in all eight windows below — so an unpinned probe would report the page as fine.
+// Agent sandboxes are worse than merely-UTC: this one ships /etc/timezone = Etc/UTC
+// but has TZ exported as America/New_York from the host, so the ambient zone silently
+// follows whoever is running it. Pin it. America/New_York is the owner's zone (and the
 // one every US deployment of this app will use).
 process.env.TZ = "America/New_York";
 

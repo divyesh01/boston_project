@@ -49,6 +49,7 @@
 | 45 | `MtdGrowth.jsx` headline card is labelled "Total Revenue" and reads the bare `total_revenue` field, which is populated by `ManualEntry.jsx` only — the card read **$0.00 on every imported day**, and because `pctCh` is 0 whenever `prev` is 0 the Owner's Snapshot narrated "Revenue is up 0.0% to $0" and could rank that $0 as the period's top driver | HIGH | FIXED 2026-08-24 | `src/pages/MtdGrowth.jsx` — the entry is flagged `derived: true`, assembled by `grossRevenueForPeriod()` from both ledgers, subtracted in integer cents, and relabelled "Total Revenue (room only)" when the basis is room. Measured: 0 of 214 real rows carry the field. See section 27 | (This commit) |
 | 46 | The same page's previous-period window was `prevToDate.setDate(prevFrom.getDate() + elapsedDays - 1)` — a UTC-midnight parse read through LOCAL calendar accessors. In every zone behind UTC the window ended a day early, so a day of prior-period revenue dropped out and **every growth percentage on the page was inflated** — the direction nobody questions | HIGH | FIXED 2026-08-24 | `src/lib/hotel.js` — new `isoEpochDay`/`epochDayToIso` built on `Date.UTC`; `src/pages/MtdGrowth.jsx` consumes them. Measured in `America/New_York`: the live filter's window ended `2025-08-01`, not `2025-08-02`. See section 27 | (This commit) |
 | 47 | The three `RECURRING_EVENTS` loops parse a date-only `startDate` (UTC midnight) and then test `d.getDay()` — a LOCAL accessor — while stamping the row with `d.toISOString()`. The weekday of the **previous** day is matched against the **current** day's date, so every recurring event lands one day late | HIGH | **OPEN** | `src/lib/eventSchedule.js:183`, `src/pages/ActionCenter.jsx:258`, `:298`. Measured in `America/New_York`: King Richard's Faire (`dayOfWeek: [6, 0]`, Sat/Sun) emits `2026-09-06 09-07 09-13 09-14`; the truth is `09-05 09-06 09-12 09-13`. Fix with `isoEpochDay` + a **UTC** weekday. Needs its own probe. See 27.4 for the sites adjudicated safe | — |
+| 48 | CI pinned `node-version: '20'`, on which jsdom@30's transitive undici@8 throws at **import** time. All 36 vitest files failed to START, so "Security and Quality Assurance" failed on **32 consecutive runs** (2026-08-13 → 2026-08-24) and **not one test had ever executed in CI**. Upstream cause: `package.json` declared no `engines` field, so nothing in the repo stated the floor | HIGH | FIXED 2026-08-24 | `package.json` gained `engines.node`; `.github/workflows/security.yml` pins `'24'`; `scripts/probe-ci-node-version.mjs` (NEW, 61 assertions) keeps the two in lockstep. See section 28 | (This commit) |
 
 ---
 
@@ -900,9 +901,19 @@ reference. Measured in the owner's own zone:
 **Wrong in 2 of 8 probed windows in `America/New_York`; wrong in 0 of 8 under `TZ=UTC`.**
 That is the whole reason it survived to production twice over: a spot-check of one month
 finds nothing, and neither does any test suite run in a UTC container — which is every CI
-runner and this repo's own Linux sandbox. `probe-mtd-growth.mjs` therefore sets
-`process.env.TZ = "America/New_York"` on its **first executable line**, before any `Date`
-is constructed.
+runner. `probe-mtd-growth.mjs` therefore sets `process.env.TZ = "America/New_York"` on its
+**first executable line**, before any `Date` is constructed.
+
+> [!NOTE]
+> **Correction, 2026-08-24: do not assume the agent sandbox is UTC.** An earlier revision
+> of this section named "this repo's own Linux sandbox" alongside CI as a UTC environment.
+> Measured in the sandbox itself: `/etc/timezone` is `Etc/UTC`, but `TZ` is exported as
+> `America/New_York` from the host, so `Intl` resolves to `America/New_York`, the offset is
+> 240, and `new Date("2026-08-24").getDate()` returns **23** — the trap reproduces there.
+> The ambient zone follows whoever is running the agent, which is worse than merely being
+> UTC, because it is *unstable*: the same suite can be correct on one machine and wrong on
+> the next with no diff between them. That is the argument for pinning `TZ` in the probe
+> rather than relying on the environment either way.
 
 The error direction matters. A comparison window one day short means less prior-period
 revenue, so **every growth percentage on the page was inflated.** Nobody files a bug about
@@ -988,6 +999,133 @@ makes `buildFilter` emit no `filter.date`, which falls through to the unfiltered
 `GrossRevenueDay.list()` branch — a full-table read whose rows are then discarded. That is
 why `useGrossRevenue` gained `enabled = true` mirroring `useOccupancy`, rather than the page
 passing an empty range when the compare toggle is off.
+
+---
+
+## 28. CI was red for eleven days for an environment reason (tracker #48)
+
+"Security and Quality Assurance" recorded **32 consecutive non-successful runs** between
+2026-08-13 and 2026-08-24, the last at commit `14ed4f9` ("fix new"), 51s. The natural
+reading of a red test step is that the tests found something. They had not: **not one test
+had ever run in CI since the workflow was created.**
+
+### 28.1 The measurement, in the order it was taken
+
+The job was reproduced whole, off the OneDrive mount, in a throwaway prefix — never with
+`npm ci` on the mount, which would delete the Windows-installed `node_modules` whose Rollup
+binary the owner's build needs (BRAIN.md's WARNING block). On **Node 22.23.2**, at the
+current file set:
+
+| Step | Observed |
+|---|---|
+| `npm ci` | exit 0 — 776 packages, 13s, "1 high severity vulnerability" |
+| `npm run lint` | exit 0, 7.5s |
+| `npm run typecheck` | exit 0, 13.9s |
+| `npm test` | **exit 0 — 36 files, 291 tests, 0 failures**, 45s |
+| `npm run audit:gate` | exit 0, 0.9s — "0 critical, 1 high, 0 moderate, 0 low", both `xlsx` advisories accepted by ID |
+| `npm run build` | exit 0, 16.8s |
+
+So nothing at HEAD was broken. Node 20.20.2 was then installed — exactly what
+`node-version: '20'` resolves to — and only the test step re-run:
+
+```
+npm test exit=1   (9.5s)
+Vitest caught 36 unhandled errors during the test run.
+Error: [vitest-pool]: Failed to start forks worker for test files .../src/pages/Setup.test.jsx.
+Caused by: TypeError: webidl.util.markAsUncloneable is not a function
+  ❯ new CacheStorage node_modules/undici/lib/web/cache/cachestorage.js:20:17
+  ❯ Object.<anonymous>  node_modules/undici/index.js:179:25
+  ❯ Object.<anonymous>  node_modules/jsdom/lib/api.js:12:33
+ Test Files  no tests
+      Tests  no tests
+     Errors  36 errors
+```
+
+`jsdom` loads `undici` at import time, `undici@8` needs Node ≥ 22.19 for
+`webidl.util.markAsUncloneable`, and on 20 that symbol is absent — so the throw happens
+while the module graph is still loading and **every** test file fails to start. Install
+(~20s) + lint (~10s) + typecheck (~14s) + 9.5s ≈ **53s**, which is the observed 51s.
+`security.yml` is byte-identical between `14ed4f9` and HEAD, so the run that failed that
+morning used exactly the workflow reproduced here.
+
+### 28.2 The root cause is one layer above the pin
+
+`package.json` declared **no `engines` field at all**. Nothing in the repo stated the
+project's Node floor, so `'20'` was never contradicted by anything. It now declares:
+
+```json
+"engines": { "node": "^22.22.2 || ^24.15.0 || >=26.0.0" }
+```
+
+That is not a taste preference — it is the measured intersection of every `engines.node`
+declaration in `package-lock.json` (428 of them at the time of writing; lockfileVersion 3
+carries the metadata, so no install is needed to read it). Measured per candidate:
+
+| Node | Verdict | Declarations violated |
+|---|---|---|
+| `20.20.2` | rejected | 8 — incl. `jsdom`, `nanoid`, `undici`, `whatwg-url`, `@testing-library/jest-dom` |
+| `22.19.0` | rejected | 2 — `jsdom`, `@napi-rs/lzma-linux-x64-gnu` |
+| `22.22.2` | **accepted** | 0 |
+| `23.11.1` | rejected | 11 |
+| `24.15.0` | **accepted** | 0 |
+| `25.5.0` | rejected | 2 — `jsdom`, `nanoid` |
+| `26.0.0` | **accepted** | 0 |
+
+> [!CAUTION]
+> **Never "simplify" the CI pin to a floating range or a `node-version-file`.** jsdom
+> (`^22.22.2 || ^24.15.0 || >=26.0.0`) and nanoid (`^22 || ^24 || >=26`) deliberately skip
+> the odd, non-LTS majors. Anything that resolves to "newest satisfying" lands on 25.x and
+> reproduces this outage in a form that looks brand new. The binding constraints are those
+> two packages; the probe prints them on every run so a future failure names who moved.
+
+Note also that `engines` alone would **not** have prevented this: npm treats it as advisory
+and `npm ci` merely prints `EBADENGINE` and continues. The field documents the floor; the
+probe is what enforces it.
+
+### 28.3 The guard, and why its own correctness is asserted first
+
+`scripts/probe-ci-node-version.mjs` (**61 assertions**, no `node_modules`, no loader) reads
+the workflow, `package.json` and `package-lock.json`, and asserts an **equivalence**: for
+each of 22 real Node releases spanning 18 → 27, `engines.node` must return the same verdict
+as the full set of lockfile declarations. Raise any dependency's floor and the probe fails,
+which is the correct outcome — the pin then needs a human decision instead of drifting.
+
+`semver` is only a transitive dependency here, so the probe carries its own range checker.
+A silently wrong checker would make every later assertion pass vacuously — precisely the
+failure mode BRAIN.md's second CAUTION block exists for — so **section 1 validates the
+instrument before anything is measured with it**, against 39 hand-computed cases including
+the awkward real forms in this lockfile: `>= 0.4` (space after the operator, 104
+occurrences), `>=v12.22.7` (leading `v`), `6.* || 8.* || >= 10.*` (wildcards behind an
+operator) and `>=16 || 14 >=14.17`, which is an **AND clause nested inside an alternative** —
+split only on `||` and `15.0.0` passes; split only on whitespace and `14.16.0` passes. Both
+are wrong and both are caught. Unrecognised syntax throws rather than defaulting to
+satisfied, and if section 1 fails the probe exits without reporting.
+
+Six mutations, each applied to an off-mount mirror so the tracked tree was never touched:
+
+| Mutation | Result |
+|---|---|
+| `node-version` back to `'20'` | **5 FAILs**, exit 1 |
+| `node-version: '25'` — what a floating range picks | **5 FAILs**, exit 1 |
+| delete the `engines` field | 1 FAIL, exit 1, stops early |
+| widen `engines` to `>=20.0.0` | **8 FAILs** — the equivalence catches the drift |
+| break the checker's `>=` comparator | **8 checker-case FAILs** — self-detected, refuses to report |
+| add `continue-on-error: true` to the test step | 1 FAIL |
+
+> [!IMPORTANT]
+> **A CI job that is red for an environment reason is worse than no CI.** For eleven days
+> the badge said the code was bad, the code was fine, and the signal was ignored because it
+> never changed. The last mutation above guards the tempting "fix": `continue-on-error`
+> turns the job green while skipping the step, which is the same defect in a new costume.
+> The lint and typecheck steps carry the same shape of scar — see 24.1 for the bare
+> `npx tsc --noEmit` that failed in 0s while checking nothing, and 24.2 for the audit gate.
+
+### 28.4 What this does NOT fix
+
+The **Dependabot** runs in that history fail for a separate and legitimate reason: they are
+major bumps that genuinely break this app — `react-leaflet` 5 requires React 19 while the
+app is on React 18, plus `vite` 6→8, `typescript` 5→7 and `recharts` 2→3. Those PRs should
+be closed, not merged; the Node pin has no bearing on them.
 
 
 

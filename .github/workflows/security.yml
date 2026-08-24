@@ -17,7 +17,23 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Was '20', which made the "Run Tests" step below fail on EVERY run from
+          # 2026-08-13 to 2026-08-24 while looking like a code problem. jsdom@30
+          # declares `^22.22.2 || ^24.15.0 || >=26.0.0` and loads undici@8
+          # (`>=22.19.0`); on Node 20 undici's `webidl.util.markAsUncloneable` does
+          # not exist, so `new CacheStorage` throws at import, all 36 test files
+          # fail to START, and vitest reports "no tests" + 36 unhandled errors with
+          # exit 1. Zero tests had ever executed in CI. Reproduced on node 20.20.2.
+          #
+          # Do NOT "simplify" this to a floating range or `node-version-file`.
+          # jsdom and nanoid deliberately exclude the odd, non-LTS majors: measured
+          # against all 428 `engines.node` declarations in package-lock.json,
+          # 22.22.2 / 24.15.0 / 26.0.0 satisfy every one, while 20.20.2 violates 8,
+          # 23.11.1 violates 11 and 25.5.0 violates 2. A range that resolves to
+          # "newest satisfying" would land on 25.x and break jsdom again.
+          # Kept in lockstep with package.json `engines` by
+          # scripts/probe-ci-node-version.mjs.
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies

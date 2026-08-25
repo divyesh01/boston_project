@@ -546,9 +546,20 @@ export default function Settings() {
       // Only an active Owner/Admin is permitted (enforced in functions.invoke).
       const confirmToken = `DELETE:${me?.id ?? ""}`;
       await db.functions.invoke("deleteAccount", { confirm: confirmToken });
-      localStorage.removeItem("rri_commission_rates_v2");
-      localStorage.removeItem("rri_cc_fee_rate");
-      await db.auth.logout(true);
+      // No local cleanup here on purpose: invokeBackend() in base44Client.js
+      // (PROTECTED) already clears every Dexie table AND localStorage on a
+      // successful deleteAccount, on both dispatch routes. Two removeItem calls
+      // used to sit here; they could not help, they named 2 of the 3 keys that
+      // one settings module owns, and being unguarded they could throw into the
+      // catch below and report a FAILED deletion after the account was gone.
+      //
+      // logout() is the AuthContext one (destructured at the top of this
+      // component), whose parameter is a boolean `shouldRedirect` — the same
+      // call the three other logout sites in this file make. db.auth.logout()
+      // takes a redirect URL instead, so the previous `db.auth.logout(true)`
+      // assigned `window.location.href = true` and sent a just-deleted account
+      // to <origin>/true. See BRAIN_TROUBLESHOOTING section 36.
+      await logout(true);
     } catch (e) {
       setDeleteError(e?.message || "Your account could not be deleted. You are still signed in, and no logout was performed.");
       setDeleting(false);

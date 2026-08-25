@@ -330,6 +330,105 @@ for (const file of ['Payroll.jsx', 'Expenses.jsx']) {
   }
 }
 
+// ── 10. Account deletion: no dead cleanup, and the right logout contract ─────
+//
+// handleDeleteAccount in Settings.jsx is the widest destructive action in the
+// app — it deletes the operator's own account and every local record. It
+// carried three defects at once, all of them silent:
+//
+//   1. Two `localStorage.removeItem` calls ran AFTER the server delete. They
+//      could not help (invokeBackend has already run localStorage.clear() by
+//      then), they named 2 of the 3 keys commissionRates.js owns, and being
+//      unguarded they threw into the handler's only catch on any browser that
+//      refuses storage.
+//   2. That catch says "Your account could not be deleted. You are still signed
+//      in, and no logout was performed." Reached from #1, every clause is false:
+//      the account is gone and all local data with it.
+//   3. `db.auth.logout(true)`. That parameter is a REDIRECT URL
+//      (`window.location.href = redirect`), not a flag, so a just-deleted
+//      account was sent to <origin>/true — which wrangler.jsonc's
+//      "single-page-application" not_found_handling serves as index.html.
+//
+// The page now calls the AuthContext `logout(shouldRedirect)` it already uses at
+// its three other logout sites, and does no cleanup of its own. That makes it
+// depend on invokeBackend continuing to clear storage, so this section pins both
+// sides of the contract. See BRAIN_TROUBLESHOOTING section 36.
+section('10. Account deletion (Settings.jsx handleDeleteAccount)');
+
+// Comments would satisfy every "does not contain" assertion below: the fix
+// deliberately documents the removed calls in prose exactly where they were.
+const codeOnly = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+const settingsSrc = readFileSync(path.join(PAGES_DIR, 'Settings.jsx'), 'utf8');
+const delStart = settingsSrc.indexOf('const handleDeleteAccount');
+const delEnd = settingsSrc.indexOf('\n  };', delStart);
+check('handleDeleteAccount found', delStart !== -1, `index ${delStart}`);
+check('handler body isolated', delEnd > delStart, `${delStart} → ${delEnd}`);
+const delAcct = codeOnly(settingsSrc.slice(delStart, delEnd));
+check('handler still invokes the server delete', delAcct.includes('db.functions.invoke("deleteAccount"'), delAcct);
+check('handler still sends the confirmation token', /confirm: confirmToken/.test(delAcct), delAcct);
+check('handler makes no web-storage call', !/(?:localStorage|sessionStorage)\s*\./.test(delAcct), delAcct);
+check('handler does not call db.auth.logout', !/db\.auth\.logout\s*\(/.test(delAcct), delAcct);
+check('handler calls the AuthContext logout(true)', /await\s+logout\(true\)/.test(delAcct), delAcct);
+check('whole page is free of web-storage calls', !/(?:localStorage|sessionStorage)\s*\./.test(codeOnly(settingsSrc)), 'a raw storage call came back into Settings.jsx');
+check('page names none of the rri_ storage keys', !/['"]rri_/.test(codeOnly(settingsSrc)), 'a storage key literal came back into Settings.jsx');
+
+// The catch reports "could not be deleted ... still signed in". That sentence is
+// only true while nothing between the resolved invoke and the end of the try can
+// throw. Deleting the two removeItem calls is what made it true again; any new
+// statement there re-opens the lie, so pin the tail exactly.
+const afterInvoke = delAcct.slice(delAcct.indexOf('db.functions.invoke("deleteAccount"'));
+const tailStatements = afterInvoke
+  .slice(afterInvoke.indexOf('\n'), afterInvoke.indexOf('} catch'))
+  .split('\n')
+  .map((l) => l.trim())
+  .filter(Boolean);
+check(
+  'nothing but logout() runs after the server delete succeeds',
+  tailStatements.length === 1 && tailStatements[0] === 'await logout(true);',
+  tailStatements.join(' | ')
+);
+check('the catch still says the deletion failed', /could not be deleted/.test(delAcct), delAcct);
+check('the catch still re-enables the button', /setDeleting\(false\)/.test(delAcct), delAcct);
+
+// Both halves of the contract the page now leans on live in src/api/base44Client.js,
+// which is PROTECTED — these are read-only assertions. If the client stops
+// clearing storage, this probe goes red and the page gets its cleanup back,
+// instead of a deleted account's financial records staying on the device.
+const clientSrc = readFileSync(path.join(ROOT, 'src/api/base44Client.js'), 'utf8');
+const ibStart = clientSrc.indexOf('async function invokeBackend(');
+const fnInvokeStart = clientSrc.indexOf('async invoke(functionName');
+check('invokeBackend and functions.invoke both found', ibStart !== -1 && fnInvokeStart > ibStart, `${ibStart} / ${fnInvokeStart}`);
+
+const delBranches = [...clientSrc.matchAll(/functionName === 'deleteAccount'/g)].map((m) => m.index);
+check('exactly one deleteAccount branch in the client', delBranches.length === 1, `found ${delBranches.length}`);
+check(
+  'that branch sits inside invokeBackend, so BOTH dispatch routes reach it',
+  delBranches.length === 1 && delBranches[0] > ibStart && delBranches[0] < fnInvokeStart,
+  `branch ${delBranches[0]}, invokeBackend ${ibStart}, functions.invoke ${fnInvokeStart}`
+);
+const delBranch = delBranches.length === 1 ? clientSrc.slice(delBranches[0], delBranches[0] + 300) : '';
+check('the branch clears every Dexie table', /localDb\.tables\.map\(\(t\) => t\.clear\(\)\)/.test(delBranch), delBranch.slice(0, 200));
+check('the branch clears localStorage', /localStorage\.clear\(\)/.test(delBranch), delBranch.slice(0, 200));
+
+const clientLogoutAt = clientSrc.indexOf('async logout(redirect)');
+check('db.auth.logout(redirect) found', clientLogoutAt !== -1, `index ${clientLogoutAt}`);
+const clientLogout = clientLogoutAt === -1 ? '' : clientSrc.slice(clientLogoutAt, clientLogoutAt + 220);
+check(
+  'db.auth.logout still takes a URL, not a flag (this is why logout(true) was wrong)',
+  /window\.location\.href = redirect/.test(clientLogout),
+  clientLogout.slice(0, 200)
+);
+
+// The other half: the AuthContext logout the page now calls really is the
+// boolean-parameter one, and really does build the login URL itself.
+const authCtxSrc = readFileSync(path.join(ROOT, 'src/lib/AuthContext.jsx'), 'utf8');
+const ctxLogoutAt = authCtxSrc.indexOf('const logout = useCallback(async (shouldRedirect = true)');
+check('AuthContext logout takes a boolean shouldRedirect', ctxLogoutAt !== -1, `index ${ctxLogoutAt}`);
+const ctxLogout = ctxLogoutAt === -1 ? '' : authCtxSrc.slice(ctxLogoutAt, ctxLogoutAt + 700);
+check('AuthContext logout builds the /login URL itself', /window\.location\.href = loginUrl/.test(ctxLogout) && /'\/login'/.test(ctxLogout), ctxLogout.slice(0, 300));
+check('AuthContext logout drops the session client-side too', /setUser\(null\)/.test(ctxLogout) && /setIsAuthenticated\(false\)/.test(ctxLogout), ctxLogout.slice(0, 300));
+
 // ── Result ──────────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(60)}`);
 console.log(`probe-delete-guard: ${pass} passed, ${fail} failed`);

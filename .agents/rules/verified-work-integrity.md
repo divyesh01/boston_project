@@ -28,6 +28,7 @@ cannot run it, say "Not run" and do not claim the change is safe.
 | `src/lib/housekeepingConfig.js`, `src/lib/laborOptimization.js`, `src/pages/Housekeeping.jsx` | `node --import ./scripts/_loader-boot.mjs scripts/probe-settings-persistence.mjs` | `PASSED: 117 passed, 0 failed` |
 | the storage key `rri_housekeeping_config_<propertyId>` | `node --import ./scripts/_loader-boot.mjs scripts/probe-db-archive.mjs` | `PASSED: 216 passed, 0 failed` |
 | `src/lib/manualDraft.js`, `src/pages/ManualEntry.jsx` | `node --import ./scripts/_loader-boot.mjs scripts/probe-manual-entry-save.mjs` | `PASSED: 96 passed, 0 failed` |
+| `src/pages/Settings.jsx`'s `handleDeleteAccount` | `node scripts/probe-delete-guard.mjs` | `PASSED: 96 passed, 0 failed` |
 | `scripts/probe-db-archive.mjs`'s `MANIFEST` | as the row above it | also `storage writers classified: 21` |
 
 ## Invariants that must not be weakened
@@ -159,6 +160,39 @@ the defect it was written for.
     **discard** button inverts the second half deliberately: when its remove
     fails the draft is still stored, so the recovery banner stays open. Closing it
     would tell the operator the draft was discarded when it was not.
+18. **`handleDeleteAccount` does no local cleanup of its own, and calls the
+    AuthContext `logout`, not `db.auth.logout`.** Both halves look like they
+    could be tidied and both are the fix.
+
+    The cleanup: `invokeBackend` in the protected `src/api/base44Client.js`
+    already runs `localDb.tables.map((t) => t.clear())` **and**
+    `localStorage.clear()` on a successful `deleteAccount`, and **both** dispatch
+    routes reach it (`:2116` when the local-auth flag is off, the `:2235`
+    fall-through when it is on — there is no `deleteAccount` shim). The two
+    `localStorage.removeItem` calls that used to sit here were therefore dead;
+    they also named 2 of the 3 keys `commissionRates.js` owns, and being
+    unguarded they threw into the handler's only `catch`, which reports *"Your
+    account could not be deleted. You are still signed in, and no logout was
+    performed."* — false in all three clauses once the server delete has
+    succeeded. **Do not "harden" this by wrapping the removes in a `try`.**
+    Deleting them is what makes that catch reachable only from the invoke, which
+    is the case its wording describes. Section 10 of `probe-delete-guard.mjs`
+    pins the tail statement-by-statement (`['await logout(true);']`), because a
+    "does not contain localStorage" check passes the moment a *different*
+    throwing statement is added there.
+
+    The logout: `db.auth.logout(redirect)` assigns its argument to
+    `window.location.href`, so the previous `db.auth.logout(true)` navigated to
+    `<origin>/true` — served as `index.html` by `wrangler.jsonc:24`'s SPA
+    `not_found_handling`, on an account that no longer exists. The AuthContext
+    `logout(shouldRedirect = true)` takes a boolean, builds
+    `/login?returnTo=…` itself, and clears the React auth state; the file's
+    three other logout sites (`:392`, `:637`, `:1217`) already call it. Two
+    same-named functions are in scope with one parameter each and opposite
+    meanings, and `true` is legal-looking to both — that is the whole defect, so
+    the probe pins **both** signatures on the protected files (read-only, as
+    `PROTECTED_FILES.md` rule 1 permits). If `db.auth.logout` ever becomes a
+    boolean flag, section 10 goes red and this invariant is what explains why.
 
 ## Deliberate non-changes
 

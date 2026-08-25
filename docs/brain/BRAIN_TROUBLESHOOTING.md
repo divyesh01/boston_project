@@ -58,6 +58,7 @@
 | 54 | **A shift longer than a day was paid as if it were an hour, and the flag that was supposed to stop it did nothing.** Three independent defects stacked. (1) `parseTime`'s AM/PM branch validated **nothing**: it reduced the hour mod 12 *before* any range check, so `"11:99 PM"` returned **1479** and `"25:00 AM"` returned **60** — a minute-of-day above the legal 1439 maximum. The numeric branch was unchecked too (`3000`→3000, `-60`→-60). (2) `shift_exceeds_24h` was **decorative** in the client path: `reconcileTimecards` skipped only shifts with a *missing* punch, so `"12:00 AM"`→`"11:99 PM"` came out as `paid_minutes 1449, hours 24.15, total_pay 362.25` **with the flag attached**, while `base44/functions/autoPayroll/entry.ts` always skipped it — the cron and the Payroll page paid different amounts for identical rows. (3) A full-datetime punch had its date **parsed and then discarded**: `clock_in "2026-03-07 09:00"` → `clock_out "2026-03-09 10:00"` is 2,940 real minutes and read as `paid_minutes 60, total_pay 15, flags []`; a backwards-dated pair paid 450 minutes with no flag at all | HIGH | FIXED 2026-08-24 | `src/lib/timecardCalc.js` — `parseTime` range-checks **before** the mod (`raw > 23` and `min > 59` both reject) and bounds the numeric branch to `0..1439`; new private `datePartOf`/`dayIndex` measure the span from the punch dates *when both are known and differ*, via exact `Date.UTC` midnight arithmetic; `normalisePunch` publishes `durationMinutes` and adds `negative_shift_duration`; `reconcileTimecards` refuses to pay any shift carrying an `UNPAYABLE_FLAGS` member, while still listing it and keeping the flag on the week. Same three fixes inlined in `base44/functions/autoPayroll/entry.ts`. `src/api/base44Client.js` is **protected and untouched** — it imports `reconcileTimecards`, so the live payroll path inherits the fix. `scripts/probe-timecard-shift-span.mjs` (NEW, 73 assertions, 11 mutations) + 7 new vitest cases in `src/lib/timecardCalc.test.js` (21→28) so CI gates it, since CI does not run `verify:all`. See section 32 | (This commit) |
 | 55 | **Two of the four housekeeping productivity standards were decorative, and a refused save reported success.** `generateHousekeepingSchedule` hardcoded `checkouts * 30 + stayovers * 15` — **the exact default values of `minutesPerCheckout` and `minutesPerStayover`** — so the owner could set Checkout to 45, click Save Standards, read "Productivity standards saved." and watch neither "N minutes required" (`Housekeeping.jsx:165`) nor the estimated labor cost (`:191`) move. The matching defaults are what made it invisible: at 30/15 the page is correct, and only a *changed* setting exposes it. Three more on the same path: `housekeepingConfig.js` was the **eighth** settings module still holding its own storage code after the seven in section 33 were converted — a bare `catch {}` on read plus an unguarded `setItem` that returned the merged config unconditionally, so at quota or in private browsing the write threw out of the click handler where no React error boundary catches it and the button simply looked inert; every field was coerced with `Number(x) \|\| fallback` and **0 is falsy**, so with the editor reporting `Number(e.target.value)` and `Number("")` being 0, clearing a field reverted to the previous value instead of clamping to the floor the clamps exist to enforce (the 10/5/7.25/5 floors were unreachable from the UI); and `saveHk` set `hkConfig` but not `hkEdited` while both the inputs and the cost read `hkEdited`, so a clamped value left the page showing figures derived from a number that was never stored | MEDIUM | FIXED 2026-08-25 | `src/lib/laborOptimization.js` — third `standards` parameter, with the two historical constants kept **as the defaults** so a caller that passes nothing gets the answer it always got. `src/lib/housekeepingConfig.js` — rewritten onto `settingsStore.js` (readers never throw, writer returns a boolean), `coerceNumber` separates "not supplied" from "supplied as 0", `LIMITS` holds the four clamps. `src/pages/Housekeeping.jsx` — `saveHk` reads back with `getHousekeepingConfig` and sets both states from what is actually stored, both derived figures read `hkConfig` (never `hkEdited`), and the cost is integer cents. `src/components/HousekeepingSettingsModal.jsx` (**dead, zero importers**) updated only to keep the changed contract valid. `scripts/probe-settings-persistence.mjs` section 8 (117 assertions total, 3 mutations). See section 34 | (This commit) |
 | 56 | **The Manual Data Entry draft — the only copy of hand-typed money rows until Save lands — could be destroyed, refused, or left behind in total silence, and one of those paths took the whole page down.** Five raw `localStorage` calls in `ManualEntry.jsx`, and not one of them could report a failure to the person typing. (1) `getItem` sat **outside** its own `try`, so a browser that refuses storage (private browsing, blocked site data) threw out of a `useEffect`; React re-throws an effect's exception, so `App.jsx`'s `LazyErrorBoundary` replaced the whole page — over a draft nobody had asked to recover. (2) A stored draft that parsed but was not a usable list was `removeItem`'d with **no message at all**, so hand-typed rows vanished and the grid simply came up empty. (3) The auto-save's only failure path was `console.warn("Auto-save failed", e)` while the page went on rendering its amber "● Unsaved draft" dot — the operator was told the rows were being kept at the exact moment they were not. (4) The clear after a **successful** save was unguarded and sits BEFORE `setSaving(false)` and `rotateCsrfToken()`, so a refused remove threw past both: the records really were written, and the Save button spun forever on a stale CSRF token. (5) The discard button's remove was unguarded too and closed the recovery banner regardless, telling the operator the draft had been discarded when it had not | HIGH | FIXED 2026-08-25 | `src/lib/manualDraft.js` (**NEW**, 217 lines) owns every access: `draftKeyFor`, `readDraft` (never throws — returns `rows` / `discard` / `problem`), `writeDraft` and `clearDraft` (both return `{ok, problem}`). Same three rules as `settingsStore.js`, but the messages are written for the **screen**, because the page routes `problem` into `setSaveMsg`/`setMsgTone` — a console-only library could not have fixed this. `src/pages/ManualEntry.jsx` — zero `localStorage`/`sessionStorage` references and zero copies of the key template remain; the post-save clear **degrades** the success message to the `warn` tone instead of overwriting it, and the discard handler keeps the recovery banner open when the remove fails. `scripts/probe-manual-entry-save.mjs` section 9 (37 → 96 assertions, 2 mutations); `scripts/probe-db-archive.mjs`'s MANIFEST updated in **both** directions. See section 35 | (This commit) |
+| 57 | **Deleting your own account navigated to `/true`, wiped nothing extra, and could report "could not be deleted" after the account was already gone.** Three defects stacked inside one 16-line handler (`Settings.jsx handleDeleteAccount`), the widest destructive action in the app. (1) `await db.auth.logout(true)` — that parameter is a **redirect URL**, not a flag (`base44Client.js:1302` is `if (redirect) window.location.href = redirect;`), so the assignment was `window.location.href = true` and the just-deleted operator was sent to `<origin>/true`. `wrangler.jsonc:24`'s `"not_found_handling": "single-page-application"` serves `index.html` there, so the app boots on a URL no route matches, with every local record already erased. The **three other logout call sites in the same file** (`:392`, `:637`, `:1217`) call the AuthContext `logout(shouldRedirect)`, whose parameter really is a boolean and which builds `/login?returnTo=…` itself. (2) Two `localStorage.removeItem` calls ran between the server delete and the logout. They were **dead** — `invokeBackend` in the protected `src/api/base44Client.js` already runs `localDb.tables.map(t => t.clear())` **and** `localStorage.clear()` on a successful `deleteAccount`, and it is reached on *both* dispatch routes (`:2116` when the local-auth flag is off, and the `:2235` fall-through when it is on, because there is no `deleteAccount` shim) — and they named only 2 of the 3 keys `commissionRates.js` owns, so as cleanup they were also incomplete. (3) Being unguarded, those two calls threw into the handler's only `catch` on any browser that refuses storage. That catch reports *"Your account could not be deleted. You are still signed in, and no logout was performed."* — reached this way, **every clause of that sentence is false**: the account is deleted, the local database is empty, and the operator is looking at a page that says the opposite | HIGH | FIXED 2026-08-25 | `src/pages/Settings.jsx` — the two dead `removeItem` calls are gone (replaced by a comment naming where the clear actually happens), and `db.auth.logout(true)` becomes `await logout(true)`, the AuthContext logout the file's three other sites already use. Nothing but that one call now runs after the invoke resolves, which is what makes the catch's sentence true again. `scripts/probe-delete-guard.mjs` section 10 (74 → 96 assertions, 1 mutation): it pins the handler's tail **statement-by-statement**, and — read-only, on a protected file — pins the other side of the contract the page now leans on (one `deleteAccount` branch, inside `invokeBackend`, clearing both stores; `db.auth.logout` still taking a URL; the AuthContext logout still taking a boolean and building the login URL). See section 36 | (This commit) |
 
 ---
 
@@ -2606,6 +2607,208 @@ which is why "storage writers classified" stayed at **21**.
   `draftWarnedFor` is a `useRef` precisely so that reporting a refused write once
   per key does not add a dependency — the effect runs on every cell edit, and a
   message per keystroke would be its own defect.
+
+---
+
+# 36. THE LAST THING A DELETED ACCOUNT SAW WAS `/true` (tracker #57)
+
+> [!IMPORTANT]
+> This handler is 16 lines long and had **three** defects in it. Not because it
+> was complicated — because it was the *end* of a flow. Nobody clicks Delete
+> Account twice, so nobody ever saw where it landed, and every one of the three
+> only shows up after the point of no return.
+
+## 36.1 The handler as shipped
+
+```js
+  const handleDeleteAccount = async () => {
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      const confirmToken = `DELETE:${me?.id ?? ""}`;
+      await db.functions.invoke("deleteAccount", { confirm: confirmToken });
+      localStorage.removeItem("rri_commission_rates_v2");
+      localStorage.removeItem("rri_cc_fee_rate");
+      await db.auth.logout(true);
+    } catch (e) {
+      setDeleteError(e?.message || "Your account could not be deleted. You are still signed in, and no logout was performed.");
+      setDeleting(false);
+    }
+  };
+```
+
+The `confirm` token, the rate limit and the dialog upstream of this are all
+correct and were left exactly as they were. Everything below concerns the four
+lines after the `await`.
+
+## 36.2 `logout(true)` — the parameter is a URL
+
+`src/api/base44Client.js:1298-1303` (**protected**, read only):
+
+```js
+  async logout(redirect) {
+    try {
+      await functions.invoke('custom_auth_logout');
+    } catch {}
+    if (redirect) window.location.href = redirect;
+  },
+```
+
+`redirect` is assigned straight to `window.location.href`. Passing `true` makes
+that `window.location.href = true`, which the browser resolves to `<origin>/true`.
+
+Two things then hide it:
+
+* `wrangler.jsonc:24` is `"not_found_handling": "single-page-application"`, so
+  `/true` is not a 404 — the Worker serves `index.html`, the SPA boots, no route
+  matches, and because the delete path has already erased all local state the app
+  is unauthenticated. It looks like an ordinary logged-out screen at a strange URL.
+* It is the **last** statement of an account deletion. There is no next action to
+  break, and the account it belonged to no longer exists to try again.
+
+`Settings.jsx` was the only call site in the repo passing an argument to
+`db.auth.logout`. The other three logout sites **in the same file** — `:392`
+(after a destructive settings reset), `:637`, and the Log Out button at `:1217` —
+call the AuthContext logout destructured at the top of the component:
+
+```js
+  const logout = useCallback(async (shouldRedirect = true) => {
+    const me = user || (await db.auth.me().catch(() => null));
+    await db.auth.logout().catch(() => {});
+    setUser(null);
+    setIsAuthenticated(false);
+    if (shouldRedirect) {
+      const returnTo = window.location.pathname === '/login' ? '/' : window.location.pathname + window.location.search;
+      const loginUrl = returnTo && returnTo !== '/' ? `/login?returnTo=${encodeURIComponent(returnTo)}` : '/login';
+      window.location.href = loginUrl;
+    }
+  }, [user]);
+```
+
+**Two functions named `logout`, in scope in the same file, whose single parameter
+means different things.** One takes a boolean, the other a URL, and `true` is a
+legal-looking argument to both. That is the whole defect. The fix is one word:
+call the boolean one, like the three lines above it already do — it also clears
+`user`/`isAuthenticated` in React state, which `db.auth.logout` cannot do.
+
+## 36.3 The two `removeItem` calls were dead, incomplete, AND dangerous
+
+Dead: `invokeBackend` in `src/api/base44Client.js` (protected) already does it,
+on success, before returning:
+
+```js
+    const res = await realClient.functions.invoke(functionName, params);
+    if (functionName === 'deleteAccount') {
+      await Promise.all(localDb.tables.map((t) => t.clear()));
+      localStorage.clear();
+    }
+```
+
+And **both** dispatch routes reach it. `functions.invoke` (`:2066`) has no
+`deleteAccount` shim, so with the local-auth flag off it returns
+`invokeBackend(...)` at `:2116`, and with the flag on it falls through every
+local branch to the same call at `:2235`. There is exactly one `deleteAccount`
+branch in the file and it is inside `invokeBackend` — verified by index, not by
+reading.
+
+Incomplete, if they had run first: `commissionRates.js` owns **three** keys
+(`rri_commission_rates_v2`, `rri_cc_fee_rate`, `rri_cc_fee_refunds_v1`) and the
+handler named two. A hand-written list of storage keys in a page is a list that
+goes stale the next time a module adds a field — which is the same argument as
+section 35.5, arrived at from the opposite direction.
+
+Dangerous, because they were unguarded and *positioned after the irreversible
+step*. A browser that refuses storage throws on `removeItem`, and the only
+`catch` in the handler says:
+
+> Your account could not be deleted. You are still signed in, and no logout was
+> performed.
+
+Reached from a `removeItem`, that sentence is false three times over: the
+account **is** deleted, the local database **is** empty, and no logout was
+performed only because the throw jumped over it. CLAUDE.md §4 (`USER / UI:
+Truthful Experience`) is the rule, and this is the most expensive possible place
+to break it — the operator's reasonable next move is to try again, or to assume
+their data is still there.
+
+Note what the fix does **not** do: it does not wrap the calls in a `try`, and it
+does not add a second error state. Deleting them is what makes the catch's
+sentence true again, because the only remaining statement between the resolved
+invoke and the `}` is the logout — and the logout swallows its own network
+failure (`.catch(() => {})`) and then navigates. So the catch is now reachable
+**only** from the invoke itself, which is exactly the case its wording describes.
+
+## 36.4 Why the probe pins a protected file
+
+Removing the page's cleanup makes the page *depend* on `invokeBackend` continuing
+to clear storage. That dependency is invisible in `Settings.jsx` — a future
+reader sees a delete with no cleanup and cannot tell whether that is deliberate.
+Two things carry it: the comment left where the calls were, and section 10 of
+`scripts/probe-delete-guard.mjs`, which asserts on `src/api/base44Client.js`
+without writing to it (reading a protected file is explicitly permitted;
+`PROTECTED_FILES.md` rule 1).
+
+What it pins, and why each one:
+
+| Assertion | What it stops |
+| --- | --- |
+| exactly **one** `deleteAccount` branch in the client | a second branch elsewhere would make "which route clears?" a real question again |
+| that branch is between `invokeBackend` and `functions.invoke` | if it moves into `functions.invoke`, only one of the two routes clears |
+| the branch clears the Dexie tables **and** `localStorage` | dropping either leaves a deleted account's financial records on the device |
+| `db.auth.logout` still contains `window.location.href = redirect` | the moment it becomes a boolean flag, this section is wrong and `logout(true)` becomes correct |
+| the AuthContext logout still takes `shouldRedirect = true` and builds `/login` | the page passes `true` to it; if that parameter ever becomes a URL the defect returns inverted |
+
+The handler's tail is pinned **statement-by-statement**, not by substring: the
+lines between the resolved invoke and `} catch` must be exactly
+`['await logout(true);']`. A "does not contain localStorage" assertion would pass
+the moment someone added a *different* statement there, and it is the presence of
+any throwing statement — not that specific one — that re-opens 36.3.
+
+Comments are stripped before every one of these assertions (`codeOnly()`), for
+the reason section 30 records: the fix deliberately writes the removed calls into
+a comment at the exact spot they were removed from, so an un-stripped
+"does not contain `localStorage`" check would fail on the fix itself.
+
+## 36.5 Verification (Observed)
+
+* `node scripts/probe-delete-guard.mjs` → **PASSED: 96 passed, 0 failed**
+  (74 at HEAD; section 10 contributes 22).
+* Mutation (restore all three defects verbatim: both `removeItem` calls and
+  `db.auth.logout(true)`) → **FAILED: 90 passed, 6 failed** — the whole-page
+  storage check, the `rri_` key-literal check, the statement-by-statement tail,
+  and the three handler-scope checks. Restored, `md5sum -c` **OK**.
+* The five protected-file pins were mutation-tested in memory (each regex
+  applied to a copy of the branch with the defended line deleted): all four
+  content pins go **false**, and breaking the branch text makes the
+  "exactly one branch" count fail. No protected file was written.
+* `eslint .` → rc=0, `✖ 223 problems (0 errors, 223 warnings)` — unchanged.
+* `tsc -p ./jsconfig.json` → rc=0.
+* Neighbouring suites: `probe-auth-hardening` **143/0**, `probe-ui-feedback`
+  **83/0**, `probe-db-archive` **216/0** (storage writers classified: 21,
+  unchanged — the page never was a classified writer), `probe-settings-persistence`
+  **117/0**, `probe-suite-integrity` **110/0**.
+* `verify-all.mjs --list` → **111 suite(s) — list 2f3a5c5a**. Section 10 extended
+  an existing suite, so discovery and the fingerprint are untouched.
+
+## 36.6 Deliberately left alone
+
+* **`src/lib/sessionChannel.js:50`** — `localStorage.setItem(REVOCATION_KEY, …)`
+  in a guarded try. This is the *fallback* transport for cross-tab session
+  revocation; BroadcastChannel is the primary and fires first. There is no
+  operator to tell (the message exists to log *someone else* out) and no
+  recovery: if storage is refused, the other tabs simply keep their sessions
+  until the 30s idle poll catches them. Silent by design.
+* **`src/lib/realtime.js:50`** and **`src/lib/dbArchive.js:729-730`** — the
+  best-effort BroadcastChannel fallback and the `_rri_test_` availability probe.
+  Same reasoning; recorded in section 35.8's sibling list and in `BRAIN.md`.
+* **`base44Client.js:2048`'s `localStorage.clear()` is itself unguarded**, and it
+  runs *after* the server has deleted the account. On a browser that refuses
+  storage it throws out of `invokeBackend`, past the `deleteAccount` branch, into
+  this handler's catch — reproducing 36.3 from inside a protected file. The page
+  cannot fix that (rule 3 forbids a wrapper), and this handler's catch is now the
+  only thing that would report it. **OWNER ITEM.**
+* **The two pre-existing unused-variable warnings in `Settings.jsx`.** Present at
+  HEAD, outside this blast radius.
 
 
 

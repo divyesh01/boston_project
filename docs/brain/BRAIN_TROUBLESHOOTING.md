@@ -61,6 +61,7 @@
 | 57 | **Deleting your own account navigated to `/true`, wiped nothing extra, and could report "could not be deleted" after the account was already gone.** Three defects stacked inside one 16-line handler (`Settings.jsx handleDeleteAccount`), the widest destructive action in the app. (1) `await db.auth.logout(true)` — that parameter is a **redirect URL**, not a flag (`base44Client.js:1302` is `if (redirect) window.location.href = redirect;`), so the assignment was `window.location.href = true` and the just-deleted operator was sent to `<origin>/true`. `wrangler.jsonc:24`'s `"not_found_handling": "single-page-application"` serves `index.html` there, so the app boots on a URL no route matches, with every local record already erased. The **three other logout call sites in the same file** (`:392`, `:637`, `:1217`) call the AuthContext `logout(shouldRedirect)`, whose parameter really is a boolean and which builds `/login?returnTo=…` itself. (2) Two `localStorage.removeItem` calls ran between the server delete and the logout. They were **dead** — `invokeBackend` in the protected `src/api/base44Client.js` already runs `localDb.tables.map(t => t.clear())` **and** `localStorage.clear()` on a successful `deleteAccount`, and it is reached on *both* dispatch routes (`:2116` when the local-auth flag is off, and the `:2235` fall-through when it is on, because there is no `deleteAccount` shim) — and they named only 2 of the 3 keys `commissionRates.js` owns, so as cleanup they were also incomplete. (3) Being unguarded, those two calls threw into the handler's only `catch` on any browser that refuses storage. That catch reports *"Your account could not be deleted. You are still signed in, and no logout was performed."* — reached this way, **every clause of that sentence is false**: the account is deleted, the local database is empty, and the operator is looking at a page that says the opposite | HIGH | FIXED 2026-08-25 | `src/pages/Settings.jsx` — the two dead `removeItem` calls are gone (replaced by a comment naming where the clear actually happens), and `db.auth.logout(true)` becomes `await logout(true)`, the AuthContext logout the file's three other sites already use. Nothing but that one call now runs after the invoke resolves, which is what makes the catch's sentence true again. `scripts/probe-delete-guard.mjs` section 10 (74 → 96 assertions, 1 mutation): it pins the handler's tail **statement-by-statement**, and — read-only, on a protected file — pins the other side of the contract the page now leans on (one `deleteAccount` branch, inside `invokeBackend`, clearing both stores; `db.auth.logout` still taking a URL; the AuthContext logout still taking a boolean and building the login URL). See section 36 | (This commit) |
 | 58 | **Four documentation clusters sent a reader to code that had nothing to do with what they were reading, and one of them pointed past the end of the file.** Not a behaviour defect — the class that damages a reader instead of a record, and the only defence against it is a convention plus a gate. Measured tree-wide 2026-08-25: **722 citations, 697 resolvable, 5 out of range** (4 of those in `.superbrain/explore-reports/` dated snapshots, correctly left alone). The live one was `probe-calendar-day-modal.mjs` citing line 406 of a **342-line** `ActionCenter.jsx` — and the defect that comment described was already fixed. Reading the five citations named in the tracker and following their nested ones found the larger, undetectable class: `uploadGuard.js`'s "Measured 2026-08-21" table quoted `Import.jsx:280-330` and `DataIntelligence.jsx:119` for checks that had **moved into `uploadGuard.js` itself**, plus a single `Import.jsx:365` for `await item.file.text()` when there are **two** such sites (`:339`, `:378`); `probe-audit-write-failure.mjs` quoted three pre-fix ranges that had all drifted, one of which (`base44Client.js:1115-1117`) now lands in `ServerRateLimiter` — a reader hunting an audit writer arrives at a rate limiter. Two further citations were measured **correct** (`csvParser.js:302`/`:307`, `exportData.js:55`) and left untouched, and one is unfixable here (`base44Client.js` names `reportParsers.js:1262` as "the one caller" of `SendEmail`; the only caller is `:1476`, and the file is **PROTECTED**) | MEDIUM | FIXED 2026-08-25 | All four fixable clusters converted to **symbol** citations, each naming the number it used to carry and why it rotted — a reader holding the old document needs to be told the citation moved, not shown a clean file that makes them doubt their memory. `scripts/verify-brain.mjs` **16 → 141 lines**: a citation range gate, scoped to the **staged diff's added lines** (a hook that is never bypassed must never false-block, or the tree cannot be committed at all), counting the **staged blob's** lines the way an editor does, `execFileSync` for Windows pathspec safety, `no-cite-check` as the escape hatch, `.superbrain`/`gemini-out`/`dist`/`node_modules` skipped, unresolvable citations skipped rather than failed, and a **loud exit-0** on its own internal failure — the deliberate opposite of `audit-gate.mjs`, because a security gate that goes green unable to run has verified nothing, while a documentation gate that *blocks* unable to run costs more than one unchecked citation. It runs on **every commit** and, because `verify-brain.mjs` is already excluded from discovery in both `verify-all.mjs` and `probe-suite-integrity.mjs`, discovery stays **111** and the fingerprint stays `2f3a5c5a`. See section 37 | (This commit) |
 | 59 | **The Dashboard card titled "Yield & ADR Optimizer" optimized nothing, and every figure in it was invented.** Five defects across three inline `if` branches in `YieldAdvisor.jsx`. (1) Literal **`$10–$15`** and **`$5–$8`** rate moves, derived from nothing at all — not from ADR, not from the room register, not from the pricing engine — presented as the output of a card whose title said *Optimizer*, directly below `PricingPanel`, which computes a real rate in integer cents. Two rate recommendations on one screen, one measured and one invented, free to disagree by any amount. (2) **`money2(adr * 1.05)`** — float multiplication on a dollar value, forbidden outright by CLAUDE.md's BUSINESS directive, and the 5% came from nowhere. The violation is the multiplication, not the formatter: `money2` is `formatCents(toCents(v), 2)` and is correct, but the float has already happened before `toCents` sees it. (3) The caption **"Occupancy vs 100-room capacity"** on a page whose `capacity` is already the real room-night total summed across the selected properties. 100 is only the per-property **fallback** applied when a statistics row carries no `total_rooms` (`CalculationService.js`, `capacityCents`), so the caption was false for any property that is not exactly 100 rooms and for **every** multi-property selection. (4) A hardcoded **`occupancy > 0.6`** band, while six other surfaces gate on the owner's configured `getOccThreshold()` — including `LowOccAlert`, **rendered on this same screen**. Set the occupancy target to 70% and the alert flagged a 65% day as low occupancy while this panel called it *Healthy Occupancy*: one screen, two answers, the same number. (5) With **nothing imported**, `occupancy` and `capacity` are both `0`, which fell through both `>` tests into the last branch — *"Soft Occupancy (0.0%). Drop rate $5–$8 on low-demand days"*. Rate advice for a period with no rows, which is CLAUDE.md §4 (`USER / UI: Truthful Experience`): an unmeasured period must read as unmeasured, not as a bad one | HIGH | FIXED 2026-08-25 | `src/lib/yieldAdvice.js` (**NEW**, 126 lines) owns the decision — `buildYieldAdvice({occupancy, capacity, roomsSold, threshold})` → `{band, target, occupancy, capacity, roomsSold, headline, action, basis}`. It left the `.jsx` because `_loader-boot.mjs` has **no JSX transform**, so logic inside a `.jsx` can only be checked by matching source text — which is exactly how the self-contradiction survived. The soft band is `occ < getOccThreshold()`, **LowOccAlert's own predicate**, so the two panels cannot disagree; `capacity <= 0` returns `band: 'unknown'` with no `$` anywhere in it, while `capacity > 0 && roomsSold === 0` stays soft with a real basis, because a genuine zero-sales week is not missing data; all three inputs use `Number.isFinite(Number(x)) ? … : 0` rather than `Number(x) \|\| 0`, since 0 is legal for each. It deliberately **recommends no rate** — `pricingEngine.js` is the only wired recommender of the three that exist and they disagree by up to $25.60/night, so every branch names the Dynamic Pricing panel instead. `src/components/dashboard/YieldAdvisor.jsx` rewritten (34 → 52 lines) to render it and add no arithmetic, with a per-band icon replacing a fixed `TrendingUp` that pointed *up* beside "below your target". `src/pages/Dashboard.jsx:513` — one line, passing `capacity`/`roomsSold`, both already in scope from `currentStats`. `scripts/probe-yield-advisor.mjs` (**NEW**, 226 lines, 55 assertions, RED 44/10 first) — 65 outputs across 5 targets × 13 occupancies with zero `$` in any of them, and section [7] asserts the two panels agree on all 65. See section 38 | (This commit) |
+| 60 | **The launch checklist's top blocker was "set a secret in a dashboard that is not the host", and nothing in the shipped build reads that secret.** `LAUNCH_READINESS_CHECKLIST.md` named **Vercel on 14 lines (20 occurrences)** and **Cloudflare zero times**, while `wrangler.jsonc:20`/`:23` have shipped a Cloudflare Worker serving `./dist` since section 33. No behaviour defect — the same class as #58, and dangerous for the same reason: this is the one artifact in the repo that tells a human to change something *outside* the repo, so when it is wrong the code stays correct and the deployment stays broken, and no gate can tell. Four defects. (1) The most-emphasised step, repeated in four places — *"set `AUDIT_CHAIN_SECRET` in Vercel"* — is **void, not relocated.** That name appears in exactly one place in the repository: `secrets.get('AUDIT_CHAIN_SECRET')` inside `base44/functions/**` (`audit_log/entry.js:70`, `audit_verify/entry.js:93`, `autoPayroll/entry.ts:489`, `custom_auth_login/entry.js:221`, `custom_auth_reset_password/entry.js:74`, `custom_user_admin/entry.js:320` and `:538`, `deleteAccount/entry.ts:126`) — never in `src/`. That backend is gone and `wrangler.jsonc` declares no vars or secrets at all, so there is no field to fill and no code left to read it. (2) *"Confirm `VITE_USE_LOCAL_AUTH` is absent from production"* — **inverted, and following it kills the site.** `src/main.jsx:26` refuses to boot a production build carrying only that flag; the standalone shape needs **both** it and `VITE_STANDALONE_LOCAL`, which is why `.env.production` is committed on purpose after two deploys died from their absence. (3) *"`dist/` is a build artifact, do not trust it"* — **backwards**: `wrangler.jsonc:23` serves the site *from* `./dist`, so here `dist/` **is** the site. (4) `vercel.json` looked like deletable dead config and is not: `probe-deploy-config.mjs` §1 parses it and §10/§11 diff `base44/config.jsonc` and `public/_headers` against it key by key, so deleting it breaks a passing gate and un-pins every security header | HIGH | FIXED 2026-08-25 | `LAUNCH_READINESS_CHECKLIST.md` (814 → 835 lines, CRLF preserved 835/835) — nine edits. A `> [!IMPORTANT]` **DEPLOYMENT CORRECTION** block after the verdict states the host, the silent second-Worker trap (a `name` mismatch does not fail, it creates another Worker — that is where `divyeshpro` came from, and both deploy paths read the same line), `vercel.json`-as-spec, all seven void call sites, and the flag rule with *"Do not 'fix' them."* The B9 checkbox is rewritten as VOID and **left unticked on purpose**, because nobody performed the step — it is simply no longer a step; the consequence the owner is knowingly accepting is stated in the item: **no server-side audit hash chain**, since the client-side chain in `securityUtils.js` is computed and stored in the same browser it protects. The replacement top blocker is **Cloudflare Access on the `boston-project` Worker** (Zero Trust → Access → Applications → *Protect one Worker*), recorded as **UNKNOWN** rather than guessed, because with auth verified in the browser an upstream identity gate is the only real boundary. `dist/` staleness is now stated as measured — 92 files, `dist/index.html` 2026-08-25 05:37, **8 tracked inputs newer, 4 of them bundled** — replacing three symptoms that had already been fixed. `.env.production:11` — one character, `section 6` → `section 7`, the same wrong citation I had first written myself (`probe-standalone-deploy.mjs` §7, not §6, owns `ENV_PROD_ALLOWED`); LF-only preserved, 34 lines / 0 CR. Verified: `probe-standalone-deploy` **57/0** rc=0, `probe-deploy-config` **121/0** rc=0. See section 39 | (This commit) |
 
 ---
 
@@ -3252,4 +3253,172 @@ of these is forbidden on this mount.
   edit in this diff.
 * **`Dashboard.jsx:63` and `:212`'s exhaustive-deps warnings.** Pre-existing,
   outside this blast radius.
+
+# 39. THE LAUNCH CHECKLIST'S TOP BLOCKER WAS "SET A SECRET IN A DASHBOARD THAT IS NOT THE HOST", AND NOTHING READS THAT SECRET (tracker #60)
+
+Tracker #60. `LAUNCH_READINESS_CHECKLIST.md`, the document the owner is supposed
+to work down before first use. Measured 2026-08-25 at commit `be0a1d1`. No
+behaviour defect — every line of this is a documentation defect, which is the
+same class as #58, and it matters for the same reason: **the checklist is the
+only artifact in this repository that instructs a human to go and change
+something outside the repository.** When it is wrong, the repository is still
+correct and the deployment is still broken, and no gate anywhere can tell.
+
+Baseline before the edits: the file named **Vercel on 14 lines (20
+occurrences)** and **Cloudflare zero times**. It has been a Cloudflare Worker
+deployment since section 33. Four of its instructions were not merely stale;
+two of them, if followed exactly, would have taken the live site down.
+
+## 39.1 The host, and the file that is no longer a config
+
+`wrangler.jsonc:20` is `"name": "boston-project"`, `:23` is
+`"directory": "./dist"`, `:24` is
+`"not_found_handling": "single-page-application"`. Live at
+`boston-project.divyesh-boston.workers.dev`. Response headers on the live site
+come from `public/_headers`, which Cloudflare reads and Vercel never did.
+
+`vercel.json` still exists and **must not be deleted**, which is the
+counter-intuitive half. It is no longer read by any host — it is now the
+canonical *spec* that `scripts/probe-deploy-config.mjs` enforces: §1 parses it,
+§10 diffs `base44/config.jsonc` against it key by key, §11 diffs
+`public/_headers` against it. The probe's own comment says it parses BOTH
+"rather than trust a human to keep them aligned". Deleting the dead config
+would break a passing gate and silently un-pin every security header. I had
+started to treat it as removable; measuring §10 and §11 stopped that.
+
+## 39.2 The secret that has nowhere to be set
+
+The checklist's single most-emphasised launch step, repeated in four places, was
+*"set `AUDIT_CHAIN_SECRET` in Vercel"*. Grepping the whole repository for that
+name returns hits in exactly one place: `secrets.get('AUDIT_CHAIN_SECRET')`
+inside `base44/functions/**` — `audit_log/entry.js:70`,
+`audit_verify/entry.js:93`, `autoPayroll/entry.ts:489`,
+`custom_auth_login/entry.js:221`, `custom_auth_reset_password/entry.js:74`,
+`custom_user_admin/entry.js:320` and `:538`, and `deleteAccount/entry.ts:126`.
+Never once in `src/`.
+
+Those functions ran on the base44 backend, and that backend is gone —
+`.env.production` states it in its own header, and `wrangler.jsonc` declares no
+vars and no secrets at all, because the Worker serves static assets and nothing
+else. So there is no dashboard field to fill in and no code left that would read
+it if there were. **The step is void, not relocated.** The near-miss here is
+worth recording precisely: the obvious repair was to rewrite "in Vercel" as "in
+Cloudflare", which would have replaced one wrong instruction with another and
+sent the owner hunting for a setting that cannot exist on either host.
+
+What the owner is being asked to accept instead, stated in the checklist so it
+is a decision and not an accident: **the shipped build has no server-side audit
+hash chain.** The client-side chain in `securityUtils.js` is computed and stored
+in the same browser it protects, which is evidence of accident, not of tamper.
+B9's serverless code is still correct and still hashes properly if that backend
+is ever restored; the checkbox is left unticked because nobody did the thing —
+it is simply no longer a thing to do.
+
+## 39.3 The two instructions that would have broken the site
+
+Both concerned `.env.production`, and both were inverted.
+
+The first told the owner to confirm `VITE_USE_LOCAL_AUTH` is **absent** from the
+production environment. `src/main.jsx:26` refuses to boot a production build
+that carries only that flag, and the standalone shape requires **both**
+`VITE_USE_LOCAL_AUTH=true` and `VITE_STANDALONE_LOCAL=true`. The file is
+committed on purpose (there is a negation for it in `.gitignore`) precisely
+because two deploys already died from those flags being absent: Cloudflare's Git
+build and GitHub Actions each clone the repo, saw neither flag, and produced a
+bundle that loads and can never log anybody in. Removing them is the exact
+failure mode the commit was made to prevent. The corrected item says: do not
+"fix" them.
+
+The second told the owner that `dist/` is a build artifact that should not be
+committed or trusted. `wrangler.jsonc:23` serves the site **from `./dist`**, so
+on this host `dist/` *is* the site. That premise was not stale, it was
+backwards.
+
+## 39.4 Three staleness symptoms that had already been fixed
+
+The `dist/` item asserted three specific symptoms: a `db.com` favicon reference
+in `dist/index.html`, a JavaScript expression sitting inside
+`dist/manifest.json`, and missing `apple-touch-icon.png` / `favicon.svg` /
+`icon-192.png` / `icon-512.png`. All three are now **false** — measured before
+writing, which is the only reason they are not in the document. `dist/` holds 92
+files, `dist/index.html` was last written 2026-08-25 05:37, and
+`dist/manifest.json` is clean JSON naming *Red Roof Intelligence*.
+
+What is actually stale is narrower and worth stating exactly: **8 tracked inputs
+are newer than the build, and 4 of them are bundled** —
+`src/pages/Dashboard.jsx`, `src/components/dashboard/YieldAdvisor.jsx`,
+`src/lib/yieldAdvice.js`, `src/lib/uploadGuard.js`. The other four are probes
+and a verifier, which never reach the bundle. A bare `npm run build` still
+cannot close this here: `node_modules/@rollup/` holds only
+`rollup-win32-x64-gnu` and `rollup-win32-x64-msvc`, so the rebuild is the
+owner's, on Windows.
+
+## 39.5 What replaces the void blocker
+
+The top launch blocker is now **Cloudflare Access on the `boston-project`
+Worker**, via Zero Trust → Access → Applications → *Protect one Worker*. It is
+not a nice-to-have on this shape: with auth verified in the browser, an upstream
+identity gate is the only real boundary, so without it anyone who reaches the
+URL reaches the app. Its state is **UNKNOWN** and stays that way in the
+document, because there is no dashboard access from here and guessing is what
+§39.2 is about.
+
+Also recorded as owner-side: delete the orphaned `divyeshpro` Worker once
+nothing points at it. A `name` mismatch in `wrangler.jsonc` does not fail — it
+**silently creates a second Worker**, which is how that one came to exist, and
+both deploy paths (`npx wrangler deploy` on the laptop, and Cloudflare's Git
+build, whose deploy command is also `npx wrangler deploy`) read the same line.
+
+## 39.6 A section number that was wrong in two places
+
+My draft cited `scripts/probe-standalone-deploy.mjs` **§6** for the
+`.env.production` key allowlist. Reading the section headings, §6 is "the guard
+is actually in the pipeline" and **§7** is the allowlist —
+`ENV_PROD_ALLOWED = ['VITE_USE_LOCAL_AUTH', 'VITE_STANDALONE_LOCAL']`, which
+also asserts the file is LF-only and tracked. Fixing my own text turned up the
+same wrong number already in the repository, at `.env.production:11`. One
+character each, and both now say 7. This is #58's failure mode arriving by a
+different route: a citation that was right when written and drifted when a
+section was inserted above it.
+
+## 39.7 Verification
+
+**Observed.** `node scripts/probe-standalone-deploy.mjs` → **57 passed, 0
+failed**, rc=0, including "`.env.production` is LF-only", ".gitattributes pins
+that file to LF", and "contains ONLY the two public flags".
+`node scripts/probe-deploy-config.mjs` → **121 passed, 0 failed**, rc=0,
+including every `/*` and `/assets/*` header matching `vercel.json` exactly.
+
+Line-ending integrity re-measured after every edit, because the two files
+disagree and both are gated: `LAUNCH_READINESS_CHECKLIST.md` is CRLF (814 → 835
+lines, 835 CR), `.env.production` is LF-only (34 lines, 0 CR). `Edit` preserved
+each convention; `Write` would have flattened the first and the probe would have
+caught only the second.
+
+**Not Run:** eslint, `npm run typecheck`, the full 112-suite sweep at
+`c1952cea`, `npm test`. `npm run build` is forbidden on this mount.
+
+## 39.8 Deliberately left alone
+
+* **Every historical `[x]` row that mentions Vercel.** Those are records of what
+  was done on the host of the day. CLAUDE.md treats records as records; the
+  correction block sits above them and says which host they applied to.
+* **The `[ ]` / `[x]` counts stayed 15 / 86.** The void B9 box is deliberately
+  left unticked, and the checklist now says why in the item itself, so a future
+  reader does not "fix" the count by ticking a step nobody performed.
+* **Three stale comments in the PROTECTED `src/api/base44Client.js`** —
+  `:1699`, `:1767` and `:2113`. Each asserts that the local-auth shims are
+  reachable only in development and that "production always takes the
+  `!USE_LOCAL_AUTH` early return". The dispatch is `:2115`
+  `if (!USE_LOCAL_AUTH) { return invokeBackend(…) }` and the flag **is** true in
+  the shipped build, so those shims are the shipped auth path and the comments
+  describe the opposite of the shipped security model — including a
+  "do not read these as the security model" note now sitting directly above what
+  is, in fact, the security model. The file is on `PROTECTED_FILES.md`.
+  **OWNER ITEM.**
+* **`base44/lib/corsConfig.js`** still ends in `module.exports` at `:138`-`:148`
+  inside a `"type": "module"` package, so it exports nothing and neither half of
+  its 2026-08-22 fix is live. Nothing imports it, and
+  `probe-deploy-config.mjs` §6 fails the moment anything does. Reported, not
+  touched — see section 34.
 

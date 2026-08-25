@@ -510,7 +510,7 @@ export default function Dashboard() {
 
         <div className="grid gap-6 lg:grid-cols-2">
           <ClerkAudit records={clerkFiltered} />
-          <YieldAdvisor occupancy={occupancy} adr={adr} revpar={revpar} />
+          <YieldAdvisor occupancy={occupancy} adr={adr} revpar={revpar} capacity={capacity} roomsSold={roomsSold} />
         </div>
       </div>
     </div>

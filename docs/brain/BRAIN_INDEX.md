@@ -1,7 +1,7 @@
-# 🗃️ 20. APPENDIX: ALL 425 FILES
+# 🗃️ 20. APPENDIX: 427 FILES LISTED — THE LIST IS BEHIND THE TREE
 
 > [!NOTE]
-> For complete reference, here is the exhaustive list of every file under `src/`, `scripts/` and `base44/` — 273 + 110 + 42 = 425, which is what the heading counts. It is not every file in the repository (measured 2026-08-24: `git ls-files` reports 1316 tracked files; the rest are config, workflows, docs, public assets and lockfiles). Use this to verify existence before creating new files in those three trees.
+> The list below holds 274 + 111 + 42 = **427** paths under `src/`, `scripts/` and `base44/`, which is what the heading counts. **It is no longer exhaustive.** Measured 2026-08-25: those three trees actually hold **284 + 148 + 42 = 474** paths, so the list is **47 files behind** — the drift is entirely in `scripts/` (37) and `src/` (10) and it accumulated silently, because nothing gates this file against the filesystem. Treat a *hit* here as reliable and a *miss* as unknown until you check with `git ls-files`. It was never every file in the repository either (`git ls-files` reports 1316 tracked; the rest are config, workflows, docs, public assets and lockfiles). **OWNER ITEM:** this appendix wants regenerating from disk, as its own commit.
 
 <details>
 <summary><strong>Click to expand the full file catalog</strong></summary>
@@ -128,6 +128,7 @@ scripts\probe-ui-feedback.mjs
 scripts\probe-validation-gaps.mjs
 scripts\probe-weather.mjs
 scripts\probe-welcome-email.mjs
+scripts\probe-yield-advisor.mjs
 scripts\repro-import-atomicity.mjs
 scripts\resolve-alias.mjs
 scripts\resolve-base44.mjs
@@ -387,6 +388,7 @@ src\lib\utils.js
 src\lib\validator.js
 src\lib\weatherService.js
 src\lib\weatherSettings.js
+src\lib\yieldAdvice.js
 src\lib\yieldOptimizer.js
 src\lib\ySync.js
 src\main.jsx

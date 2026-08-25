@@ -60,6 +60,7 @@
 | 56 | **The Manual Data Entry draft — the only copy of hand-typed money rows until Save lands — could be destroyed, refused, or left behind in total silence, and one of those paths took the whole page down.** Five raw `localStorage` calls in `ManualEntry.jsx`, and not one of them could report a failure to the person typing. (1) `getItem` sat **outside** its own `try`, so a browser that refuses storage (private browsing, blocked site data) threw out of a `useEffect`; React re-throws an effect's exception, so `App.jsx`'s `LazyErrorBoundary` replaced the whole page — over a draft nobody had asked to recover. (2) A stored draft that parsed but was not a usable list was `removeItem`'d with **no message at all**, so hand-typed rows vanished and the grid simply came up empty. (3) The auto-save's only failure path was `console.warn("Auto-save failed", e)` while the page went on rendering its amber "● Unsaved draft" dot — the operator was told the rows were being kept at the exact moment they were not. (4) The clear after a **successful** save was unguarded and sits BEFORE `setSaving(false)` and `rotateCsrfToken()`, so a refused remove threw past both: the records really were written, and the Save button spun forever on a stale CSRF token. (5) The discard button's remove was unguarded too and closed the recovery banner regardless, telling the operator the draft had been discarded when it had not | HIGH | FIXED 2026-08-25 | `src/lib/manualDraft.js` (**NEW**, 217 lines) owns every access: `draftKeyFor`, `readDraft` (never throws — returns `rows` / `discard` / `problem`), `writeDraft` and `clearDraft` (both return `{ok, problem}`). Same three rules as `settingsStore.js`, but the messages are written for the **screen**, because the page routes `problem` into `setSaveMsg`/`setMsgTone` — a console-only library could not have fixed this. `src/pages/ManualEntry.jsx` — zero `localStorage`/`sessionStorage` references and zero copies of the key template remain; the post-save clear **degrades** the success message to the `warn` tone instead of overwriting it, and the discard handler keeps the recovery banner open when the remove fails. `scripts/probe-manual-entry-save.mjs` section 9 (37 → 96 assertions, 2 mutations); `scripts/probe-db-archive.mjs`'s MANIFEST updated in **both** directions. See section 35 | (This commit) |
 | 57 | **Deleting your own account navigated to `/true`, wiped nothing extra, and could report "could not be deleted" after the account was already gone.** Three defects stacked inside one 16-line handler (`Settings.jsx handleDeleteAccount`), the widest destructive action in the app. (1) `await db.auth.logout(true)` — that parameter is a **redirect URL**, not a flag (`base44Client.js:1302` is `if (redirect) window.location.href = redirect;`), so the assignment was `window.location.href = true` and the just-deleted operator was sent to `<origin>/true`. `wrangler.jsonc:24`'s `"not_found_handling": "single-page-application"` serves `index.html` there, so the app boots on a URL no route matches, with every local record already erased. The **three other logout call sites in the same file** (`:392`, `:637`, `:1217`) call the AuthContext `logout(shouldRedirect)`, whose parameter really is a boolean and which builds `/login?returnTo=…` itself. (2) Two `localStorage.removeItem` calls ran between the server delete and the logout. They were **dead** — `invokeBackend` in the protected `src/api/base44Client.js` already runs `localDb.tables.map(t => t.clear())` **and** `localStorage.clear()` on a successful `deleteAccount`, and it is reached on *both* dispatch routes (`:2116` when the local-auth flag is off, and the `:2235` fall-through when it is on, because there is no `deleteAccount` shim) — and they named only 2 of the 3 keys `commissionRates.js` owns, so as cleanup they were also incomplete. (3) Being unguarded, those two calls threw into the handler's only `catch` on any browser that refuses storage. That catch reports *"Your account could not be deleted. You are still signed in, and no logout was performed."* — reached this way, **every clause of that sentence is false**: the account is deleted, the local database is empty, and the operator is looking at a page that says the opposite | HIGH | FIXED 2026-08-25 | `src/pages/Settings.jsx` — the two dead `removeItem` calls are gone (replaced by a comment naming where the clear actually happens), and `db.auth.logout(true)` becomes `await logout(true)`, the AuthContext logout the file's three other sites already use. Nothing but that one call now runs after the invoke resolves, which is what makes the catch's sentence true again. `scripts/probe-delete-guard.mjs` section 10 (74 → 96 assertions, 1 mutation): it pins the handler's tail **statement-by-statement**, and — read-only, on a protected file — pins the other side of the contract the page now leans on (one `deleteAccount` branch, inside `invokeBackend`, clearing both stores; `db.auth.logout` still taking a URL; the AuthContext logout still taking a boolean and building the login URL). See section 36 | (This commit) |
 | 58 | **Four documentation clusters sent a reader to code that had nothing to do with what they were reading, and one of them pointed past the end of the file.** Not a behaviour defect — the class that damages a reader instead of a record, and the only defence against it is a convention plus a gate. Measured tree-wide 2026-08-25: **722 citations, 697 resolvable, 5 out of range** (4 of those in `.superbrain/explore-reports/` dated snapshots, correctly left alone). The live one was `probe-calendar-day-modal.mjs` citing line 406 of a **342-line** `ActionCenter.jsx` — and the defect that comment described was already fixed. Reading the five citations named in the tracker and following their nested ones found the larger, undetectable class: `uploadGuard.js`'s "Measured 2026-08-21" table quoted `Import.jsx:280-330` and `DataIntelligence.jsx:119` for checks that had **moved into `uploadGuard.js` itself**, plus a single `Import.jsx:365` for `await item.file.text()` when there are **two** such sites (`:339`, `:378`); `probe-audit-write-failure.mjs` quoted three pre-fix ranges that had all drifted, one of which (`base44Client.js:1115-1117`) now lands in `ServerRateLimiter` — a reader hunting an audit writer arrives at a rate limiter. Two further citations were measured **correct** (`csvParser.js:302`/`:307`, `exportData.js:55`) and left untouched, and one is unfixable here (`base44Client.js` names `reportParsers.js:1262` as "the one caller" of `SendEmail`; the only caller is `:1476`, and the file is **PROTECTED**) | MEDIUM | FIXED 2026-08-25 | All four fixable clusters converted to **symbol** citations, each naming the number it used to carry and why it rotted — a reader holding the old document needs to be told the citation moved, not shown a clean file that makes them doubt their memory. `scripts/verify-brain.mjs` **16 → 141 lines**: a citation range gate, scoped to the **staged diff's added lines** (a hook that is never bypassed must never false-block, or the tree cannot be committed at all), counting the **staged blob's** lines the way an editor does, `execFileSync` for Windows pathspec safety, `no-cite-check` as the escape hatch, `.superbrain`/`gemini-out`/`dist`/`node_modules` skipped, unresolvable citations skipped rather than failed, and a **loud exit-0** on its own internal failure — the deliberate opposite of `audit-gate.mjs`, because a security gate that goes green unable to run has verified nothing, while a documentation gate that *blocks* unable to run costs more than one unchecked citation. It runs on **every commit** and, because `verify-brain.mjs` is already excluded from discovery in both `verify-all.mjs` and `probe-suite-integrity.mjs`, discovery stays **111** and the fingerprint stays `2f3a5c5a`. See section 37 | (This commit) |
+| 59 | **The Dashboard card titled "Yield & ADR Optimizer" optimized nothing, and every figure in it was invented.** Five defects across three inline `if` branches in `YieldAdvisor.jsx`. (1) Literal **`$10–$15`** and **`$5–$8`** rate moves, derived from nothing at all — not from ADR, not from the room register, not from the pricing engine — presented as the output of a card whose title said *Optimizer*, directly below `PricingPanel`, which computes a real rate in integer cents. Two rate recommendations on one screen, one measured and one invented, free to disagree by any amount. (2) **`money2(adr * 1.05)`** — float multiplication on a dollar value, forbidden outright by CLAUDE.md's BUSINESS directive, and the 5% came from nowhere. The violation is the multiplication, not the formatter: `money2` is `formatCents(toCents(v), 2)` and is correct, but the float has already happened before `toCents` sees it. (3) The caption **"Occupancy vs 100-room capacity"** on a page whose `capacity` is already the real room-night total summed across the selected properties. 100 is only the per-property **fallback** applied when a statistics row carries no `total_rooms` (`CalculationService.js`, `capacityCents`), so the caption was false for any property that is not exactly 100 rooms and for **every** multi-property selection. (4) A hardcoded **`occupancy > 0.6`** band, while six other surfaces gate on the owner's configured `getOccThreshold()` — including `LowOccAlert`, **rendered on this same screen**. Set the occupancy target to 70% and the alert flagged a 65% day as low occupancy while this panel called it *Healthy Occupancy*: one screen, two answers, the same number. (5) With **nothing imported**, `occupancy` and `capacity` are both `0`, which fell through both `>` tests into the last branch — *"Soft Occupancy (0.0%). Drop rate $5–$8 on low-demand days"*. Rate advice for a period with no rows, which is CLAUDE.md §4 (`USER / UI: Truthful Experience`): an unmeasured period must read as unmeasured, not as a bad one | HIGH | FIXED 2026-08-25 | `src/lib/yieldAdvice.js` (**NEW**, 126 lines) owns the decision — `buildYieldAdvice({occupancy, capacity, roomsSold, threshold})` → `{band, target, occupancy, capacity, roomsSold, headline, action, basis}`. It left the `.jsx` because `_loader-boot.mjs` has **no JSX transform**, so logic inside a `.jsx` can only be checked by matching source text — which is exactly how the self-contradiction survived. The soft band is `occ < getOccThreshold()`, **LowOccAlert's own predicate**, so the two panels cannot disagree; `capacity <= 0` returns `band: 'unknown'` with no `$` anywhere in it, while `capacity > 0 && roomsSold === 0` stays soft with a real basis, because a genuine zero-sales week is not missing data; all three inputs use `Number.isFinite(Number(x)) ? … : 0` rather than `Number(x) \|\| 0`, since 0 is legal for each. It deliberately **recommends no rate** — `pricingEngine.js` is the only wired recommender of the three that exist and they disagree by up to $25.60/night, so every branch names the Dynamic Pricing panel instead. `src/components/dashboard/YieldAdvisor.jsx` rewritten (34 → 52 lines) to render it and add no arithmetic, with a per-band icon replacing a fixed `TrendingUp` that pointed *up* beside "below your target". `src/pages/Dashboard.jsx:513` — one line, passing `capacity`/`roomsSold`, both already in scope from `currentStats`. `scripts/probe-yield-advisor.mjs` (**NEW**, 226 lines, 55 assertions, RED 44/10 first) — 65 outputs across 5 targets × 13 occupancies with zero `$` in any of them, and section [7] asserts the two panels agree on all 65. See section 38 | (This commit) |
 
 ---
 
@@ -3055,4 +3056,200 @@ into an existing hook instead of a new `verify-*.mjs` (37.4).
   whitespace in this diff.
 * **`csvParser.js:302` / `:307` and `exportData.js:55`.** Measured correct. A
   citation that is right does not become better for being rewritten.
+
+---
+
+# 38. THE PANEL TITLED "OPTIMIZER" OPTIMIZED NOTHING, AND EVERY FIGURE IN IT WAS INVENTED (tracker #59)
+
+Tracker #59. `src/components/dashboard/YieldAdvisor.jsx`, rendered on the
+Dashboard directly below `PricingPanel`. Measured 2026-08-25 against the file at
+commit `22f3ab5`. Five defects, and they are worth separating because they fail
+in four different ways: two are fabricated numbers, one is a false caption, one
+is a self-contradicting screen, and one is advice about a hotel with no rooms in
+it.
+
+## 38.1 The five, as they shipped
+
+The whole panel was three `if` branches over `occupancy`:
+
+```jsx
+if (occupancy > 0.8) {
+  advice = `High Occupancy (${pct(occupancy)}). Increase Rack Rate by $10–$15/night …`;
+} else if (occupancy > 0.6) {
+  advice = `Healthy Occupancy (${pct(occupancy)}). Hold rate, push mid-week direct
+             promos to lift ADR above ${money2(adr * 1.05)}.`;
+} else {
+  advice = `Soft Occupancy (${pct(occupancy)}). Drop rate $5–$8 on low-demand days …`;
+}
+…
+<p className="mt-2 text-xs text-slate-500">Occupancy vs 100-room capacity</p>
+```
+
+1. **`$10–$15` and `$5–$8` are literals.** They are not derived from ADR, from
+   the room register, or from the pricing engine. They are prose that looks like
+   output, on a card whose title said *Optimizer*.
+2. **`money2(adr * 1.05)` is float math on a dollar value**, which CLAUDE.md's
+   BUSINESS directive forbids outright, and the 5% came from nowhere. Note the
+   violation is the multiplication, not the formatter: `money2` is
+   `formatCents(toCents(v), 2)` in `hotel.js` and is correct — the float has
+   already happened by the time `toCents` sees it.
+3. **"Occupancy vs 100-room capacity" was false for almost every reader.** 100 is
+   only the *per-property fallback* used when a statistics row carries no
+   `total_rooms` (`CalculationService.js`, `capacityCents`). The page it printed
+   this on already holds the real room-night total.
+4. **`occupancy > 0.6` is a hardcoded band** while six other surfaces gate on the
+   owner's configured `getOccThreshold()` — including `LowOccAlert`, **on this
+   same screen**. Set the target to 70% and the alert flagged a 65% day as low
+   occupancy while this panel called it *Healthy Occupancy*. One screen, two
+   answers, same number.
+5. **An empty database got rate advice.** With nothing imported, `occupancy` and
+   `capacity` are both `0`, which fell through the two `>` tests into the last
+   branch: *"Soft Occupancy (0.0%). Drop rate $5–$8"*. That is CLAUDE.md §4
+   (`USER / UI: Truthful Experience`) — an unmeasured period must read as
+   unmeasured, not as a bad one.
+
+## 38.2 The logic had to leave the `.jsx` before it could be tested
+
+`scripts/_loader-boot.mjs` installs the DOM shims and the `@/` alias resolver but
+has **no JSX transform**, so a `.jsx` file can only ever be checked by matching
+its source text. That is how defect 4 survived: a regex can see `occupancy > 0.6`
+but cannot see that it disagrees with another component.
+
+So the decision moved into `src/lib/yieldAdvice.js` (new, plain `.js`, importable)
+and `YieldAdvisor.jsx` became a renderer that adds no arithmetic of its own. This
+is the repo's existing pattern — `src/lib/actionCenter.js` ↔
+`src/pages/ActionCenter.jsx` — and it is the reason `probe-yield-advisor.mjs` can
+run 65 real outputs through the real function instead of grepping for adjectives.
+
+## 38.3 `capacity` is room-NIGHTS, verified before it went into a caption
+
+The new basis line reads *"434 of 620 room-nights sold in the selected period"*,
+so the unit had to be established rather than assumed — this repo has a recorded
+history of exactly this error (`PricingPanel`'s own header records a $149.00 rate
+that was advertised as `$14,900.00`).
+
+Traced: `calculateOccupancyMetrics` returns `capacity: fromCents(capacityCents(…))`,
+and `capacityCents` accumulates `(rooms || 0) * 100` **once per property-day**,
+deduped on a `${pid}|${date}` key and preferring an explicit `total_rooms` over the
+fallback. Summed across days and properties, divided back out of cents: room-nights.
+`roomsSold` comes from the same object, in the same unit, on the same line of
+`Dashboard.jsx` (`const { revenue, roomsSold, capacity, occupancy, adr, revpar } =
+currentStats;`) — which is why wiring the panel cost exactly one line.
+
+A fractional room-night is printed rather than rounded away. Room-nights are whole
+rooms on whole nights, so a fraction means the *inventory* was fractional, and
+hiding that behind a round number is how a data problem becomes invisible.
+
+## 38.4 It deliberately recommends no rate
+
+The obvious fix — compute the rate move honestly instead of inventing it — is the
+wrong one, and `yieldOptimizer.js`'s file header already says why: this app has
+**three** rate recommenders written and only one wired, and they disagree by up to
+$25.60/night on identical inputs. Adding a second live one next to `pricingEngine`
+recreates defect 1 with better arithmetic: two rate numbers on one screen, free to
+disagree.
+
+`buildYieldAdvice` therefore returns a **band**, the **target it was measured
+against**, and the **room-night basis** — all three measured — and every branch
+ends by naming the Dynamic Pricing panel as the thing that holds the rate. The
+`yieldOptimizer.js` header's recommendation ("delete this file and make
+`YieldAdvisor.jsx` render pricingEngine's number") is resolved this way instead,
+and its BRAIN_FRONTEND row now says so.
+
+## 38.5 Three states, not two — and `Number(x) || fallback` collapses them
+
+`capacity <= 0` returns `band: 'unknown'`: *"No occupancy to read yet"*, an action
+that asks for an import or a wider date range, and a basis reading *"No occupancy
+rows in the selected period"* rather than printing a denominator it does not have.
+The probe asserts that branch's action contains **no `$`** at all.
+
+`capacity > 0 && roomsSold === 0` is a different state and stays **soft**, with a
+real basis (*"0 of 620 room-nights sold"*). Rooms were available and none sold —
+that is a genuine zero-sales week, and reporting it as "no data" would hide the
+worst week the hotel can have. Collapsing the two is the §4 violation.
+
+All three numeric inputs use `Number.isFinite(Number(x)) ? Number(x) : 0` rather
+than `Number(x) || 0`, because **0 is a legal value for every one of them** and the
+falsy form silently swaps a real zero for the fallback. Same trap as section 34's
+clamp floors.
+
+Occupancy above `1.0` is asserted to read **strong**, not broken: overbooking is
+real in this data, and so is a day whose `total_rooms` is missing and falls back
+low.
+
+## 38.6 Two probe-authoring traps, both caught the hard way
+
+**A source contract must be anchored on structure, not on a word.** The first draft
+asserted `/capacity/.test(panel)` to prove the panel now accepts the real capacity.
+It **PASSED against the defective file**, because the caption it was written to
+condemn read *"Occupancy vs 100-room capacity"*. It was replaced by two regexes on
+the destructuring — `function YieldAdvisor({ … capacity … roomsSold … })` and
+`buildYieldAdvice({ … capacity … roomsSold … })`. A contract assertion that can
+pass on the code it forbids is worse than none, because it manufactures confidence.
+
+**Comments must be stripped before a source contract runs.** `yieldAdvice.js`'s
+header quotes every string it replaced — `$10–$15`, `100-room`, `occupancy > 0.6` —
+so an unstripped `!/100-room/` check would fail *because the file documents its own
+fix*. A probe that punishes documentation will get the documentation deleted. Same
+technique already in `probe-ui-feedback.mjs`.
+
+**`YieldAdvisor.jsx` has no trailing newline** (40 lines, 39 CR at HEAD). An `Edit`
+whose `old_string` ended `}\n` failed with *"String to replace not found in file"*
+while the visible text matched exactly, and the tool's hint pointed at the `·` and
+`–` characters instead. Diagnosed with `tail -c 24 | od -c`, which showed the file
+ending `) ; \r \n }`. The rule: do not end an Edit anchor at a line boundary unless
+the file actually has that newline.
+
+## 38.7 The agreement is asserted, not assumed
+
+Section [7] of the probe transcribes `LowOccAlert`'s predicate verbatim
+(`occRows.filter((r) => Number(r.occupancy || 0) < threshold)`), asserts that line
+is **still present** so the agreement cannot silently rot, and then walks all **65**
+combinations of 5 targets × 13 occupancies checking that *"flagged low by the
+alert"* and *"called soft by the panel"* are the same predicate. The shipped
+contradiction is kept as a named regression: target `0.70`, occupancy `0.65`.
+
+`STRONG_OCCUPANCY_MARGIN = 0.20` is the one editorial constant left in the panel.
+`alertThresholds.js` has **no** high-occupancy setting (`DEFAULTS` is
+`revenueDecreasePct`, `occupancyDecreasePoints`, `occupancyThreshold`), so the
+strong band is expressed *relative to the target* rather than absolutely. At the
+default 0.60 target that reproduces the shipped 0.80 boundary exactly — no owner's
+bands move because of this change — and raising the target moves the strong band
+with it. **OWNER ITEM:** if it should be configurable it needs a Settings field.
+
+## 38.8 Verification (Observed)
+
+* `probe-yield-advisor` **RED first: 44 passed, 10 failed, rc=1** against the
+  unmodified `.jsx` files, all ten failures being the source contracts. Then
+  **55 passed, 0 failed, rc=0**.
+* `probe-mtd-growth` **58/0** · `probe-pdf-pagination` **50/0** — the only other
+  two suites that name `Dashboard.jsx` or the panel (found by grepping `scripts/`
+  and the vitest files for `YieldAdvisor`, `yieldAdvice`, `pages/Dashboard.jsx`).
+* `probe-float-money` **28/0**, re-run because the change deletes `adr * 1.05`.
+* `probe-suite-integrity` **110 → 111/0** — it asserts one thing per discovered
+  suite, so the new probe adds exactly one.
+* `eslint .` → **223 problems (0 errors, 223 warnings)**, rc=0 — byte-identical to
+  the #56/#57/#58 baseline. The two warnings inside the touched files are at
+  `Dashboard.jsx:63` and `:212`, both pre-existing exhaustive-deps notes and both
+  unreachable from a one-line change at `:513`.
+* `tsc -p ./jsconfig.json` → rc=0, no output.
+* `node --check` OK on both new files; CRLF verified `lines == CR count` on all
+  four (`Write` emits LF into a CRLF tree — converted and re-measured).
+* `verify-all.mjs --list` → **112 suites, fingerprint `c1952cea`** (was 111 /
+  `2f3a5c5a`). Discovery is by filename prefix, so the probe registered itself.
+
+**Not Run:** the full 112-suite sweep, `npm test`, and `npm run build` — the last
+of these is forbidden on this mount.
+
+## 38.9 Deliberately left alone
+
+* **`src/lib/yieldOptimizer.js` stays unwired and still contains float-dollar
+  `Math.round`.** Wiring it is what 38.4 exists to refuse; deleting it is a
+  separate decision on the owner's #78 list. Its BRAIN_FRONTEND row was corrected
+  to stop claiming the Dashboard panel computes its own advice.
+* **The `Optimizer` in the card title is gone**, because the panel does not
+  optimize. That is a title, not a behaviour change, and it is the one cosmetic
+  edit in this diff.
+* **`Dashboard.jsx:63` and `:212`'s exhaustive-deps warnings.** Pre-existing,
+  outside this blast radius.
 

@@ -1,13 +1,12 @@
-# 🗃️ 20. APPENDIX: 427 FILES LISTED — THE LIST IS BEHIND THE TREE
+# 🗃️ 20. APPENDIX: 476 FILES — REGENERATED FROM `git ls-files` (2026-08-25)
 
 > [!NOTE]
-> The list below holds 274 + 111 + 42 = **427** paths under `src/`, `scripts/` and `base44/`, which is what the heading counts. **It is no longer exhaustive.** Measured 2026-08-25: those three trees actually hold **284 + 148 + 42 = 474** paths, so the list is **47 files behind** — the drift is entirely in `scripts/` (37) and `src/` (10) and it accumulated silently, because nothing gates this file against the filesystem. Treat a *hit* here as reliable and a *miss* as unknown until you check with `git ls-files`. It was never every file in the repository either (`git ls-files` reports 1316 tracked; the rest are config, workflows, docs, public assets and lockfiles). **OWNER ITEM:** this appendix wants regenerating from disk, as its own commit.
+> The catalog below is **regenerated from `git ls-files`** and current as of 2026-08-25: **42 + 149 + 285 = 476** tracked paths under `base44/`, `scripts/` and `src/`. Because it is built from `git ls-files`, both a *hit* and a *miss* are reliable at generation time — but **nothing gates this file against the tree**, so it will drift again the moment a file is added or removed; regenerate it when accuracy matters. `base44/.app.jsonc` is intentionally **git-ignored** and is therefore excluded, as is everything outside these three trees (`git ls-files` reports 1325 tracked repo-wide; the rest is config, workflows, docs, public assets and lockfiles). The two code fences bounding this block were previously mangled (a tab where `text` belonged; a literal `n` in place of the closing newline) and are corrected in this regeneration.
 
 <details>
 <summary><strong>Click to expand the full file catalog</strong></summary>
 
-`	ext
-base44\.app.jsonc
+```text
 base44\.types\types.d.ts
 base44\auth\config.jsonc
 base44\config.jsonc
@@ -49,91 +48,131 @@ base44\functions\getWeather\entry.ts
 base44\functions\importDriveFile\entry.ts
 base44\functions\listDriveFiles\entry.ts
 base44\lib\corsConfig.js
+base44\utils\apiHandler.js
+scripts\_dom-shims.mjs
+scripts\_fixtures-suite-integrity\assertions-no-exit.mjs
+scripts\_fixtures-suite-integrity\assertions-no-summary.mjs
+scripts\_fixtures-suite-integrity\banner-summary.mjs
+scripts\_fixtures-suite-integrity\comment-only-fail.mjs
+scripts\_fixtures-suite-integrity\compliant.mjs
+scripts\_fixtures-suite-integrity\conditional-exit-assertion.mjs
+scripts\_fixtures-suite-integrity\diagnostic-marker.mjs
+scripts\_fixtures-suite-integrity\escaped-newline-summary.mjs
+scripts\_fixtures-suite-integrity\escaped-newline-template.mjs
+scripts\_fixtures-suite-integrity\exit-member-ternary.mjs
+scripts\_fixtures-suite-integrity\exitcode-nonzero.mjs
+scripts\_fixtures-suite-integrity\exitcode-zero-only.mjs
+scripts\_fixtures-suite-integrity\plusequals-counter.mjs
+scripts\_fixtures-suite-integrity\ternary-summary.mjs
+scripts\_fixtures-suite-integrity\unclassified.mjs
 scripts\_harness-auth.mjs
 scripts\_loader-boot.mjs
+scripts\_repo-root.mjs
+scripts\_verdict.mjs
 scripts\acceptance-harness.mjs
-scripts\acceptance-report.json
+scripts\audit-gate.mjs
 scripts\benchmark_performance.mjs
-scripts\data\Adjustments and Refunds Activity (1).csv
-scripts\data\Adjustments and Refunds Activity (2).csv
-scripts\data\Adjustments and Refunds Activity.csv
-scripts\data\All Transactions (1).csv
-scripts\data\All Transactions (2).csv
-scripts\data\All Transactions.csv
-scripts\data\Clerk Shift.csv
-scripts\data\Gross Revenue Report midelboro.csv
-scripts\data\Hotel Statistics (1).csv
-scripts\data\Hotel Statistics.csv
-scripts\data\Occupancy Summary midelboro.csv
-scripts\data\Payments Summary (1).csv
-scripts\data\Payments Summary (2).csv
-scripts\data\Payments Summary.csv
-scripts\data\Source Summary (1).csv
-scripts\data\Source Summary (2).csv
-scripts\data\Source Summary (3).csv
-scripts\data\Source Summary.csv
-scripts\data\timecard-sample.csv
+scripts\generate-brain-map.mjs
 scripts\probe-active-vs-idle.mjs
 scripts\probe-adjustments.mjs
+scripts\probe-app-config.mjs
+scripts\probe-audit-chain-race.mjs
 scripts\probe-audit-chain.mjs
-scripts\probe-audit-filter.mjs
+scripts\probe-audit-export.mjs
 scripts\probe-audit-list.mjs
+scripts\probe-audit-write-failure.mjs
 scripts\probe-auth-audit.mjs
 scripts\probe-auth-hardening.mjs
+scripts\probe-build-chunks.mjs
+scripts\probe-calendar-day-modal.mjs
+scripts\probe-capacity-per-day.mjs
+scripts\probe-cents-unit-mismatch.mjs
+scripts\probe-ci-node-version.mjs
+scripts\probe-clear-all-rollback.mjs
 scripts\probe-clerk-fraud-filter.mjs
 scripts\probe-config-exposure.mjs
+scripts\probe-cors-config.mjs
+scripts\probe-crdt-convergence.mjs
+scripts\probe-csrf-default-closed.mjs
 scripts\probe-csrf-host-prefix.mjs
 scripts\probe-csrf-secure-flag.mjs
 scripts\probe-csv-data-loss.mjs
 scripts\probe-csvParser-data-loss.mjs
 scripts\probe-date-validation.mjs
 scripts\probe-db-archive.mjs
+scripts\probe-db-mock-rls.mjs
+scripts\probe-decimal-integration.mjs
 scripts\probe-delete-guard.mjs
 scripts\probe-deploy-config.mjs
+scripts\probe-employee-id-reuse.mjs
+scripts\probe-entity-rls-declarations.mjs
+scripts\probe-export-data.mjs
 scripts\probe-financial-invariant.mjs
 scripts\probe-float-money.mjs
 scripts\probe-hotel.mjs
 scripts\probe-housekeeping.mjs
 scripts\probe-idle-polling.mjs
-scripts\probe-import.mjs
 scripts\probe-import-rollback-id.mjs
 scripts\probe-import-txn-zone.mjs
 scripts\probe-import-validation.mjs
+scripts\probe-ledger-index.mjs
 scripts\probe-manual-entry-import.mjs
-scripts\probe-money-kept.mjs
+scripts\probe-manual-entry-save.mjs
+scripts\probe-money-kept-double-count.mjs
 scripts\probe-money-kept-fix.mjs
 scripts\probe-money-kept-float.mjs
+scripts\probe-money-kept-gross.mjs
+scripts\probe-money-kept.mjs
 scripts\probe-monthly-calendar.mjs
+scripts\probe-mtd-growth.mjs
+scripts\probe-no-real-credentials.mjs
 scripts\probe-ota-sync.mjs
 scripts\probe-parse-amount.mjs
+scripts\probe-password-policy.mjs
+scripts\probe-payroll-entry-parity.mjs
+scripts\probe-payroll-minute-rounding.mjs
+scripts\probe-pdf-pagination.mjs
+scripts\probe-premium-surfaces.mjs
 scripts\probe-pricing.mjs
 scripts\probe-profit-leakage.mjs
 scripts\probe-property-isolation.mjs
 scripts\probe-realtime.mjs
+scripts\probe-recurring-events.mjs
 scripts\probe-red.mjs
 scripts\probe-red6.mjs
 scripts\probe-red8.mjs
+scripts\probe-repo-root.mjs
 scripts\probe-revenue-reconciliation.mjs
 scripts\probe-reviews.mjs
 scripts\probe-roomboard.mjs
 scripts\probe-sdk-analytics-off.mjs
 scripts\probe-session-expiry.mjs
-scripts\probe-session-noop.mjs
-scripts\probe-session-slide.mjs
 scripts\probe-session-sliding.mjs
 scripts\probe-settings-persistence.mjs
+scripts\probe-sri-integrity.mjs
+scripts\probe-standalone-deploy.mjs
 scripts\probe-startup.mjs
+scripts\probe-suite-integrity.mjs
+scripts\probe-timecard-shift-span.mjs
+scripts\probe-toast-lifecycle.mjs
 scripts\probe-ui-disabled-reason.mjs
 scripts\probe-ui-feedback.mjs
+scripts\probe-upload-guard.mjs
+scripts\probe-user-form-validation.mjs
 scripts\probe-validation-gaps.mjs
+scripts\probe-verify-all-verdict.mjs
 scripts\probe-weather.mjs
 scripts\probe-welcome-email.mjs
+scripts\probe-ws-server.mjs
 scripts\probe-yield-advisor.mjs
 scripts\repro-import-atomicity.mjs
 scripts\resolve-alias.mjs
 scripts\resolve-base44.mjs
 scripts\stubs\base44-runtime.mjs
 scripts\stubs\base44-sdk.mjs
+scripts\test-parser.mjs
+scripts\test-throttle-standalone.mjs
+scripts\test-throttle.mjs
 scripts\test_anomaly_detector.mjs
 scripts\test_auditlog_immutability.mjs
 scripts\test_bulletproof_auth.mjs
@@ -141,14 +180,12 @@ scripts\test_defect_5_probe.mjs
 scripts\test_local_auth.mjs
 scripts\test_realtime_revocation.mjs
 scripts\test_validator.mjs
-scripts\test-parser.mjs
-scripts\test-throttle.mjs
-scripts\test-throttle-standalone.mjs
 scripts\update-csrf.mjs
 scripts\update-test-csrf.mjs
-scripts\verify_cross_module_impact.mjs
 scripts\verify-actioncenter.mjs
+scripts\verify-all.mjs
 scripts\verify-anomaly-ingestion.mjs
+scripts\verify-brain.mjs
 scripts\verify-coexistence.mjs
 scripts\verify-donut-labels.mjs
 scripts\verify-harness.mjs
@@ -160,21 +197,35 @@ scripts\verify-source-contributions.mjs
 scripts\verify-statistics.mjs
 scripts\verify-timecard.mjs
 scripts\verify-transactions.mjs
+scripts\verify_cross_module_impact.mjs
+src\App.jsx
 src\api\authLocal.test.js
 src\api\autoPayroll.test.js
 src\api\base44Client.importRollback.test.js
 src\api\base44Client.js
 src\api\localDb.js
-src\App.jsx
 src\components\AIAssistant.jsx
 src\components\AnomalySignoffModal.jsx
 src\components\AuditCategoryFilter.jsx
 src\components\AuthLayout.jsx
+src\components\CommandMenu.jsx
+src\components\GlobalControlBar.jsx
+src\components\GoogleIcon.jsx
+src\components\HousekeepingSettingsModal.jsx
+src\components\Layout.jsx
+src\components\MFARecoveryModal.jsx
+src\components\MFASetup.jsx
+src\components\PasswordConfirmDialog.jsx
+src\components\PricingOverrideButton.jsx
+src\components\ProtectedRoute.jsx
+src\components\ReconciliationExportButton.jsx
+src\components\ScrollToTop.jsx
+src\components\TaxConfigModal.jsx
+src\components\UserNotRegisteredError.jsx
 src\components\charts\ChartToolbar.jsx
 src\components\charts\PieDonut.jsx
 src\components\charts\PieDonut.test.jsx
 src\components\charts\UniversalChart.jsx
-src\components\CommandMenu.jsx
 src\components\compare\ChannelRevenue.jsx
 src\components\compare\CompareBars.jsx
 src\components\compare\CompareCard.jsx
@@ -191,29 +242,24 @@ src\components\dashboard\PropertyRanking.jsx
 src\components\dashboard\RevenueTrend.jsx
 src\components\dashboard\WeatherPanel.jsx
 src\components\dashboard\YieldAdvisor.jsx
-src\components\GlobalControlBar.jsx
-src\components\GoogleIcon.jsx
-src\components\HousekeepingSettingsModal.jsx
-src\components\Layout.jsx
-src\components\MFARecoveryModal.jsx
-src\components\MFASetup.jsx
-src\components\PasswordConfirmDialog.jsx
-src\components\PricingOverrideButton.jsx
 src\components\propertyMap.jsx
-src\components\ProtectedRoute.jsx
-src\components\ReconciliationExportButton.jsx
-src\components\ScrollToTop.jsx
 src\components\statistics\MetricExplorer.jsx
-src\components\TaxConfigModal.jsx
 src\components\transactions\CommissionsPanel.jsx
 src\components\transactions\EmployeeCompare.jsx
 src\components\transactions\LedgerStrip.jsx
 src\components\transactions\LedgerTable.jsx
+src\components\ui-exec\Badge.jsx
+src\components\ui-exec\Card.jsx
+src\components\ui-exec\KpiCard.jsx
+src\components\ui-exec\RangePicker.jsx
+src\components\ui-exec\Sparkline.jsx
+src\components\ui-exec\StatusBadge.jsx
+src\components\ui\ResponsiveSelect.jsx
 src\components\ui\accordion.jsx
 src\components\ui\accordion.test.jsx
+src\components\ui\alert-dialog.jsx
 src\components\ui\alert.jsx
 src\components\ui\alert.test.jsx
-src\components\ui\alert-dialog.jsx
 src\components\ui\aspect-ratio.jsx
 src\components\ui\avatar.jsx
 src\components\ui\avatar.test.jsx
@@ -240,9 +286,9 @@ src\components\ui\error-boundary.jsx
 src\components\ui\form.jsx
 src\components\ui\hover-card.jsx
 src\components\ui\image.jsx
+src\components\ui\input-otp.jsx
 src\components\ui\input.jsx
 src\components\ui\input.test.jsx
-src\components\ui\input-otp.jsx
 src\components\ui\label.jsx
 src\components\ui\label.test.jsx
 src\components\ui\loading.jsx
@@ -254,7 +300,6 @@ src\components\ui\progress.jsx
 src\components\ui\progress.test.jsx
 src\components\ui\radio-group.jsx
 src\components\ui\resizable.jsx
-src\components\ui\ResponsiveSelect.jsx
 src\components\ui\scroll-area.jsx
 src\components\ui\select.jsx
 src\components\ui\separator.jsx
@@ -275,25 +320,24 @@ src\components\ui\tabs.test.jsx
 src\components\ui\textarea.jsx
 src\components\ui\textarea.test.jsx
 src\components\ui\toast.jsx
+src\components\ui\toast.test.jsx
 src\components\ui\toaster.jsx
-src\components\ui\toggle.jsx
-src\components\ui\toggle.test.jsx
 src\components\ui\toggle-group.jsx
 src\components\ui\toggle-group.test.jsx
+src\components\ui\toggle.jsx
+src\components\ui\toggle.test.jsx
 src\components\ui\tooltip.jsx
 src\components\ui\types.js
 src\components\ui\use-toast.jsx
-src\components\ui-exec\Card.jsx
-src\components\ui-exec\KpiCard.jsx
-src\components\ui-exec\RangePicker.jsx
-src\components\ui-exec\StatusBadge.jsx
-src\components\UserNotRegisteredError.jsx
 src\crdt.jsx
 src\hooks\use-mobile.jsx
+src\hooks\use-size.jsx
 src\hooks\usePullToRefresh.js
 src\hooks\useSettingsVersion.js
-src\hooks\use-size.jsx
 src\index.css
+src\lib\AuthContext.jsx
+src\lib\PageNotFound.jsx
+src\lib\RevenueReconciliation.js
 src\lib\actionCenter.js
 src\lib\agenticAI.js
 src\lib\aiEngine.js
@@ -305,9 +349,10 @@ src\lib\anomalyDetector.js
 src\lib\anomalyDetector.test.js
 src\lib\anomalySignoff.js
 src\lib\app-params.js
+src\lib\auditFailureLog.js
 src\lib\auditFilter.js
 src\lib\auditLogger.js
-src\lib\AuthContext.jsx
+src\lib\auditView.js
 src\lib\authHelpers.js
 src\lib\authHelpers.test.js
 src\lib\authReturnTo.js
@@ -326,7 +371,9 @@ src\lib\decimal.js
 src\lib\deleteGuard.js
 src\lib\donutLabelLayout.js
 src\lib\employeeId.js
+src\lib\eventSchedule.js
 src\lib\expenseCategories.js
+src\lib\exportData.js
 src\lib\financialReconciliation.js
 src\lib\forecasting.js
 src\lib\fraudScoringEngine.js
@@ -334,19 +381,22 @@ src\lib\hotel.js
 src\lib\hotelKeyRegression.test.js
 src\lib\housekeepingConfig.js
 src\lib\housekeepingService.js
+src\lib\importReset.js
 src\lib\importValidation.js
 src\lib\laborOptimization.js
 src\lib\launchPolicy.js
+src\lib\manualDraft.js
 src\lib\manualEntryImport.js
+src\lib\manualEntrySave.js
 src\lib\mfaRecovery.js
 src\lib\motion.js
 src\lib\navigation.js
 src\lib\ownerIntelligence.js
-src\lib\PageNotFound.jsx
 src\lib\parser.worker.js
 src\lib\paymentNorm.js
 src\lib\payrollCalc.js
 src\lib\pdfExport.js
+src\lib\pdfPagination.js
 src\lib\permissions.js
 src\lib\pricingEngine.js
 src\lib\pricingOverride.js
@@ -357,7 +407,6 @@ src\lib\recalculationService.js
 src\lib\reconciliationExport.js
 src\lib\reportParsers.js
 src\lib\reputationService.js
-src\lib\RevenueReconciliation.js
 src\lib\revenueThresholds.js
 src\lib\roomBoard.js
 src\lib\sdkAnalyticsOff.js
@@ -379,18 +428,20 @@ src\lib\transactionAnalytics.js
 src\lib\transactionNorm.js
 src\lib\ui-utils.js
 src\lib\universalParser.js
+src\lib\uploadGuard.js
 src\lib\uploadRetention.js
 src\lib\useCountUp.jsx
 src\lib\useGlobalFilters.jsx
 src\lib\useHotelData.js
 src\lib\usePricing.js
+src\lib\userFormValidation.js
 src\lib\utils.js
 src\lib\validator.js
 src\lib\weatherService.js
 src\lib\weatherSettings.js
+src\lib\ySync.js
 src\lib\yieldAdvice.js
 src\lib\yieldOptimizer.js
-src\lib\ySync.js
 src\main.jsx
 src\pages\ActionCenter.jsx
 src\pages\AuditLog.jsx
@@ -428,12 +479,9 @@ src\pages\Statistics.jsx
 src\pages\TermsOfService.jsx
 src\pages\Transactions.jsx
 src\pages\Users.jsx
+src\test-setup.js
 src\tests\dataIntegrity.test.js
 src\tests\financials.test.js
-src\test-setup.js
 src\types\ui.js
-src\utils\index.js
-src\utils\index.ts
-``n</details>
-
-
+```
+</details>

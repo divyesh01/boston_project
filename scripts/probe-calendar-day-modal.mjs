@@ -29,8 +29,13 @@
 //      richer Event Details popup is unreachable on exactly the days where it
 //      is the only information available.
 //
-// Defect 2 also fires in src/pages/ActionCenter.jsx:406, which prints the
-// mislabeled weekday DIRECTLY ABOVE the raw (correct) date string.
+// Defect 2 also fired in src/pages/ActionCenter.jsx — the `dayOfWeek` const in
+// the "Upcoming Events" list, whose <p> sits DIRECTLY ABOVE the raw (correct)
+// date string, so the page contradicted itself two lines apart. Both call sites
+// now go through formatDayLabel and section 4 below pins both. Cited by symbol
+// on purpose: the line number this comment carried (:406) had drifted past the
+// end of a 343-line file, which is how a reader learns to distrust the comment
+// instead of the code.
 //
 // Sections 1-2 exercise the real production module. Sections 3-5 are structural
 // assertions on the JSX: `vite`/`vitest` binaries cannot run on this mount (the

@@ -5,9 +5,14 @@
 // pipeline (both end at db.integrations.Core.UploadFile and then parse the
 // bytes), but only one of them was guarded. Measured 2026-08-21:
 //
-//   Import.jsx:280-330        extension allowlist, executable denylist,
-//                             10MB size cap, magic-byte inspection
-//   DataIntelligence.jsx:119  extension regex. Nothing else.
+//   Import.jsx            extension allowlist, executable denylist,
+//                         10MB size cap, magic-byte inspection
+//   DataIntelligence.jsx  extension regex. Nothing else.
+//
+// Neither line is quoted on purpose. The checks MOVED into this file, so any
+// number here would send a reader to unrelated code — as the numbers this
+// comment used to carry (Import.jsx:280-330, DataIntelligence.jsx:119) now do.
+// `git log -S EXECUTABLE_EXT -- src/pages/Import.jsx` finds the original.
 //
 // So a renamed executable (payload.csv), a 500MB file, or an .xlsx that is not
 // actually a ZIP container was rejected at one door and accepted at the other.
@@ -22,9 +27,10 @@
 // The checks below are the ones Import.jsx already performed, moved verbatim so
 // the hardened door's behaviour is preserved exactly. This is a client-side gate
 // and it runs BEFORE the file is read or uploaded, which is the point: the CSV
-// text is consumed locally (Import.jsx:365 `await item.file.text()`), so a
-// server-side validator interposed at the upload call would arrive after the
-// hostile bytes had already reached the parser. Validate first, then read.
+// text is consumed locally (Import.jsx calls `await item.file.text()` in two
+// places, one per report shape), so a server-side validator interposed at the
+// upload call would arrive after the hostile bytes had already reached the
+// parser. Validate first, then read.
 
 /** Largest file we will accept. Matches csvParser.js:302/307, which reject a
  *  larger payload later anyway — enforcing it here fails fast and cheaply. */

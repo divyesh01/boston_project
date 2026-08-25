@@ -2,9 +2,14 @@
 //
 // THE DEFECT (launch item #7). Three writers caught a failed audit write and did
 // nothing but `console.error`:
-//     src/lib/auditLogger.js:34-36     catch (e) { console.error(...) }
-//     src/api/base44Client.js:1115-1117 catch (e) { console.error(...) }
-//     src/lib/pricingOverride.js:49-51  catch (err) { console.warn('Audit logging deferred', ...) }
+//     src/lib/auditLogger.js       logAuditEvent's  catch (e) { console.error(...) }
+//     src/api/base44Client.js      the `audit.log` shim's catch, same shape
+//     src/lib/pricingOverride.js   catch (err) { console.warn('Audit logging deferred', ...) }
+// Symbols, not line numbers, and deliberately so: the three ranges this header
+// used to quote (auditLogger.js:34-36, base44Client.js:1115-1117,
+// pricingOverride.js:49-51) had all drifted by the time anyone followed them,
+// and base44Client.js:1115 now lands in the rate limiter — a header that
+// locates a defect BY LINE starts rotting in the same turn the fix lands.
 // A console line in a browser is not a signal — nobody is watching it and it is
 // gone on the next reload — so the operation carried on as if it had been
 // recorded. That is the one gap an append-only trail cannot tolerate silently:

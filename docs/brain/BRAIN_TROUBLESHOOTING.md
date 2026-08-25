@@ -59,6 +59,7 @@
 | 55 | **Two of the four housekeeping productivity standards were decorative, and a refused save reported success.** `generateHousekeepingSchedule` hardcoded `checkouts * 30 + stayovers * 15` — **the exact default values of `minutesPerCheckout` and `minutesPerStayover`** — so the owner could set Checkout to 45, click Save Standards, read "Productivity standards saved." and watch neither "N minutes required" (`Housekeeping.jsx:165`) nor the estimated labor cost (`:191`) move. The matching defaults are what made it invisible: at 30/15 the page is correct, and only a *changed* setting exposes it. Three more on the same path: `housekeepingConfig.js` was the **eighth** settings module still holding its own storage code after the seven in section 33 were converted — a bare `catch {}` on read plus an unguarded `setItem` that returned the merged config unconditionally, so at quota or in private browsing the write threw out of the click handler where no React error boundary catches it and the button simply looked inert; every field was coerced with `Number(x) \|\| fallback` and **0 is falsy**, so with the editor reporting `Number(e.target.value)` and `Number("")` being 0, clearing a field reverted to the previous value instead of clamping to the floor the clamps exist to enforce (the 10/5/7.25/5 floors were unreachable from the UI); and `saveHk` set `hkConfig` but not `hkEdited` while both the inputs and the cost read `hkEdited`, so a clamped value left the page showing figures derived from a number that was never stored | MEDIUM | FIXED 2026-08-25 | `src/lib/laborOptimization.js` — third `standards` parameter, with the two historical constants kept **as the defaults** so a caller that passes nothing gets the answer it always got. `src/lib/housekeepingConfig.js` — rewritten onto `settingsStore.js` (readers never throw, writer returns a boolean), `coerceNumber` separates "not supplied" from "supplied as 0", `LIMITS` holds the four clamps. `src/pages/Housekeeping.jsx` — `saveHk` reads back with `getHousekeepingConfig` and sets both states from what is actually stored, both derived figures read `hkConfig` (never `hkEdited`), and the cost is integer cents. `src/components/HousekeepingSettingsModal.jsx` (**dead, zero importers**) updated only to keep the changed contract valid. `scripts/probe-settings-persistence.mjs` section 8 (117 assertions total, 3 mutations). See section 34 | (This commit) |
 | 56 | **The Manual Data Entry draft — the only copy of hand-typed money rows until Save lands — could be destroyed, refused, or left behind in total silence, and one of those paths took the whole page down.** Five raw `localStorage` calls in `ManualEntry.jsx`, and not one of them could report a failure to the person typing. (1) `getItem` sat **outside** its own `try`, so a browser that refuses storage (private browsing, blocked site data) threw out of a `useEffect`; React re-throws an effect's exception, so `App.jsx`'s `LazyErrorBoundary` replaced the whole page — over a draft nobody had asked to recover. (2) A stored draft that parsed but was not a usable list was `removeItem`'d with **no message at all**, so hand-typed rows vanished and the grid simply came up empty. (3) The auto-save's only failure path was `console.warn("Auto-save failed", e)` while the page went on rendering its amber "● Unsaved draft" dot — the operator was told the rows were being kept at the exact moment they were not. (4) The clear after a **successful** save was unguarded and sits BEFORE `setSaving(false)` and `rotateCsrfToken()`, so a refused remove threw past both: the records really were written, and the Save button spun forever on a stale CSRF token. (5) The discard button's remove was unguarded too and closed the recovery banner regardless, telling the operator the draft had been discarded when it had not | HIGH | FIXED 2026-08-25 | `src/lib/manualDraft.js` (**NEW**, 217 lines) owns every access: `draftKeyFor`, `readDraft` (never throws — returns `rows` / `discard` / `problem`), `writeDraft` and `clearDraft` (both return `{ok, problem}`). Same three rules as `settingsStore.js`, but the messages are written for the **screen**, because the page routes `problem` into `setSaveMsg`/`setMsgTone` — a console-only library could not have fixed this. `src/pages/ManualEntry.jsx` — zero `localStorage`/`sessionStorage` references and zero copies of the key template remain; the post-save clear **degrades** the success message to the `warn` tone instead of overwriting it, and the discard handler keeps the recovery banner open when the remove fails. `scripts/probe-manual-entry-save.mjs` section 9 (37 → 96 assertions, 2 mutations); `scripts/probe-db-archive.mjs`'s MANIFEST updated in **both** directions. See section 35 | (This commit) |
 | 57 | **Deleting your own account navigated to `/true`, wiped nothing extra, and could report "could not be deleted" after the account was already gone.** Three defects stacked inside one 16-line handler (`Settings.jsx handleDeleteAccount`), the widest destructive action in the app. (1) `await db.auth.logout(true)` — that parameter is a **redirect URL**, not a flag (`base44Client.js:1302` is `if (redirect) window.location.href = redirect;`), so the assignment was `window.location.href = true` and the just-deleted operator was sent to `<origin>/true`. `wrangler.jsonc:24`'s `"not_found_handling": "single-page-application"` serves `index.html` there, so the app boots on a URL no route matches, with every local record already erased. The **three other logout call sites in the same file** (`:392`, `:637`, `:1217`) call the AuthContext `logout(shouldRedirect)`, whose parameter really is a boolean and which builds `/login?returnTo=…` itself. (2) Two `localStorage.removeItem` calls ran between the server delete and the logout. They were **dead** — `invokeBackend` in the protected `src/api/base44Client.js` already runs `localDb.tables.map(t => t.clear())` **and** `localStorage.clear()` on a successful `deleteAccount`, and it is reached on *both* dispatch routes (`:2116` when the local-auth flag is off, and the `:2235` fall-through when it is on, because there is no `deleteAccount` shim) — and they named only 2 of the 3 keys `commissionRates.js` owns, so as cleanup they were also incomplete. (3) Being unguarded, those two calls threw into the handler's only `catch` on any browser that refuses storage. That catch reports *"Your account could not be deleted. You are still signed in, and no logout was performed."* — reached this way, **every clause of that sentence is false**: the account is deleted, the local database is empty, and the operator is looking at a page that says the opposite | HIGH | FIXED 2026-08-25 | `src/pages/Settings.jsx` — the two dead `removeItem` calls are gone (replaced by a comment naming where the clear actually happens), and `db.auth.logout(true)` becomes `await logout(true)`, the AuthContext logout the file's three other sites already use. Nothing but that one call now runs after the invoke resolves, which is what makes the catch's sentence true again. `scripts/probe-delete-guard.mjs` section 10 (74 → 96 assertions, 1 mutation): it pins the handler's tail **statement-by-statement**, and — read-only, on a protected file — pins the other side of the contract the page now leans on (one `deleteAccount` branch, inside `invokeBackend`, clearing both stores; `db.auth.logout` still taking a URL; the AuthContext logout still taking a boolean and building the login URL). See section 36 | (This commit) |
+| 58 | **Four documentation clusters sent a reader to code that had nothing to do with what they were reading, and one of them pointed past the end of the file.** Not a behaviour defect — the class that damages a reader instead of a record, and the only defence against it is a convention plus a gate. Measured tree-wide 2026-08-25: **722 citations, 697 resolvable, 5 out of range** (4 of those in `.superbrain/explore-reports/` dated snapshots, correctly left alone). The live one was `probe-calendar-day-modal.mjs` citing line 406 of a **342-line** `ActionCenter.jsx` — and the defect that comment described was already fixed. Reading the five citations named in the tracker and following their nested ones found the larger, undetectable class: `uploadGuard.js`'s "Measured 2026-08-21" table quoted `Import.jsx:280-330` and `DataIntelligence.jsx:119` for checks that had **moved into `uploadGuard.js` itself**, plus a single `Import.jsx:365` for `await item.file.text()` when there are **two** such sites (`:339`, `:378`); `probe-audit-write-failure.mjs` quoted three pre-fix ranges that had all drifted, one of which (`base44Client.js:1115-1117`) now lands in `ServerRateLimiter` — a reader hunting an audit writer arrives at a rate limiter. Two further citations were measured **correct** (`csvParser.js:302`/`:307`, `exportData.js:55`) and left untouched, and one is unfixable here (`base44Client.js` names `reportParsers.js:1262` as "the one caller" of `SendEmail`; the only caller is `:1476`, and the file is **PROTECTED**) | MEDIUM | FIXED 2026-08-25 | All four fixable clusters converted to **symbol** citations, each naming the number it used to carry and why it rotted — a reader holding the old document needs to be told the citation moved, not shown a clean file that makes them doubt their memory. `scripts/verify-brain.mjs` **16 → 141 lines**: a citation range gate, scoped to the **staged diff's added lines** (a hook that is never bypassed must never false-block, or the tree cannot be committed at all), counting the **staged blob's** lines the way an editor does, `execFileSync` for Windows pathspec safety, `no-cite-check` as the escape hatch, `.superbrain`/`gemini-out`/`dist`/`node_modules` skipped, unresolvable citations skipped rather than failed, and a **loud exit-0** on its own internal failure — the deliberate opposite of `audit-gate.mjs`, because a security gate that goes green unable to run has verified nothing, while a documentation gate that *blocks* unable to run costs more than one unchecked citation. It runs on **every commit** and, because `verify-brain.mjs` is already excluded from discovery in both `verify-all.mjs` and `probe-suite-integrity.mjs`, discovery stays **111** and the fingerprint stays `2f3a5c5a`. See section 37 | (This commit) |
 
 ---
 
@@ -2810,6 +2811,248 @@ a comment at the exact spot they were removed from, so an un-stripped
 * **The two pre-existing unused-variable warnings in `Settings.jsx`.** Present at
   HEAD, outside this blast radius.
 
+---
 
+# 37. A COMMENT THAT LOCATES A DEFECT BY LINE STARTS ROTTING IN THE SAME TURN THE FIX LANDS (tracker #58)
 
+Tracker #58. Not a behaviour defect — a documentation-integrity one, and the only
+class in this file that damages a reader rather than a record.
+
+## 37.1 Two classes, and only one of them is mechanically detectable
+
+A `path.js:123` citation can be wrong in two ways:
+
+1. **Out of range** — the file has fewer than 123 lines. Objective, cheap to
+   check, and no judgement is involved.
+2. **In range but pointing at the wrong line** — the file grew, the citation did
+   not. Indistinguishable from a correct citation without an anchor. **Nothing
+   mechanical can catch this**, and pretending otherwise is worse than admitting
+   it.
+
+The convention that survives both is: **cite the SYMBOL, and keep line numbers
+for things a probe pins.** A symbol moves with its code; a line number is a
+snapshot of a file that is still being edited. Every fix in 37.3 is a conversion
+from the second form to the first.
+
+## 37.2 The census (Observed 2026-08-25, before this change)
+
+Scanned every tracked text file (`.md .js .jsx .mjs .cjs .ts .tsx .json .jsonc
+.yml .yaml .css .html`) with a read-only scratch scanner in the VM's own `/tmp`:
+
+| | count |
+|---|---|
+| citations seen | **722** |
+| resolved to a tracked file | **697** |
+| unresolvable (ambiguous basename, untracked, or a URL fragment) — skipped | **25** |
+| **out of range** | **5** |
+
+Five *occurrences*, not five distinct citations: four of them are two citations
+that each appear twice inside `.superbrain/explore-reports/*.md` —
+`package-lock.json:12193-12196` against a 12,081-line file, and <!-- no-cite-check -->
+`src/lib/roomBoard.js:283-285` against a 193-line one. Those reports are <!-- no-cite-check -->
+**dated snapshots of a past state on purpose** — re-pointing them would falsify
+the record they exist to keep. The fifth was live: `probe-calendar-day-modal.mjs`
+cited `ActionCenter.jsx:406` in a **342-line** file — 343 as an editor numbers <!-- no-cite-check -->
+it, because its last byte is not `\n`.
+
+The four deliberate citations in this section carry `no-cite-check`, and needing
+them was the first empirical test of the gate: staged without the markers it
+**refused this very commit**, twice, naming these lines, the table row below, the
+tracker row in section 14, and one line in its own header comment. A gate that
+cannot block the change that introduces it has not been tested.
+
+So the mechanically-detectable class was, tree-wide, **one** real instance. The
+in-range-but-wrong class turned out to be far larger, and was found by reading
+the five citations task #36 named and then following their nested citations.
+
+## 37.3 What was actually wrong
+
+Every verdict below was measured with `sed`/`grep` against the working tree
+before it was written down — including the two that came back **correct**, which
+is why they were left untouched.
+
+| Citation | Verdict | Ground truth |
+|---|---|---|
+| `uploadGuard.js` → `Import.jsx:280-330` | **WRONG** | The checks it names *moved into `uploadGuard.js` itself*. The number now sends a reader to unrelated code. `git log -S EXECUTABLE_EXT -- src/pages/Import.jsx` finds the original |
+| `uploadGuard.js` → `DataIntelligence.jsx:119` | **WRONG** | Same cause: the extension regex it describes is no longer there |
+| `uploadGuard.js` → `Import.jsx:365` `await item.file.text()` | **WRONG** | Two such call sites exist, one per report shape, at `:339` and `:378` — so even a corrected single number would have been misleading |
+| `probe-audit-write-failure.mjs` → `auditLogger.js:34-36` | **DRIFTED** | `logAuditEvent` is at `:15`; its `console.error('[auditLogger] failed to write log:', e)` is at `:57` |
+| `probe-audit-write-failure.mjs` → `base44Client.js:1115-1117` | **DRIFTED, and now actively misleading** | The `audit.log` shim is `:1177-1178`, its catch's `console.error` at `:1212`. `:1115-1117` is now `resetAt`/`blocked`/`retryAfter` **inside `ServerRateLimiter`** — a reader lands on a rate limiter while looking for an audit writer |
+| `probe-audit-write-failure.mjs` → `pricingOverride.js:49-51` | **DRIFTED** | The `catch (err)` it names has moved within a 66-line file |
+| `probe-calendar-day-modal.mjs` → `ActionCenter.jsx:406` | **OUT OF RANGE** | 342-line file. The defect it named is also already fixed — `formatDayLabel` is called at `:246`, imported at `:13` <!-- no-cite-check --> |
+| `uploadGuard.js` → `csvParser.js:302` / `:307` | **CORRECT** | Left untouched |
+| `audit-gate.mjs:43` → `exportData.js:55` | **CORRECT** | `import * as XLSX from "xlsx";`. Left untouched |
+| `base44Client.js` → `reportParsers.js:1262` "the one caller" | **WRONG** | The only `SendEmail` caller in `src/` is `reportParsers.js:1476`; `:1262` is `chargeType: cell(chargeIdx),`. **`base44Client.js` is PROTECTED — OWNER ITEM**, it cannot be corrected here |
+
+All four fixable clusters were converted to symbol citations, with the drift
+explained in place rather than silently erased: each header now names the number
+it used to carry and why that number rotted. A reader who arrives with the old
+document in hand needs to be told the citation moved, not shown a clean file that
+makes them doubt their own memory.
+
+## 37.4 The gate went into `verify-brain.mjs`, not a new suite
+
+The out-of-range class is now checked automatically. Three placements were
+available and two of them were wrong:
+
+* **A new `scripts/verify-citations.mjs`** — rejected. `verify-all.mjs` discovers
+  by filename prefix, so a new `verify-*` file would move discovery **111 → 112**
+  and invalidate the list fingerprint `2f3a5c5a` that `BRAIN.md` and
+  `.agents/rules/verified-work-integrity.md` both pin. A documentation check is
+  not worth invalidating the anchor that catches shard-arithmetic lies.
+* **Inside the existing full sweep** — rejected. The sweep runs when someone asks
+  for it. Citation rot is created at commit time, one line at a time.
+* **`scripts/verify-brain.mjs`** — chosen. It is already the pre-commit hook
+  (`.git/hooks/pre-commit`, 40 bytes: `#!/bin/sh` + `node scripts/verify-brain.mjs`
+  — there is **no `.husky` directory** in this repo), it is already the
+  documentation-integrity gate, and it is **already excluded from suite discovery
+  in both walks**: `verify-all.mjs` lists it as *"documentation gate, not a
+  behaviour suite"* and `probe-suite-integrity.mjs` carries it in `NOT_A_SUITE`.
+  So the check now runs on **every commit** and discovery stays at 111.
+
+The new code was deliberately **not** put inside the file's pre-existing blanket
+`try { … } catch { /* Ignore if not a git repo or no staged files */ }`. Adding to
+that catch would have recreated the "asserted nothing = PASS" vacuity hole fixed
+in `_verdict.mjs` (section 22): a gate that cannot distinguish *checked and clean*
+from *never ran* is not a gate.
+
+## 37.5 Scope is the staged diff's ADDED lines, deliberately
+
+A pre-commit hook in this repo is **never bypassed** — `--no-verify` is not on the
+table, by the owner's own instruction. That single fact determines the scope:
+
+> A gate that judged pre-existing content would block a commit for rot its author
+> did not write. With no bypass available, that does not mean "fix it first" — it
+> means **the tree cannot be committed at all.**
+
+So the walk is `git diff --cached -U0 --no-color --diff-filter=ACMR`, tracking
+`+++ b/<path>` and `@@ -… +N` to number the added lines, and only lines beginning
+`+` are examined. Supporting decisions:
+
+* **Line counts come from the staged blob** (`git show :<path>`), not the working
+  tree, so a citation is judged against the content actually being committed.
+* **Counted the way an editor numbers lines**, not the way `wc -l` does:
+  `buf[last] === 0x0a ? nl : nl + 1`. `ActionCenter.jsx` is 342 by `wc -l` and 343
+  in an editor, and a gate that disagreed with the reader's editor would be
+  useless. CRLF is irrelevant either way — only `0x0a` is counted.
+* **`execFileSync`, not `execSync`.** Single-quoted pathspecs are not special to
+  `cmd.exe`; a shelled `git diff -- '*.md'` breaks on the owner's Windows machine.
+* **Unresolvable citations are skipped, never failed.** An ambiguous basename or
+  an untracked path is counted into `skipped` and reported in the pass line.
+* **`.superbrain/`, `gemini-out/`, `dist/`, `node_modules/` are skipped** — the
+  first two hold dated snapshots (37.2), the last two are generated.
+* **`no-cite-check` anywhere on the line is an escape hatch**, for a deliberate
+  historical citation or sample output. This document's own 37.2 uses it.
+
+## 37.6 It exits 0 on its own internal failure — the opposite of `audit-gate.mjs`, on purpose
+
+If the gate's own machinery breaks (git missing, a `maxBuffer` overflow, a
+malformed diff), it prints
+
+```
+[citation gate] DID NOT RUN, so no citation was checked: <first line of the error>
+```
+
+and exits **0**. `scripts/audit-gate.mjs` takes the exact opposite position and
+fails closed. Both are correct, and the difference is the point:
+
+| | `audit-gate.mjs` | the citation gate |
+|---|---|---|
+| defends | a security boundary | documentation accuracy |
+| cost of a green run on a broken gate | **a vulnerability ships believed-checked** | one unchecked citation |
+| cost of a wrong block | a commit waits | **nobody can commit anything, with no bypass** |
+| therefore | fail closed | fail open, **loudly** |
+
+The word that carries this is *loudly*. It never goes green **silently**: the
+success path prints `[citation gate] N citation(s) in the staged diff resolve in
+range (M unresolved, skipped)`, so a run that prints neither line is visibly a run
+that did not happen. That distinction is the whole lesson of section 22, applied to
+a gate where failing closed would be the wrong answer.
+
+## 37.7 Verification
+
+Every run below is Observed. The gate was not tested by inventing a mutation and
+watching it fail; it was tested by **the commit that introduces it**, which is the
+only test that counts for a hook nobody here bypasses. It refused that commit three
+times, on three real findings, before it went green.
+
+**Run 1 — rc=1, three findings, one of them in the gate's own header.** The staged
+diff cited line 406 of `ActionCenter.jsx` three times: twice in this section's <!-- no-cite-check -->
+draft (`docs/brain/BRAIN_TROUBLESHOOTING.md:2852` and `:2873`) and once at line 24
+of `scripts/verify-brain.mjs`, the file that carries the gate. Each report named the
+real size — `src/pages/ActionCenter.jsx has 343 lines` — and the run ended
+`Commit aborted.` A gate that cannot block the change that introduces it has not
+been tested. This one did, first try, on prose I had written minutes earlier.
+
+**Run 1 also exposed a contradiction inside the commit.** The header said "3 out of
+range"; this section said 5. Rather than pick one, the census scanner was re-run:
+**748 seen / 721 resolved / 27 unresolved / 8 out of range** after the edits, which
+subtracts back to the 722 / 697 / 25 / 5 baseline in 37.2 and settles the split — 4
+archival *occurrences* (2 distinct citations, each appearing twice) plus the 1 live
+finding already fixed. The header now states occurrences. Neither number was typed
+twice from memory.
+
+**Runs 2 and 3 — rc=1, marker placement, not content.** `no-cite-check` is
+LINE-scoped, and markdown reflow moves a citation off the line its marker is on
+without touching either. Run 2 flagged the two archival citations newly quoted in
+37.2 plus `scripts/verify-brain.mjs:25`; run 3 flagged a single line, where one
+marker at the end of a wrapped sentence had covered only the first of two citation
+lines. Fixed by giving **every** citation-bearing line its own marker. This is the
+gate's sharpest edge in daily use and the reason 37.2 is wrapped the way it is.
+
+**Run 4 — rc=0:**
+
+```
+[citation gate] 20 citation(s) in the staged diff resolve in range (2 unresolved, skipped).
+```
+
+Six files staged: `BRAIN.md`, `docs/brain/BRAIN_TROUBLESHOOTING.md`,
+`scripts/verify-brain.mjs`, `scripts/probe-audit-write-failure.mjs`,
+`scripts/probe-calendar-day-modal.mjs`, `src/lib/uploadGuard.js`. The anti-rot BRAIN
+check ahead of it passes too, because code and brain are staged together.
+
+**Then a two-case mutation test, to pin the two behaviours the real commit could not
+show.** One `printf` appended a comment to `scripts/probe-calendar-day-modal.mjs`,
+staged it, ran the gate, and restored the file from a pristine copy inside the same
+shell call — `md5sum -c` confirming the tree came back byte-identical:
+
+| case | the added line | result |
+|---|---|---|
+| A | a citation past the end of `src/lib/roomBoard.js` **and** `src/lib/hotel.js:2` | rc=1, naming **only** the bad one |
+| B | the same line with `no-cite-check` on it | rc=0, and the checked count stayed **20** |
+| C | tree restored, `md5sum -c` OK | rc=0, the same 20 |
+
+Case A is the discriminating one. Both citations sat on a single added line and only
+the out-of-range one was reported, so the gate is resolving each named file and
+counting its lines rather than reacting to "there is a number after a colon". Case B
+shows the escape hatch skips the line *before* it is counted, not after — the total
+stayed at 20 instead of rising to 21, which is why a marker on a dense table row
+suppresses that whole row (37.2).
+
+**Scope is Observed, not merely intended.** The working tree holds 748 citations; the
+green run checks **20**. The 4 archival out-of-range occurrences are present in the
+tree for every one of these runs and never block anything.
+
+**Also observed:** `node --check scripts/verify-brain.mjs` OK; suite discovery
+unchanged at **111** and the list fingerprint still `2f3a5c5a`, because the gate went
+into an existing hook instead of a new `verify-*.mjs` (37.4).
+
+## 37.8 Deliberately left alone
+
+* **The 4 out-of-range occurrences — 2 distinct citations — in
+  `.superbrain/explore-reports/*.md`.** Dated snapshots of a past state;
+  re-pointing them would falsify the record they exist to keep. `SKIP_DIR`
+  excludes the directory so the gate agrees.
+* **The in-range-but-wrong class, tree-wide.** 697 resolvable citations cannot be
+  adjudicated by machine (37.1) and reading them all is not a good use of this
+  turn. The convention in 37.1 stops new ones; a transcription pass can audit the
+  existing ones cheaply later.
+* **`base44Client.js`'s `reportParsers.js:1262` citation.** PROTECTED file. Rule 2
+  forbids a v2 copy and rule 3 forbids a wrapper, and a comment cannot be fixed
+  from outside the file it lives in. **OWNER ITEM.**
+* **`probe-calendar-day-modal.mjs`'s 7 LF-only trailing lines.** The file is
+  measurably mixed (280 lines, 270 CR). Normalising them would put unrelated
+  whitespace in this diff.
+* **`csvParser.js:302` / `:307` and `exportData.js:55`.** Measured correct. A
+  citation that is right does not become better for being rewritten.
 

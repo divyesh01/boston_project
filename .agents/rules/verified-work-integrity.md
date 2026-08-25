@@ -30,6 +30,7 @@ cannot run it, say "Not run" and do not claim the change is safe.
 | `src/lib/manualDraft.js`, `src/pages/ManualEntry.jsx` | `node --import ./scripts/_loader-boot.mjs scripts/probe-manual-entry-save.mjs` | `PASSED: 96 passed, 0 failed` |
 | `src/pages/Settings.jsx`'s `handleDeleteAccount` | `node scripts/probe-delete-guard.mjs` | `PASSED: 96 passed, 0 failed` |
 | `scripts/probe-db-archive.mjs`'s `MANIFEST` | as the row above it | also `storage writers classified: 21` |
+| `scripts/verify-brain.mjs` (the citation gate) | `git add <paths> && node scripts/verify-brain.mjs` | exit 0 **and** a printed `[citation gate] N citation(s) … resolve in range` line — silence means it did not run |
 
 ## Invariants that must not be weakened
 
@@ -193,6 +194,26 @@ the defect it was written for.
     the probe pins **both** signatures on the protected files (read-only, as
     `PROTECTED_FILES.md` rule 1 permits). If `db.auth.logout` ever becomes a
     boolean flag, section 10 goes red and this invariant is what explains why.
+19. **`scripts/verify-brain.mjs`'s citation gate exits 0 on its own internal
+    failure, and judges only the STAGED DIFF'S ADDED LINES. Both are deliberate;
+    do not "harden" either.** This script IS `.git/hooks/pre-commit`, and this
+    repo never passes `--no-verify`, so a false block does not mean "fix it
+    first" — it means the tree cannot be committed at all. That asymmetry is why
+    its stance is the opposite of `scripts/audit-gate.mjs`, which defends a
+    security boundary and must fail closed: a green run on a broken citation
+    check costs one unchecked citation, while a wrong block costs every commit.
+    Three temptations to refuse — (a) scanning whole files instead of added
+    lines, which would block a commit for rot its author did not write; (b)
+    turning the `catch` that prints `[citation gate] DID NOT RUN` into an
+    `exit(1)`; (c) failing instead of skipping when a cited path cannot be
+    resolved in the index. Keep `no-cite-check` LINE-scoped, and keep the
+    success line — it must never go green **silently**, because a run that prints
+    neither the pass line nor a failure block is a run that did not happen
+    (section 22's lesson). Both paths are proved in BRAIN_TROUBLESHOOTING.md
+    section 37.7: the gate refused its own commit three times on three real
+    out-of-range citations, then passed at 20 checked, and a restore-verified
+    mutation showed it names only the out-of-range citation on a line carrying
+    two.
 
 ## Deliberate non-changes
 

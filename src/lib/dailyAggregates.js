@@ -41,12 +41,68 @@ function inRange(dateStr, from, to) {
   return true;
 }
 
+// The date column differs per ledger, and the index is named after it, so the
+// bound has to be attached under the right key or planQuery has nothing to plan.
+const LEDGER_DATE_FIELD = {
+  OccupancyDay: 'date',
+  SourceDay: 'date',
+  GrossRevenueDay: 'date',
+  PaymentDay: 'date',
+  Expense: 'expense_date',
+};
+
+/**
+ * A date range expressed as a query condition, so the read is narrowed by an
+ * index instead of by discarding rows afterwards.
+ *
+ * planQuery() in base44Client.js turns `{ property_id: 'X', date: {$gte,$lte} }`
+ * into `[property_id+date].between(...)` and a bare `{ date: {$gte,$lte} }` into
+ * `date.between(...)`; both indexes are declared (localDb v14 for the ledgers,
+ * v20 for the aggregate cache). With no condition to plan it reads the table, so
+ * a one-month view used to materialize every row the property has ever had and
+ * then throw almost all of them away.
+ *
+ * The upper bound is padded because these columns are not guaranteed to be
+ * date-only — `ensure()` below slices ten characters off them for exactly that
+ * reason. A stored '2026-08-31T23:30:00Z' sorts ABOVE '2026-08-31', so an
+ * unpadded between() would silently drop that day. U+FFFF sorts above every
+ * character a timestamp suffix can begin with, which makes the index range a
+ * strict superset of what inRange() accepts — and inRange() still runs on the
+ * result, so the rows returned are identical either way. Narrowing must never be
+ * the thing that decides which rows exist.
+ *
+ * Exported for scripts/probe-ledger-index.mjs, which asserts that superset
+ * property directly rather than trusting the argument above.
+ *
+ * @param {string} from inclusive lower bound, 'YYYY-MM-DD' (empty = unbounded)
+ * @param {string} to inclusive upper bound, 'YYYY-MM-DD' (empty = unbounded)
+ * @returns {{$gte?: string, $lte?: string} | null} null when neither bound is set
+ */
+export function dateBound(from, to) {
+  const cond = {};
+  if (from) cond.$gte = String(from).slice(0, 10);
+  if (to) cond.$lte = `${String(to).slice(0, 10)}\uffff`;
+  return Object.keys(cond).length ? cond : null;
+}
+
 async function fetchLedger(name, propertyId, from, to) {
+  const query = {};
+  const field = LEDGER_DATE_FIELD[name];
+  const bound = field ? dateBound(from, to) : null;
+  if (bound) query[field] = bound;
+
   let rows;
   if (propertyId && propertyId !== 'all') {
-    rows = await db.entities[name].filter({ property_id: propertyId });
+    query.property_id = propertyId;
+    rows = await db.entities[name].filter(query);
   } else {
-    rows = await db.entities[name].list('-created_date', 200000);
+    // No 200000 cap. list() sorted by -created_date and then sliced, so once a
+    // table passed that many rows the OLDEST rows fell out of the rebuild — and
+    // because the Dashboard prefers this cache over the live ledgers, the days it
+    // dropped would have shown as revenue that quietly went missing. The cap
+    // never bounded memory either: the proxy materializes the whole table before
+    // slicing it.
+    rows = await db.entities[name].filter(query, '-created_date');
   }
   return rows.filter((r) => inRange(r.date || r.business_date || r.expense_date, from, to));
 }
@@ -275,6 +331,16 @@ export async function getDailyAggregates({ propertyId = 'all', from = '', to = '
   if (propertyId && propertyId !== 'all') {
     query.property_id = Array.isArray(propertyId) ? { $in: propertyId } : propertyId;
   }
+  // The date range belongs in the query, not in a .filter() afterwards. This is
+  // the read the Dashboard makes on every metric view, and it used to materialize
+  // every day the property had ever recorded in order to render one month of them.
+  // With a single property selected planQuery() drives
+  // [property_id+business_date].between(); with a list or the whole portfolio it
+  // falls back to property_id.anyOf() / a scan, because `business_date` is not in
+  // its single-field driver list — the cache is one row per property-day, so that
+  // fallback reads hundreds of rows rather than the ledgers' tens of thousands.
+  const bound = dateBound(from, to);
+  if (bound) query.business_date = bound;
   const rows = await db.entities.DailyFinancialAggregate.filter(query);
   // Rows written before DAILY_AGGREGATE_VERSION used a different money-unit
   // contract. Do not guess whether a legacy row is dollars or cents: ignore it so

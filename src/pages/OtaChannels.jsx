@@ -11,6 +11,14 @@ import { C, money, money2, pct, num, inRange, commissionFor } from "@/lib/hotel"
 import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, COMMISSION_TYPES } from "@/lib/commissionRates";
 import { ErrorState } from "@/components/ui/status";
 
+// Shown when localStorage refuses a write. The typed value is deliberately left
+// in the input rather than snapped back: updateRate fires on every keystroke, so
+// reverting would make the field impossible to type in. The wording therefore has
+// to carry the whole message — that what is on screen is NOT what is being
+// applied, and that it will not survive a reload.
+const WRITE_REFUSED =
+  "The browser refused to store this change, so the previous rate is still being used for every commission and fee figure on this page, and this edit will be gone when you reload. Storage may be full, or this window may be in private browsing — the browser console names the key that failed.";
+
 export default function OtaChannels() {
   const { dateRange, property, months } = useGlobalFilters();
   const sourcesQ = useSources(dateRange, property, months);
@@ -22,6 +30,14 @@ export default function OtaChannels() {
   const [newSource, setNewSource] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState(null);
+  // This page has no Save button: every edit below writes straight to storage and
+  // the card subtitle promises "changes save to browser". When the write is
+  // refused there is otherwise nothing at all on screen to contradict that, and
+  // commissionFor() keeps reading the OLD rate out of storage while the input
+  // shows the new one. Holds which surface failed ("" | "rates" | "ccFee") so the
+  // message appears on the control the operator just used, and only once — two
+  // mounted role="alert" nodes with the same text announce twice.
+  const [saveError, setSaveError] = useState("");
   const contentRef = useRef(null);
 
   const handleRefresh = async () => { await Promise.all([refetch(), refPay()]); };
@@ -67,7 +83,7 @@ export default function OtaChannels() {
     }
     updated[source] = { ...updated[source], [field]: next };
     setRates(updated);
-    setCommissionRates(updated);
+    setSaveError(setCommissionRates(updated) ? "" : "rates");
   };
 
   const addSource = () => {
@@ -75,7 +91,7 @@ export default function OtaChannels() {
     const key = newSource.trim().toUpperCase();
     const updated = { ...rates, [key]: { type: "percentage", rate: 0, taxExempt: false } };
     setRates(updated);
-    setCommissionRates(updated);
+    setSaveError(setCommissionRates(updated) ? "" : "rates");
     setNewSource("");
   };
 
@@ -83,7 +99,7 @@ export default function OtaChannels() {
     const updated = { ...rates };
     delete updated[source];
     setRates(updated);
-    setCommissionRates(updated);
+    setSaveError(setCommissionRates(updated) ? "" : "rates");
   };
 
   // Memoised: this used to be an inline `.filter(...)` in the JSX, which handed
@@ -99,8 +115,17 @@ export default function OtaChannels() {
     const val = parseFloat(v) || 0;
     const frac = Math.min(0.9999, Math.max(0, val / 100));
     setCcFee(frac);
-    setCcFeeRate(frac);
+    setSaveError(setCcFeeRate(frac) ? "" : "ccFee");
   };
+
+  const writeRefusedBanner = (
+    <p
+      role="alert"
+      className="mb-3 rounded-lg border border-[#FF6B6B]/30 bg-[#FF6B6B]/10 px-3 py-2 text-xs text-[#FFB4B4]"
+    >
+      {WRITE_REFUSED}
+    </p>
+  );
 
   const handleExport = async () => {
     if (exporting || !contentRef.current) return;
@@ -156,6 +181,7 @@ export default function OtaChannels() {
         </div>
 
         <Card title="Channel Performance Matrix" subtitle="Edit commission rates inline — changes save to browser and reflect instantly">
+          {saveError === "rates" ? writeRefusedBanner : null}
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -242,6 +268,7 @@ export default function OtaChannels() {
         </Card>
 
         <Card title="Credit/Debit Card Processing Fee" subtitle="Applied to all card charges and refunds">
+          {saveError === "ccFee" ? writeRefusedBanner : null}
           <div className="flex items-center gap-4">
             <input
               type="number"

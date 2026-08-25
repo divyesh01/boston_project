@@ -1,12 +1,15 @@
-# 4. ALL 36 PAGES (What Users See)
+# 4. ALL 34 PAGES (What Users See)
 
-Every page in the app, what it does, and what files it depends on.
+Every page in the app, what it does, and what files it depends on. The count is the
+number of rows below, verified against `src/pages/*.jsx` (excluding `*.test.jsx`):
+34 on disk, 34 documented, no drift in either direction. This heading read "36" until
+2026-08-25 while the table below listed 34 — the table was right.
 
 ### Main Dashboard
 | Page | File | What It Does | Key Dependencies |
 |------|------|-------------|-----------------|
 | **Dashboard** | `src/pages/Dashboard.jsx` | Main scoreboard: revenue, occupancy, profit, charts | `MoneyKept`, `PaymentMethodChart`, `RevenueTrend`, `PropertyRanking`, `OtaMatrix`, `ExecutiveCharts`, `LowOccAlert`, `WeatherPanel`, `YieldAdvisor`, `PricingPanel` |
-| **Statistics** | `src/pages/Statistics.jsx` | Detailed stats with filters, MTD, YTD comparisons | `statisticsAnalytics.js`, `columnarAnalytics.js` |
+| **Statistics** | `src/pages/Statistics.jsx` | Detailed stats with filters, MTD, YTD comparisons | `statisticsAnalytics.js`, `MetricExplorer`, `useHotelData.js` |
 | **Compare** | `src/pages/Compare.jsx` | Side-by-side property and period comparison | `CompareBars`, `CompareCard`, `ChannelRevenue` |
 | **MtdGrowth** | `src/pages/MtdGrowth.jsx` | Month-to-date growth velocity tracking | `calculationService.js` |
 | **Forecasting** | `src/pages/Forecasting.jsx` | Predict future revenue (1, 7, 30, 90 day) | `forecasting.js` |
@@ -17,7 +20,7 @@ Every page in the app, what it does, and what files it depends on.
 | **Import** | `src/pages/Import.jsx` | Upload CSV files from HotelKey, auto-classify, atomic undo | `csvParser.js`, `universalParser.js`, `parser.worker.js`, `importValidation.js`, `reportParsers.js` |
 | **ManualEntry** | `src/pages/ManualEntry.jsx` | Enter data by hand, copy-paste from spreadsheets | `manualEntryImport.js` |
 | **Housekeeping** | `src/pages/Housekeeping.jsx` | Room status board (clean/dirty/inspected), maid assignment | `housekeepingService.js`, `housekeepingConfig.js`, `laborOptimization.js` |
-| **RoomBoard** | `src/pages/RoomBoard.jsx` | Visual room grid: check-in/out, real-time CRDT sync | `roomBoard.js`, `crdtSync.js`, `pricingEngine.js` |
+| **RoomBoard** | `src/pages/RoomBoard.jsx` | Visual room grid: check-in/out, live cache invalidation | `roomBoard.js`, `pricingEngine.js`, `pricingSettings.js`, `realtime.js` |
 | **MonthlyCalendar** | `src/pages/MonthlyCalendar.jsx` | Heatmap calendar: daily occupancy + revenue tiers | `calendarGrids.js`, `revenueThresholds.js`, `hotel.js` |
 
 ### Finance
@@ -71,10 +74,11 @@ These are the files in `src/lib/` -- the brains of the app. Grouped by what they
 |------|-------------|-------------------|
 | `calculationService.js` | **Main calculator**: ADR, RevPAR, occupancy, net revenue, weighted averages | Dashboard numbers change. Test ALL financial displays. |
 | `dailyAggregates.js` | Builds daily summary rows from raw data, caches results | Dashboard cards break. The room_revenue typo lived here (Problem #3). |
-| `financialReconciliation.js` | 4-way cross-check: PMS reports, gateway auth, batch settlement, bank deposits | Revenue drift alerts break. |
+| `financialReconciliation.js` | 4-way cross-check: PMS reports, gateway auth, batch settlement, bank deposits | Nothing on screen changes — no page imports it (measured 2026-08-24: `hotelKeyRegression.test.js` + `probe-financial-invariant.mjs` only). Drift is a `console.warn`, not an alert. |
 | `RevenueReconciliation.js` | 3-path revenue matcher (Path 1 vs 2 vs 3) | Revenue audit breaks. |
-| `decimal.js` | Integer-cents math: toCents(), fromCents(), multiply(), divide() -- prevents float errors | ALL money calculations break. Critical for accuracy. |
-| `commissionRates.js` | OTA commission models (fixed, %, none, tax-exempt) | Channel revenue goes wrong. |
+| `decimal.js` | Integer-cents math: toCents(), fromCents(), multiply(), divide() -- prevents float errors | ALL money calculations break. Critical for accuracy. `Math.round(n * SCALE)` inside it is not a violation — that IS the dollars-to-cents boundary. Importing this module opts a file into the cents domain, and `scripts/probe-float-money.mjs` then forbids float-dollar rounding in it unless the site is allowlisted with a reason. Measured 2026-08-24: 26 modules have opted in. |
+| `settingsStore.js` | The ONLY localStorage reader/writer the settings modules may use. Readers return the caller's fallback and log the key they discarded; writers return `true`/`false` and never throw. Measured 2026-08-24: 7 importing modules, 9 storage keys. | A refused write becomes silent again. Before 2026-08-24 those 7 modules carried 9 hand-written `catch {}` blocks between them, so a quota-exhausted or private-browsing write was swallowed while `notifySettingsChanged()` still fired — the page showed "Saved" and the app kept computing on the OLD rate (measured: 22% typed, 15% applied = $70 unreported per $1,000 of Expedia gross). **Never `void` a writer's return value.** |
+| `commissionRates.js` | OTA commission models (fixed, %, none, tax-exempt) | Channel revenue goes wrong. Its setters return `false` when the browser refuses the write — a caller that ignores that shows a rate the engine is not using. `commissionFor()` resolves the LONGEST matching key, so editing `EXPEDIA` does not move `EXPEDIA HOTEL COLLECT`. |
 | `expenseCategories.js` | Expense type definitions | Expense tracking breaks. |
 | `taxConfig.js` | Tax configuration rules | Tax calculations go wrong. |
 | `taxSettings.js` | Date-windowed property-specific tax rates | Tax liability miscalculated. |
@@ -119,9 +123,9 @@ These are the files in `src/lib/` -- the brains of the app. Grouped by what they
 | File | What It Does | If You Edit This... |
 |------|-------------|-------------------|
 | `anomalyDetector.js` | Welford's algorithm + Benford's Law + z-score outliers | Fraud detection breaks. |
-| `fraudScoringEngine.js` | Scores transactions: rate overrides, off-hours, large cash (>$200) | Fraud alerts stop. |
+| `fraudScoringEngine.js` | Clerk-shift risk scoring: cash-adjustment z-score, rate overrides, off-hours (01:00–05:00) activity over $50. **Two entry points that disagree on weights and cut-offs** — read the module header before wiring either in | Nothing on screen changes — imported only by `hotelKeyRegression.test.js`. There is no fraud alert wired to a page yet. |
 | `statisticsAnalytics.js` | Statistical analysis engine for Statistics page | Statistics page breaks. |
-| `columnarAnalytics.js` | Column-level data analysis | Data Intelligence breaks. |
+| `columnarAnalytics.js` | **Unwired scaffold.** Zero importers anywhere; every metric array is built at length 0 with no ingestion path, so it can only ever return zeros | Nothing breaks. Data Intelligence runs on `dataScanner.js` + `aiInsights.js`. Deletion proposed — see the file header. |
 | `transactionAnalytics.js` | Transaction pattern analysis, employee performance | Transaction insights wrong. |
 | `aiEngine.js` | AI prompt builder + intent parser + date resolver | AI Assistant answers wrong. |
 | `aiInsights.js` | AI-generated dashboard insight cards | AI insight cards break. |
@@ -142,9 +146,9 @@ These are the files in `src/lib/` -- the brains of the app. Grouped by what they
 | `housekeepingConfig.js` | Housekeeping settings | Housekeeping defaults wrong. |
 | `roomBoard.js` | Room grid state management | Room board view breaks. |
 | `weatherService.js` | Live weather data + revenue correlation | Weather widget breaks. |
-| `weatherSettings.js` | Weather display configuration | Weather display wrong. |
+| `weatherSettings.js` | Property coordinates for the forecast (never an API key — that is server-side) | More than the weather card. Traced 2026-08-24: WeatherPanel fetches with these coordinates and persists `WeatherSnapshot` rows, `usePricing.js` builds `weatherByDate` from those rows, and `pricingEngine.js` turns it into `weatherMultiplierBps` — so wrong coordinates quietly move every recommended rate. |
 | `laborOptimization.js` | Staff scheduling optimization | Labor cost estimates wrong. |
-| `yieldOptimizer.js` | Revenue yield optimization suggestions | Yield suggestions wrong. |
+| `yieldOptimizer.js` | Rate recommendation in float dollars. **Unwired**, and it disagrees with the live `pricingEngine.js` by up to $25.60/night on identical inputs | Nothing on screen changes — imported only by `hotelKeyRegression.test.js`. The Dashboard's yield panel computes its own advice; see the file header. |
 | `reputationService.js` | Guest review aggregation + sentiment | Reviews page breaks. |
 | `actionCenter.js` | Action item management (Fix Today/Investigate/Opportunity) | Action Center page breaks. |
 | `anomalySignoff.js` | Anomaly triage sign-off workflow | Anomaly triage breaks. |
@@ -153,7 +157,7 @@ These are the files in `src/lib/` -- the brains of the app. Grouped by what they
 | File | What It Does | If You Edit This... |
 |------|-------------|-------------------|
 | `query-client.js` | React Query config (data fetching cache) | ALL data fetching breaks. |
-| `crdtSync.js` | Yjs CRDT real-time sync operations | Multi-user editing breaks. |
+| `crdtSync.js` | Hand-rolled LWW-Set / OR-Map / vector clocks. **Not Yjs** (that is `src/crdt.jsx`) and **unwired** — the only importer is `probe-crdt-convergence.mjs` | Nothing breaks. Multi-user editing runs on `src/crdt.jsx` (Yjs), which `App.jsx` wraps the whole app in. Editing this only affects that one probe. |
 | `ySync.js` | Yjs sync utilities | Real-time sync breaks. |
 | `realtime.js` | Real-time data subscription | Live updates stop. |
 | `settingsBus.js` | Settings event bus (BroadcastChannel) | Settings do not propagate across tabs. |
@@ -200,7 +204,7 @@ These are the files in `src/lib/` -- the brains of the app. Grouped by what they
 | `ExecutiveCharts.jsx` | Multi-series area/bar: portfolio occupancy and revenue pacing | Multiple sources |
 | `LowOccAlert.jsx` | Low occupancy warning banner | `OccupancyDay` entity |
 | `WeatherPanel.jsx` | Weather forecast + revenue correlation | `getWeather` function |
-| `YieldAdvisor.jsx` | Revenue optimization tips | `yieldOptimizer.js` |
+| `YieldAdvisor.jsx` | Revenue optimization tips — computes nothing; three if-branches on occupancy emit prose with literal dollar amounts | `hotel.js` (`pct`, `money2`), `ui-exec/Card` |
 | `PricingPanel.jsx` | Dynamic pricing overview card | `pricingEngine.js` |
 | `ModuleCards.jsx` | Feature module quick access tiles | Navigation config |
 | `ClerkAudit.jsx` | Clerk shift audit view | `ClerkShiftRecord` entity |

@@ -5,6 +5,7 @@
 
 import { notifySettingsChanged } from "@/lib/settingsBus";
 import { getTaxSettings, saveTaxSettings } from "@/lib/taxSettings";
+import { readObjectSetting, writeJsonSetting } from "@/lib/settingsStore";
 
 const TAX_KEY = "rri_tax_config_v1";
 
@@ -23,38 +24,48 @@ const DEFAULT_CONFIG = {
 };
 
 export function getTaxConfig() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(TAX_KEY) || "{}");
-    return {
-      taxRate: typeof stored.taxRate === "number" ? stored.taxRate : DEFAULT_CONFIG.taxRate,
-      taxEnabled: stored.taxEnabled !== undefined ? stored.taxEnabled : DEFAULT_CONFIG.taxEnabled,
-      sources: stored.sources?.length ? stored.sources : TAX_SOURCES,
-    };
-  } catch {
-    return { ...DEFAULT_CONFIG };
-  }
+  const stored = readObjectSetting(TAX_KEY, {});
+  return {
+    taxRate: typeof stored.taxRate === "number" ? stored.taxRate : DEFAULT_CONFIG.taxRate,
+    taxEnabled: stored.taxEnabled !== undefined ? stored.taxEnabled : DEFAULT_CONFIG.taxEnabled,
+    sources: stored.sources?.length ? stored.sources : TAX_SOURCES,
+  };
 }
 
+/**
+ * @param {Object} config
+ * @returns {boolean} true only if the config AND the default tax period it syncs
+ *   are now stored. A false return means the PREVIOUS tax rate is still what every
+ *   tax figure is computed from, so a caller that closes a dialog on success — as
+ *   TaxConfigModal does — must check it.
+ */
 export function setTaxConfig(config) {
-  try { localStorage.setItem(TAX_KEY, JSON.stringify(config)); } catch {}
-  syncDefaultTaxSetting(config.taxRate);
+  const saved = writeJsonSetting(TAX_KEY, config);
+  const synced = syncDefaultTaxSetting(config.taxRate);
   notifySettingsChanged();
+  return saved && synced;
 }
 
+/**
+ * Mirrors the single legacy tax rate onto the newest catch-all tax period.
+ *
+ * @param {number} rate
+ * @returns {boolean} true when there was nothing to write or the write landed
+ */
 function syncDefaultTaxSetting(rate) {
   const r = Number(rate);
-  if (!Number.isFinite(r) || r <= 0) return;
+  if (!Number.isFinite(r) || r <= 0) return true;
   const list = getTaxSettings();
   const defaults = list
     .map((rec, i) => ({ ...rec, _i: i }))
     .filter((rec) => rec.property_id === "*" || !rec.property_id);
-  if (!defaults.length) return;
+  if (!defaults.length) return true;
   defaults.sort((a, b) => String(b.effective_start || "").localeCompare(String(a.effective_start || "")));
   const idx = defaults[0]._i;
   const next = [...list];
   const { _i, ...rest } = { ...next[idx], state_rate: r, city_rate: 0, other_rate: 0 };
   next[idx] = rest;
-  saveTaxSettings(next);
+  return saveTaxSettings(next);
 }
 
 export function getTaxRate() {

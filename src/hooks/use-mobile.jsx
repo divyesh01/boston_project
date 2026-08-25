@@ -20,7 +20,14 @@ export function useIsMobile() {
     const onChange = () => {
       try {
         setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
-      } catch {}
+      } catch {
+        // Silent by design, and unreachable in practice: neither
+        // window.innerWidth nor a React state setter throws. Kept as a guard
+        // because the failure mode that IS real — matchMedia itself throwing —
+        // is handled above with a one-shot innerWidth fallback, and a handler
+        // bound to every viewport change is the last place that should be able
+        // to raise an error about a layout hint.
+      }
     }
     const add = mql.addEventListener ? mql.addEventListener.bind(mql) : mql.addListener.bind(mql);
     const remove = mql.removeEventListener ? mql.removeEventListener.bind(mql) : mql.removeListener.bind(mql);

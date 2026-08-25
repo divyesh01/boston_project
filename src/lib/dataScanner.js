@@ -1,12 +1,6 @@
 import { db, runInTransaction } from '@/api/base44Client';
 import { parseCsvText, rowsToObjects, convertDate, isIsoDate, parseAmount } from '@/lib/csvParser';
 
-const ENTITY_TABLES = [
-  'OccupancyDay', 'SourceDay', 'GrossRevenueDay', 'PaymentDay',
-  'ClerkShiftRecord', 'Expense', 'PayrollRun', 'UploadedReport',
-  'Staff', 'Property', 'User', 'ImportSession',
-];
-
 export class DataScanner {
   constructor() {
     this.healthHistory = [];

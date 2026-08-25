@@ -50,7 +50,16 @@ export default function Layout() {
         hist[group.to] = pathname;
         sessionStorage.setItem("rri_tab_history", JSON.stringify(hist));
       }
-    } catch (e) {}
+    } catch {
+      // Deliberately silent, and it must stay that way. This remembers which
+      // sub-route you were last on inside a nav group so the tab returns you
+      // there; losing it costs a nicety, nothing more. The effect runs on EVERY
+      // navigation, so reporting a blocked sessionStorage (private browsing,
+      // storage disabled) would put an error in the console — or a toast on
+      // screen — on every single click, describing a feature the owner never
+      // asked about. Contrast settingsStore.js, where a swallowed write changes
+      // money figures and therefore must be loud.
+    }
   }, [pathname]);
 
   // Page transitions now come from the shared motion tokens, so navigation uses

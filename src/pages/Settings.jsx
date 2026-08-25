@@ -147,9 +147,24 @@ export default function Settings() {
       rotateCsrfToken();
       return;
     }
-    setCommissionRates(rates);
-    setCcFeeRate(ccFee);
-    setCcFeeOnRefunds(ccRefunds);
+    const stored = [
+      setCommissionRates(rates),
+      setCcFeeRate(ccFee),
+      setCcFeeOnRefunds(ccRefunds),
+    ].every(Boolean);
+    if (!stored) {
+      // The write was refused by the browser, so the PREVIOUS rates are still
+      // what every net-revenue figure in the app is computed from. Showing the
+      // "Saved" tick here is how an owner ends up billing commission at a rate
+      // they replaced weeks ago. Nothing to audit-log either: nothing changed.
+      toast({
+        variant: "destructive",
+        title: "Not saved",
+        description: "The browser refused to store these rates, so the previous commission and card-fee rates are still in effect and will come back when you reload. Storage may be full, or this window may be in private browsing. See the browser console for the exact key.",
+      });
+      rotateCsrfToken();
+      return;
+    }
     try {
       await db.audit.log({
         username: me?.username || "settings",
@@ -217,7 +232,15 @@ export default function Settings() {
       return;
     }
     const clean = taxRows.map(({ _key, ...rest }) => rest);
-    saveTaxSettings(clean);
+    if (!saveTaxSettings(clean)) {
+      toast({
+        variant: "destructive",
+        title: "Not saved",
+        description: "The browser refused to store these tax periods, so the previous rates are still what every tax figure is computed from and will come back when you reload. Storage may be full, or this window may be in private browsing. See the browser console for the exact key.",
+      });
+      rotateCsrfToken();
+      return;
+    }
     try {
       await db.audit.log({
         username: me?.username || "settings",
@@ -386,7 +409,15 @@ export default function Settings() {
       rotateCsrfToken();
       return;
     }
-    saveAlertThresholds(thresholds);
+    if (!saveAlertThresholds(thresholds)) {
+      toast({
+        variant: "destructive",
+        title: "Not saved",
+        description: "The browser refused to store these alert thresholds, so the previous ones are still in effect. Storage may be full, or this window may be in private browsing.",
+      });
+      rotateCsrfToken();
+      return;
+    }
     setThresholdSaved(true);
     setTimeout(() => setThresholdSaved(false), 2000);
     rotateCsrfToken();
@@ -404,7 +435,15 @@ export default function Settings() {
       rotateCsrfToken();
       return;
     }
-    saveRevenueThresholds(revThresholds);
+    if (!saveRevenueThresholds(revThresholds)) {
+      toast({
+        variant: "destructive",
+        title: "Not saved",
+        description: "The browser refused to store these revenue bands, so the previous ones are still in effect. Storage may be full, or this window may be in private browsing.",
+      });
+      rotateCsrfToken();
+      return;
+    }
     setRevSaved(true);
     setTimeout(() => setRevSaved(false), 2000);
     rotateCsrfToken();

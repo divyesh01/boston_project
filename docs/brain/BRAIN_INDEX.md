@@ -1,7 +1,7 @@
-# 🗃️ 20. APPENDIX: ALL 422 FILES
+# 🗃️ 20. APPENDIX: ALL 425 FILES
 
 > [!NOTE]
-> For complete reference, here is the exhaustive list of every single file in the project. Use this to verify existence before creating new files.
+> For complete reference, here is the exhaustive list of every file under `src/`, `scripts/` and `base44/` — 273 + 110 + 42 = 425, which is what the heading counts. It is not every file in the repository (measured 2026-08-24: `git ls-files` reports 1316 tracked files; the rest are config, workflows, docs, public assets and lockfiles). Use this to verify existence before creating new files in those three trees.
 
 <details>
 <summary><strong>Click to expand the full file catalog</strong></summary>
@@ -91,6 +91,7 @@ scripts\probe-db-archive.mjs
 scripts\probe-delete-guard.mjs
 scripts\probe-deploy-config.mjs
 scripts\probe-financial-invariant.mjs
+scripts\probe-float-money.mjs
 scripts\probe-hotel.mjs
 scripts\probe-housekeeping.mjs
 scripts\probe-idle-polling.mjs
@@ -120,6 +121,7 @@ scripts\probe-session-expiry.mjs
 scripts\probe-session-noop.mjs
 scripts\probe-session-slide.mjs
 scripts\probe-session-sliding.mjs
+scripts\probe-settings-persistence.mjs
 scripts\probe-startup.mjs
 scripts\probe-ui-disabled-reason.mjs
 scripts\probe-ui-feedback.mjs
@@ -363,6 +365,7 @@ src\lib\securityUtils.js
 src\lib\securityUtils.test.js
 src\lib\sessionChannel.js
 src\lib\settingsBus.js
+src\lib\settingsStore.js
 src\lib\sound.js
 src\lib\statisticsAnalytics.js
 src\lib\taxConfig.js

@@ -4,11 +4,21 @@ import { getTaxConfig, setTaxConfig, formatTaxRate } from "@/lib/taxConfig";
 
 export default function TaxConfigModal({ open, onClose }) {
   const [config, setConfig] = useState(getTaxConfig());
+  // Closing the dialog is this component's only "saved" signal, so it must not
+  // close on a write the browser refused: the tax rate every charge is computed
+  // from would still be the old one, with nothing on screen to say so.
+  const [saveError, setSaveError] = useState("");
 
   if (!open) return null;
 
   const handleSave = () => {
-    setTaxConfig(config);
+    if (!setTaxConfig(config)) {
+      setSaveError(
+        "The browser refused to store this tax configuration. The previous tax rate is still being applied to every charge. Storage may be full, or this window may be in private browsing — check the browser console for the key that failed."
+      );
+      return;
+    }
+    setSaveError("");
     onClose();
   };
 
@@ -117,6 +127,14 @@ export default function TaxConfigModal({ open, onClose }) {
         </div>
 
         {/* Actions */}
+        {saveError ? (
+          <p
+            role="alert"
+            className="mb-3 rounded-lg border border-[#FF6B6B]/30 bg-[#FF6B6B]/[0.08] px-3 py-2 text-xs text-[#FFB4B4]"
+          >
+            {saveError}
+          </p>
+        ) : null}
         <div className="flex justify-end gap-3">
           <button
             onClick={onClose}

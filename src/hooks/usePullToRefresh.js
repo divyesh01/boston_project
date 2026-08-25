@@ -37,7 +37,23 @@ export function usePullToRefresh(refetch) {
         setPullDist(threshold);
         try {
           await refetch();
-        } catch {}
+        } catch {
+          // Silent by design, given what the three callers actually pass.
+          // Dashboard and OtaChannels pass a Promise.all of react-query refetch
+          // functions; Payments passes one directly. react-query's refetch
+          // RESOLVES with a result object when the query fails rather than
+          // rejecting (throwOnError is off), so a failed reload arrives here as
+          // an ordinary return and this branch is close to unreachable. The
+          // pages surface the failure from the query's own isError state —
+          // Payments destructures `isError, error` for exactly that — so there
+          // is nothing to report here that the screen is not already saying.
+          //
+          // What must not happen is a spinner that never stops, and that is why
+          // setRefreshing(false) below sits OUTSIDE this catch: the pull resets
+          // even if the promise rejects. If a future caller passes a plain async
+          // function that can reject, the honest answer changes — surface the
+          // error to that caller instead of widening this swallow.
+        }
         setRefreshing(false);
       }
       currentPull.current = 0;

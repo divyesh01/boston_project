@@ -38,7 +38,16 @@ async function serial(target) {
 // imports, double-clicks, and files imported twice under different names.
 async function dedupePropertyRows(entity, propertyId, keyFn) {
   try {
-    const all = await db.entities[entity].filter(propertyId ? { property_id: propertyId } : {}, "created_date", 100000);
+    // Reading the property's whole history is the point here — this pass also
+    // clears duplicates left by earlier imports, so it cannot be narrowed to the
+    // dates in the file just landed. It is index-driven either way: planQuery()
+    // turns { property_id } into property_id.equals(). What is gone is the 100000
+    // cap. Sorted ascending by created_date and then sliced, the rows it dropped
+    // were the NEWEST ones — the rows this import just wrote. A property past that
+    // many rows would have had the dedupe pass silently stop covering exactly the
+    // rows it exists to check. The cap never bounded memory: the proxy
+    // materializes the whole table before slicing it.
+    const all = await db.entities[entity].filter(propertyId ? { property_id: propertyId } : {}, "created_date");
     const seen = new Map();
     const removeIds = [];
     for (const r of all) {
@@ -334,16 +343,25 @@ async function skipExisting(entity, rows, keyFn, propertyId) {
   else if ('review_date' in sample) dateField = 'review_date';
 
   let existing = [];
+  // No row cap on any of these three reads. `seen` below decides which incoming
+  // rows are duplicates, so a truncated read does not merely slow things down —
+  // it makes rows that ARE already stored look new and imports them a second
+  // time. Both fallback branches sorted ascending and sliced, so the rows they
+  // dropped were the most recent ones, which is where duplicates actually cluster.
   if (dateField) {
     const dates = [...new Set(rows.map(r => r[dateField]).filter(Boolean))];
     if (dates.length > 0) {
+       // planQuery() plans this as date.anyOf(dates) for `date`/`shift_date`
+       // entities. `business_date` and `review_date` are indexed but are not in
+       // its driver list, so those two fall back to property_id.equals() — a
+       // wider scan, same rows.
        filter[dateField] = { $in: dates };
-       existing = await db.entities[entity].filter(filter, dateField, 100000);
+       existing = await db.entities[entity].filter(filter, dateField);
     } else {
-       existing = await db.entities[entity].filter(filter, "created_date", 100000);
+       existing = await db.entities[entity].filter(filter, "created_date");
     }
   } else {
-    existing = await db.entities[entity].filter(filter, "created_date", 100000);
+    existing = await db.entities[entity].filter(filter, "created_date");
   }
 
   const seen = new Set(existing.map(keyFn));
@@ -1771,10 +1789,17 @@ async function doImport(scanResult, meta, importId) {
 
     let newRows = rows;
     if (!forceImport) {
+      // No row cap. `seen` below is what decides whether an incoming row is a
+      // duplicate, so truncating this read does not make the import faster — it
+      // makes rows that ARE already stored look new and imports them a second
+      // time, on the ledger whose totals have to reconcile to the cent. The old
+      // 1000000 cap sorted by "date" ASCENDING and then sliced, so the rows it
+      // dropped were the most recent ones: exactly where a re-export overlaps.
+      // It never bounded memory either — the proxy materializes the whole table
+      // before slicing it.
       const existing = await db.entities.TransactionLine.filter(
         restMeta.propertyId ? { property_id: restMeta.propertyId } : {},
-        "date",
-        1000000
+        "date"
       );
       const seen = new Set(existing.map((r) => r.dedupe_key));
       newRows = rows.filter((r) => !seen.has(r.dedupe_key));

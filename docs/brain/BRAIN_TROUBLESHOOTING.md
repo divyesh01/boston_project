@@ -385,7 +385,8 @@ be excluded for failing; that is the one thing the runner exists to surface.
 
 ### 22.3 A reduced `--timeout` manufactures failures (my own mistake, 2026-08-20)
 
-The 70 suites run serially and take 12-25 minutes end to end. The sandbox used to
+The suites run serially: the 70 of the time took 12-25 minutes end to end, and the
+list is 111 suites now, so budget more than that. The sandbox used to
 drive them kills any single command at ~178s **and discards its output**. Faced with
 that, I lowered `--timeout` so a whole run would fit. It does not work that way: the
 per-suite budget is not the run length, so all that changed was which suites got
@@ -2085,4 +2086,149 @@ an unverified claim into a green tick. Same class of hole as section 30's
   behaviour cannot drift silently.
 * **`MS_PER_MIN` at `timecardCalc.js:32` is declared and never referenced.**
   Pre-existing dead code, unrelated to this defect.
+
+---
+
+# 33. THE SILENT-FAILURE SWEEP, AND TWO SCANNERS THAT WERE WRONG IN OPPOSITE DIRECTIONS
+
+> [!NOTE]
+> Two audit items landed together: *"empty catch blocks swallow errors"* and
+> *"pages with no loading/error/empty state handling"*. Both arrived as scanner
+> output with alarming counts. Measured against the shipped code, the code was in
+> far better shape than either claimed. Every figure below was counted on
+> 2026-08-25 by brace-matching each `catch` body with comments stripped.
+
+## 33.1 The census, and the rule it produced
+
+| Count | What |
+|------:|------|
+| 202 | `catch` blocks in `src/**/*.{js,jsx}` |
+| 36 | with no executable body |
+| 9 | that a naive scan calls "bare" |
+| 6 | actually bare |
+| **0** | **bare, in live product code** |
+
+The six: `base44Client.js:1293`, `:1301`, `securityUtils.js:85`, `:539` — all four
+**PROTECTED**, read-only, not touchable without owner authorization;
+`securityUtils.test.js:80` — test teardown deliberately swallowing an expected
+throw; and `app-params.js:63` — a module with zero importers.
+
+The rule governing the other 30 is not "can this throw" but **would reporting it
+tell the user something true that the screen is not already saying?** If silence
+is the honest answer it must say why, inline. Two worked examples, opposite
+verdicts:
+
+* `Layout.jsx:53` remembers which sub-route you were last on inside a nav group.
+  It runs on **every** navigation, so reporting a blocked `sessionStorage`
+  (private browsing, storage off) means an error per click about a nicety.
+  **Silence is correct**, and the comment there says so.
+* `settingsStore.js` is the counter-example. Before 2026-08-24 the settings
+  modules carried nine hand-written `catch {}` between them. A refused write was
+  swallowed while `notifySettingsChanged()` still fired — the page said "Saved"
+  and the engine kept computing on the OLD rate. Measured: 22% typed, 15%
+  applied, **$70 unreported per $1,000 of Expedia gross.** **Silence was a money
+  defect.** Its writers now return `true`/`false`; never `void` that return.
+
+## 33.2 A naive `catch {` regex matches its own documentation
+
+Three of the nine "bare" hits are the literal string `catch {}` **inside
+explanatory comments** describing the defect that was already fixed:
+`settingsStore.js:9`, `DataIntelligence.jsx:120`, `OtaChannels.jsx:134`.
+
+A scanner that matches `catch\s*(\([^)]*\))?\s*\{` and then brace-matches will
+find `catch {` in prose, read the very next `}` as an empty body, and file the
+comment as the defect. **Strip comments before matching** — otherwise every fix
+that documents itself is re-reported as a new finding, and the fix looks like
+the bug.
+
+## 33.3 The caller contract that settled the one real-looking case
+
+`usePullToRefresh.js:40` looked like a genuine swallow — `await refetch()` in a
+`try`, nothing in the `catch`. It is not, and the reason lives in the callers:
+
+| Caller | What it passes |
+|--------|----------------|
+| `Dashboard.jsx:140` | `Promise.all([refOcc(), refSrc(), refClerk(), refGross()])` |
+| `OtaChannels.jsx:44` | `Promise.all([refetch(), refPay()])` |
+| `Payments.jsx:24` | one react-query `refetch`, directly |
+
+All three are react-query refetch functions, and **react-query's `refetch`
+resolves with a result object when the query fails rather than rejecting**
+(`throwOnError` is off). A failed reload therefore arrives at that `catch` as an
+ordinary return and the branch is close to unreachable; the pages surface failure
+from the query's own `isError` — `Payments.jsx:19` destructures `isError, error`
+for exactly that purpose.
+
+What does matter there: `setRefreshing(false)` sits **outside** the catch, so a
+rejection cannot leave the spinner running forever. If a future caller passes a
+plain async function that *can* reject, the honest answer changes — surface it to
+that caller instead of widening the swallow.
+
+## 33.4 The state-coverage scan found nothing, because its patterns were the wrong flavour
+
+The scan flagged 7 of the 34 pages as matching none of 13 loading/error/empty
+patterns. All seven are clean:
+
+| Page | Why it matched nothing |
+|------|------------------------|
+| `AuditLog.jsx` | hand-rolled lowercase `loading` / `loadError` — see below |
+| `ChangePassword.jsx` | `loading` (22) and `error` (23), both rendered (110-111, 114-115) |
+| `DataTemplate.jsx` | static reference page; one `expanded` useState, nothing to fetch |
+| `DemoYDoc.jsx` | 24 lines total |
+| `Login.jsx`, `ForgotPassword.jsx`, `ResetPassword.jsx` | PROTECTED auth pages with their own state handling |
+
+The 13 patterns were react-query-flavoured (`isLoading`, `isError`, `useQuery`,
+`<ErrorState>`, `<EmptyState>`), so pages using hand-rolled `useState` fell
+straight through. **"Matches none of the patterns" is not "has no state
+handling."**
+
+`AuditLog.jsx` is in fact the best-behaved page in the repo on this axis. It
+distinguishes **four** states where most code manages two: loading (531), read
+failure (533 — *"This is a read failure, not an empty log — events may exist that
+are not shown."*), truly empty (546), and filtered-empty (552 — *"events are
+loaded — the filters exclude all of them"*), plus `maybeTruncated` at 403.
+
+## 33.5 What the scans did surface: stale numbers in these very docs
+
+Corrected 2026-08-25, all five present-tense structural claims:
+
+| Where | Was | Is |
+|-------|-----|-----|
+| `README.md:8` | 36 pages | **34** (16 entities and 19 functions were already right) |
+| `BRAIN.md:22` | mermaid `36 Pages` | **34** |
+| `BRAIN_FRONTEND.md:1` | `ALL 36 PAGES` | **ALL 34 PAGES** — the table below it already listed 34 |
+| `BRAIN_BACKEND.md:361` | "auto-discovers all 83 suites" | **111** |
+| `BRAIN_TROUBLESHOOTING.md:388` | "The 70 suites run serially" | 70 then, **111** now |
+
+Measured baseline, 2026-08-25: **34** pages (non-test `.jsx` in `src/pages`, and
+the enumeration in BRAIN_FRONTEND matches file-for-file, no drift either way);
+**282** `.js`+`.jsx` in `src`; **16** entities; **19** serverless functions;
+**111** suites at list fingerprint `2f3a5c5a`.
+
+**Dated records were left alone deliberately.** A line like *"Measured baseline,
+2026-08-20 (list `53aa539e`): 72 suites…"* is an observation with a date on it.
+Rewriting it to today's number does not fix rot, it falsifies the record. Only
+present-tense structural claims are rot.
+
+## 33.6 Deliberately left alone
+
+* **The four protected bare catches** (`base44Client.js:1293`/`:1301`,
+  `securityUtils.js:85`/`:539`). Read-only per PROTECTED_FILES.md.
+* **`app-params.js:63`** — bare, but the module has zero importers. Reported, not
+  edited.
+* **`securityUtils.test.js:80`** — a test swallowing an expected throw in
+  teardown. Correct as written.
+* **`upgrade_system.cjs:53` and `upgrade_system2.cjs:50`** hard-code
+  `getSec(/4\. ALL 36 PAGES/i)`, and `getSec()` throws on a non-match. They read
+  `BRAIN.md`, which has not contained that heading since the hub/spoke split, so
+  **both already threw before the rename** — measured: `grep -c` returns 0.
+  Neither is wired into `package.json`, `.husky/`, `.github/` or `scripts/`.
+  Unwired one-shot codemods; reported, not deleted.
+* **`base44/functions/validateUpload/`** is an empty directory with no `entry.*`
+  file and **no tracked contents** (`git ls-files` returns nothing). It is a
+  local leftover from the deleted orphan test, not part of the repo — which is
+  why "19 serverless functions" is the correct count against 20 directories.
+* **`src/components/ui/empty-state.jsx`** — 86 lines, zero importers, duplicates
+  the live *named* `EmptyState` in `ui/status.jsx`. Reported, not deleted.
+
 

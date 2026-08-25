@@ -14,6 +14,13 @@ import { ErrorState } from "@/components/ui/status";
 
 const toCentsFromDollars = (d) => Math.round((Number(d) || 0) * 100);
 
+// savePricingConfig returns false when the browser refuses the write. This page
+// has no Save button — every control writes on change — so without this the panel
+// would show the new multipliers and base rates while the engine kept quoting
+// from the old stored config, and the edit would vanish on reload.
+const WRITE_REFUSED =
+  "The browser refused to store this pricing change, so the engine is still using the previous configuration and this edit will be gone when you reload. Storage may be full, or this window may be in private browsing — the browser console names the key that failed.";
+
 const PRESETS = {
   Conservative: { minMultiplier: 0.85, maxMultiplier: 1.3, demandSensitivity: 0.35, competitorWeight: 0.4 },
   Balanced: { minMultiplier: 0.75, maxMultiplier: 1.6, demandSensitivity: 0.5, competitorWeight: 0.3 },
@@ -40,8 +47,21 @@ export default function Pricing() {
 
   const { forecast, enabled, isError: forecastError, error: forecastErr, refetch: refetchForecast } = usePricingForecast(horizon);
 
-  const update = (patch) => { const next = { ...cfg, ...patch }; setCfg(next); savePricingConfig(next); };
-  const applyPreset = (name) => { update(PRESETS[name]); setNotice({ type: "ok", text: `Applied ${name} pricing profile.` }); };
+  const update = (patch) => {
+    const next = { ...cfg, ...patch };
+    setCfg(next);
+    const stored = savePricingConfig(next);
+    // Clear only this page's own storage warning on a later success — any other
+    // notice (a preset confirmation, a push result) is left where it was.
+    setNotice((prev) =>
+      stored ? (prev && prev.text === WRITE_REFUSED ? null : prev) : { type: "error", text: WRITE_REFUSED }
+    );
+    return stored;
+  };
+  const applyPreset = (name) => {
+    if (!update(PRESETS[name])) return;
+    setNotice({ type: "ok", text: `Applied ${name} pricing profile.` });
+  };
   const updateBaseRate = (type, dollars) => update({ baseRates: { ...cfg.baseRates, [type]: toCentsFromDollars(dollars) } });
 
   const today = forecast[0];

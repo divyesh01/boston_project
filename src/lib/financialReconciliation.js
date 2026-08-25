@@ -1,27 +1,54 @@
 import { toCents, fromCents, sumCents } from '@/lib/decimal';
 
-// ─── Cryptographic audit batch integrity (4-way reconciliation) ────────────
-
-function computeAuditBatchHash(date, pmsTotalCents, gatewayNetCents, merchantNetCents, bankDepositCents, prevHash) {
+// ─── Daily batch chain checksum (4-way reconciliation) ─────────────────────
+//
+// NOT CRYPTOGRAPHIC, despite what three comments in this file claimed until
+// 2026-08-24. This is multiply-by-31-and-add string folding — Java's
+// String.hashCode — into a 32-bit int. It detects a figure that changed by
+// accident, and nothing more. Anyone who can alter a number can recompute the
+// chain, so it is not tamper evidence and must never be cited as such. The real
+// HMAC-SHA256 audit chain lives in securityUtils.js and the base44 serverless
+// audit functions; calling this one "cryptographic" made it look like a second
+// copy of that guarantee, which is how a reviewer ends up trusting the wrong one.
+//
+// Two encoding defects fixed at the same time, both of which overstated it:
+//
+//   Math.abs(h) discarded the sign bit, so h and -h produced the SAME checksum.
+//   That is collisions by construction — not merely improbable ones — in the
+//   function whose only job is to notice that a number changed. Now `h >>> 0`,
+//   which keeps all 32 bits.
+//
+//   padStart(16, '0') presented the result as a 16-hex-digit (64-bit) digest when
+//   at most 8 of those digits can ever be non-zero. Now padded to 8, so the
+//   printed width states the real strength instead of eight leading zeros of
+//   borrowed credibility.
+//
+// Reachability, measured 2026-08-24: reconcileDailyFinancials below is imported
+// only by src/lib/hotelKeyRegression.test.js. No page renders it.
+function computeBatchChecksum(date, pmsTotalCents, gatewayNetCents, merchantNetCents, bankDepositCents, prevHash) {
   const payload = [date, pmsTotalCents, gatewayNetCents, merchantNetCents, bankDepositCents, prevHash || 'GENESIS'].join('|');
   let h = 0;
   for (let i = 0; i < payload.length; i++) {
     const ch = payload.charCodeAt(i);
     h = ((h << 5) - h + ch) | 0;
   }
-  return Math.abs(h).toString(16).padStart(16, '0');
+  return (h >>> 0).toString(16).padStart(8, '0');
 }
 
 /**
  * reconcileDailyFinancials
  *
- * Performs a 3-way reconciliation between HotelKey PMS records, merchant
- * batch settlements, and bank deposits.
+ * Performs a 4-way reconciliation between HotelKey PMS records, payment-gateway
+ * authorizations, merchant batch settlements, and bank deposits. (This said
+ * "3-way" and omitted the gateway leg until 2026-08-24, while the body already
+ * computed gatewayAuthVariance and labelled itself 4-way — the parameter list and
+ * the prose disagreed about how many sources were being checked.)
  *
- * Each day is compared across three sources:
+ * Each day is compared across four sources:
  *   1. PMS — card_revenue, cash_revenue, direct_bill (recorded in the property management system)
- *   2. Merchant — settled_amount and fee_deductions (from the payment processor)
- *   3. Bank — deposit_amount (actual bank deposit)
+ *   2. Gateway — token_authorized_amount less fee_deductions (from the card gateway)
+ *   3. Merchant — settled_amount and fee_deductions (from the payment processor)
+ *   4. Bank — deposit_amount (actual bank deposit)
  *
  * Reconciliation logic per day:
  *   - Merchant net settlement = settled_amount - fee_deductions
@@ -101,8 +128,9 @@ export function reconcileDailyFinancials({ pmsRecords = [], gatewayAuths = [], m
 
     const pmsTotalCents = pmsCardRevenue + cashRevenue + directBill;
 
-    // Cryptographic audit chain per daily batch
-    const auditBatchHash = computeAuditBatchHash(date, pmsTotalCents, gatewayNetCents, merchantNet, bankDeposit, prevAuditHash);
+    // Chain checksum for this daily batch. See computeBatchChecksum above: this
+    // is accident detection, not tamper evidence.
+    const auditBatchHash = computeBatchChecksum(date, pmsTotalCents, gatewayNetCents, merchantNet, bankDeposit, prevAuditHash);
     prevAuditHash = auditBatchHash;
     auditChain.push({ date, hash: auditBatchHash, gatewayVariance: gatewayAuthVarianceCents, gatewayStatus: gatewayAuthVarianceCents === 0 ? 'MATCHED' : (gatewayAuthVarianceCents > 0 ? 'GATEWAY_EXCESS' : 'GATEWAY_SHORTAGE') });
 

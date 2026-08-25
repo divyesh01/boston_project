@@ -33,6 +33,7 @@ export default function WeatherPanel() {
   const [cfgOpen, setCfgOpen] = useState(false);
   const [draftLat, setDraftLat] = useState(getWeatherConfig().lat);
   const [draftLon, setDraftLon] = useState(getWeatherConfig().lon);
+  const [cfgError, setCfgError] = useState("");
 
   const isPortfolio = property === "all" || Array.isArray(property);
   const propertyId = !isPortfolio ? property : "all";
@@ -71,10 +72,19 @@ export default function WeatherPanel() {
   const chartData = forecast.map((f) => ({ day: String(f.date).slice(5), high: Number(f.temp_max), low: Number(f.temp_min) }));
 
   const handleSaveCfg = () => {
-    saveWeatherConfig({
+    const stored = saveWeatherConfig({
       lat: Number(draftLat) || 41.89,
       lon: Number(draftLon) || -70.91,
     });
+    if (!stored) {
+      // Closing this panel is its only "saved" signal, so it must stay open on a
+      // refused write: the forecast below would keep describing the old location.
+      setCfgError(
+        "The browser refused to store these coordinates, so the forecast is still for the previous location. Storage may be full, or this window may be in private browsing — the browser console names the key that failed."
+      );
+      return;
+    }
+    setCfgError("");
     setCfgOpen(false);
   };
 
@@ -99,6 +109,11 @@ export default function WeatherPanel() {
             <button onClick={handleSaveCfg} className="rounded-lg bg-[#6C63FF] px-3 py-1.5 text-xs font-medium text-white">Save</button>
             <button onClick={() => setCfgOpen(false)} className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-300">Cancel</button>
           </div>
+          {cfgError ? (
+            <p role="alert" className="mt-2 rounded-lg border border-[#FF6B6B]/30 bg-[#FF6B6B]/10 px-2 py-1.5 text-xs text-[#FFB4B4]">
+              {cfgError}
+            </p>
+          ) : null}
         </div>
       )}
 

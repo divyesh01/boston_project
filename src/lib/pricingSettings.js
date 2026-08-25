@@ -6,6 +6,8 @@
 // the engine reads from occupancy/reservations/weather — the calculation itself
 // lives in pricingEngine.js so it can be unit-tested in Node.
 
+import { readObjectSetting, writeJsonSetting } from "@/lib/settingsStore";
+
 const KEY = "rri_pricing_config";
 
 export const ROOM_TYPES = ["Standard", "Queen", "King", "Suite", "Double", "Accessible"];
@@ -47,15 +49,15 @@ export const DEFAULT_PRICING_CONFIG = {
 };
 
 export function getPricingConfig() {
-  try {
-    return { ...DEFAULT_PRICING_CONFIG, ...JSON.parse(localStorage.getItem(KEY) || "{}") };
-  } catch {
-    return { ...DEFAULT_PRICING_CONFIG };
-  }
+  return { ...DEFAULT_PRICING_CONFIG, ...readObjectSetting(KEY, {}) };
 }
 
+/**
+ * @param {Object} cfg - merged over the stored config
+ * @returns {boolean} true only if the config is now stored
+ */
 export function savePricingConfig(cfg) {
-  try { localStorage.setItem(KEY, JSON.stringify({ ...getPricingConfig(), ...cfg })); } catch {}
+  return writeJsonSetting(KEY, { ...getPricingConfig(), ...cfg });
 }
 
 export function isPricingEnabled() {

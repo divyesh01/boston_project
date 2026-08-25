@@ -6,6 +6,7 @@
 
 import { getTaxRate } from "@/lib/taxConfig";
 import { notifySettingsChanged } from "@/lib/settingsBus";
+import { readJsonSetting, reportDiscardedSetting, writeJsonSetting } from "@/lib/settingsStore";
 
 const TAX_SETTINGS_KEY = "rri_tax_settings_v1";
 
@@ -15,17 +16,24 @@ const num = (v) => {
 };
 
 export function getTaxSettings() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(TAX_SETTINGS_KEY) || "[]");
-    return Array.isArray(raw) ? raw : [];
-  } catch {
-    return [];
-  }
+  const raw = readJsonSetting(TAX_SETTINGS_KEY, []);
+  if (Array.isArray(raw)) return raw;
+  // Dropping this silently discards every configured tax period, and the caller
+  // then falls back to the single legacy rate as though none had been set up.
+  reportDiscardedSetting(TAX_SETTINGS_KEY, `expected a list of tax periods, stored value is ${typeof raw}`);
+  return [];
 }
 
+/**
+ * @param {Array} list
+ * @returns {boolean} true only if the tax periods are now stored. A false return
+ *   means the PREVIOUS tax periods are still what every tax figure is computed
+ *   from, so a caller that reports success must check it.
+ */
 export function saveTaxSettings(list) {
-  try { localStorage.setItem(TAX_SETTINGS_KEY, JSON.stringify(list || [])); } catch {}
+  const saved = writeJsonSetting(TAX_SETTINGS_KEY, list || []);
   notifySettingsChanged();
+  return saved;
 }
 
 // Resolve the tax rates that apply to a property on a specific date.

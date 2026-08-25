@@ -3,6 +3,13 @@
 // Global CC/debit card processing fee applies to card charges and refunds
 
 import { notifySettingsChanged } from "@/lib/settingsBus";
+import {
+  readObjectSetting,
+  readRawSetting,
+  reportDiscardedSetting,
+  writeJsonSetting,
+  writeRawSetting,
+} from "@/lib/settingsStore";
 
 const RATES_KEY = "rri_commission_rates_v2";
 const CC_FEE_KEY = "rri_cc_fee_rate";
@@ -44,54 +51,62 @@ function normalizeRate(val) {
 }
 
 export function getCommissionRates() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(RATES_KEY) || "{}");
-    const out = {};
-    for (const [key, val] of Object.entries({ ...DEFAULT_RATES, ...stored })) {
-      out[key] = normalizeRate(val);
-    }
-    return out;
-  } catch {
-    return { ...DEFAULT_RATES };
+  const stored = readObjectSetting(RATES_KEY, {});
+  const out = {};
+  for (const [key, val] of Object.entries({ ...DEFAULT_RATES, ...stored })) {
+    out[key] = normalizeRate(val);
   }
+  return out;
 }
 
+/**
+ * @param {Object} rates
+ * @returns {boolean} true only if the rates are now stored. A false return means
+ *   the app is still computing commission at the PREVIOUS rates, so a caller that
+ *   shows a "Saved" affordance must check it.
+ */
 export function setCommissionRates(rates) {
-  try { localStorage.setItem(RATES_KEY, JSON.stringify(rates)); } catch {}
+  const saved = writeJsonSetting(RATES_KEY, rates);
   notifySettingsChanged();
+  return saved;
 }
 
 export function getCcFeeRate() {
-  try {
-    const v = localStorage.getItem(CC_FEE_KEY);
-    if (v === null) return DEFAULT_CC_FEE;
-    const n = parseFloat(v);
-    if (Number.isNaN(n)) return DEFAULT_CC_FEE;
-    return Math.max(0, Math.min(0.9999, n));
-  } catch {
+  const v = readRawSetting(CC_FEE_KEY);
+  if (v === null) return DEFAULT_CC_FEE;
+  const n = parseFloat(v);
+  if (Number.isNaN(n)) {
+    reportDiscardedSetting(CC_FEE_KEY, "stored value is not a number", v);
     return DEFAULT_CC_FEE;
   }
+  return Math.max(0, Math.min(0.9999, n));
 }
 
+/**
+ * @param {number} rate
+ * @returns {boolean} true only if the fee is now stored.
+ */
 export function setCcFeeRate(rate) {
   let n = Number(rate);
   if (Number.isNaN(n)) n = DEFAULT_CC_FEE;
-  try { localStorage.setItem(CC_FEE_KEY, String(Math.max(0, Math.min(0.9999, n)))); } catch {}
+  const saved = writeRawSetting(CC_FEE_KEY, String(Math.max(0, Math.min(0.9999, n))));
   notifySettingsChanged();
+  return saved;
 }
 
 // Whether the card processing fee also applies to card refunds
 export function getCcFeeOnRefunds() {
-  try {
-    return localStorage.getItem(CC_REFUNDS_KEY) === "1";
-  } catch {
-    return false;
-  }
+  return readRawSetting(CC_REFUNDS_KEY) === "1";
 }
 
+/**
+ * @param {boolean} enabled
+ * @returns {boolean} true only if the switch is now stored.
+ */
 export function setCcFeeOnRefunds(enabled) {
-  try { localStorage.setItem(CC_REFUNDS_KEY, enabled ? "1" : "0"); } catch {}
+  const saved = writeRawSetting(CC_REFUNDS_KEY, enabled ? "1" : "0");
   notifySettingsChanged();
+  return saved;
 }
 
 export const COMMISSION_TYPES = [

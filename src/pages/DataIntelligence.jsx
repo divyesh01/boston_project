@@ -18,6 +18,7 @@ import { formatNumber } from '@/lib/decimal';
 import { ErrorState } from '@/components/ui/status';
 import { toast } from 'sonner';
 import { inspectUploadFile } from '@/lib/uploadGuard';
+import { readJsonSetting, writeJsonSetting, reportDiscardedSetting } from '@/lib/settingsStore';
 
 const SEVERITY_COLORS = {
   critical: 'border-[#FF6B6B]/30 bg-[#FF6B6B]/[0.08] text-[#FF6B6B]',
@@ -79,6 +80,25 @@ function useAllEntities() {
   });
 }
 
+/**
+ * Reads a stored list, refusing a value of the wrong shape.
+ *
+ * Both keys feed panels that call `.map` on the result, so a slot holding an
+ * object or a string — an older format, a hand-edited value, a collision with
+ * another tool — would throw during render and blank the page. settingsStore has
+ * `readObjectSetting` for the opposite requirement but no list equivalent, so the
+ * check lives here with the two callers that need it.
+ *
+ * @param {string} key
+ * @returns {Array} the stored list, or [] with the reason reported
+ */
+function readStoredList(key) {
+  const value = readJsonSetting(key, []);
+  if (Array.isArray(value)) return value;
+  reportDiscardedSetting(key, `expected a list, stored value is ${value === null ? 'null' : typeof value}`);
+  return [];
+}
+
 export default function DataIntelligence() {
   const { property, properties } = useGlobalFilters();
   const filesQ = useFiles();
@@ -96,24 +116,34 @@ export default function DataIntelligence() {
   const scanner = useMemo(() => new DataScannerClass(), []);
   const aiEngine = useMemo(() => new AIInsightsEngine(scanner), [scanner]);
 
+  // This page's own two storage keys used to fail in silence. The writes were
+  // `try { localStorage.setItem(...) } catch {}` followed UNCONDITIONALLY by
+  // setState, so a blocked or full store discarded the write while the panel went
+  // on showing the rule as saved — the owner only discovers it on the next visit,
+  // when the rule is gone. The reads swallowed too, substituting [] for whatever
+  // was stored. Both now go through settingsStore.js, which names the key in the
+  // report and returns false so the toast can tell the truth. Identical defect and
+  // identical fix to the money settings; see that module's header for why the
+  // shared helper exists rather than nine hand-corrected copies.
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem('rri_automationRules');
-      if (saved) setAutomationRules(JSON.parse(saved));
-    } catch { setAutomationRules([]); }
-    try {
-      const history = localStorage.getItem('rri_reportHistory');
-      if (history) setReportHistory(JSON.parse(history));
-    } catch { setReportHistory([]); }
+    setAutomationRules(readStoredList('rri_automationRules'));
+    setReportHistory(readStoredList('rri_reportHistory'));
   }, []);
 
   const saveAutomationRules = (rules) => {
-    try { localStorage.setItem('rri_automationRules', JSON.stringify(rules)); } catch {}
+    if (!writeJsonSetting('rri_automationRules', rules)) {
+      toast.error('Automation rules could not be saved — they apply until you close this tab, then revert.');
+    }
+    // State updates either way: the rules ARE live in this session, and throwing
+    // away work the owner just did would be a worse answer than warning them it
+    // is not durable.
     setAutomationRules(rules);
   };
 
   const saveReportHistory = (history) => {
-    try { localStorage.setItem('rri_reportHistory', JSON.stringify(history)); } catch {}
+    if (!writeJsonSetting('rri_reportHistory', history)) {
+      toast.error('Report history could not be saved — this run will be missing from the list next time.');
+    }
     setReportHistory(history);
   };
 

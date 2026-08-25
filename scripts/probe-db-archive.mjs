@@ -733,7 +733,17 @@ console.log("\n9. Invariants that live in another file");
   // nobody thinks about backups, and the key is silently absent from every
   // archive from then on. Every file in src/ that writes web storage is listed
   // here with a decision. A new writer fails this suite until it is classified.
+  //
+  // A file counts as a writer if it calls `.setItem(` directly OR goes through
+  // settingsStore.js's shared writers. Matching only `.setItem(` was enough until
+  // 2026-08-24, when the settings modules were converted to the shared helper so
+  // that a refused write could stop being silent: at that moment seven classified
+  // writers vanished from this scan at once, and a NEW module calling
+  // writeJsonSetting("rri_brand_new_key") would have been invisible here — which
+  // is precisely the rot this check exists to catch.
+  const WRITES_STORAGE = /\.setItem\(|write(?:Json|Raw)Setting\(/;
   const MANIFEST = {
+    "src/lib/settingsStore.js": "the shared settings writer itself — each key is classified at its calling module",
     "src/lib/alertThresholds.js": "archived — rri_alert_thresholds",
     "src/lib/commissionRates.js": "archived — rri_commission_rates_v2, rri_cc_fee_rate, rri_cc_fee_refunds_v1",
     "src/lib/exportData.js": "archived — rri_filters_<page>",
@@ -760,7 +770,7 @@ console.log("\n9. Invariants that live in another file");
     for (const entry of fs.readdirSync(path.join(REPO, dir), { withFileTypes: true })) {
       const rel = `${dir}/${entry.name}`;
       if (entry.isDirectory()) walk(rel);
-      else if (/\.(js|jsx)$/.test(entry.name) && read(rel).includes(".setItem(")) writers.push(rel);
+      else if (/\.(js|jsx)$/.test(entry.name) && WRITES_STORAGE.test(read(rel))) writers.push(rel);
     }
   };
   walk("src");

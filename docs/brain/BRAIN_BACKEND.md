@@ -358,7 +358,7 @@ never against a number copied out of a document.
 
 ### How To Run Tests
 ```powershell
-# EVERYTHING. Start here -- auto-discovers all 83 suites, distinguishes PASS / FAIL /
+# EVERYTHING. Start here -- auto-discovers all 111 suites, distinguishes PASS / FAIL /
 # BROKEN (could not start) / TIMEOUT (could not finish) / BAD-EXIT / SKIP.
 npm run verify:all
 npm run verify:all -- --list            # the live list + why anything is excluded

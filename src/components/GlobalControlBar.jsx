@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { GitCompare, RotateCcw, Check, CalendarClock, FileDown, Building2 } from "lucide-react";
+import { toast } from "sonner";
 
 import {
   useGlobalFilters, PERIODS, MONTHS_SHORT, MONTHS_LONG, PAGE_FILTERS,
@@ -145,12 +146,17 @@ export default function GlobalControlBar() {
     try {
       const { exportToPdf } = await import("@/lib/pdfExport");
       const content = document.querySelector("[data-page-content]");
-      if (content) {
-        const propName = f.property === "all" ? "Portfolio" : (Array.isArray(f.property) ? `${f.property.length}_Properties` : (f.properties.find((p) => p.id === f.property)?.name || "Property"));
-        await exportToPdf(content, `RRI_${propName}_${f.dateRange.from || "all"}_${f.dateRange.to || "latest"}.pdf`);
-      }
+      // Layout.jsx puts data-page-content on the routed page. When it is absent
+      // this used to fall out of the try block having done nothing at all, so the
+      // button simply stopped saying "Generating…" — indistinguishable from a PDF
+      // that saved. Same for a thrown error, which only reached console.error.
+      if (!content) throw new Error("this page has no exportable content area");
+      const propName = f.property === "all" ? "Portfolio" : (Array.isArray(f.property) ? `${f.property.length}_Properties` : (f.properties.find((p) => p.id === f.property)?.name || "Property"));
+      await exportToPdf(content, `RRI_${propName}_${f.dateRange.from || "all"}_${f.dateRange.to || "latest"}.pdf`);
     } catch (e) {
-      console.error("PDF export failed:", e);
+      toast.error("The PDF was not created", {
+        description: `${e?.message || String(e)}. Nothing was saved to your downloads.`,
+      });
     }
     setExporting(false);
   };

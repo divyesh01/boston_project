@@ -106,6 +106,10 @@ export default function Dashboard() {
   const aggPrev = useDailyFinancialAggregates(alertPrevRange, property);
   const aggPrevData = aggPrev.data;
   const [exporting, setExporting] = useState(false);
+  // An export failure used to reach console.error only, so the button dropped back
+  // to "Export PDF" with nothing saved and no way to tell that from a PDF that did
+  // save. Same surface as OtaChannels.jsx, which already got this right.
+  const [exportError, setExportError] = useState(null);
   const contentRef = useRef(null);
 
   const occRows = useMemo(() => {
@@ -228,10 +232,11 @@ export default function Dashboard() {
   const handleExport = async () => {
     if (exporting || !contentRef.current) return;
     setExporting(true);
+    setExportError(null);
     try {
       await exportToPdf(contentRef.current, `RRI_Executive_${property}_${dateRange.from}_${dateRange.to}.pdf`);
     } catch (e) {
-      console.error(e);
+      setExportError(e?.message || String(e));
     }
     setExporting(false);
   };
@@ -284,6 +289,12 @@ export default function Dashboard() {
           <span className="hidden sm:inline">{exporting ? "Generating…" : "Export PDF"}</span>
         </button>
       </header>
+
+      {exportError && (
+        <div className="flex items-center gap-2 rounded-lg border border-[#FF6B6B]/30 bg-[#FF6B6B]/10 px-3 py-2 text-xs text-[#FF6B6B]">
+          <TrendingDown className="h-4 w-4 shrink-0" /> The PDF was not created: {exportError}. Nothing was saved to your downloads.
+        </div>
+      )}
 
       {/* Color-coded glowing module cards */}
       <ModuleCards />

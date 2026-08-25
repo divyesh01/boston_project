@@ -6,6 +6,8 @@
 // function, which reads the key from Base44 secrets and proxies the request, so
 // the key is never shipped to or stored in the browser.
 
+import { readObjectSetting, writeJsonSetting } from "@/lib/settingsStore";
+
 const KEY = "rri_weather_config";
 
 const DEFAULTS = {
@@ -14,19 +16,27 @@ const DEFAULTS = {
 };
 
 export function getWeatherConfig() {
-  try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || "{}") };
-  } catch {
-    return { ...DEFAULTS };
-  }
+  return { ...DEFAULTS, ...readObjectSetting(KEY, {}) };
 }
 
+/**
+ * @param {Object} cfg
+ * @returns {boolean} true only if the coordinates are now stored.
+ *
+ * A false return matters beyond the weather card. Traced 2026-08-24: these
+ * coordinates are read only by WeatherPanel.jsx, which passes them to
+ * fetchOpenWeatherForecast and persists the result as WeatherSnapshot rows;
+ * usePricing.js then builds its `weatherByDate` map from those same rows and
+ * pricingEngine.js turns it into `weatherMultiplierBps`. So a refused write
+ * leaves the forecast AND the weather leg of every recommended rate describing
+ * the PREVIOUS location, with nothing on screen to say so.
+ */
 export function saveWeatherConfig(cfg) {
   // Never persist an apiKey — the key is server-side only. Strip it defensively
   // in case an older client wrote one to the same storage key.
   const { apiKey, ...safe } = cfg || {};
   void apiKey;
-  try { localStorage.setItem(KEY, JSON.stringify({ ...getWeatherConfig(), ...safe })); } catch {}
+  return writeJsonSetting(KEY, { ...getWeatherConfig(), ...safe });
 }
 
 export function hasApiKey() {

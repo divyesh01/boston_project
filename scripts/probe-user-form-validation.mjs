@@ -188,11 +188,11 @@ function eq(label, actual, expected) {
 {
   console.log("\n=== 3. the stored email is the normalised one ===");
 
-  const r = validateUserForm({ username: "bob", email: "  Bob@X.COM  " });
-  eq("values.email is trimmed and lowercased", r.values.email, "bob@x.com");
-  ok("…so Bob@x.com and bob@x.com can no longer become two accounts",
-    validateUserForm({ username: "bob", email: "bob@x.com" }).values.email === r.values.email);
-  eq("values.username is trimmed but NOT case-folded", validateUserForm({ username: " Divyesh ", email: "a@b.co" }).values.username, "Divyesh");
+  const r = validateUserForm({ username: "bob", email: "  Bob@X.TEST  " });
+  eq("values.email is trimmed and lowercased", r.values.email, "bob@x.test");
+  ok("…so Bob@x.test and bob@x.test can no longer become two accounts",
+    validateUserForm({ username: "bob", email: "bob@x.test" }).values.email === r.values.email);
+  eq("values.username is trimmed but NOT case-folded", validateUserForm({ username: " Divyesh ", email: "a@b.test" }).values.username, "Divyesh");
 
   // The third email branch (`sanitizeEmail(email) !== email` after normalisation)
   // is documented in userFormValidation.js as a backstop that cannot fire on
@@ -218,9 +218,9 @@ function eq(label, actual, expected) {
   // The reverse direction is NOT symmetric, and that is the whole point of
   // keeping isValidEmail in front: the loose sanitiser accepts things RFC does not.
   ok("the loose sanitiser accepts a double-dot local part that isValidEmail refuses",
-    sanitizeEmail("a..b@x.com") === "a..b@x.com" && isValidEmail("a..b@x.com") === false);
+    sanitizeEmail("a..b@x.test") === "a..b@x.test" && isValidEmail("a..b@x.test") === false);
   ok("…and validateUserForm refuses it, because the RFC check runs first",
-    validateUserForm({ username: "abc", email: "a..b@x.com" }).ok === false);
+    validateUserForm({ username: "abc", email: "a..b@x.test" }).ok === false);
 }
 
 // ── 4. PASSWORD_HELP is the policy, in words ─────────────────────────────────
@@ -366,7 +366,7 @@ function eq(label, actual, expected) {
   ok("…and rejects a 40-character name the sanitiser's 50-char cap leaves alone",
     sanitizeAlphanumeric(long, long.length) === long && isValidUsername(long) === false);
   ok("…so a 40-character username is refused rather than silently truncated",
-    validateUserForm({ username: long, email: "a@b.co" }).ok === false);
+    validateUserForm({ username: long, email: "a@b.test" }).ok === false);
 
   console.log("\n--- 6b. the one case where the sanitiser and the regex disagree ---");
   // This is the exception the module's header names, and the reason it trims
@@ -374,8 +374,8 @@ function eq(label, actual, expected) {
   ok("a leading space is stripped by the sanitiser but accepted by isValidUsername",
     sanitizeAlphanumeric(" abc", 4) !== " abc" && isValidUsername(" abc") === true);
   ok("…which is exactly what the old gate misread as \"invalid characters\"",
-    validateUserForm({ username: " abc", email: "a@b.co" }).ok === true);
-  eq("…and the stored name is the trimmed one", validateUserForm({ username: " abc ", email: "a@b.co" }).values.username, "abc");
+    validateUserForm({ username: " abc", email: "a@b.test" }).ok === true);
+  eq("…and the stored name is the trimmed one", validateUserForm({ username: " abc ", email: "a@b.test" }).values.username, "abc");
 }
 
 // ── 7. full_name keeps the sanitisation the old code applied ─────────────────
@@ -383,18 +383,18 @@ function eq(label, actual, expected) {
   console.log("\n=== 7. full_name is sanitised exactly as before ===");
 
   eq("a spreadsheet formula is neutralised with a leading quote",
-    validateUserForm({ username: "abc", email: "a@b.co", full_name: "=cmd()" }).values.full_name, "'=cmd()");
-  eq("…and so is a tab-prefixed payload", validateUserForm({ username: "abc", email: "a@b.co", full_name: "\t=1+1" }).values.full_name, "'\t=1+1");
-  const xss = validateUserForm({ username: "abc", email: "a@b.co", full_name: "<script>x()</script>Jane" }).values.full_name;
+    validateUserForm({ username: "abc", email: "a@b.test", full_name: "=cmd()" }).values.full_name, "'=cmd()");
+  eq("…and so is a tab-prefixed payload", validateUserForm({ username: "abc", email: "a@b.test", full_name: "\t=1+1" }).values.full_name, "'\t=1+1");
+  const xss = validateUserForm({ username: "abc", email: "a@b.test", full_name: "<script>x()</script>Jane" }).values.full_name;
   ok("a <script> element is removed", !xss.includes("<script"), JSON.stringify(xss));
   ok("…and the name itself survives", xss.includes("Jane"), JSON.stringify(xss));
   eq("the composition matches the expression the page used to run inline",
-    validateUserForm({ username: "abc", email: "a@b.co", full_name: "-Jane" }).values.full_name,
+    validateUserForm({ username: "abc", email: "a@b.test", full_name: "-Jane" }).values.full_name,
     sanitizeCsvCell(sanitizeText("-Jane")));
   eq("a missing full_name becomes an empty string, never undefined",
-    validateUserForm({ username: "abc", email: "a@b.co" }).values.full_name, "");
+    validateUserForm({ username: "abc", email: "a@b.test" }).values.full_name, "");
   ok("full_name is never a reason to refuse the form",
-    validateUserForm({ username: "abc", email: "a@b.co", full_name: "=cmd()" }).ok === true);
+    validateUserForm({ username: "abc", email: "a@b.test", full_name: "=cmd()" }).ok === true);
 }
 
 // ── 8. Editing an existing account ──────────────────────────────────────────
@@ -404,17 +404,17 @@ function eq(label, actual, expected) {
   // A name stored before the current rule must not block an unrelated change.
   const legacy = "old name";
   ok("the legacy name would fail the rule on its own", isValidUsername(legacy) === false);
-  ok("…but saving it unchanged is allowed", validateUserForm({ username: legacy, email: "a@b.co" }, { previousUsername: legacy }).ok === true);
+  ok("…but saving it unchanged is allowed", validateUserForm({ username: legacy, email: "a@b.test" }, { previousUsername: legacy }).ok === true);
   ok("…and a whitespace-only difference still counts as unchanged",
-    validateUserForm({ username: ` ${legacy} `, email: "a@b.co" }, { previousUsername: legacy }).ok === true);
+    validateUserForm({ username: ` ${legacy} `, email: "a@b.test" }, { previousUsername: legacy }).ok === true);
   ok("changing it to something invalid IS refused",
-    validateUserForm({ username: "n o", email: "a@b.co" }, { previousUsername: legacy }).ok === false);
+    validateUserForm({ username: "n o", email: "a@b.test" }, { previousUsername: legacy }).ok === false);
   ok("changing it to something valid is allowed",
-    validateUserForm({ username: "new_name", email: "a@b.co" }, { previousUsername: legacy }).ok === true);
+    validateUserForm({ username: "new_name", email: "a@b.test" }, { previousUsername: legacy }).ok === true);
   ok("the grandfather clause never applies in the create dialog (no previousUsername)",
-    validateUserForm({ username: legacy, email: "a@b.co" }).ok === false);
+    validateUserForm({ username: legacy, email: "a@b.test" }).ok === false);
   ok("…and an empty stored name does not grandfather an empty submission",
-    validateUserForm({ username: "", email: "a@b.co" }, { previousUsername: "" }).ok === false);
+    validateUserForm({ username: "", email: "a@b.test" }, { previousUsername: "" }).ok === false);
 
   console.log("\n--- 8b. hostile and absent input ---");
   [undefined, null, 42, {}, [], true].forEach((v) => {

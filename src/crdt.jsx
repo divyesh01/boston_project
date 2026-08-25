@@ -70,7 +70,16 @@ export function YDocProvider({ name, children }) {
           try {
             const map = docRef.current.getMap('root');
             localStorage.setItem(`__yjs_${name}`, JSON.stringify({ root: map.toJSON() }));
-          } catch (e) {}
+          } catch {
+            // Silent by design. This fires on EVERY document update, so a
+            // blocked or full localStorage would report once per change rather
+            // than once per problem. The cache is also redundant: the Y.Doc in
+            // memory is authoritative, and the read at the top of this effect
+            // already treats a missing cache as the normal first-run case.
+            // Losing the write costs offline restore after a reload, not any
+            // data in this session. Note this handler is only ever registered
+            // when ENDPOINT is set, which the shipped config leaves empty.
+          }
         });
       } catch (e) {
         // WebSocket not available — operate fully offline
@@ -83,7 +92,12 @@ export function YDocProvider({ name, children }) {
       disconnected = true;
       try {
         if (provider) provider.disconnect();
-      } catch (e) {}
+      } catch {
+        // Silent by design: this is unmount cleanup. disconnect() can throw if
+        // the socket is already closing, and there is nobody left to tell — the
+        // component is gone. Reporting here would announce a failure to tidy up
+        // something the browser tears down regardless.
+      }
     };
   }, [name]);
 

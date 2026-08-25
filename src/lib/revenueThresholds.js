@@ -1,3 +1,5 @@
+import { readObjectSetting, writeJsonSetting } from "@/lib/settingsStore";
+
 const KEY = "rri_revenue_thresholds";
 
 const DEFAULTS = {
@@ -6,15 +8,15 @@ const DEFAULTS = {
 };
 
 export function getRevenueThresholds() {
-  try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || "{}") };
-  } catch {
-    return { ...DEFAULTS };
-  }
+  return { ...DEFAULTS, ...readObjectSetting(KEY, {}) };
 }
 
+/**
+ * @param {Object} thresholds
+ * @returns {boolean} true only if the thresholds are now stored
+ */
 export function saveRevenueThresholds(thresholds) {
-  try { localStorage.setItem(KEY, JSON.stringify(thresholds)); } catch {}
+  return writeJsonSetting(KEY, thresholds);
 }
 
 export function getRevenueColor(revenue) {

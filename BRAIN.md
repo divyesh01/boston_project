@@ -19,7 +19,7 @@
 ```mermaid
 graph TD
     subgraph Browser [User's Browser]
-        UI[React Frontend<br/>(36 Pages, 40+ Components)]
+        UI[React Frontend<br/>(34 Pages, 40+ Components)]
         DB_Local[(Local IndexedDB<br/>Offline Cache)]
         UI <--> DB_Local
     end
@@ -63,10 +63,16 @@ the wrong package — always use `npm run typecheck`.**
 
 > [!CAUTION]
 > **If your shell caps a command's wall clock, shard the LIST — never lower
-> `--timeout`.** The suites run serially and take 12-25 minutes at 70 files, longer at
-> the current 100; the Linux
-> sandbox agents use here kills any single command at ~178s. Lowering `--timeout` to
-> fit does not shorten the run, it kills slow suites and labels them `TIMEOUT`. That
+> `--timeout`.** Measured 2026-08-25 at list `2f3a5c5a`: the 111 suites run serially in
+> **519.8s of suite time — 8.7 minutes, mean 4.7s**, with a long tail of four
+> (`probe-audit-write-failure` 54.7s, `probe-audit-export` 49.4s,
+> `probe-user-form-validation` 45.0s, `probe-premium-surfaces` 25.7s). An earlier
+> revision of this note estimated "12-25 minutes at 70 files, longer at the current
+> 100" and that estimate is what made a full sweep look impossible in a sandbox — it is
+> wrong by roughly 2-3x. **A complete sweep fits here**: 20 shards of 6, three shards
+> per command at a 175s cap, is the recipe that produced the green run in the table
+> below. Lowering `--timeout` to fit does not shorten the run, it kills slow suites and
+> labels them `TIMEOUT`. That
 > is exactly how this file came to claim "7 broken suites" on 2026-08-20 — six of the
 > seven pass in 9-25s each when given a real budget. `--shard i/n` cuts on the correct
 > axis: `for i in $(seq 1 10); do npm run verify:all -- --shard $i/10; done`, one
@@ -80,10 +86,14 @@ the wrong package — always use `npm run typecheck`.**
 > changes every slice boundary — so a suite can be run twice or not at all while all
 > shards still report green. That happened on 2026-08-20; see the NOTE under CURRENT
 > STATE. Freeze `scripts/` for the duration of a sharded run and check the ids match
-> before summing. Verified twice, on both file sets: 9 shards over 71 suites all printed
-> `8c09a3eb` and 8 shards over 72 all printed `53aa539e`, each covering every file exactly
-> once, and a trailing shard reports itself empty rather than green. (Counts are
-> measurements with dates — the current one is in the table below, not here.)
+> before summing. Verified three times, on three file sets: 9 shards over 71 suites all
+> printed `8c09a3eb`, 8 shards over 72 all printed `53aa539e`, and 20 shards over 111 all
+> printed `2f3a5c5a` — each covering every file exactly once, and a trailing shard
+> reports itself empty rather than green (`shard 20/20 is empty (111 suite(s) fit in 19
+> shard(s) of 6). Nothing to run.`). The cheap way to prove exactly-once rather than
+> assume it: collect every result line across the shards, then check
+> `sort -u | wc -l` equals the discovered count and `uniq -d` prints nothing. (Counts
+> are measurements with dates — the current one is in the table below, not here.)
 
 > [!CAUTION]
 > **A suite must exit non-zero when it fails.** `console.assert` prints and returns; it
@@ -93,19 +103,19 @@ the wrong package — always use `npm run typecheck`.**
 > exactly this reason. Before trusting a repaired assertion, break the product on
 > purpose and confirm the suite objects. See BRAIN_TROUBLESHOOTING.md section 22.
 
-## CURRENT STATE (2026-08-24)
+## CURRENT STATE (2026-08-25)
 
 | Area | Status |
 |------|--------|
 | Known problems tracker | 54 filed, **54 fixed, 0 OPEN** — BRAIN_TROUBLESHOOTING.md section 14. #54 closed 2026-08-24: **a 49-hour shift was paid one hour, and the flag that should have stopped it did nothing.** Three stacked defects: `parseTime`'s AM/PM branch reduced the hour mod 12 *before* range-checking anything, so `"11:99 PM"` returned **1479** minutes-of-day against a legal max of 1439 (and `"25:00 AM"` returned 60); `shift_exceeds_24h` was **decorative** in the client path, which paid a 1,449-minute pair **$362.25 with the flag attached** while the backend copy skipped it — cron and Payroll page disagreeing on identical rows; and a full-datetime punch had its **date parsed then discarded**, so `2026-03-07 09:00 → 2026-03-09 10:00` (2,940 real minutes) read as `paid_minutes 60, total_pay 15, flags []`. Section 32. #53 closed the same day: **payroll paid people from a display rounding.** A punch pair is an integer number of minutes, but `hours` was rounded to 2 decimals *for a label* and the rate was multiplied by that label — so 2,243 minutes at $15.00/h paid $560.70 instead of $560.75, and 140 overtime minutes at $22.50/h paid $52.43 instead of $52.50. Systematic, always downward. The file that actually pays people (`runLocalAutoPayroll`) is **protected**, and was made correct **without being touched**: it recomputes pay from `hours` itself, so feeding it an exact quotient instead of a 2-dp one lands it on the right cent. Section 31. #49–#52 closed the same day from ONE screenshot of the Add User dialog with five stacked red toasts: the form validated as a chain of early returns and complained about input that only needed trimming (#49), promised a generated password it never generated while understating a 7-rule policy as 3 (#50), shipped a decorative "require password change" switch (#51), and — the reason the five were still on screen — **no toast this app had ever shown could be dismissed or could expire** (#52). Section 30. Problem #30 covered 12 suites that could not fail; **all 12 are closed.** **This tracker is not the owner’s 30-item review playbook.** They are two separate lists, and a closed tracker says nothing about the playbook. Per-item playbook verdicts: BRAIN_TROUBLESHOOTING.md section 23. |
-| `npm run verify:all` — discovery | **107 discovered, list fingerprint `28e9ea65`** (measured 2026-08-24 via `--list`). `probe-timecard-shift-span` was added that day at list position 82, taking 106 → 107. `probe-payroll-minute-rounding` was added the same day at position 56. Ten suites were added on 2026-08-24 in all: `probe-db-archive`, `probe-monthly-calendar`, `probe-sdk-analytics-off`, `probe-mtd-growth`, `probe-ci-node-version`, `probe-recurring-events`, `probe-toast-lifecycle`, `probe-user-form-validation`, `probe-payroll-minute-rounding`, then this one. The ids before them were `466f06d8` at 100, `26268ca8` at 101, `82bc3362` at 102, `d3091dab` at 103, `25ba9bcf` at 105 and `781af269` at 106. |
-| `npm run verify:all` — full sweep | **Not Run at the current file set.** The last complete green run was **72 suites, 70 PASS / 0 FAIL / 0 BROKEN / 0 TIMEOUT / 0 BAD-EXIT / 2 SKIP** on 2026-08-20 at fingerprint `53aa539e`, from an 8-shard run whose per-shard logs were each read and which all printed the same id. **Do not sum shards across `53aa539e`, `466f06d8`, `26268ca8`, `82bc3362`, `d3091dab`, `25ba9bcf`, `781af269` and `28e9ea65`** — the list has changed seven times, so every slice boundary moved. That is precisely what the fingerprint exists to make visible. A full sweep at `28e9ea65` needs a Windows run. |
+| `npm run verify:all` — discovery | **111 discovered, list fingerprint `2f3a5c5a`** (measured 2026-08-25 via `--list`). Four suites were added on 2026-08-25, taking 107 → 111: `probe-settings-persistence`, `probe-float-money`, `probe-pdf-pagination`, `probe-ledger-index` — each confirmed present in the `--list` output, so the delta is fully accounted for. Before them, `probe-timecard-shift-span` was added 2026-08-24 at list position 82, taking 106 → 107, and `probe-payroll-minute-rounding` the same day at position 56. Ten suites were added on 2026-08-24 in all: `probe-db-archive`, `probe-monthly-calendar`, `probe-sdk-analytics-off`, `probe-mtd-growth`, `probe-ci-node-version`, `probe-recurring-events`, `probe-toast-lifecycle`, `probe-user-form-validation`, `probe-payroll-minute-rounding`, then that one. The ids before them were `466f06d8` at 100, `26268ca8` at 101, `82bc3362` at 102, `d3091dab` at 103, `25ba9bcf` at 105, `781af269` at 106 and `28e9ea65` at 107. |
+| `npm run verify:all` — full sweep | **Observed green at the current file set, 2026-08-25, fingerprint `2f3a5c5a`: 111 suites, 108 PASS / 0 FAIL / 0 BROKEN / 0 TIMEOUT / 0 BAD-EXIT / 0 DIAGNOSTIC / 3 SKIP.** Run as 20 shards in a Linux sandbox (shard 20 reported itself empty — 111 fit in 19 shards of 6). Every shard printed the same list id, and the run was checked the way this file's two earlier wrong counts were caught: the 111 result lines were collected across all shards, `sort -u` returned 111, and `uniq -d` returned nothing — so each suite ran exactly once, and 18×6 + 3 + 0 = 111 reconciles against discovery. The 3 SKIPs are the environment ones in the row below, not failures; they are **Not Run**, so 108 is what was actually verified. The previous complete run was **72 suites, 70 PASS / 2 SKIP** on 2026-08-20 at `53aa539e`. **Do not sum shards across `53aa539e`, `466f06d8`, `26268ca8`, `82bc3362`, `d3091dab`, `25ba9bcf`, `781af269`, `28e9ea65` and `2f3a5c5a`** — the list has changed eight times, so every slice boundary moved. That is precisely what the fingerprint exists to make visible. |
 | Targeted slices at `28e9ea65` (2026-08-24) | All Observed green: `probe-timecard-shift-span` **73/0** (rc=0) · `probe-payroll-minute-rounding` **61/0** (rc=0, measured with a redirect — `cmd \| tail` reports *tail's* status) · `verify-timecard` **47/0** · `src/lib/timecardCalc.test.js` **28/28** and `src/api/autoPayroll.test.js` **6/6** (vitest, `--pool=threads` — the default `forks` pool times out in a Linux VM and reports *no tests*). Carried forward from `25ba9bcf`: `probe-toast-lifecycle` **68/0** · `probe-user-form-validation` **95/0** · `src/components/ui/toast.test.jsx` **17/17**. From `d3091dab`: `probe-recurring-events` 107/0 · `verify-actioncenter` 39/0 · `probe-ci-node-version` 61/0 · `probe-mtd-growth` 58/0 · `probe-monthly-calendar` 67/0 · `probe-db-archive` 216/0 · `probe-sdk-analytics-off` 53/0 · `probe-hotel` 40/0 · `probe-money-kept-gross` 49/0 · `probe-money-kept-double-count` 65/0 · `probe-capacity-per-day` 68/0 · `probe-cents-unit-mismatch` 38/0 · `probe-calendar-day-modal` 30/0 · `verify-transactions` 115/0 · `--filter calendar` 2/2 · `verify-revenue` 50/0 · `verify-statistics` 84/0 · `probe-premium-surfaces` 131/0 · `probe-ui-feedback` 83/0. Section 31 changes `timecardCalc.js`, whose only consumers are `verify-timecard` and the two vitest files above — all three were re-run. Section 32 changes the same file plus `base44/functions/autoPayroll/entry.ts`; the same three suites plus the new probe were re-run, and `src/api/base44Client.js` (**protected, untouched**) inherits the fix through its `reconcileTimecards` import. |
 | CI — "Security and Quality Assurance" | **32 consecutive non-successful runs, 2026-08-13 → 2026-08-24, all for one environment reason.** The job pinned Node 20; jsdom@30's transitive undici@8 throws at import there, so all 36 vitest files failed to START and **not one test had ever executed in CI**. Fixed: `package.json` now declares `engines.node`, the workflow pins `'24'`, and `probe-ci-node-version.mjs` keeps them in lockstep. Reproduced whole off-mount on Node 22.23.2: **all six steps exit 0, `npm test` 36 files / 291 tests / 0 failures.** BRAIN_TROUBLESHOOTING.md section 28. Dependabot's separate failures are legitimate major-bump breaks and should be closed, not merged. |
 | `npm run lint` | 0 errors (warnings pre-existing) |
 | `npm run typecheck` | 0 errors |
-| Cannot run in a Linux VM (SKIP, = **Not Run**, not verified) | `verify-harness.mjs` — `import('vite')`, and `node_modules` here was installed on Windows, so Rollup's native binding is missing. `acceptance-harness.mjs` has the same dependency and is not even auto-discovered (its name matches neither `probe-*` nor `verify-*`). `probe-config-exposure.mjs` needs a dev server on `localhost:5173`. Run all three on Windows or in CI. |
-| **Deployed bundle is STALE** | `dist/index.html` dates from 2026-08-23 21:16 and at least 12 tracked files are newer. `vite build` **cannot** run in the Linux VM (`Cannot find module '@rollup/rollup-linux-x64-gnu'`), so the live Worker does not contain tracker **#41–#47**. The owner must build on Windows and redeploy before any live-site claim is made. |
+| Cannot run in a Linux VM (SKIP, = **Not Run**, not verified) | `verify-harness.mjs` — `import('vite')`, and `node_modules` here was installed on Windows, so Rollup's native binding is missing. `acceptance-harness.mjs` has the same dependency and is not even auto-discovered (its name matches neither `probe-*` nor `verify-*`). `probe-config-exposure.mjs` needs a dev server on `localhost:5173`. `probe-build-chunks.mjs` needs a fresh `dist/`, and self-skips when it is stale — on 2026-08-25 it reported `dist/ is older than 45 of its 285 inputs`. These are the 3 SKIPs in the full sweep above (`acceptance-harness` is the fourth file but is never discovered). Run all four on Windows or in CI. Note the order: a Windows `vite build` refreshes `dist/` on this OneDrive mount and makes later VM calls stall for minutes, so run it **last**. |
+| **Deployed bundle is STALE** | `dist/index.html` dates from **2026-08-24 06:10**, and **44 of the 334 tracked build inputs** (`src`, `base44`, `backend`, `public`, `index.html`, `vite.config.js`, `package.json`) are newer than it — measured 2026-08-25. `probe-build-chunks.mjs` reaches the same verdict from its own input set (`dist/ is older than 45 of its 285 inputs`) and self-SKIPs rather than assert against a stale bundle. `vite build` **cannot** run in the Linux VM (`Cannot find module '@rollup/rollup-linux-x64-gnu'` — still true, and it is why `verify-harness.mjs` SKIPs), so everything committed after that timestamp is absent from the live Worker. The owner must build on Windows and redeploy before any live-site claim is made. Rebuild last in any batch: writing `dist/` onto this OneDrive mount makes subsequent repo operations stall for minutes. |
 | YTD gross benchmark | RESOLVED 2026-08-20 — total $1,020,598.17 = room $1,011,258.67 + ancillary $9,339.50, measured by `probe-money-kept-gross.mjs`. BRAIN_FINANCE.md 12.6. Which occupancy field carries which figure: **12.8**. |
 
 > [!NOTE]

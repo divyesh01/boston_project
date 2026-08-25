@@ -32,7 +32,7 @@
  *
  * The value the caller persists is always `values.*` — never the raw input — so
  * the stored username is trimmed and the stored email is lowercase, exactly as
- * before. Two admins can no longer create `Bob@x.com` and `bob@x.com` as
+ * before. Two admins can no longer create `Bob@x.test` and `bob@x.test` as
  * separate accounts by accident.
  *
  * On username format: `sanitizeAlphanumeric` strips anything outside

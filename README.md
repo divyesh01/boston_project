@@ -5,7 +5,7 @@ sources, payroll, expenses and a tamper-evident audit trail. It is a React + Vit
 single-page app on a [Base44](https://base44.com) backend, with a Dexie/IndexedDB
 cache so the front desk keeps working when the network does not.
 
-At the time of writing the app is 36 pages against 16 database entities and 19
+At the time of writing the app is 34 pages against 16 database entities and 19
 serverless functions.
 
 ## Start here
@@ -48,8 +48,11 @@ not *start* otherwise looks exactly like a suite that passed. Useful flags:
 a `list <id> (<n> discovered)` fingerprint; if you split a run into shards, confirm
 all shards printed the same id before adding the results up.
 
-Measured baseline, 2026-08-20 (list `53aa539e`): **72 suites, 70 pass, 0 fail, 2
-skip.** The two skips need a Windows/CI environment rather than a Linux sandbox.
+Measured baseline, 2026-08-25 (list `2f3a5c5a`): **111 suites, 108 pass, 0 fail, 3
+skip.** The three skips need a Windows/CI environment rather than a Linux sandbox: two
+want Vite (whose Rollup native binding is missing here) or a dev server, and one wants
+a `dist/` newer than its inputs. A skip is *not run*, so 108 is what was verified.
+The previous baseline was 72 suites at `53aa539e` on 2026-08-20.
 
 A single suite needs the loader, which resolves the `@/` alias:
 

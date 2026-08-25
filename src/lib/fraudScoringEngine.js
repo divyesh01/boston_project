@@ -1,3 +1,23 @@
+// Clerk-shift fraud scoring.
+//
+// TWO ENTRY POINTS, AND THEY DISAGREE (measured 2026-08-24). Neither is imported
+// by a page yet: `evaluateClerkShiftRisk` is imported only by
+// src/lib/hotelKeyRegression.test.js, and `computeClerkRiskIndex` is exported and
+// imported by nothing at all. They are not two variants of one policy — they
+// disagree on the weights (45/25 vs 35/20 for a cash-adjustment outlier), on the
+// severity cut-offs (CRITICAL at 70 vs at 60, manager review at 40 vs at 30) and
+// on what they measure (only the CRI path scores voids and Benford digit
+// deviation). Whoever wires clerk risk into a page has to choose deliberately;
+// taking whichever function appears first in the file gives a materially
+// different verdict on the same shift.
+//
+// Known defect in the unreachable path, left in place because there is no way to
+// verify a change to code nothing calls: computeClerkRiskIndex updates each
+// tracker with the CURRENT shift before taking that shift's z-score, so the
+// observation sits inside its own baseline and every z is pulled toward zero — it
+// under-reports exactly the outliers it exists to catch. It also seeds
+// `adjustmentTracker` and then never reads it. evaluateClerkShiftRisk builds its
+// statistics from the history alone, which is the correct comparison.
 import { sanitizeText as sanitizeInput } from './securityUtils';
 
 // ─── Online Welford Streaming Tracker (O(1) space/time) ──────────────────
@@ -48,11 +68,24 @@ function computeBenfordDeviation(numbers = []) {
   return { deviation: Math.round(chiSquare * 100) / 100, suspicious };
 }
 
+// One definition of sigma for the whole module. This used to divide the squared
+// deviations by `values.length` while WelfordTracker above divides by
+// `count - 1`, so the two risk entry points below scored the same shift against
+// two different scales.
+//
+// The Bessel-corrected divisor is the right one here: the historical cohort is a
+// SAMPLE standing in for "this clerk's normal", not the whole population.
+// Dividing by n understates sigma — 11% at the five-shift cohort the regression
+// suite uses — and an understated sigma overstates every z-score, so the bias
+// ran toward flagging a clerk who simply has few recorded shifts.
+//
+// Measured: switching the divisor leaves both regression verdicts unchanged
+// (95/CRITICAL and 0/LOW). The thresholds are nowhere near the boundary on those
+// fixtures, which is exactly why the divergence survived unnoticed.
 function calculateStats(values = []) {
-  if (values.length === 0) return { mean: 0, stdDev: 0 };
-  const mean = values.reduce((sum, v) => sum + v, 0) / values.length;
-  const variance = values.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / values.length;
-  return { mean, stdDev: Math.sqrt(variance) };
+  const tracker = new WelfordTracker();
+  values.forEach((v) => tracker.update(v));
+  return { mean: tracker.mean, stdDev: tracker.stdDev() };
 }
 
 // ─── Multivariate Clerk Risk Index (CRI) ───────────────────────────────

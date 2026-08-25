@@ -1,5 +1,31 @@
 ﻿/**
- * CRDT Sync Engine (Step 7 — 100× Unified Engine)
+ * CRDT Sync Engine — hand-rolled, and NOT the CRDT layer the app runs on.
+ *
+ * Reachability, measured 2026-08-24: the only importer of this file anywhere in
+ * src, base44, scripts, backend or tests is scripts/probe-crdt-convergence.mjs:39.
+ * No page, component or library imports it.
+ *
+ * DO NOT CONFUSE THIS WITH src/crdt.jsx, which is a different file and is very much
+ * live: crdt.jsx is a Yjs provider (`import * as Y from 'yjs'`) imported by
+ * App.jsx — so it wraps the entire application — plus src/lib/ySync.js and
+ * src/pages/DemoYDoc.jsx. Yjs is the CRDT implementation that actually ships. This
+ * file is a separate, from-scratch implementation of the same idea (LWW-Element-Set,
+ * OR-Map, vector clocks) that shares no code with it. Two CRDT engines in one repo,
+ * one of them unreachable, is exactly the shape of mistake that gets the wrong one
+ * debugged during an incident.
+ *
+ * docs/brain/BRAIN_FRONTEND.md listed this file as a dependency of RoomBoard.jsx
+ * until 2026-08-24. That was false — RoomBoard's real-time behaviour comes from
+ * `useRealtimeInvalidation` in src/lib/realtime.js (RoomBoard.jsx:12). Corrected
+ * there.
+ *
+ * Kept, not deleted, and this is deliberate: the defects fixed here for launch
+ * item #3 (dot comparison was lexicographic on stringified numbers, and merge
+ * dropped keys absent from the local replica) are asserted by
+ * probe-crdt-convergence.mjs, which runs green in verify:all. Deleting the file
+ * would delete a passing assertion about merge determinism, which is a worse
+ * trade than carrying an unwired module. If the owner decides Yjs is the only sync
+ * layer, this file and its probe should go together, in one change.
  *
  * State-based CRDTs for offline-first multi-property hotel operations.
  * Implements:

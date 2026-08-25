@@ -2,15 +2,28 @@ import React, { useState } from 'react';
 import { Settings, X, Save } from 'lucide-react';
 import { getHousekeepingConfig, saveHousekeepingConfig } from '@/lib/housekeepingConfig';
 
+// NOTE (2026-08-25): this component has ZERO importers. The live editor for these
+// standards is inline in src/pages/Housekeeping.jsx, which duplicates it. Kept as
+// found rather than deleted; it is updated here only because saveHousekeepingConfig
+// now returns a boolean instead of the merged config, and a dead file that calls a
+// changed contract is a trap for whoever revives it.
 export default function HousekeepingSettingsModal({ isOpen, onClose, propertyId, onSaved }) {
   const [config, setConfig] = useState(() => getHousekeepingConfig(propertyId));
+  const [error, setError] = useState(null);
 
   if (!isOpen) return null;
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    const updated = saveHousekeepingConfig(propertyId, config);
-    if (onSaved) onSaved(updated);
+    // saveHousekeepingConfig returns whether the write landed, and clamps each
+    // field, so the stored values are read back rather than assumed.
+    if (!saveHousekeepingConfig(propertyId, config)) {
+      setError('Could not save — browser storage is full or blocked. The previous standards are still in effect.');
+      return;
+    }
+    const stored = getHousekeepingConfig(propertyId);
+    setConfig(stored);
+    if (onSaved) onSaved(stored);
     onClose();
   };
 
@@ -28,6 +41,11 @@ export default function HousekeepingSettingsModal({ isOpen, onClose, propertyId,
         </div>
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-3.5 text-xs">
+          {error && (
+            <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-2 text-red-700">
+              {error}
+            </p>
+          )}
           <div>
             <label className="block font-medium text-gray-700 mb-1">
               Checkout Turnover Cleaning Time (Minutes)
@@ -37,7 +55,7 @@ export default function HousekeepingSettingsModal({ isOpen, onClose, propertyId,
               min="15"
               max="90"
               value={config.minutesPerCheckout}
-              onChange={(e) => setConfig({ ...config, minutesPerCheckout: e.target.value })}
+              onChange={(e) => setConfig({ ...config, minutesPerCheckout: Number(e.target.value) })}
               className="w-full rounded-lg border border-gray-300 p-2 focus:ring-1 focus:ring-red-600 outline-none"
             />
           </div>
@@ -51,7 +69,7 @@ export default function HousekeepingSettingsModal({ isOpen, onClose, propertyId,
               min="5"
               max="45"
               value={config.minutesPerStayover}
-              onChange={(e) => setConfig({ ...config, minutesPerStayover: e.target.value })}
+              onChange={(e) => setConfig({ ...config, minutesPerStayover: Number(e.target.value) })}
               className="w-full rounded-lg border border-gray-300 p-2 focus:ring-1 focus:ring-red-600 outline-none"
             />
           </div>
@@ -65,7 +83,7 @@ export default function HousekeepingSettingsModal({ isOpen, onClose, propertyId,
               step="0.25"
               min="7.25"
               value={config.hourlyWage}
-              onChange={(e) => setConfig({ ...config, hourlyWage: e.target.value })}
+              onChange={(e) => setConfig({ ...config, hourlyWage: Number(e.target.value) })}
               className="w-full rounded-lg border border-gray-300 p-2 focus:ring-1 focus:ring-red-600 outline-none"
             />
           </div>

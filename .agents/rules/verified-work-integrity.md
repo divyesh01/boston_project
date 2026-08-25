@@ -25,6 +25,8 @@ cannot run it, say "Not run" and do not claim the change is safe.
 | `scripts/audit-gate.mjs` | `npm run audit:gate` | exit 0, prints `Audit gate passed` |
 | `base44/functions/**/entry.{js,ts}` | `node --import ./scripts/_loader-boot.mjs scripts/probe-audit-chain.mjs` | `PASSED: 36 passed, 0 failed` |
 | `src/components/dashboard/MoneyKept.jsx` | `node --import ./scripts/_loader-boot.mjs scripts/verify-money-kept.mjs` | `PASSED: 29 checks passed, 0 failed` |
+| `src/lib/housekeepingConfig.js`, `src/lib/laborOptimization.js`, `src/pages/Housekeeping.jsx` | `node --import ./scripts/_loader-boot.mjs scripts/probe-settings-persistence.mjs` | `PASSED: 117 passed, 0 failed` |
+| the storage key `rri_housekeeping_config_<propertyId>` | `node --import ./scripts/_loader-boot.mjs scripts/probe-db-archive.mjs` | `PASSED: 216 passed, 0 failed` |
 
 ## Invariants that must not be weakened
 
@@ -107,6 +109,32 @@ the defect it was written for.
     the suite red instead of shipping quietly. The per-day `share` / `lumpTotal`
     revenue-share allocation is deliberately left fractional — it is an
     apportionment feeding a trend chart, not a stated amount.
+13. **`generateHousekeepingSchedule` keeps its third `standards` parameter, and
+    `Housekeeping.jsx` keeps passing `hkConfig` to it.** Dropping the argument
+    "because the defaults are the same numbers" is precisely the bug that was
+    fixed on 2026-08-25 (tracker #55): the function hardcoded `* 30` and `* 15`,
+    which are *exactly* the defaults of `minutesPerCheckout` and
+    `minutesPerStayover`, so both settings were read, clamped, persisted and then
+    ignored — and the page was correct for anyone who never changed them. The
+    constants remain the parameter defaults on purpose, which makes a revert look
+    harmless in every fixture that uses defaults. Section 8b of
+    `probe-settings-persistence.mjs` is the guard: it asserts that the untuned
+    result is still 450 **and** that a tuned 45/20 pair is not 450. A round-trip
+    or persistence assertion cannot see this class of defect; only an assertion on
+    the *derived figure* can.
+14. **`saveHk` reads the config back with `getHousekeepingConfig` instead of
+    trusting what it submitted, and both derived figures read `hkConfig`, never
+    `hkEdited`.** `saveHousekeepingConfig` clamps every field, so
+    `setHkConfig(hkEdited)` would render minutes and a labor cost computed from a
+    value the store rejected — and mixing a typed wage with saved turnover times
+    would state a cost true of no configuration at all. The collapse to one
+    `setState` will look like a simplification; it is the defect.
+15. **`housekeepingConfig.js` coerces with `coerceNumber`, not
+    `Number(x) || fallback`.** `0` is falsy and the editors report
+    `Number(e.target.value)`, where `Number("")` is `0`, so the falsy form
+    silently restored the previous value and made the clamp floors (10, 5, 7.25,
+    5) unreachable from the UI. Any settings module that accepts a numeric field
+    where 0 is a legal input has this trap.
 
 ## Deliberate non-changes
 
@@ -155,6 +183,19 @@ Do not "fix" these. Each was investigated and left alone on purpose.
 - **`DataIntelligence.jsx`'s `fileExt === 'txt'` branch** is unreachable (its own
   extension filter excludes `.txt`) and its two unused-variable lint warnings
   (`setActiveTab`, `format`) are pre-existing. Noted, not touched.
+- **`formatCents(cents, 0)` truncates rather than rounds** (`decimal.js:85` is
+  `Math.floor(abs / SCALE)`), so `$123.75` displays as `$123`. This is the
+  app-wide display convention — `money()` in `hotel.js` is defined in terms of it
+  — and `probe-settings-persistence.mjs` section 8f now pins both that and
+  `formatCents(12400, 0) === "$124"`. Do not "fix" it to round: every whole-dollar
+  figure in the app would move at once, and the two pinned assertions would go red
+  without telling the next reader why.
+- **`src/components/HousekeepingSettingsModal.jsx`** has zero importers and is
+  duplicated by the live inline editor in `Housekeeping.jsx`; it is stale enough
+  to edit only 3 of the 4 fields. It was updated on 2026-08-25 **solely** so it
+  would not call a contract that had changed under it (the saver now returns a
+  boolean), and it carries a header note saying so. Do not revive it as "the"
+  editor, and do not delete it as part of an unrelated change.
 
 ## Proposed addition to `PROTECTED_FILES.md` (owner action)
 

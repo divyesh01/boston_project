@@ -353,6 +353,155 @@ say("\n[7] storage that refuses reads is announced, and never crashes a page");
   ok("the blocked storage is announced", drain().length > 0, "console was silent");
 }
 
+// ── 8. The EIGHTH settings module, and the settings it turned out to ignore ───
+// housekeepingConfig.js was missed when the seven above were converted (found
+// 2026-08-25 while triaging the 40 raw browser-storage call sites). It had the
+// same swallowed read and unguarded write, and something worse of its own: two of
+// its four settings were decorative. `generateHousekeepingSchedule` hardcoded
+// `* 30` and `* 15` — the very numbers housekeepingConfig ships as defaults — so
+// the owner could set "Checkout (min)" to 45, click Save Standards, get
+// "Productivity standards saved.", and watch neither the "N minutes required"
+// line nor the estimated labor cost move. Ever.
+say("\n[8] housekeeping standards: stored, clamped, reported, and actually USED");
+{
+  const hk = await import("@/lib/housekeepingConfig");
+  const { generateHousekeepingSchedule } = await import("@/lib/laborOptimization");
+  const { toCents, formatCents } = await import("@/lib/decimal");
+  const HK_KEY = "rri_housekeeping_config_p1";
+
+  // 8a. round trip and the boolean contract
+  reset();
+  eq("saveHousekeepingConfig reports success", hk.saveHousekeepingConfig("p1", {
+    minutesPerCheckout: 45, minutesPerStayover: 20, hourlyWage: 18.25, targetLaborRevenuePercent: 12,
+  }), true);
+  const back = hk.getHousekeepingConfig("p1");
+  eq("checkout minutes round-trip", back.minutesPerCheckout, 45);
+  eq("stayover minutes round-trip", back.minutesPerStayover, 20);
+  eq("hourly wage round-trips", back.hourlyWage, 18.25);
+  eq("target labor % round-trips", back.targetLaborRevenuePercent, 12);
+  eq("a successful save says nothing on the console", drain().length, 0);
+
+  // 8b. THE REGRESSION THIS SECTION EXISTS FOR. The defaults are deliberately the
+  // historical hardcoded constants, so threading standards through is a no-op at
+  // defaults — that is what makes the fix safe. What must NOT be a no-op is a
+  // CHANGED standard. Before the fix, all three of these returned 450.
+  const noStandards = generateHousekeepingSchedule(10, 10);
+  eq("no standards supplied reproduces the historical 10x30 + 10x15", noStandards.requiredMinutes, 450);
+  eq("the shipped defaults agree with it (the fix is a no-op at defaults)",
+    generateHousekeepingSchedule(10, 10, hk.getHousekeepingConfig("never-saved")).requiredMinutes, 450);
+  const tuned = generateHousekeepingSchedule(10, 10, back);
+  eq("the owner's 45/20 standards reach the schedule", tuned.requiredMinutes, 10 * 45 + 10 * 20);
+  ok("...and therefore differ from the hardcoded answer", tuned.requiredMinutes !== 450,
+    `both were ${tuned.requiredMinutes} — the standards are being ignored again`);
+  eq("staff needed follows the tuned minutes (650 / 480, rounded up)", tuned.staffNeeded, 2);
+  // A partial object must not read as zero work.
+  eq("a partial standards object falls back per field, not to zero",
+    generateHousekeepingSchedule(10, 10, { minutesPerCheckout: 45 }).requiredMinutes, 10 * 45 + 10 * 15);
+  eq("a non-finite standard falls back to the default rather than erasing the workload",
+    generateHousekeepingSchedule(10, 0, { minutesPerCheckout: "abc" }).requiredMinutes, 300);
+
+  // 8c. a typed 0 is clamped to the floor, NOT reverted to the previous value.
+  // The editor's onChange reports Number(e.target.value), and Number("") is 0, so
+  // clearing a field sent a real 0 into `Number(x) || current` and got the old
+  // value back — the clamp floors were unreachable from the UI.
+  eq("clearing checkout minutes clamps to the floor, not back to 45",
+    (hk.saveHousekeepingConfig("p1", { minutesPerCheckout: 0 }), hk.getHousekeepingConfig("p1").minutesPerCheckout), 10);
+  eq("clearing the wage clamps to the federal minimum, not back to 18.25",
+    (hk.saveHousekeepingConfig("p1", { hourlyWage: 0 }), hk.getHousekeepingConfig("p1").hourlyWage), 7.25);
+  eq("a field absent from the update keeps its stored value",
+    hk.getHousekeepingConfig("p1").minutesPerStayover, 20);
+  eq("out-of-range high still clamps to the ceiling",
+    (hk.saveHousekeepingConfig("p1", { minutesPerCheckout: 500 }), hk.getHousekeepingConfig("p1").minutesPerCheckout), 90);
+  eq("the wage deliberately has no ceiling",
+    (hk.saveHousekeepingConfig("p1", { hourlyWage: 250 }), hk.getHousekeepingConfig("p1").hourlyWage), 250);
+
+  // 8d. a write that cannot land says so, and leaves the old standards in effect
+  reset();
+  hk.saveHousekeepingConfig("p1", { minutesPerCheckout: 45, hourlyWage: 18.25 });
+  drain();
+  failWrites = true;
+  let threw = null;
+  let wrote = null;
+  try {
+    wrote = hk.saveHousekeepingConfig("p1", { minutesPerCheckout: 80, hourlyWage: 99 });
+  } catch (e) {
+    threw = e;
+  }
+  failWrites = false;
+  ok("a refused write does not throw out of the click handler", threw === null,
+    threw ? `threw ${threw.name}: ${threw.message}` : undefined);
+  eq("a refused write reports false", wrote, false);
+  const lines = drain();
+  ok("the refusal is announced naming the key", mentions(lines, HK_KEY), `console said: ${JSON.stringify(lines)}`);
+  eq("the OLD checkout minutes are still what the app reads", hk.getHousekeepingConfig("p1").minutesPerCheckout, 45);
+  eq("the OLD wage is still what the app reads", hk.getHousekeepingConfig("p1").hourlyWage, 18.25);
+
+  // 8e. unreadable and unusable stored values are announced, never crash a page
+  reset();
+  store.set(HK_KEY, "{not json");
+  let readThrew = null;
+  let cfg = null;
+  try {
+    cfg = hk.getHousekeepingConfig("p1");
+  } catch (e) {
+    readThrew = e;
+  }
+  ok("corrupt stored JSON does not throw", readThrew === null,
+    readThrew ? `threw ${readThrew.name}: ${readThrew.message}` : undefined);
+  eq("corrupt stored JSON falls back to the default wage", cfg && cfg.hourlyWage, 16.50);
+  ok("...and is announced naming the key", mentions(drain(), HK_KEY), "console was silent");
+
+  reset();
+  store.set(HK_KEY, JSON.stringify({ minutesPerCheckout: "abc", hourlyWage: 19 }));
+  const partial = hk.getHousekeepingConfig("p1");
+  eq("an unusable single field falls back to its default", partial.minutesPerCheckout, 30);
+  eq("...while its usable neighbours survive", partial.hourlyWage, 19);
+  ok("...and the discarded field is announced", mentions(drain(), "minutesPerCheckout"), "console was silent");
+
+  reset();
+  failReads = true;
+  let blockedThrew = null;
+  try {
+    hk.getHousekeepingConfig("p1");
+  } catch (e) {
+    blockedThrew = e;
+  }
+  failReads = false;
+  ok("a reader never throws when storage refuses reads", blockedThrew === null,
+    blockedThrew ? `threw ${blockedThrew.name}: ${blockedThrew.message}` : undefined);
+
+  // 8f. the estimated labor cost is integer cents, on the same basis as payroll.
+  // Housekeeping.jsx computed `(requiredMinutes / 60) * Number(hourlyWage)` and
+  // handed the float dollars to money(). Measured over 636,000 wage/minute pairs
+  // ($7.25-$60.00 in 25c steps x 1-3000 minutes): the two forms disagree on 9,295
+  // of them, and the float form is the LOW one in all 9,295 — the same downward
+  // bias as tracker #53. Being honest about the blast radius: the label formats at
+  // ZERO decimals, and in none of those 9,295 did the displayed string change. So
+  // this is a conformance fix against the BUSINESS integer-cents directive with a
+  // real but invisible error, not a visible money defect. The visible defect in
+  // this cluster is 8b.
+  const costCents = (wage, minutes) => Math.round((toCents(wage) * minutes) / 60);
+  eq("the exact cost of 450 minutes at $16.50 is $123.75", costCents(16.50, 450), 12375);
+  eq("18 minutes at $7.25 is 218 cents", costCents(7.25, 18), 218);
+  eq("...where the float form yielded 217", toCents((18 / 60) * 7.25), 217);
+  // `formatCents(c, 0)` FLOORS (`Math.floor(abs / SCALE)`), it does not round — so
+  // $123.75 displays as "$123". My first draft of this assertion expected "$124"
+  // and failed; the code was right. It also means the re-measurement of visibility
+  // above had to be redone with a truncating formatter, and 0 of the 9,295 changed
+  // the displayed string either way: a 1-cent shortfall only crosses a floor
+  // boundary when the correct figure is an exact dollar, which never occurs here.
+  eq("the label renders the cents figure without a float hop", formatCents(costCents(16.50, 450), 0), "$123");
+  eq("...and whole dollars are displayed as whole dollars", formatCents(12400, 0), "$124");
+  // The page derives its cost from the STORED standards, so an unsaved edit cannot
+  // produce a figure that is true of no configuration at all.
+  reset();
+  hk.saveHousekeepingConfig("p1", { minutesPerCheckout: 45, minutesPerStayover: 20, hourlyWage: 18.25 });
+  const stored = hk.getHousekeepingConfig("p1");
+  const plan = generateHousekeepingSchedule(10, 10, stored);
+  eq("stored standards drive both the minutes and the cost", plan.requiredMinutes, 650);
+  eq("650 minutes at $18.25 is $197.71", costCents(stored.hourlyWage, plan.requiredMinutes), 19771);
+}
+
 console.error = realError;
 console.warn = realWarn;
 

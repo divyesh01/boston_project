@@ -6,7 +6,7 @@ import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { db } from "@/api/base44Client";
 import { useRealtimeInvalidation } from "@/lib/realtime";
 import { ErrorState } from "@/components/ui/status";
-import { money } from "@/lib/hotel";
+import { formatCents, toCents } from "@/lib/decimal";
 import {
   TASK_TYPES, TASK_TYPE_LABELS, TASK_STATUS, canTransition,
   defaultChecklist, checklistComplete, checklistProgress,
@@ -62,12 +62,39 @@ export default function Housekeeping() {
   }, [singlePropertyId]);
   const setHk = (field, value) => setHkEdited((p) => ({ ...p, [field]: value }));
   const saveHk = () => {
-    const saved = saveHousekeepingConfig(singlePropertyId || "default", hkEdited);
-    setHkConfig(saved);
+    const key = singlePropertyId || "default";
+    if (!saveHousekeepingConfig(key, hkEdited)) {
+      setNotice({
+        type: "error",
+        text: "Could not save the standards — browser storage is full or blocked. The previous standards are still in effect.",
+      });
+      return;
+    }
+    // Read back instead of trusting what was submitted: the store clamps each
+    // field, so the inputs and the figures below would otherwise keep showing a
+    // value that was never stored.
+    const stored = getHousekeepingConfig(key);
+    setHkConfig(stored);
+    setHkEdited(stored);
     setNotice({ type: "ok", text: "Productivity standards saved." });
   };
-  const laborPlan = useMemo(() => generateHousekeepingSchedule(rooms.length, rooms.length), [rooms]);
-  const estLaborCost = (laborPlan.requiredMinutes / 60) * Number(hkEdited.hourlyWage || 0);
+
+  // Both figures below derive from the STORED standards, never from unsaved
+  // edits. They are one pair — mixing a typed wage with saved turnover times
+  // would report a cost that is true of no configuration at all.
+  //
+  // OWNER QUESTION, unresolved: both arguments are `rooms.length`, so every room
+  // counts as a checkout AND as a stayover (rooms x 45 minutes at the defaults).
+  // A room is one or the other. Which field distinguishes them is a data question
+  // only the owner can settle, so the arithmetic is left exactly as it was rather
+  // than replaced with a guess.
+  const laborPlan = useMemo(
+    () => generateHousekeepingSchedule(rooms.length, rooms.length, hkConfig),
+    [rooms, hkConfig]
+  );
+  // Integer cents, rate x minutes / 60 — the basis payroll uses. Previously
+  // `(requiredMinutes / 60) * Number(hourlyWage)`, float dollars into money().
+  const estLaborCostCents = Math.round((toCents(hkConfig.hourlyWage) * laborPlan.requiredMinutes) / 60);
 
   const rollup = useMemo(() => housekeepingRollup(tasks), [tasks]);
   const overdue = useMemo(() => tasks.filter((t) => !["completed", "inspected"].includes(t.status) &&
@@ -188,7 +215,7 @@ export default function Housekeeping() {
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs text-slate-400">
-            Est. daily labor cost: <span className="font-medium text-white">{money(estLaborCost)}</span> · target {hkEdited.targetLaborRevenuePercent}% of revenue
+            Est. daily labor cost: <span className="font-medium text-white">{formatCents(estLaborCostCents, 0)}</span> · target {hkConfig.targetLaborRevenuePercent}% of revenue
           </p>
           <button
             onClick={saveHk}

@@ -56,6 +56,7 @@
 | 52 | **No toast this application has ever shown could be dismissed, or could expire.** Three independent sufficient causes: `toaster.jsx` rendered `<ToastClose />` with no `onClick` (it is a hand-rolled `<button>` — the Radix primitives had been replaced with plain divs); **nothing anywhere dispatched `DISMISS_TOAST`**, so the whole auto-expiry path was unreachable code; and `TOAST_REMOVE_DELAY` was `1_000_000`. Plus `TOAST_LIMIT = 20` as a permanent ceiling (~1800px in a `max-h-screen` container with no scroll, so the oldest were clipped out of the viewport), and `ToastProvider`/`ToastViewport` carrying BYTE-IDENTICAL fixed class strings — the toasts lived in the provider, so the empty viewport was a 32px invisible strip **swallowing clicks on every page in the app**. A page reload was the only way to clear a toast | HIGH | FIXED 2026-08-24 | `src/components/ui/use-toast.jsx` — the missing `dismissTimers` map, `DEFAULT_DURATION_MS` (5s / 10s destructive), `TOAST_LIMIT` 3, `TOAST_REMOVE_DELAY` 200 (measured: the exit animation compiles to 150ms); `toaster.jsx` — `onClick={() => dismiss(id)}`, `open`/`onOpenChange` out of the spread; `toast.jsx` — one `pointer-events-none` viewport, `open`→`data-state`, `type="button"`, variant-split ARIA. `src/components/ui/toast.test.jsx` (NEW, 17 vitest cases) + `scripts/probe-toast-lifecycle.mjs` (NEW, 68 assertions), 8 mutations. See section 30.4 | (This commit) |
 | 53 | **Payroll paid people from a display rounding, and lost cents every week.** A punch pair is an integer number of minutes, but `reconcileTimecards` rounded `hours` to 2 decimals *for a label* and then multiplied the rate by that label. Measured against the shipped code: 2,243 paid minutes at $15.00/h paid **$560.70 instead of $560.75**, and 140 overtime minutes at $22.50/h paid **$52.43 instead of $52.50**. Systematic and always downward, because the intermediate had already been truncated. Three copies of the arithmetic existed and the one that actually pays people — `runLocalAutoPayroll` in `src/api/base44Client.js` — is **protected**; `base44/functions/autoPayroll/entry.ts` was worse still, doing raw float dollar math (`baseRate * hours`, `Math.round(totalPay * 100) / 100`) that CLAUDE.md's BUSINESS mandate forbids outright, in a file that **no lint or typecheck gate covers** | HIGH | FIXED 2026-08-24 | `src/lib/timecardCalc.js` — rows carry `paid_minutes`/`regular_minutes`/`overtime_minutes` as integers, the 40h cap is compared in minutes, `hours` is the **exact quotient** `minutes / 60` and is never rounded, and pay goes through a new exported `payCentsForMinutes(rateCents, minutes)`. The protected file was **not touched**: it recomputes pay from `hours` itself, so an exact multiplicand puts its existing integer-cent math on the right cent (measured 224300c, where the 2-dp path gave 224280c). `base44/functions/autoPayroll/entry.ts` — inlined `toCents`/`fromCents`/`payCentsForMinutes`; `byEmployee` sums minutes and divides once. `src/pages/Expenses.jsx` — both hours render sites go through `formatNumber(x, 'auto')`, since `hours` is now `37.38333333333333`. `eslint.config.js` + `jsconfig.json` — the ignore note claiming typecheck gated these `.ts` files was false and now says so. `scripts/probe-payroll-minute-rounding.mjs` (NEW, 61 assertions, 6 mutations, incl. a 25,929-pair determinism sweep). See section 31 | (This commit) |
 | 54 | **A shift longer than a day was paid as if it were an hour, and the flag that was supposed to stop it did nothing.** Three independent defects stacked. (1) `parseTime`'s AM/PM branch validated **nothing**: it reduced the hour mod 12 *before* any range check, so `"11:99 PM"` returned **1479** and `"25:00 AM"` returned **60** — a minute-of-day above the legal 1439 maximum. The numeric branch was unchecked too (`3000`→3000, `-60`→-60). (2) `shift_exceeds_24h` was **decorative** in the client path: `reconcileTimecards` skipped only shifts with a *missing* punch, so `"12:00 AM"`→`"11:99 PM"` came out as `paid_minutes 1449, hours 24.15, total_pay 362.25` **with the flag attached**, while `base44/functions/autoPayroll/entry.ts` always skipped it — the cron and the Payroll page paid different amounts for identical rows. (3) A full-datetime punch had its date **parsed and then discarded**: `clock_in "2026-03-07 09:00"` → `clock_out "2026-03-09 10:00"` is 2,940 real minutes and read as `paid_minutes 60, total_pay 15, flags []`; a backwards-dated pair paid 450 minutes with no flag at all | HIGH | FIXED 2026-08-24 | `src/lib/timecardCalc.js` — `parseTime` range-checks **before** the mod (`raw > 23` and `min > 59` both reject) and bounds the numeric branch to `0..1439`; new private `datePartOf`/`dayIndex` measure the span from the punch dates *when both are known and differ*, via exact `Date.UTC` midnight arithmetic; `normalisePunch` publishes `durationMinutes` and adds `negative_shift_duration`; `reconcileTimecards` refuses to pay any shift carrying an `UNPAYABLE_FLAGS` member, while still listing it and keeping the flag on the week. Same three fixes inlined in `base44/functions/autoPayroll/entry.ts`. `src/api/base44Client.js` is **protected and untouched** — it imports `reconcileTimecards`, so the live payroll path inherits the fix. `scripts/probe-timecard-shift-span.mjs` (NEW, 73 assertions, 11 mutations) + 7 new vitest cases in `src/lib/timecardCalc.test.js` (21→28) so CI gates it, since CI does not run `verify:all`. See section 32 | (This commit) |
+| 55 | **Two of the four housekeeping productivity standards were decorative, and a refused save reported success.** `generateHousekeepingSchedule` hardcoded `checkouts * 30 + stayovers * 15` — **the exact default values of `minutesPerCheckout` and `minutesPerStayover`** — so the owner could set Checkout to 45, click Save Standards, read "Productivity standards saved." and watch neither "N minutes required" (`Housekeeping.jsx:165`) nor the estimated labor cost (`:191`) move. The matching defaults are what made it invisible: at 30/15 the page is correct, and only a *changed* setting exposes it. Three more on the same path: `housekeepingConfig.js` was the **eighth** settings module still holding its own storage code after the seven in section 33 were converted — a bare `catch {}` on read plus an unguarded `setItem` that returned the merged config unconditionally, so at quota or in private browsing the write threw out of the click handler where no React error boundary catches it and the button simply looked inert; every field was coerced with `Number(x) \|\| fallback` and **0 is falsy**, so with the editor reporting `Number(e.target.value)` and `Number("")` being 0, clearing a field reverted to the previous value instead of clamping to the floor the clamps exist to enforce (the 10/5/7.25/5 floors were unreachable from the UI); and `saveHk` set `hkConfig` but not `hkEdited` while both the inputs and the cost read `hkEdited`, so a clamped value left the page showing figures derived from a number that was never stored | MEDIUM | FIXED 2026-08-25 | `src/lib/laborOptimization.js` — third `standards` parameter, with the two historical constants kept **as the defaults** so a caller that passes nothing gets the answer it always got. `src/lib/housekeepingConfig.js` — rewritten onto `settingsStore.js` (readers never throw, writer returns a boolean), `coerceNumber` separates "not supplied" from "supplied as 0", `LIMITS` holds the four clamps. `src/pages/Housekeeping.jsx` — `saveHk` reads back with `getHousekeepingConfig` and sets both states from what is actually stored, both derived figures read `hkConfig` (never `hkEdited`), and the cost is integer cents. `src/components/HousekeepingSettingsModal.jsx` (**dead, zero importers**) updated only to keep the changed contract valid. `scripts/probe-settings-persistence.mjs` section 8 (117 assertions total, 3 mutations). See section 34 | (This commit) |
 
 ---
 
@@ -2230,5 +2231,205 @@ present-tense structural claims are rot.
   why "19 serverless functions" is the correct count against 20 directories.
 * **`src/components/ui/empty-state.jsx`** — 86 lines, zero importers, duplicates
   the live *named* `EmptyState` in `ui/status.jsx`. Reported, not deleted.
+
+---
+
+
+# 34. THE OWNER TYPED 45 AND THE PAGE KEPT USING 30 (tracker #55)
+
+> [!IMPORTANT]
+> The reason this survived every previous pass is arithmetic, not obscurity.
+> `laborOptimization.js` hardcoded `* 30` and `* 15`. `housekeepingConfig.js`
+> defaulted `minutesPerCheckout` to **30** and `minutesPerStayover` to **15**.
+> The two files agreed *at the defaults*, so the Housekeeping page is correct for
+> every owner who never changes a setting — and wrong for every owner who does.
+> A defect that only appears after the owner exercises the feature is invisible
+> to any test that uses default fixtures.
+
+## 34.1 What the owner would have seen
+
+The Housekeeping page carries an inline editor with four numbers: Checkout (min),
+Stayover (min), Wage ($/hr) and Target labor %. Set Checkout to 45, press **Save
+Standards**, and:
+
+* the notice reads **"Productivity standards saved."**
+* the value persists across a reload, so it really was stored
+* `{laborPlan.requiredMinutes} minutes required` (`Housekeeping.jsx:165`) does
+  **not** move
+* the estimated labor cost (`:191`) does **not** move
+
+Every part of the loop worked except the part that mattered. `getHousekeepingConfig`
+read the field, `saveHousekeepingConfig` clamped and persisted it, the input
+re-rendered with it — and the only consumer of the number ignored it:
+
+```js
+// src/lib/laborOptimization.js, as shipped until 2026-08-25
+export function generateHousekeepingSchedule(checkouts, stayovers) {
+  const minutes = (checkouts || 0) * 30 + (stayovers || 0) * 15;
+  const staffNeeded = Math.ceil(minutes / 480);
+```
+
+This is the third instance of the same class in this tracker: **#51** was a
+"require password change" switch that `handleCreate` overrode with a hard-coded
+`true`, **#54** was a `shift_exceeds_24h` flag that the client payroll path
+attached and then paid anyway, and this is a pair of settings with no reader. The
+class is worth naming: *a control the user can change, that is validated, clamped
+and persisted, and that nothing downstream consumes.* Persistence probes pass.
+Round-trip probes pass. Only a probe that asserts the **derived figure changed**
+catches it, which is why section 8b of `probe-settings-persistence.mjs` asserts
+`tuned.requiredMinutes !== 450` with the failure message "the standards are being
+ignored again".
+
+## 34.2 Three more defects on the same 49 lines
+
+`housekeepingConfig.js` was the **eighth** settings module still holding its own
+storage code after the seven in section 33 were routed through `settingsStore.js`.
+It had both defects that item was filed for, plus one of its own.
+
+**The read was a bare `catch {}`.** A corrupt value or a blocked store silently
+replaced the owner's configuration with built-in defaults — and since every figure
+on the page derives from these four numbers, the page would have quietly reported
+a labor plan for a configuration nobody had chosen.
+
+**The write was unguarded and the return was unconditional.** `localStorage.setItem`
+sat outside any `try`, and the function returned the merged config regardless. At
+quota, or in private browsing, the write **throws out of an onClick handler** —
+where React error boundaries do not catch, because the exception never passes
+through render. The observable result is a button that does nothing: no notice, no
+error, no stored value.
+
+**`Number(x) || fallback` cannot express a legitimate 0.** The editor's inputs
+report `Number(e.target.value)`, and `Number("")` is `0`. Clearing a field
+therefore sent a *real* 0 into `|| fallback`, which returned the previous value —
+so the four clamp floors (10, 5, 7.25, 5) were **unreachable from the UI**. The
+owner could not discover the minimum by trying to go below it; the field just
+snapped back and looked like a failed keystroke. The replacement separates the
+three cases explicitly:
+
+```js
+function coerceNumber(candidate, fallback) {
+  if (candidate === null || candidate === undefined || candidate === '') return fallback;
+  const n = Number(candidate);
+  return Number.isFinite(n) ? n : fallback;
+}
+```
+
+**And the page showed figures derived from a value it had never stored.** `saveHk`
+set `hkConfig` from the *submitted* object but left `hkEdited` alone, while the
+inputs and the cost label both read `hkEdited`. Since the store clamps, typing 200
+into Checkout produced inputs showing 200, a cost computed from 200, and a stored
+value of 90. The fix is to stop trusting the submitted value at all:
+
+```js
+const stored = getHousekeepingConfig(key);
+setHkConfig(stored);
+setHkEdited(stored);
+```
+
+Both derived figures now read `hkConfig` (stored) and never `hkEdited` (typed) —
+mixing a typed wage with saved turnover times would report a cost true of no
+configuration at all.
+
+## 34.3 Why threading the parameter is provably a no-op at defaults
+
+The two hardcoded constants became the parameter's defaults:
+
+```js
+const DEFAULT_MINUTES_PER_CHECKOUT = 30;
+const DEFAULT_MINUTES_PER_STAYOVER = 15;
+```
+
+so `generateHousekeepingSchedule(10, 10)` with no third argument still returns 450,
+and a **partial** `standards` object falls back per field rather than to zero — a
+missing entry cannot silently erase the workload. The probe asserts all three
+paths: no-standards is 450, the shipped defaults are 450 (*the fix is a no-op at
+defaults*), and only the tuned 45/20 pair differs. `MINUTES_PER_SHIFT = 480` was
+named but deliberately **not** made configurable — there is no UI for it and
+inventing one would be a feature, not a fix.
+
+## 34.4 The money change is conformance, not a visible defect — and the measurement says so
+
+The cost label was `money(hkEdited.hourlyWage * laborPlan.requiredMinutes / 60)`:
+float dollars, which CLAUDE.md's BUSINESS mandate forbids. It is now
+`Math.round((toCents(hkConfig.hourlyWage) * laborPlan.requiredMinutes) / 60)`, the
+same basis `payCentsForMinutes` uses in section 31.
+
+How wrong was the float form? Measured over **636,000** wage/minute pairs
+($7.25–$60.00 in 25¢ steps × 1–3000 minutes): the two disagree on **9,295**, and
+the float form is the **low** one in all 9,295 (0 high) — the same downward bias as
+#53. But **0 of the 9,295 changed the displayed string**, because a one-cent
+shortfall only crosses a dollar boundary when the correct figure is an exact
+dollar, which does not occur in this domain.
+
+So this is a conformance fix, and saying otherwise would overstate it. The *visible*
+defect in this cluster is the decorative settings, not the cents.
+
+> [!WARNING]
+> **`formatCents(c, 0)` truncates — it does not round.** `decimal.js:85` computes
+> `Math.floor(abs / SCALE)`, so `$123.75` displays as **`$123`**. This is the
+> app-wide display convention (`money = (v) => formatCents(toCents(v), 0)`) and is
+> **not** to be "fixed" to round. It invalidated a first pass at the measurement
+> above, which used a rounding formatter; the re-measurement with flooring gave the
+> same answer, but only the second one is evidence. The probe now pins both
+> behaviours: `formatCents(12375, 0) === "$123"` and `formatCents(12400, 0) === "$124"`.
+
+## 34.5 Verification (Observed)
+
+* `node --import ./scripts/_loader-boot.mjs scripts/probe-settings-persistence.mjs`
+  → **rc=0, 117 passed / 0 failed.** The pre-change baseline was measured by
+  running the HEAD copy of the file (it does no disk reads, so a copy runs
+  faithfully): **80 passed / 0 failed**, so section 8 contributes **37**. It is 80,
+  not 111 — 111 is the *suite discovery* count in BRAIN.md and the two are easy to
+  confuse.
+* **Three mutation tests**, one per bash call, each against a pristine `/tmp` copy
+  with `md5sum` asserted after restore — all three caught, all three restored
+  byte-identical:
+  * pre-fix `laborOptimization.js` (hardcoded 30/15) → **rc=1, 6 failures**,
+    "expected 650, got 450";
+  * `Number(x) || fallback` restored → **rc=1, 2 failures**, "expected 10, got 45"
+    and "expected 7.25, got 18.25";
+  * saver returning `merged` instead of the boolean → **rc=1, 2 failures** on the
+    writer contract.
+* `probe-float-money` **28/0**, `probe-suite-integrity` **110/0**.
+* `eslint .` → **rc=0, 224 problems (0 errors, 224 warnings)** — the same total as
+  before the change, so no warning was introduced and none was removed.
+* `tsc -p ./jsconfig.json` → **rc=0, 0 output lines.** It took two runs: tightening
+  `getHousekeepingConfig`'s `@returns` from `{Object}` to an all-numeric shape made
+  `tsc` surface three **pre-existing** `TS2322` string-into-number assignments in
+  the dead modal, which is a fair argument for precise JSDoc — a vague return type
+  had been hiding them.
+* Suite discovery stays at **111** and the list fingerprint stays **`2f3a5c5a`**,
+  because section 8 extended an existing suite instead of adding a file.
+
+## 34.6 The one question this cluster could not answer (OWNER)
+
+`Housekeeping.jsx` calls:
+
+```js
+generateHousekeepingSchedule(rooms.length, rooms.length, hkConfig)
+```
+
+Every room is counted as **both** a checkout and a stayover, so the plan is
+`rooms × 45` minutes at the defaults. That is either a deliberate
+worst-case-staffing figure or a placeholder, and the difference cannot be read off
+the code. Answering it needs the owner to say which field distinguishes a departure
+from an in-house room. The arithmetic was left exactly as found, with an
+`OWNER QUESTION, unresolved` comment at the call site rather than a guess — a wrong
+split would change every staffing number on the page while looking authoritative.
+
+## 34.7 Deliberately left alone
+
+* **`src/components/HousekeepingSettingsModal.jsx`** — 93 lines, **zero
+  importers**, duplicated by the live inline editor and stale enough to edit only
+  3 of the 4 fields (no Target labor %). It was updated **only** because
+  `saveHousekeepingConfig` now returns a boolean rather than the merged config, and
+  a dead file that calls a changed contract is a trap for whoever revives it. It
+  was not revived, and it was not deleted.
+* **`MINUTES_PER_SHIFT = 480`** — named, not made configurable. See 34.3.
+* **`formatCents`'s flooring** — the display convention. See the warning in 34.4.
+* **`checklist` at `Housekeeping.jsx:43`** — an unused `useState`, present at HEAD
+  and untouched by this change (it is one of the 224 pre-existing lint warnings).
+  Reported, not deleted.
+
 
 

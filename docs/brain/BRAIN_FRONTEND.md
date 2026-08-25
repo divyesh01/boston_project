@@ -77,7 +77,7 @@ These are the files in `src/lib/` -- the brains of the app. Grouped by what they
 | `financialReconciliation.js` | 4-way cross-check: PMS reports, gateway auth, batch settlement, bank deposits | Nothing on screen changes — no page imports it (measured 2026-08-24: `hotelKeyRegression.test.js` + `probe-financial-invariant.mjs` only). Drift is a `console.warn`, not an alert. |
 | `RevenueReconciliation.js` | 3-path revenue matcher (Path 1 vs 2 vs 3) | Revenue audit breaks. |
 | `decimal.js` | Integer-cents math: toCents(), fromCents(), multiply(), divide() -- prevents float errors | ALL money calculations break. Critical for accuracy. `Math.round(n * SCALE)` inside it is not a violation — that IS the dollars-to-cents boundary. Importing this module opts a file into the cents domain, and `scripts/probe-float-money.mjs` then forbids float-dollar rounding in it unless the site is allowlisted with a reason. Measured 2026-08-24: 26 modules have opted in. |
-| `settingsStore.js` | The ONLY localStorage reader/writer the settings modules may use. Readers return the caller's fallback and log the key they discarded; writers return `true`/`false` and never throw. Measured 2026-08-24: 7 importing modules, 9 storage keys. | A refused write becomes silent again. Before 2026-08-24 those 7 modules carried 9 hand-written `catch {}` blocks between them, so a quota-exhausted or private-browsing write was swallowed while `notifySettingsChanged()` still fired — the page showed "Saved" and the app kept computing on the OLD rate (measured: 22% typed, 15% applied = $70 unreported per $1,000 of Expedia gross). **Never `void` a writer's return value.** |
+| `settingsStore.js` | The ONLY localStorage reader/writer the settings modules may use. Readers return the caller's fallback and log the key they discarded; writers return `true`/`false` and never throw. **Measured 2026-08-25: 9 importers — 8 settings modules plus `DataIntelligence.jsx` — and 12 key names, one of which (`rri_housekeeping_config_`) is a per-property prefix rather than a fixed key.** The earlier figure of "7 modules, 9 keys" was correct on 2026-08-24 and went stale twice: `DataIntelligence.jsx` (+2 keys) joined with the catch-block sweep, and `housekeepingConfig.js` (+1) with tracker #55. | A refused write becomes silent again. Before 2026-08-24 those modules carried hand-written `catch {}` blocks between them, so a quota-exhausted or private-browsing write was swallowed while `notifySettingsChanged()` still fired — the page showed "Saved" and the app kept computing on the OLD rate (measured: 22% typed, 15% applied = $70 unreported per $1,000 of Expedia gross). **Never `void` a writer's return value.** And a boolean is only half of it: where the store *clamps*, read the value back before rendering it — see `housekeepingConfig.js` below. |
 | `commissionRates.js` | OTA commission models (fixed, %, none, tax-exempt) | Channel revenue goes wrong. Its setters return `false` when the browser refuses the write — a caller that ignores that shows a rate the engine is not using. `commissionFor()` resolves the LONGEST matching key, so editing `EXPEDIA` does not move `EXPEDIA HOTEL COLLECT`. |
 | `expenseCategories.js` | Expense type definitions | Expense tracking breaks. |
 | `taxConfig.js` | Tax configuration rules | Tax calculations go wrong. |
@@ -143,11 +143,11 @@ These are the files in `src/lib/` -- the brains of the app. Grouped by what they
 | `pricingOverride.js` | Manual price overrides | Override prices do not apply. |
 | `pricingSettings.js` | Pricing sensitivity presets | Pricing defaults wrong. |
 | `housekeepingService.js` | Room status management (clean/dirty/inspected) | Room board wrong. |
-| `housekeepingConfig.js` | Housekeeping settings | Housekeeping defaults wrong. |
+| `housekeepingConfig.js` | Four per-property productivity standards (checkout min, stayover min, wage, target labor %), clamped to `LIMITS` on write | The Housekeeping page's whole labor plan derives from these four numbers. Two rules learned the hard way (tracker #55, BRAIN_TROUBLESHOOTING section 34): **the writer clamps, so a caller must re-read with `getHousekeepingConfig` rather than trust what it submitted** — otherwise the page renders figures computed from a value that was never stored; and **`Number(x) \|\| fallback` is forbidden here**, because the editors report `Number(e.target.value)`, `Number("")` is `0`, and a falsy test made the clamp floors unreachable from the UI. |
 | `roomBoard.js` | Room grid state management | Room board view breaks. |
 | `weatherService.js` | Live weather data + revenue correlation | Weather widget breaks. |
 | `weatherSettings.js` | Property coordinates for the forecast (never an API key — that is server-side) | More than the weather card. Traced 2026-08-24: WeatherPanel fetches with these coordinates and persists `WeatherSnapshot` rows, `usePricing.js` builds `weatherByDate` from those rows, and `pricingEngine.js` turns it into `weatherMultiplierBps` — so wrong coordinates quietly move every recommended rate. |
-| `laborOptimization.js` | Staff scheduling optimization | Labor cost estimates wrong. |
+| `laborOptimization.js` | `generateHousekeepingSchedule(checkouts, stayovers, standards)` — required minutes and shift count | Until 2026-08-25 it hardcoded `* 30` and `* 15`, **the exact defaults of the two minute settings**, so both were decorative: read, clamped, saved, never consumed. The historical constants are now the parameter's defaults, so a caller passing nothing is unchanged. If you touch it, assert that a *tuned* standard moves `requiredMinutes` — a round-trip assertion cannot see this defect. `MINUTES_PER_SHIFT = 480` is deliberately not configurable. |
 | `yieldOptimizer.js` | Rate recommendation in float dollars. **Unwired**, and it disagrees with the live `pricingEngine.js` by up to $25.60/night on identical inputs | Nothing on screen changes — imported only by `hotelKeyRegression.test.js`. The Dashboard's yield panel computes its own advice; see the file header. |
 | `reputationService.js` | Guest review aggregation + sentiment | Reviews page breaks. |
 | `actionCenter.js` | Action item management (Fix Today/Investigate/Opportunity) | Action Center page breaks. |
@@ -552,5 +552,66 @@ the display side.
 > completely. Every CI runner is UTC; an agent sandbox inherits `TZ` from its host and can
 > be either (BRAIN_TROUBLESHOOTING.md 27.2). `scripts/probe-mtd-growth.mjs` pins the zone
 > on its first executable line so the verdict does not depend on where it ran.
+
+---
+
+# 17. REACT-QUERY FETCH GATING (why 28 missing `enabled:` options are NOT a defect)
+
+Measured 2026-08-25: **40 `useQuery` calls across 12 files, 12 with `enabled:`, 8 with an
+explicit `staleTime`.** That reads like a bug report — 28 queries that fire before their
+inputs are ready — and it is not one. Anyone tempted to add `enabled:` to the other 28
+should read this section first, because the churn buys nothing and the reasoning is not
+visible from any single call site.
+
+## 17.1 The three properties that make it safe
+
+**One: no page component mounts until auth is resolved.** `RequireAuth` (`src/App.jsx:166`)
+wraps every route under `ProtectedRoutes`, and while `isLoadingAuth || !authChecked` it
+returns a full-screen spinner instead of `children`; if the check completes unauthenticated
+it returns `null`. So the ordinary "query fires with a half-initialised user" race cannot
+happen here — the query's component does not exist yet.
+
+**Two: no selection is a sentinel, not a hole.** With `selectedPropertyIds` defaulting to
+`[]` (`useGlobalFilters.jsx:143`), `effectiveProperties` is empty and `property` resolves to
+the string `"all"`. Consumers forward that to `db.entities.*.filter` as *no property
+condition*, and `applyScope` turns an absent condition into the caller's own allowance.
+`"all"` therefore means "all of mine", never "all that exist" — the data layer enforces it,
+not the hook. That is why an early fire returns correct data rather than empty or leaked
+data.
+
+**Three: every property-dependent key contains the property.** `["occupancy", from, to,
+propertyId, …]` and friends. If the roster resolves later and changes `effectiveProperties`,
+the key changes with it and react-query refetches on its own. The two keys that carry no
+property — `["uploads"]` and `["properties"]` — are portfolio-wide within the allowance by
+design, so there is nothing for a property switch to change.
+
+## 17.2 The failure mode this would be, if any one of the three were missing
+
+Worth writing down, because it is a real react-query trap and the next reader will meet it
+somewhere else. `src/lib/query-client.js` sets `staleTime: 5000` **and
+`refetchOnWindowFocus: false`**, with no `refetchOnReconnect` override. Nothing in
+`AuthContext.jsx`, `App.jsx` or `main.jsx` clears or invalidates the cache when auth
+resolves — verified by grep, and **not one of the 40 query keys contains user identity or an
+auth-ready flag.**
+
+So *if* a query could fire while the allowance was still empty, it would cache `[]` under a
+key that never subsequently changes. Stale after 5s is not the same as refetched: with
+window-focus refetching off and no remount, no invalidation and no key change, that empty
+array would be served forever. The user would get a dashboard of zeros that a reload fixes
+and nothing else does — indistinguishable from "there is no data", which is the exact
+failure `useGlobalFilters.jsx:162-166` warns about in its own comment.
+
+The protection is property one, and it lives in a different file from all 40 call sites.
+**If anyone ever makes `RequireAuth` render `children` during loading — for a skeleton
+screen, say — this section becomes a live defect list and all 28 queries need `enabled:`.**
+That is the coupling to watch, not the missing option.
+
+## 17.3 What was checked and found clean
+
+`DataIntelligence.jsx:41` (`['data-files']`) reads a raw table with no property scope and
+says so in a comment on the next line; it is one of the documented raw-access sites from the
+B4 sweep, and `:103` pulls `property` from `useGlobalFilters` for display. Not a defect.
+`useUploads` and `useProperties` are property-agnostic on purpose. No code change was made
+for any of this, deliberately.
 
 ---

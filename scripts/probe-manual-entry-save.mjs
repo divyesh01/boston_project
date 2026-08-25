@@ -36,6 +36,8 @@ if (globalThis.navigator === undefined) {
 
 const { db, runInTransaction } = await import("@/api/base44Client");
 const { saveManualRows } = await import("@/lib/manualEntrySave");
+const { draftKeyFor, readDraft, writeDraft, clearDraft } = await import("@/lib/manualDraft");
+const { readFileSync: fsReadFileSync } = await import("node:fs");
 const { signInAsAllPropertyOwner } = await import("./_harness-auth.mjs");
 
 const PROPERTY = "prop-manual-save";
@@ -268,6 +270,139 @@ console.log("\n[8] runInTransaction itself rolls back a partial write");
   } catch (e) { threw = e; }
   ok(threw !== null, "the transaction reports the abort");
   eq(await countRows(), before, "and the row created before the throw is gone");
+}
+
+// ── 9. The draft is the only copy of the typed rows, so losing it must be loud ──
+// The page held five raw localStorage calls (a read OUTSIDE its own try, two
+// unguarded removes, a silent discard of a corrupt draft, and an auto-save whose
+// only failure path was console.warn). On a browser that refuses storage — private
+// browsing, blocked site data, or simply quota — the read threw out of a useEffect
+// and took the page down, and the auto-save failed while the page went on showing
+// its amber "● Unsaved draft" dot. src/lib/manualDraft.js owns every access now,
+// which is what makes these assertions possible at all: an effect cannot be probed
+// headlessly, a module can.
+console.log("\n[9] the manual-entry draft store reports every storage failure");
+{
+  const KEY = draftKeyFor("prop-manual-save", "occupancy");
+  const ROWS = [{ date: "2026-06-01", rooms_sold: 12 }, { date: "2026-06-02", rooms_sold: 9 }];
+
+  // Failure messages go to the console AND come back as `problem` for the page to
+  // render. Both are asserted: the console line is the record, the return value is
+  // what stops the page claiming success.
+  const capture = (fn) => {
+    const real = console.error;
+    const lines = [];
+    console.error = (...a) => lines.push(a.map(String).join(" "));
+    try { return { value: fn(), lines }; } finally { console.error = real; }
+  };
+  // Storage that refuses one named operation, as a blocked or full browser does.
+  const refuse = (op) => ({
+    ...__storage,
+    [op]: () => { const e = new Error("The operation is insecure."); e.name = "SecurityError"; throw e; },
+  });
+  const withStorage = (s, fn) => {
+    globalThis.localStorage = s;
+    try { return fn(); } finally { globalThis.localStorage = __storage; }
+  };
+
+  eq(KEY, "manual_draft_prop-manual-save_occupancy", "the key shape is unchanged");
+  ok(KEY.startsWith("manual_draft_"), "and keeps the prefix dbArchive backs up");
+
+  __storage.clear();
+  const w = writeDraft(KEY, ROWS);
+  ok(w.ok === true, "a draft writes", w.problem);
+  eq(w.problem, "", "with nothing to report");
+  const r = readDraft(KEY);
+  eq(JSON.stringify(r.rows), JSON.stringify(ROWS), "and reads back row for row");
+  ok(r.discard === false && r.problem === "", "with nothing to discard or report");
+  ok(clearDraft(KEY).ok === true, "and clears");
+  const gone = readDraft(KEY);
+  ok(gone.rows === null && gone.discard === false && gone.problem === "",
+    "an absent draft is not a failure and is not reported");
+
+  // Unusable stored values: all four were deleted in silence before.
+  for (const [label, raw, mustReport] of [
+    ["an empty list", "[]", false],
+    ["truncated JSON", '[{"date":"2026-06-01"', true],
+    ["an object instead of a list", '{"date":"2026-06-01"}', true],
+    ["the text null", "null", true],
+    ["a list of numbers", "[1,2,3]", true],
+  ]) {
+    __storage.setItem(KEY, raw);
+    const { value, lines } = capture(() => readDraft(KEY));
+    ok(value.rows === null, `${label}: nothing is offered to recover`);
+    ok(value.discard === true, `${label}: the caller is told to clear the key`);
+    if (mustReport) {
+      ok(value.problem.length > 0, `${label}: the loss is reported`, value.problem);
+      ok(value.problem.includes(KEY), `${label}: the message names the key`);
+      ok(lines.some((l) => l.includes(KEY)), `${label}: and it reaches the console`);
+    } else {
+      // A cleared draft costs the operator nothing, so it is removed quietly.
+      eq(value.problem, "", `${label}: is cleaned up without a message`);
+      eq(lines.length, 0, `${label}: and logs nothing`);
+    }
+  }
+  __storage.clear();
+
+  // THE PAGE-BLANKING CASE. `localStorage.getItem` throws in a context where
+  // storage is blocked, and the old call sat outside its try.
+  {
+    const { value, lines } = capture(() => withStorage(refuse("getItem"), () => readDraft(KEY)));
+    ok(value.rows === null, "a refused read returns instead of throwing");
+    ok(value.discard === false,
+      "and does NOT ask for the key to be cleared — nothing is known about the stored value");
+    ok(value.problem.includes(KEY), "the message names the key", value.problem);
+    ok(/private browsing|blocked/i.test(value.problem), "and says why storage might refuse");
+    ok(lines.length === 1, "reported once to the console", String(lines.length));
+  }
+
+  // A refused write is what the amber "unsaved draft" dot used to lie about.
+  {
+    const { value, lines } = capture(() => withStorage(refuse("setItem"), () => writeDraft(KEY, ROWS)));
+    ok(value.ok === false, "a refused write reports failure rather than returning void");
+    ok(value.problem.includes(KEY), "the message names the key", value.problem);
+    ok(/NOT being kept/.test(value.problem), "and states that the rows are not being kept");
+    ok(/lost if this tab closes/.test(value.problem), "and what that costs");
+    ok(lines.some((l) => l.includes("SecurityError")), "the cause is on the console");
+    ok(__storage.getItem(KEY) === null, "and nothing was stored");
+  }
+
+  // Rows that cannot be serialised are a code defect, not a full disk, and must not
+  // send the owner off to clear their browser.
+  {
+    const cyclic = [{ date: "2026-06-01" }];
+    cyclic[0].self = cyclic;
+    const { value } = capture(() => writeDraft(KEY, cyclic));
+    ok(value.ok === false, "unserialisable rows report failure");
+    ok(/defect in the calling code/.test(value.problem), "and are not blamed on storage", value.problem);
+    ok(__storage.getItem(KEY) === null, "and nothing was stored");
+  }
+
+  // A refused remove used to throw out of an onClick — after a save had already
+  // committed, and before setSaving(false).
+  {
+    const { value, lines } = capture(() => withStorage(refuse("removeItem"), () => clearDraft(KEY)));
+    ok(value.ok === false, "a refused remove reports failure instead of throwing");
+    ok(value.problem.includes(KEY), "the message names the key", value.problem);
+    ok(/reappear|recovery/i.test(value.problem), "and says the draft will come back");
+    ok(lines.length === 1, "reported once to the console", String(lines.length));
+  }
+
+  // Static: the page must not hold a second copy of any of this. These are the
+  // assertions that fail if a future edit puts a raw localStorage call back into
+  // the component, which is the shape the defect had.
+  const readFile = (rel) => fsReadFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
+  const page = readFile("src/pages/ManualEntry.jsx");
+  ok(!/localStorage|sessionStorage/.test(page.replace(/^\s*\/\/.*$/gm, "")),
+    "ManualEntry.jsx touches web storage nowhere outside the draft module");
+  ok(/from ["']@\/lib\/manualDraft["']/.test(page), "and imports the draft module");
+  for (const fn of ["draftKeyFor", "readDraft", "writeDraft", "clearDraft"]) {
+    ok(new RegExp(`\\b${fn}\\(`).test(page), `and calls ${fn}()`);
+  }
+  ok(!/manual_draft_/.test(page), "the key template lives in exactly one place, not in the page");
+  ok(/manual_draft_/.test(readFile("src/lib/manualDraft.js")), "and that place is manualDraft.js");
+  ok(/LOCAL_SLOT_PREFIXES[\s\S]{0,120}manual_draft_/.test(readFile("src/lib/dbArchive.js")),
+    "dbArchive still backs the prefix up, so a draft survives an export");
 }
 
 console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);

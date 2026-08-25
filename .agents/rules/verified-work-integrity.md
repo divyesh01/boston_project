@@ -27,6 +27,8 @@ cannot run it, say "Not run" and do not claim the change is safe.
 | `src/components/dashboard/MoneyKept.jsx` | `node --import ./scripts/_loader-boot.mjs scripts/verify-money-kept.mjs` | `PASSED: 29 checks passed, 0 failed` |
 | `src/lib/housekeepingConfig.js`, `src/lib/laborOptimization.js`, `src/pages/Housekeeping.jsx` | `node --import ./scripts/_loader-boot.mjs scripts/probe-settings-persistence.mjs` | `PASSED: 117 passed, 0 failed` |
 | the storage key `rri_housekeeping_config_<propertyId>` | `node --import ./scripts/_loader-boot.mjs scripts/probe-db-archive.mjs` | `PASSED: 216 passed, 0 failed` |
+| `src/lib/manualDraft.js`, `src/pages/ManualEntry.jsx` | `node --import ./scripts/_loader-boot.mjs scripts/probe-manual-entry-save.mjs` | `PASSED: 96 passed, 0 failed` |
+| `scripts/probe-db-archive.mjs`'s `MANIFEST` | as the row above it | also `storage writers classified: 21` |
 
 ## Invariants that must not be weakened
 
@@ -135,6 +137,28 @@ the defect it was written for.
     silently restored the previous value and made the clamp floors (10, 5, 7.25,
     5) unreachable from the UI. Any settings module that accepts a numeric field
     where 0 is a legal input has this trap.
+16. **`ManualEntry.jsx` holds zero web-storage calls and zero copies of the draft
+    key template.** Both are asserted statically by section 9 of
+    `probe-manual-entry-save.mjs`. `src/lib/manualDraft.js` exists because the
+    page's five raw `localStorage` calls could not report a failure to the person
+    typing, and one of them — a `getItem` **outside** its own `try`, inside a
+    `useEffect` — blanked the entire page behind `LazyErrorBoundary` on any
+    browser that refuses storage. Note the second half: a grep for `localStorage`
+    returning nothing does **not** prove the page is decoupled. The literal
+    `manual_draft_${propId}_${reportType}` survived my own rewrite and only the
+    key-template assertion caught it, which is the state from which the next edit
+    reintroduces a raw call. `manual_draft_` is also a `LOCAL_SLOT_PREFIXES` entry
+    in `dbArchive.js`, so a rename silently drops drafts out of every backup.
+17. **The clear after a successful save neither overwrites the success message nor
+    throws.** `clearDraft(draftKey)` in `handleSave` sits **before**
+    `setSaving(false)` and `rotateCsrfToken()`, and the records are already
+    committed when it runs. So a refused remove must (a) return rather than throw
+    — an unguarded `removeItem` there left a completed save with the Save button
+    spinning on a stale CSRF token — and (b) *append* to "N records saved" under
+    the `warn` tone rather than replace it, because that sentence is true. The
+    **discard** button inverts the second half deliberately: when its remove
+    fails the draft is still stored, so the recovery banner stays open. Closing it
+    would tell the operator the draft was discarded when it was not.
 
 ## Deliberate non-changes
 

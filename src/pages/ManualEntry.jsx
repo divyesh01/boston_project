@@ -12,6 +12,7 @@ import { ErrorState } from "@/components/ui/status";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
 import { parseManualEntryCsv, parseManualEntryPaste } from "@/lib/manualEntryImport";
 import { saveManualRows } from "@/lib/manualEntrySave";
+import { draftKeyFor, readDraft, writeDraft, clearDraft } from "@/lib/manualDraft";
 
 // An uploaded file is hostile input. 10MB matches the cap fetchCsvRows enforces on
 // the report-import path, so both importers refuse the same oversized file.
@@ -140,47 +141,65 @@ export default function ManualEntry() {
   
   const [draftKey, setDraftKey] = useState("");
   const [draftToRecover, setDraftToRecover] = useState(null);
+  // Which draft key the auto-save failure has already been stated for, so a
+  // refused write is reported once instead of on every keystroke.
+  const draftWarnedFor = useRef("");
 
   // When property/reportType changes, evaluate draft
   useEffect(() => {
     const propId = Array.isArray(property) ? property[0] : property;
     if (!propId) return;
-    const key = `manual_draft_${propId}_${reportType}`;
+    const key = draftKeyFor(propId, reportType);
     setDraftKey(key);
     
-    const saved = localStorage.getItem(key);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setDraftToRecover(parsed);
-        } else {
-          localStorage.removeItem(key);
-          setDraftToRecover(null);
-        }
-      } catch (e) {
-        localStorage.removeItem(key);
-        setDraftToRecover(null);
-      }
-    } else {
-      setDraftToRecover(null);
+    // Every failure here reaches the screen as well as the console. A draft of
+    // hand-typed money rows that turned out to be unreadable used to be deleted in
+    // silence, and the grid simply came up empty. See src/lib/manualDraft.js.
+    const { rows: recoverable, discard, problem } = readDraft(key);
+    // The result is deliberately ignored: a draft that cannot be loaded is being
+    // removed as cleanup, and if the removal fails the next read reports it again.
+    if (discard) clearDraft(key);
+    setDraftToRecover(recoverable);
+    if (problem) {
+      setSaveMsg(problem);
+      setMsgTone("error");
+      setImportWarnings([problem]);
     }
   }, [property, reportType]);
 
-  // Auto-save logic
+  // Auto-save. A refused write used to be a console.warn while the page went on
+  // rendering its amber "● Unsaved draft" dot, so the operator was told the typed
+  // rows were being kept at the exact moment they were not. Reported once per key
+  // rather than once per keystroke — this effect runs on every cell edit.
   useEffect(() => {
     if (!draftKey) return;
-    if (hasDraft && rows.length > 0) {
-      try {
-        localStorage.setItem(draftKey, JSON.stringify(rows));
-      } catch (e) {
-        console.warn("Auto-save failed", e);
-      }
+    if (!hasDraft || rows.length === 0) return;
+    const { ok, problem } = writeDraft(draftKey, rows);
+    if (ok) {
+      draftWarnedFor.current = "";
+      return;
     }
+    if (draftWarnedFor.current === draftKey) return;
+    draftWarnedFor.current = draftKey;
+    setSaveMsg(problem);
+    setMsgTone("error");
   }, [rows, hasDraft, draftKey]);
 
   const handleDiscardDraft = () => {
-    if (draftKey) localStorage.removeItem(draftKey);
+    if (!draftKey) {
+      setDraftToRecover(null);
+      return;
+    }
+    const { ok, problem } = clearDraft(draftKey);
+    if (!ok) {
+      // The draft is still stored, so the recovery banner stays put: Resume still
+      // works, and the draft would reappear on the next visit regardless. Closing
+      // the banner here would state that it had been discarded when it had not.
+      setSaveMsg(problem);
+      setMsgTone("error");
+      setImportWarnings([problem]);
+      return;
+    }
     setDraftToRecover(null);
   };
 
@@ -553,7 +572,18 @@ export default function ManualEntry() {
     setMsgTone("success");
     setImportWarnings([]);
     setHasDraft(false);
-    if (draftKey) localStorage.removeItem(draftKey);
+    if (draftKey) {
+      // The records ARE written by this point, so a refused removal is not an error
+      // and must not overwrite the success message — but it must also not throw,
+      // because setSaving(false) and rotateCsrfToken() are below it. An unguarded
+      // removeItem here left a completed save with the Save button spinning and a
+      // stale CSRF token.
+      const { ok, problem } = clearDraft(draftKey);
+      if (!ok) {
+        setSaveMsg(`${saved} records saved. All dashboards updated.${extra} ${problem}`);
+        setMsgTone("warn");
+      }
+    }
     setSaving(false);
     rotateCsrfToken();
   };

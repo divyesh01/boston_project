@@ -57,6 +57,7 @@
 | 53 | **Payroll paid people from a display rounding, and lost cents every week.** A punch pair is an integer number of minutes, but `reconcileTimecards` rounded `hours` to 2 decimals *for a label* and then multiplied the rate by that label. Measured against the shipped code: 2,243 paid minutes at $15.00/h paid **$560.70 instead of $560.75**, and 140 overtime minutes at $22.50/h paid **$52.43 instead of $52.50**. Systematic and always downward, because the intermediate had already been truncated. Three copies of the arithmetic existed and the one that actually pays people — `runLocalAutoPayroll` in `src/api/base44Client.js` — is **protected**; `base44/functions/autoPayroll/entry.ts` was worse still, doing raw float dollar math (`baseRate * hours`, `Math.round(totalPay * 100) / 100`) that CLAUDE.md's BUSINESS mandate forbids outright, in a file that **no lint or typecheck gate covers** | HIGH | FIXED 2026-08-24 | `src/lib/timecardCalc.js` — rows carry `paid_minutes`/`regular_minutes`/`overtime_minutes` as integers, the 40h cap is compared in minutes, `hours` is the **exact quotient** `minutes / 60` and is never rounded, and pay goes through a new exported `payCentsForMinutes(rateCents, minutes)`. The protected file was **not touched**: it recomputes pay from `hours` itself, so an exact multiplicand puts its existing integer-cent math on the right cent (measured 224300c, where the 2-dp path gave 224280c). `base44/functions/autoPayroll/entry.ts` — inlined `toCents`/`fromCents`/`payCentsForMinutes`; `byEmployee` sums minutes and divides once. `src/pages/Expenses.jsx` — both hours render sites go through `formatNumber(x, 'auto')`, since `hours` is now `37.38333333333333`. `eslint.config.js` + `jsconfig.json` — the ignore note claiming typecheck gated these `.ts` files was false and now says so. `scripts/probe-payroll-minute-rounding.mjs` (NEW, 61 assertions, 6 mutations, incl. a 25,929-pair determinism sweep). See section 31 | (This commit) |
 | 54 | **A shift longer than a day was paid as if it were an hour, and the flag that was supposed to stop it did nothing.** Three independent defects stacked. (1) `parseTime`'s AM/PM branch validated **nothing**: it reduced the hour mod 12 *before* any range check, so `"11:99 PM"` returned **1479** and `"25:00 AM"` returned **60** — a minute-of-day above the legal 1439 maximum. The numeric branch was unchecked too (`3000`→3000, `-60`→-60). (2) `shift_exceeds_24h` was **decorative** in the client path: `reconcileTimecards` skipped only shifts with a *missing* punch, so `"12:00 AM"`→`"11:99 PM"` came out as `paid_minutes 1449, hours 24.15, total_pay 362.25` **with the flag attached**, while `base44/functions/autoPayroll/entry.ts` always skipped it — the cron and the Payroll page paid different amounts for identical rows. (3) A full-datetime punch had its date **parsed and then discarded**: `clock_in "2026-03-07 09:00"` → `clock_out "2026-03-09 10:00"` is 2,940 real minutes and read as `paid_minutes 60, total_pay 15, flags []`; a backwards-dated pair paid 450 minutes with no flag at all | HIGH | FIXED 2026-08-24 | `src/lib/timecardCalc.js` — `parseTime` range-checks **before** the mod (`raw > 23` and `min > 59` both reject) and bounds the numeric branch to `0..1439`; new private `datePartOf`/`dayIndex` measure the span from the punch dates *when both are known and differ*, via exact `Date.UTC` midnight arithmetic; `normalisePunch` publishes `durationMinutes` and adds `negative_shift_duration`; `reconcileTimecards` refuses to pay any shift carrying an `UNPAYABLE_FLAGS` member, while still listing it and keeping the flag on the week. Same three fixes inlined in `base44/functions/autoPayroll/entry.ts`. `src/api/base44Client.js` is **protected and untouched** — it imports `reconcileTimecards`, so the live payroll path inherits the fix. `scripts/probe-timecard-shift-span.mjs` (NEW, 73 assertions, 11 mutations) + 7 new vitest cases in `src/lib/timecardCalc.test.js` (21→28) so CI gates it, since CI does not run `verify:all`. See section 32 | (This commit) |
 | 55 | **Two of the four housekeeping productivity standards were decorative, and a refused save reported success.** `generateHousekeepingSchedule` hardcoded `checkouts * 30 + stayovers * 15` — **the exact default values of `minutesPerCheckout` and `minutesPerStayover`** — so the owner could set Checkout to 45, click Save Standards, read "Productivity standards saved." and watch neither "N minutes required" (`Housekeeping.jsx:165`) nor the estimated labor cost (`:191`) move. The matching defaults are what made it invisible: at 30/15 the page is correct, and only a *changed* setting exposes it. Three more on the same path: `housekeepingConfig.js` was the **eighth** settings module still holding its own storage code after the seven in section 33 were converted — a bare `catch {}` on read plus an unguarded `setItem` that returned the merged config unconditionally, so at quota or in private browsing the write threw out of the click handler where no React error boundary catches it and the button simply looked inert; every field was coerced with `Number(x) \|\| fallback` and **0 is falsy**, so with the editor reporting `Number(e.target.value)` and `Number("")` being 0, clearing a field reverted to the previous value instead of clamping to the floor the clamps exist to enforce (the 10/5/7.25/5 floors were unreachable from the UI); and `saveHk` set `hkConfig` but not `hkEdited` while both the inputs and the cost read `hkEdited`, so a clamped value left the page showing figures derived from a number that was never stored | MEDIUM | FIXED 2026-08-25 | `src/lib/laborOptimization.js` — third `standards` parameter, with the two historical constants kept **as the defaults** so a caller that passes nothing gets the answer it always got. `src/lib/housekeepingConfig.js` — rewritten onto `settingsStore.js` (readers never throw, writer returns a boolean), `coerceNumber` separates "not supplied" from "supplied as 0", `LIMITS` holds the four clamps. `src/pages/Housekeeping.jsx` — `saveHk` reads back with `getHousekeepingConfig` and sets both states from what is actually stored, both derived figures read `hkConfig` (never `hkEdited`), and the cost is integer cents. `src/components/HousekeepingSettingsModal.jsx` (**dead, zero importers**) updated only to keep the changed contract valid. `scripts/probe-settings-persistence.mjs` section 8 (117 assertions total, 3 mutations). See section 34 | (This commit) |
+| 56 | **The Manual Data Entry draft — the only copy of hand-typed money rows until Save lands — could be destroyed, refused, or left behind in total silence, and one of those paths took the whole page down.** Five raw `localStorage` calls in `ManualEntry.jsx`, and not one of them could report a failure to the person typing. (1) `getItem` sat **outside** its own `try`, so a browser that refuses storage (private browsing, blocked site data) threw out of a `useEffect`; React re-throws an effect's exception, so `App.jsx`'s `LazyErrorBoundary` replaced the whole page — over a draft nobody had asked to recover. (2) A stored draft that parsed but was not a usable list was `removeItem`'d with **no message at all**, so hand-typed rows vanished and the grid simply came up empty. (3) The auto-save's only failure path was `console.warn("Auto-save failed", e)` while the page went on rendering its amber "● Unsaved draft" dot — the operator was told the rows were being kept at the exact moment they were not. (4) The clear after a **successful** save was unguarded and sits BEFORE `setSaving(false)` and `rotateCsrfToken()`, so a refused remove threw past both: the records really were written, and the Save button spun forever on a stale CSRF token. (5) The discard button's remove was unguarded too and closed the recovery banner regardless, telling the operator the draft had been discarded when it had not | HIGH | FIXED 2026-08-25 | `src/lib/manualDraft.js` (**NEW**, 217 lines) owns every access: `draftKeyFor`, `readDraft` (never throws — returns `rows` / `discard` / `problem`), `writeDraft` and `clearDraft` (both return `{ok, problem}`). Same three rules as `settingsStore.js`, but the messages are written for the **screen**, because the page routes `problem` into `setSaveMsg`/`setMsgTone` — a console-only library could not have fixed this. `src/pages/ManualEntry.jsx` — zero `localStorage`/`sessionStorage` references and zero copies of the key template remain; the post-save clear **degrades** the success message to the `warn` tone instead of overwriting it, and the discard handler keeps the recovery banner open when the remove fails. `scripts/probe-manual-entry-save.mjs` section 9 (37 → 96 assertions, 2 mutations); `scripts/probe-db-archive.mjs`'s MANIFEST updated in **both** directions. See section 35 | (This commit) |
 
 ---
 
@@ -2430,6 +2431,182 @@ split would change every staffing number on the page while looking authoritative
 * **`checklist` at `Housekeeping.jsx:43`** — an unused `useState`, present at HEAD
   and untouched by this change (it is one of the 224 pre-existing lint warnings).
   Reported, not deleted.
+
+---
+
+
+# 35. THE DRAFT WAS THE ONLY COPY, AND EVERY WAY IT COULD FAIL WAS SILENT (tracker #56)
+
+> [!IMPORTANT]
+> Section 33 swept the settings modules; this is the same defect class on
+> something strictly worse than a setting. A setting can be re-typed from what is
+> on the screen. The Manual Data Entry draft is the **only copy of hand-typed
+> money rows** between the moment they are typed and the moment Save commits them
+> to Dexie — there is no CSV to re-import, because the operator *is* the source.
+
+## 35.1 The five call sites, as they shipped
+
+```js
+const key = `manual_draft_${propId}_${reportType}`;   // the template, in the page
+const saved = localStorage.getItem(key);              // OUTSIDE the try below
+if (saved) {
+  try { ... }
+  catch (e) { localStorage.removeItem(key); }         // silent discard
+}
+try { localStorage.setItem(draftKey, JSON.stringify(rows)); }
+catch (e) { console.warn("Auto-save failed", e); }    // console only
+if (draftKey) localStorage.removeItem(draftKey);      // twice, both unguarded
+```
+
+Five accesses, one key template, and no path by which the person typing could
+learn that anything had gone wrong. CLAUDE.md section 10 is explicit: *"Report
+errors loudly, not silently."*
+
+## 35.2 A `getItem` outside its own `try` is a page-blanking bug, not a logging bug
+
+This is the part that is easy to under-rate. The read ran inside a `useEffect`
+body. React does not swallow an exception thrown from an effect — it re-throws it
+to the nearest error boundary, and `src/App.jsx` wraps every route in
+`LazyErrorBoundary` (with `TopLevelErrorBoundary` above that). So on a browser
+that refuses storage — private browsing refuses `getItem` outright, and "block
+site data" does the same — the entire Manual Data Entry page was **replaced by an
+error screen**, over an optional draft the operator had not asked to recover.
+
+The fix is not "wrap it in a try". It is that `readDraft` **cannot** throw, and
+that a refused read returns `discard: false`: nothing is known about the stored
+value, so it must not be deleted. Deleting on a read failure would turn a
+temporary browser condition into permanent data loss.
+
+## 35.3 The post-save clear was a money-path defect, because of where it sat
+
+The tail of `handleSave`, as it shipped:
+
+```js
+setSaveMsg(`${saved} records saved. All dashboards updated.${extra}`);
+setHasDraft(false);
+if (draftKey) localStorage.removeItem(draftKey);   // unguarded
+setSaving(false);
+rotateCsrfToken();
+```
+
+By the time that line runs the rows **are** in the database. A refused
+`removeItem` therefore threw past `setSaving(false)` and `rotateCsrfToken()`,
+producing the worst possible reading of a *successful* save: the Save button
+spinning forever, and a CSRF token that was never rotated. The operator's only
+recourse is a reload, at which point the still-present draft offers to restore
+rows that have already been committed — a straight path to double-entering
+revenue.
+
+So the new call deliberately **does not** treat a failed clear as an error:
+
+```js
+const { ok, problem } = clearDraft(draftKey);
+if (!ok) {
+  setSaveMsg(`${saved} records saved. All dashboards updated.${extra} ${problem}`);
+  setMsgTone("warn");
+}
+```
+
+The success sentence is kept and the warning is appended, because "N records
+saved" is true and must not be overwritten by a housekeeping complaint. `warn` is
+a real key in `MSG_TONE_CLASS` (`ManualEntry.jsx:23`), not a new one. The same
+reasoning inverts for the **discard** button: there, a refused remove means the
+draft is still stored, so the recovery banner stays open — closing it would state
+that the draft had been discarded when it had not, and Resume still works.
+
+## 35.4 Why this did not go onto `settingsStore.js`
+
+Seven modules were converted in section 33 and `housekeepingConfig.js` in section
+34, so the obvious move was a ninth. It is the wrong move, for two measured
+reasons:
+
+1. **A draft's failures have to reach the screen.** `settingsStore.js` reports to
+   the console and returns a boolean; that is right for a setting the owner can
+   re-type. Here the page renders `problem` through `setSaveMsg`/`setMsgTone`,
+   which is why every message in `manualDraft.js` is a finished sentence that
+   names the key *and* says what it costs — `The draft is NOT being kept ("…"):
+   … Everything typed here will be lost if this tab closes — save it to the
+   database now.`
+2. **It needs a guarded remove**, which no settings module has ever wanted.
+   Settings are overwritten; drafts are consumed and deleted. `settingsStore.js`
+   has no remove primitive at all.
+
+`describe()` and `echo()` are duplicated from `settingsStore.js` on purpose:
+coupling the draft module to the settings store for a string formatter would be a
+worse dependency than eleven lines of repetition.
+
+## 35.5 A grep for `localStorage` does not prove a page is decoupled
+
+Worth recording as a method failure, because it nearly shipped. After the rewrite
+I grepped `ManualEntry.jsx` for `localStorage|sessionStorage`, got **no matches**,
+and concluded the page was decoupled. It was not — this was still at line 148:
+
+```js
+const key = `manual_draft_${propId}_${reportType}`;
+```
+
+The page had stopped *calling* storage while still *knowing* the key shape, which
+is exactly the state from which the next edit reintroduces a raw call. Two of the
+96 assertions caught it ("the key template lives in exactly one place, not in the
+page", "and calls `draftKeyFor()`"). The rule that follows: when extracting
+storage access out of a component, assert on the **key template** as well as on
+the API calls — the absence of a call does not prove the absence of the
+knowledge.
+
+The same key is load-bearing in a second place. `LOCAL_SLOT_PREFIXES` in
+`src/lib/dbArchive.js` copies every key starting `manual_draft_` into a database
+export, and `probe-db-archive.mjs` asserts it, so a rename would silently drop
+drafts out of every backup. Section 9 pins that too, and `draftKeyFor`'s JSDoc
+says so at the definition.
+
+## 35.6 `probe-db-archive.mjs`'s MANIFEST is a two-way gate
+
+Moving storage access out of a page needs **both** directions edited. That probe
+walks `src/` for `WRITES_STORAGE = /\.setItem\(|write(?:Json|Raw)Setting\(/`: an
+unclassified writer fails the suite, **and** a manifest entry naming a file that
+no longer writes storage fails it as `gone`. So `src/lib/manualDraft.js` was added
+and the now-stale `src/pages/ManualEntry.jsx` row was removed — one out, one in,
+which is why "storage writers classified" stayed at **21**.
+
+## 35.7 Verification (Observed)
+
+* `node --import ./scripts/_loader-boot.mjs scripts/probe-manual-entry-save.mjs`
+  → **rc=0, 96 passed / 0 failed.** The HEAD copy of the same file measures
+  **37 passed / 0 failed**, so section 9 contributes **59**.
+* **Two mutation tests**, one per bash call, each against a pristine copy with
+  `md5sum` asserted after restore — both caught, both restored byte-identical:
+  * `failedWrite` returning `{ok: true, problem: ""}` (2 sites) → **rc=1,
+    87 passed / 9 failed** — the refused write, the unserialisable rows and the
+    refused remove all objected;
+  * a raw `localStorage.removeItem(draftKey)` put back into the page → **rc=1,
+    95 passed / 1 failed** — "ManualEntry.jsx touches web storage nowhere outside
+    the draft module".
+* `probe-db-archive.mjs` → **rc=0, 216 passed / 0 failed**, "storage writers
+  classified: 21".
+* `probe-suite-integrity.mjs` → **110 passed / 0 failed**, "Contract violators: 0".
+* `eslint .` → **rc=0, `✖ 223 problems (0 errors, 223 warnings)`.** That is **one
+  fewer** than the 224 baseline, and a drop has to be explained rather than
+  celebrated: mutation-testing the HEAD copy of `ManualEntry.jsx` shows **3**
+  warnings there against **2** now, the missing one being
+  `161:16 'e' is defined but never used` — the unused binding of the swallowing
+  `catch` that this change deleted. No new warning was introduced.
+* `tsc -p ./jsconfig.json` → **rc=0**, no output. (There is no `tsconfig.json` in
+  this repo; use `npm run typecheck` or that exact `-p` flag.)
+* `node scripts/verify-all.mjs --list` → **111 suite(s) — list `2f3a5c5a`**,
+  unchanged, because section 9 extended an existing suite instead of adding a
+  file.
+
+## 35.8 Deliberately left alone
+
+* **`ManualEntry.jsx`'s two remaining lint warnings** — the `existing`
+  logical-expression `react-hooks/exhaustive-deps` warning (now line 223) and
+  `'v' is defined but never used` (now line 628). Both are present at HEAD and
+  both are outside this change's blast radius. Reported, not fixed.
+* **The auto-save effect's dependency array** is still `[rows, hasDraft, draftKey]`.
+  `draftWarnedFor` is a `useRef` precisely so that reporting a refused write once
+  per key does not add a dependency — the effect runs on every cell edit, and a
+  message per keystroke would be its own defect.
+
 
 
 

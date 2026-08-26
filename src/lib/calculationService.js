@@ -17,7 +17,11 @@ import { expenseBucket, chooseActualOrEstimate, DERIVED_COST_BUCKETS } from '@/l
 function inRange(dateStr, from, to) {
   if (!dateStr) return false;
   const d = String(dateStr).slice(0, 10);
-  return d >= from && d <= to;
+  // Empty/falsy bound = unbounded on that side. See src/lib/hotel.js inRange:
+  // `d <= ''` rejects every real date, so an open upper bound must be skipped.
+  if (from && d < from) return false;
+  if (to && d > to) return false;
+  return true;
 }
 
 function sum(rows, key) {

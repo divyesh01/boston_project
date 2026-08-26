@@ -8,6 +8,12 @@ export default function TaxConfigModal({ open, onClose }) {
   // close on a write the browser refused: the tax rate every charge is computed
   // from would still be the old one, with nothing on screen to say so.
   const [saveError, setSaveError] = useState("");
+  // Raw draft string for the rate input. A controlled number input bound to a
+  // formatted value (toFixed(2)) reformats on every keystroke, so a decimal like
+  // "8.25" collapses to "8.20" mid-type and can't be entered. The draft holds
+  // exactly what the operator typed; config is committed live and the draft is
+  // normalized on blur.
+  const [rateDraft, setRateDraft] = useState(() => ((Number(getTaxConfig().taxRate) || 0) * 100).toFixed(2));
 
   if (!open) return null;
 
@@ -30,8 +36,6 @@ export default function TaxConfigModal({ open, onClose }) {
       ),
     });
   };
-
-  const ratePercent = (Number(config.taxRate) || 0) * 100;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
@@ -70,11 +74,13 @@ export default function TaxConfigModal({ open, onClose }) {
             <input
               type="number"
               step="0.01"
-              value={ratePercent.toFixed(2)}
+              value={rateDraft}
               onChange={(e) => {
-                const pct = parseFloat(e.target.value) || 0;
-                setConfig({ ...config, taxRate: pct / 100 });
+                setRateDraft(e.target.value);
+                const pct = parseFloat(e.target.value);
+                setConfig({ ...config, taxRate: Number.isFinite(pct) ? pct / 100 : 0 });
               }}
+              onBlur={() => setRateDraft(((Number(config.taxRate) || 0) * 100).toFixed(2))}
               disabled={!config.taxEnabled}
               className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-4 py-2.5 text-sm text-white outline-none focus:border-[#00D4FF] disabled:opacity-40"
             />

@@ -111,7 +111,7 @@ export class OwnerIntelligenceService {
       const byCategory = {};
       exps.forEach(e => {
         if (!byCategory[e.category]) byCategory[e.category] = [];
-        byCategory[e.category].push(e.amount || 0);
+        byCategory[e.category].push(Number(e.amount) || 0);
       });
       
       Object.entries(byCategory).forEach(([cat, amounts]) => {

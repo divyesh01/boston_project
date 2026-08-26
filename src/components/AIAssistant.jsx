@@ -29,6 +29,10 @@ export default function AIAssistant() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef(null);
+  // Concurrency guard. `loading` state can't gate re-entry because setLoading(true)
+  // runs only AFTER the awaited rate-limiter check, so two fast presses both read
+  // loading===false and fire concurrent invokes. A ref flips synchronously.
+  const busyRef = useRef(false);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -37,9 +41,10 @@ export default function AIAssistant() {
   }, [messages, loading]);
 
   const handleAsk = async (question) => {
-    if (!question.trim() || loading) return;
+    if (!question.trim() || busyRef.current) return;
+    busyRef.current = true;
     const q = question.trim();
-    
+
     // Rate limiting for AI queries
     try {
       const rateLimit = await serverAiQueryRateLimiter.check();
@@ -48,11 +53,13 @@ export default function AIAssistant() {
           role: "assistant",
           text: `Too many AI queries. Please try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`
         }]);
+        busyRef.current = false;
         return;
       }
     } catch (e) {
       setMessages((prev) => [...prev, { role: "assistant", text: "Rate limiter check failed. Please try again." }]);
       setLoading(false);
+      busyRef.current = false;
       return;
     }
 
@@ -95,6 +102,7 @@ export default function AIAssistant() {
       setMessages((prev) => [...prev, { role: "assistant", text: `Sorry, I encountered an error: ${e.response?.data?.error || e.message}. Please try again.` }]);
     }
     setLoading(false);
+    busyRef.current = false;
   };
 
   return (

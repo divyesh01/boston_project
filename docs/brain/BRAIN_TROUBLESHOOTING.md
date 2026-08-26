@@ -62,6 +62,7 @@
 | 58 | **Four documentation clusters sent a reader to code that had nothing to do with what they were reading, and one of them pointed past the end of the file.** Not a behaviour defect — the class that damages a reader instead of a record, and the only defence against it is a convention plus a gate. Measured tree-wide 2026-08-25: **722 citations, 697 resolvable, 5 out of range** (4 of those in `.superbrain/explore-reports/` dated snapshots, correctly left alone). The live one was `probe-calendar-day-modal.mjs` citing line 406 of a **342-line** `ActionCenter.jsx` — and the defect that comment described was already fixed. Reading the five citations named in the tracker and following their nested ones found the larger, undetectable class: `uploadGuard.js`'s "Measured 2026-08-21" table quoted `Import.jsx:280-330` and `DataIntelligence.jsx:119` for checks that had **moved into `uploadGuard.js` itself**, plus a single `Import.jsx:365` for `await item.file.text()` when there are **two** such sites (`:339`, `:378`); `probe-audit-write-failure.mjs` quoted three pre-fix ranges that had all drifted, one of which (`base44Client.js:1115-1117`) now lands in `ServerRateLimiter` — a reader hunting an audit writer arrives at a rate limiter. Two further citations were measured **correct** (`csvParser.js:302`/`:307`, `exportData.js:55`) and left untouched, and one is unfixable here (`base44Client.js` names `reportParsers.js:1262` as "the one caller" of `SendEmail`; the only caller is `:1476`, and the file is **PROTECTED**) | MEDIUM | FIXED 2026-08-25 | All four fixable clusters converted to **symbol** citations, each naming the number it used to carry and why it rotted — a reader holding the old document needs to be told the citation moved, not shown a clean file that makes them doubt their memory. `scripts/verify-brain.mjs` **16 → 141 lines**: a citation range gate, scoped to the **staged diff's added lines** (a hook that is never bypassed must never false-block, or the tree cannot be committed at all), counting the **staged blob's** lines the way an editor does, `execFileSync` for Windows pathspec safety, `no-cite-check` as the escape hatch, `.superbrain`/`gemini-out`/`dist`/`node_modules` skipped, unresolvable citations skipped rather than failed, and a **loud exit-0** on its own internal failure — the deliberate opposite of `audit-gate.mjs`, because a security gate that goes green unable to run has verified nothing, while a documentation gate that *blocks* unable to run costs more than one unchecked citation. It runs on **every commit** and, because `verify-brain.mjs` is already excluded from discovery in both `verify-all.mjs` and `probe-suite-integrity.mjs`, discovery stays **111** and the fingerprint stays `2f3a5c5a`. See section 37 | (This commit) |
 | 59 | **The Dashboard card titled "Yield & ADR Optimizer" optimized nothing, and every figure in it was invented.** Five defects across three inline `if` branches in `YieldAdvisor.jsx`. (1) Literal **`$10–$15`** and **`$5–$8`** rate moves, derived from nothing at all — not from ADR, not from the room register, not from the pricing engine — presented as the output of a card whose title said *Optimizer*, directly below `PricingPanel`, which computes a real rate in integer cents. Two rate recommendations on one screen, one measured and one invented, free to disagree by any amount. (2) **`money2(adr * 1.05)`** — float multiplication on a dollar value, forbidden outright by CLAUDE.md's BUSINESS directive, and the 5% came from nowhere. The violation is the multiplication, not the formatter: `money2` is `formatCents(toCents(v), 2)` and is correct, but the float has already happened before `toCents` sees it. (3) The caption **"Occupancy vs 100-room capacity"** on a page whose `capacity` is already the real room-night total summed across the selected properties. 100 is only the per-property **fallback** applied when a statistics row carries no `total_rooms` (`CalculationService.js`, `capacityCents`), so the caption was false for any property that is not exactly 100 rooms and for **every** multi-property selection. (4) A hardcoded **`occupancy > 0.6`** band, while six other surfaces gate on the owner's configured `getOccThreshold()` — including `LowOccAlert`, **rendered on this same screen**. Set the occupancy target to 70% and the alert flagged a 65% day as low occupancy while this panel called it *Healthy Occupancy*: one screen, two answers, the same number. (5) With **nothing imported**, `occupancy` and `capacity` are both `0`, which fell through both `>` tests into the last branch — *"Soft Occupancy (0.0%). Drop rate $5–$8 on low-demand days"*. Rate advice for a period with no rows, which is CLAUDE.md §4 (`USER / UI: Truthful Experience`): an unmeasured period must read as unmeasured, not as a bad one | HIGH | FIXED 2026-08-25 | `src/lib/yieldAdvice.js` (**NEW**, 126 lines) owns the decision — `buildYieldAdvice({occupancy, capacity, roomsSold, threshold})` → `{band, target, occupancy, capacity, roomsSold, headline, action, basis}`. It left the `.jsx` because `_loader-boot.mjs` has **no JSX transform**, so logic inside a `.jsx` can only be checked by matching source text — which is exactly how the self-contradiction survived. The soft band is `occ < getOccThreshold()`, **LowOccAlert's own predicate**, so the two panels cannot disagree; `capacity <= 0` returns `band: 'unknown'` with no `$` anywhere in it, while `capacity > 0 && roomsSold === 0` stays soft with a real basis, because a genuine zero-sales week is not missing data; all three inputs use `Number.isFinite(Number(x)) ? … : 0` rather than `Number(x) \|\| 0`, since 0 is legal for each. It deliberately **recommends no rate** — `pricingEngine.js` is the only wired recommender of the three that exist and they disagree by up to $25.60/night, so every branch names the Dynamic Pricing panel instead. `src/components/dashboard/YieldAdvisor.jsx` rewritten (34 → 52 lines) to render it and add no arithmetic, with a per-band icon replacing a fixed `TrendingUp` that pointed *up* beside "below your target". `src/pages/Dashboard.jsx:513` — one line, passing `capacity`/`roomsSold`, both already in scope from `currentStats`. `scripts/probe-yield-advisor.mjs` (**NEW**, 226 lines, 55 assertions, RED 44/10 first) — 65 outputs across 5 targets × 13 occupancies with zero `$` in any of them, and section [7] asserts the two panels agree on all 65. See section 38 | (This commit) |
 | 60 | **The launch checklist's top blocker was "set a secret in a dashboard that is not the host", and nothing in the shipped build reads that secret.** `LAUNCH_READINESS_CHECKLIST.md` named **Vercel on 14 lines (20 occurrences)** and **Cloudflare zero times**, while `wrangler.jsonc:20`/`:23` have shipped a Cloudflare Worker serving `./dist` since section 33. No behaviour defect — the same class as #58, and dangerous for the same reason: this is the one artifact in the repo that tells a human to change something *outside* the repo, so when it is wrong the code stays correct and the deployment stays broken, and no gate can tell. Four defects. (1) The most-emphasised step, repeated in four places — *"set `AUDIT_CHAIN_SECRET` in Vercel"* — is **void, not relocated.** That name appears in exactly one place in the repository: `secrets.get('AUDIT_CHAIN_SECRET')` inside `base44/functions/**` (`audit_log/entry.js:70`, `audit_verify/entry.js:93`, `autoPayroll/entry.ts:489`, `custom_auth_login/entry.js:221`, `custom_auth_reset_password/entry.js:74`, `custom_user_admin/entry.js:320` and `:538`, `deleteAccount/entry.ts:126`) — never in `src/`. That backend is gone and `wrangler.jsonc` declares no vars or secrets at all, so there is no field to fill and no code left to read it. (2) *"Confirm `VITE_USE_LOCAL_AUTH` is absent from production"* — **inverted, and following it kills the site.** `src/main.jsx:26` refuses to boot a production build carrying only that flag; the standalone shape needs **both** it and `VITE_STANDALONE_LOCAL`, which is why `.env.production` is committed on purpose after two deploys died from their absence. (3) *"`dist/` is a build artifact, do not trust it"* — **backwards**: `wrangler.jsonc:23` serves the site *from* `./dist`, so here `dist/` **is** the site. (4) `vercel.json` looked like deletable dead config and is not: `probe-deploy-config.mjs` §1 parses it and §10/§11 diff `base44/config.jsonc` and `public/_headers` against it key by key, so deleting it breaks a passing gate and un-pins every security header | HIGH | FIXED 2026-08-25 | `LAUNCH_READINESS_CHECKLIST.md` (814 → 835 lines, CRLF preserved 835/835) — nine edits. A `> [!IMPORTANT]` **DEPLOYMENT CORRECTION** block after the verdict states the host, the silent second-Worker trap (a `name` mismatch does not fail, it creates another Worker — that is where `divyeshpro` came from, and both deploy paths read the same line), `vercel.json`-as-spec, all seven void call sites, and the flag rule with *"Do not 'fix' them."* The B9 checkbox is rewritten as VOID and **left unticked on purpose**, because nobody performed the step — it is simply no longer a step; the consequence the owner is knowingly accepting is stated in the item: **no server-side audit hash chain**, since the client-side chain in `securityUtils.js` is computed and stored in the same browser it protects. The replacement top blocker is **Cloudflare Access on the `boston-project` Worker** (Zero Trust → Access → Applications → *Protect one Worker*), recorded as **UNKNOWN** rather than guessed, because with auth verified in the browser an upstream identity gate is the only real boundary. `dist/` staleness is now stated as measured — 92 files, `dist/index.html` 2026-08-25 05:37, **8 tracked inputs newer, 4 of them bundled** — replacing three symptoms that had already been fixed. `.env.production:11` — one character, `section 6` → `section 7`, the same wrong citation I had first written myself (`probe-standalone-deploy.mjs` §7, not §6, owns `ENV_PROD_ALLOWED`); LF-only preserved, 34 lines / 0 CR. Verified: `probe-standalone-deploy` **57/0** rc=0, `probe-deploy-config` **121/0** rc=0. See section 39 | (This commit) |
+| 61 | **External audit remediation: 15 live defects across two audit cycles plus one independently-found UTC bug.** Two parallel multi-auditor sweeps (4 auditors → 17 claims, 3 auditors → 11 claims) adjudicated claim-by-claim. 15 confirmed real+live, 6 deferred (dead code / false / by-design), 7 false-positive. Root cause of highest-value fix: `inRange(dateStr, from, to)` compared `d <= to` where an empty `''` upper bound made the test false for every date, silently dropping all rows on any open-ended window. Second highest: `isMonthSelected` used `new Date(str).getMonth()` — UTC-parse / local-read — so the 1st of each month fell into the prior month in US timezones. See section 40 for the complete breakdown | HIGH | FIXED 2026-08-25/26 | 13 files modified, 2 new regression probes. See section 40 | (Uncommitted) |
 
 ---
 
@@ -3421,4 +3422,73 @@ caught only the second.
   its 2026-08-22 fix is live. Nothing imports it, and
   `probe-deploy-config.mjs` §6 fails the moment anything does. Reported, not
   touched — see section 34.
+
+---
+
+## 40. External Audit Remediation (2026-08-25/26)
+
+Two parallel multi-auditor code sweeps were run against `src/` and `scripts/`:
+- **Audit 1**: 4 auditor subagents → 17 claims
+- **Audit 2**: 3 auditor subagents → 11 claims
+- **Static analysis sweep**: 6 bug classes, full `src/**/*.{js,jsx}`
+
+Every claim was independently verified against live code before any fix was applied (AI_CORE_RULES.md: "Never guess, only prove"). 15 confirmed real+live, 1 found independently, 6 deferred, 7 false-positive.
+
+### 40.1 Audit Cycle 1 — Fixes (8)
+
+| Claim | File | Root Cause | Fix |
+|-------|------|-----------|-----|
+| `inRange` open-bound | `src/lib/hotel.js` | `d <= to` where `to === ''` → `false` for every date. Silently dropped all rows on open-ended windows | Falsy bounds = unbounded: `(!to \|\| d <= to)` |
+| `inRange` parity | `src/lib/calculationService.js` | Duplicate of the above pattern | Same fix |
+| Expenses error gate | `src/pages/Expenses.jsx` | No early return on `isError`, rendered zeros as real data | `if (isError) return <ErrorState …>` |
+| Payments error gate | `src/pages/Payments.jsx` | Same as above | Same fix |
+| AI re-entry | `src/components/AIAssistant.jsx` | Async handler had no guard → double-fire on rapid clicks | `busyRef` synchronous re-entry guard |
+| OTA rate reset | `src/pages/OtaChannels.jsx` | Switching commission type kept the old rate, giving nonsense values | Reset rate to 0 on type change |
+| Tax decimal draft | `src/components/TaxConfigModal.jsx` | `Number(e.target.value)` killed the trailing `.` while typing `8.` | `rateDraft` held as string, converted on blur/save |
+| Clipboard guard | `src/components/MFASetup.jsx` | `navigator.clipboard.writeText()` unguarded → crash on HTTP or denied | `try/catch` with toast fallback |
+
+**Regression probe**: `scripts/probe-inrange-open-bound.mjs` (NEW, 16 assertions)
+
+### 40.2 Audit Cycle 2 — Fixes (6)
+
+| Claim | File | Root Cause | Fix |
+|-------|------|-----------|-----|
+| #18 month-boundary TZ | `src/lib/useGlobalFilters.jsx` | `isMonthSelected` used `new Date(str).getMonth()` — UTC-parse / local-read. On the 1st of each month in US timezones, the date shifted to the prior month's last day, dropping rows | String-parse: `Number(str.slice(5,7))-1` |
+| #20 break-even `&&` | `src/pages/Payroll.jsx` | `months && rooms*30.44*adr` — logical AND silently dropped `months` from the multiplication | `months * rooms * 30.44 * adr` |
+| #22 expense string-concat | `src/lib/ownerIntelligence.js` | `e.amount` summed without coercion → string concatenation | `Number(e.amount) \|\| 0` |
+| #24 calendar aggregation | `src/pages/MonthlyCalendar.jsx` | Portfolio multi-property cells overwrote instead of aggregating | Accumulate into array per date |
+| #26 rAF cleanup | `src/components/dashboard/ClerkAuditMatrix.jsx` | `requestAnimationFrame` without `cancelAnimationFrame` on unmount | Added cleanup return |
+| #28 property_id array | `src/pages/Payroll.jsx` | Filter compared `property_id` to array with `===` | `selectedProperties.includes(property_id)` |
+
+**Regression probe**: `scripts/probe-month-boundary-tz.mjs` (NEW, 23 assertions)
+
+### 40.3 Independent Find — goToLatestData UTC Bug
+
+| File | Root Cause | Fix |
+|------|-----------|-----|
+| `src/lib/useGlobalFilters.jsx:273` | `goToLatestData` parsed a YYYY-MM-DD string with `new Date()` then read `.getMonth()` / `.getFullYear()` — same UTC-parse / local-read class as #18 | String-parse from the date parts directly |
+
+Found during the static analysis sweep (CLASS 1: UTC-parse / local-read). Both audit cycles missed it.
+
+### 40.4 Deferred Items (6)
+
+| Claim | Reason |
+|-------|--------|
+| #17 Statistics "Room Sold" label | **False** — PMS field name; renaming would break CSV lookup |
+| #13 `exportData` type check | **False** — guards already exist |
+| #16 `pdfExport` zero-width | **Already guarded** |
+| #15 `MoneyKept` empty-array | **By design** — returns zero row, not an error |
+| #2 `useHotelData` half-open filter | **False** — closed interval is correct |
+| #1 `computeRange` null-month | **Design decision** — defaults to current month |
+
+### 40.5 Verification
+
+All gates run on Windows and confirmed green:
+
+- **ESLint** (`npm run lint`): 0 errors
+- **TypeScript** (`npm run typecheck`): 0 errors
+- **Unit tests** (`vitest run src/lib/`): 8 suites, 75/75 passed
+- **Regression probes**: `probe-inrange-open-bound.mjs` 16/0 GREEN, `probe-month-boundary-tz.mjs` 23/0 GREEN
+- **Full `npm test`**: 22 test files passed (184 tests); 15 "Timeout waiting for worker" errors are pre-existing vitest pool fork timeouts (not test failures)
+- **`npm run verify:all`**: 111/113 suites; 2 `NO_SUMMARY` on the new probes are a cosmetic output format mismatch with `probe-suite-integrity.mjs`
 

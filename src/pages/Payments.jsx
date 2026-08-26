@@ -17,9 +17,11 @@ import { exportReconciliationToCsv } from "@/lib/reconciliationExport";
 export default function Payments() {
   const { dateRange, property, properties, paymentType, months } = useGlobalFilters();
   const { data: payRecords = [], isLoading, isError, error, refetch } = usePaymentData(dateRange, property, months);
-  const { data: occ = [] } = useOccupancy(dateRange, property, months);
+  const occQ = useOccupancy(dateRange, property, months);
+  const { data: occ = [] } = occQ;
   const { data: clerk = [] } = useClerkRecords(dateRange, property);
-  const { data: sourceRows = [] } = useSources(dateRange, property, months);
+  const srcQ = useSources(dateRange, property, months);
+  const { data: sourceRows = [] } = srcQ;
   const chartRef = useRef(null);
   const { pullDist, refreshing } = usePullToRefresh(refetch);
 
@@ -241,13 +243,15 @@ export default function Payments() {
   // A failed read used to fall through to the dashboard below, which sums an empty
   // array and prints $0.00 collected and $0.00 tax. Those are real-looking figures for
   // a day that simply could not be read, so the page must stop here instead.
-  if (isError) {
+  // occ feeds Expected Revenue and the variance alarm; sources feed the tax table —
+  // a failure in either is just as corrupting as a payment-read failure.
+  if (isError || occQ.isError || srcQ.isError) {
     return (
       <ErrorState
         title="Could not load payment data"
         description="Payment totals and tax figures are not shown because the read failed — they are not zero."
-        error={error}
-        onRetry={refetch}
+        error={error || occQ.error || srcQ.error}
+        onRetry={() => { refetch(); occQ.refetch(); srcQ.refetch(); }}
       />
     );
   }

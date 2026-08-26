@@ -64,12 +64,12 @@ export default function Dashboard() {
     ? (Array.isArray(property) ? { property_id: { $in: property } } : { property_id: property })
     : {};
   
-  const { data: expenses = [] } = useQuery({
+  const { data: expenses = [], isError: expensesError, error: expensesErrorObj, refetch: refExpenses } = useQuery({
     queryKey: ["expenses", propertyKey],
     queryFn: () => db.entities.Expense.filter(propFilter, "-expense_date", 100000),
   });
-  
-  const { data: payroll = [] } = useQuery({
+
+  const { data: payroll = [], isError: payrollError, error: payrollErrorObj, refetch: refPayroll } = useQuery({
     queryKey: ["payroll", propertyKey],
     queryFn: () => db.entities.PayrollRun.filter(propFilter, "-pay_period_start", 100000),
   });
@@ -135,7 +135,7 @@ export default function Dashboard() {
   }, [clerk, employee, paymentType]);
 
   const handleRefresh = async () => {
-    await Promise.all([refOcc(), refSrc(), refClerk(), refGross()]);
+    await Promise.all([refOcc(), refSrc(), refClerk(), refGross(), refExpenses(), refPayroll()]);
   };
   const { pullDist, refreshing } = usePullToRefresh(handleRefresh);
 
@@ -252,7 +252,12 @@ export default function Dashboard() {
   // Every KPI card on this page sums an array. An empty array sums to 0, so a failed
   // read renders a complete, confident dashboard reading $0 revenue and 0% occupancy —
   // figures an owner could act on. Stop instead.
-  const dashboardError = agg.isError ? agg.error : occError ? occErrorObj : grossError ? grossErrorObj : null;
+  // A failed expenses or payroll read is included below because they are the ONLY
+  // source of the deductions in "Money Kept — net profit after all deductions": on
+  // failure React Query leaves them [], so the card would silently book zero costs
+  // and overstate profit with no error shown. isError (not empty) gates it, so a
+  // hotel that genuinely has no expenses/payroll yet is unaffected.
+  const dashboardError = agg.isError ? agg.error : occError ? occErrorObj : grossError ? grossErrorObj : expensesError ? expensesErrorObj : payrollError ? payrollErrorObj : null;
   if (dashboardError) {
     return (
       <ErrorState

@@ -64,13 +64,17 @@ export default function ClerkAuditMatrix({
       const duration = 1000;
       const startTime = performance.now();
       
+      let rafId;
       const update = (now) => {
         const progress = Math.min((now - startTime) / duration, 1);
         const easeOut = 1 - Math.pow(1 - progress, 3);
         setDisplay(start + (end - start) * easeOut);
-        if (progress < 1) requestAnimationFrame(update);
+        if (progress < 1) rafId = requestAnimationFrame(update);
       };
-      requestAnimationFrame(update);
+      rafId = requestAnimationFrame(update);
+      // Cancel the in-flight frame loop when `value` changes mid-animation or the
+      // component unmounts, so orphaned loops can't keep calling setDisplay.
+      return () => cancelAnimationFrame(rafId);
     }, [value]);
     return display;
   };

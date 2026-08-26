@@ -355,7 +355,7 @@ export default function Payroll() {
       bonus: Number(staffForm.bonus) || 0,
       deductions: Number(staffForm.deductions) || 0,
       employee_id: reservedId,
-      property_id: property !== "all" ? property : "",
+      property_id: property !== "all" ? (Array.isArray(property) ? property[0] : property) : "",
       property_name: p?.name || "",
     });
     setStaffForm(EMPTY_STAFF);
@@ -786,7 +786,7 @@ export default function Payroll() {
       avgMonthly: months ? totalPay7 / months : 0,
       avgRevMonthly: months ? totalRev / months : 0,
       payrollRatio: totalRev > 0 ? (totalPay7 / totalRev) * 100 : 0,
-      breakEvenOcc: totalPay7 > 0 ? (totalPay7 / (months && rooms * 30.44 * adr)) * 100 : 0,
+      breakEvenOcc: totalPay7 > 0 ? (totalPay7 / (months * rooms * 30.44 * adr)) * 100 : 0,
     });
     sfx.success();
   };

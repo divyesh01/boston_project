@@ -59,17 +59,21 @@ function usePayroll(propertyId) {
 
 export default function Expenses() {
   const { property, properties, dateRange, months, period, year } = useGlobalFilters();
-  const { data: occ = [] } = useOccupancy(dateRange, property, months);
-  const { data: payRecords = [] } = usePaymentData(dateRange, property, months);
+  const occQ = useOccupancy(dateRange, property, months);
+  const payQ = usePaymentData(dateRange, property, months);
+  const { data: occ = [] } = occQ;
+  const { data: payRecords = [] } = payQ;
   const qc = useQueryClient();
   const expensesQ = useExpenses(property);
   const payrollQ = usePayroll(property);
   const { data: expenses = [] } = expensesQ;
   const { data: payroll = [] } = payrollQ;
   // A failed read renders as "No expenses match your filters" — zero cost, which
-  // inflates every net-profit figure derived from this page.
-  const readFailed = expensesQ.isError ? expensesQ : payrollQ.isError ? payrollQ : null;
-  const retryReads = () => { expensesQ.refetch(); payrollQ.refetch(); };
+  // inflates every net-profit figure derived from this page. occ/pay feed
+  // grossRevenue/netRevenue, so a failure there is just as corrupting as an
+  // expenses/payroll failure and must stop the page the same way.
+  const readFailed = expensesQ.isError ? expensesQ : payrollQ.isError ? payrollQ : occQ.isError ? occQ : payQ.isError ? payQ : null;
+  const retryReads = () => { expensesQ.refetch(); payrollQ.refetch(); occQ.refetch(); payQ.refetch(); };
   const [showForm, setShowForm] = useState(false);
   const [showPayrollForm, setShowPayrollForm] = useState(false);
   const [targetMargin, setTargetMargin] = useState(15);

@@ -213,7 +213,12 @@ export function GlobalFiltersProvider({ children }) {
     if (!dateStr) return false;
     if (period !== "monthly") return true; // only filter when in multi-month mode
     if (months.length === 0) return true; // no months selected = all
-    const m = new Date(String(dateStr).slice(0, 10)).getMonth();
+    // Parse the month straight from the YYYY-MM-DD string. `new Date("2026-02-01")`
+    // parses at UTC midnight and .getMonth() then reads it in LOCAL time, so in any
+    // US timezone (UTC-5..-10) the 1st of each month rolls back into the previous
+    // month and its rows silently drop out of the selection. Slicing the literal
+    // (months are 0-indexed to match toggleMonth/getMonth) avoids the Date entirely.
+    const m = Number(String(dateStr).slice(5, 7)) - 1;
     return months.includes(m);
   }, [period, months]);
 
@@ -265,9 +270,12 @@ export function GlobalFiltersProvider({ children }) {
 
   const goToLatestData = () => {
     if (!latestDate) return;
-    const d = new Date(latestDate);
-    setYear(d.getFullYear());
-    setMonths([d.getMonth()]);
+    // Parse year/month from the YYYY-MM-DD literal. `new Date(latestDate)` parses at
+    // UTC midnight and getFullYear()/getMonth() read it in LOCAL time, so when the
+    // latest date is the 1st of a month, US timezones rolled "Go to latest" back into
+    // the previous month (and, on Jan 1, the previous year). Same trap as isMonthSelected.
+    setYear(Number(String(latestDate).slice(0, 4)));
+    setMonths([Number(String(latestDate).slice(5, 7)) - 1]);
     setPeriod("monthly");
   };
 

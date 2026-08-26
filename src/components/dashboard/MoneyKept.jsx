@@ -56,7 +56,13 @@ function bucketKey(dateStr, mode) {
   const dt = new Date(`${dateStr}T00:00:00`);
   const monday = new Date(dt);
   monday.setDate(dt.getDate() - ((dt.getDay() + 6) % 7));
-  return monday.toISOString().slice(0, 10);
+  // `monday` is a LOCAL-midnight Date. toISOString() re-applies the UTC offset and
+  // rolls this label back a day for viewers east of UTC (the same UTC trap the day
+  // parse on the line above avoids), so format from local parts instead. Grouping
+  // is self-consistent either way; this keeps the label the actual Monday everywhere.
+  const mm = String(monday.getMonth() + 1).padStart(2, "0");
+  const dd = String(monday.getDate()).padStart(2, "0");
+  return `${monday.getFullYear()}-${mm}-${dd}`;
 }
 
 function buildPropertyFilter(property) {

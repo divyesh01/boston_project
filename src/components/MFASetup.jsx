@@ -65,7 +65,15 @@ export default function MFASetup({
       toast({ title: "Copy failed", description: "Clipboard not available in this browser." });
       return;
     }
-    await navigator.clipboard.writeText(code.replace('-', ''));
+    // writeText can still reject (NotAllowedError: permission denied, not focused,
+    // insecure context) even when the API exists. Without a catch that rejection
+    // is unhandled and the copy silently fails with no feedback.
+    try {
+      await navigator.clipboard.writeText(code.replace('-', ''));
+    } catch {
+      toast({ variant: "destructive", title: "Copy failed", description: "The browser blocked clipboard access. Copy the code manually." });
+      return;
+    }
     setCopiedIndex(index);
     setTimeout(() => setCopiedIndex(-1), 2000);
     toast({ title: "Copied!", description: "Backup code copied to clipboard." });
@@ -77,7 +85,12 @@ export default function MFASetup({
       return;
     }
     const allCodes = backupCodesRef.current.map(c => c.replace('-', '')).join('\n');
-    await navigator.clipboard.writeText(allCodes);
+    try {
+      await navigator.clipboard.writeText(allCodes);
+    } catch {
+      toast({ variant: "destructive", title: "Copy failed", description: "The browser blocked clipboard access. Use Download instead." });
+      return;
+    }
     toast({ title: "All codes copied", description: "10 backup codes copied to clipboard." });
   };
 

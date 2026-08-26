@@ -48,7 +48,14 @@ export const avg = (rows, key) => rows && rows.length ? sum(rows, key) / rows.le
 export function inRange(dateStr, from, to) {
   if (!dateStr) return false;
   const d = String(dateStr).slice(0, 10);
-  return d >= from && d <= to;
+  // An empty ('') or falsy bound means "unbounded on that side" — not a wall
+  // that rejects every date. `d <= ''` is false for every real date string, so
+  // the old `d >= from && d <= to` dropped ALL rows whenever the upper bound was
+  // open (the default custom-range value and the cache-fallback path), zeroing
+  // the page. Matches the guarded twin in dailyAggregates.js.
+  if (from && d < from) return false;
+  if (to && d > to) return false;
+  return true;
 }
 
 // ─── Total revenue = room ledger + ancillary charges ───────────────────────

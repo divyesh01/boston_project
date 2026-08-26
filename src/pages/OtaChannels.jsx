@@ -82,6 +82,11 @@ export default function OtaChannels() {
       next = updated[source].type === "percentage" ? Math.min(0.9999, numVal / 100) : numVal;
     }
     updated[source] = { ...updated[source], [field]: next };
+    // Switching type reinterprets the stored number: a fixed $15 fee read as a
+    // percentage fraction becomes 1500% (commission = gross × 15). The two scales
+    // are incompatible, so reset the rate on a type change and let the operator
+    // re-enter it in the new unit.
+    if (field === "type") updated[source].rate = 0;
     setRates(updated);
     setSaveError(setCommissionRates(updated) ? "" : "rates");
   };

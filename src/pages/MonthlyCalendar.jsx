@@ -33,13 +33,39 @@ export default function MonthlyCalendar() {
   );
 
   const byDate = useMemo(() => {
-    const map = new Map();
+    // Group every row for a date, not just the last one. In portfolio ("all") mode
+    // the reads return one row PER PROPERTY per date, so the old `map.set(d, r)`
+    // kept only the last property's row: the calendar cell showed a single property
+    // while the KPI cards above aggregated the whole portfolio, and the two numbers
+    // disagreed. Dates with a single row are passed through unchanged.
+    const groups = new Map();
     occRows.forEach((r) => {
       const d = String(r.date).slice(0, 10);
-      map.set(d, r);
+      if (!groups.has(d)) groups.set(d, []);
+      groups.get(d).push(r);
+    });
+    const map = new Map();
+    groups.forEach((rows, d) => {
+      if (rows.length === 1) { map.set(d, rows[0]); return; }
+      // Reuse the SAME aggregator the KPI cards use (occupancyStats) so a cell can
+      // never drift from the header. occupancy comes back as a 0..1 fraction, which
+      // both the cell and the day modal already normalise.
+      const s = occupancyStats(rows, properties);
+      map.set(d, {
+        ...rows[0],
+        date: d,
+        property_id: "all",
+        property_name: `${rows.length} properties`,
+        room_revenue: s.revenue,
+        rooms_sold: s.roomsSold,
+        total_rooms: s.capacity,
+        occupancy: s.occupancy,
+        adr: s.adr,
+        revpar: s.revpar,
+      });
     });
     return map;
-  }, [occRows]);
+  }, [occRows, properties]);
 
   const srcByDate = useMemo(() => {
     const map = new Map();

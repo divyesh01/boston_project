@@ -59,6 +59,21 @@ export function requestedWeekdays(question) {
   return DAY_NAMES.filter((day) => new RegExp(`\\b${day.toLowerCase()}\\b`, "i").test(q));
 }
 
+/** Return the immediately preceding equal-length business-date range. */
+export function priorComparableRange(from, to) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(from || "")) || !/^\d{4}-\d{2}-\d{2}$/.test(String(to || ""))) return null;
+  const start = new Date(`${from}T12:00:00`);
+  const end = new Date(`${to}T12:00:00`);
+  if (Number.isNaN(start.valueOf()) || Number.isNaN(end.valueOf()) || end < start) return null;
+  const days = Math.round((end - start) / 86400000) + 1;
+  const shift = (date, amount) => {
+    const result = new Date(date);
+    result.setDate(result.getDate() + amount);
+    return result.toISOString().slice(0, 10);
+  };
+  return { from: shift(start, -days), to: shift(end, -days), days };
+}
+
 function dateFor(row) {
   return String(row?.date || row?.business_date || row?.expense_date || "").slice(0, 10);
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeOwnerQuestion, requestedWeekdays, weekdayPerformanceAnalysis } from "./ownerAnalysis";
+import { normalizeOwnerQuestion, priorComparableRange, requestedWeekdays, weekdayPerformanceAnalysis } from "./ownerAnalysis";
 
 describe("owner analysis", () => {
   it("corrects only known operational words and keeps numbers intact", () => {
@@ -28,5 +28,10 @@ describe("owner analysis", () => {
     expect(result.delta.revenue).toBe(3200);
     expect(result.delta.rooms).toBe(20);
     expect(result.channels[0]).toMatchObject({ name: "Expedia", change: 1300 });
+  });
+
+  it("uses the immediately preceding equal-length range for money-change analysis", () => {
+    expect(priorComparableRange("2026-08-24", "2026-08-30")).toEqual({ from: "2026-08-17", to: "2026-08-23", days: 7 });
+    expect(priorComparableRange("not-a-date", "2026-08-30")).toBeNull();
   });
 });

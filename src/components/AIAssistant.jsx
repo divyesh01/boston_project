@@ -8,12 +8,15 @@ import ReactMarkdown from "react-markdown";
 
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { getDailyAggregates, buildSyntheticRows } from "@/lib/dailyAggregates";
+import { contextFromSummary, nextQuestionScope, questionWithConversationTopic } from "@/lib/conversationContext";
 
 const SUGGESTIONS = [
   "What is wrong today?",
   "Why Monday money low and Friday high?",
   "Why is money kept down this week?",
+  "What is wrong today? Give me an owner briefing.",
   "Did Expedia or Booking.com bring less revenue than usual?",
+  "What about Expedia?",
   "Are payments and refunds unusual?",
   "Which clerk has the largest cash variance?",
   "What should I ask the GM today?",
@@ -26,6 +29,7 @@ export default function AIAssistant() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [activeContext, setActiveContext] = useState(null);
   const scrollRef = useRef(null);
   // Concurrency guard. `loading` state can't gate re-entry because setLoading(true)
   // runs only AFTER the awaited rate-limiter check, so two fast presses both read
@@ -37,6 +41,12 @@ export default function AIAssistant() {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages, loading]);
+
+  // Changing the dashboard filters is an explicit owner action. Do not let an
+  // older chat topic quietly override that new choice.
+  useEffect(() => {
+    setActiveContext(null);
+  }, [property, dateRange.from, dateRange.to]);
 
   const handleAsk = async (question) => {
     if (!question.trim() || busyRef.current) return;
@@ -65,7 +75,9 @@ export default function AIAssistant() {
     setInput("");
     setLoading(true);
     try {
-      const propertyId = Array.isArray(property) ? property : (property === "all" ? "all" : property);
+      const pageProperty = Array.isArray(property) ? property : (property === "all" ? "all" : property);
+      const scope = nextQuestionScope({ question: q, activeContext, pageProperty, pageDateRange: dateRange });
+      const questionForAnalysis = questionWithConversationTopic(q, activeContext, scope.continued);
       // No `allowedPropertyIds` computed here any more. This component used to
       // derive the AI's property scope from the `user` object and send it with
       // the request — the thing being authorized deciding its own authorization,
@@ -77,9 +89,9 @@ export default function AIAssistant() {
       let synthetic = {};
       try {
         const aggs = await getDailyAggregates({
-          propertyId,
-          from: dateRange.from || "",
-          to: dateRange.to || ""
+          propertyId: scope.propertyId,
+          from: scope.dateFrom,
+          to: scope.dateTo,
         });
         if (aggs && aggs.length > 0) {
           synthetic = buildSyntheticRows(aggs);
@@ -89,13 +101,16 @@ export default function AIAssistant() {
       }
 
       const res = await db.functions.invoke("aiAssistant", {
-        question: q,
-        propertyId,
-        dateFrom: dateRange.from || "",
-        dateTo: dateRange.to || "",
+        question: questionForAnalysis,
+        propertyId: scope.propertyId,
+        dateFrom: scope.dateFrom,
+        dateTo: scope.dateTo,
         synthetic,
       });
-      setMessages((prev) => [...prev, { role: "assistant", text: res.data.answer || "I couldn't process that question.", summary: res.data.summary }]);
+      const summary = res.data.summary;
+      const returnedContext = contextFromSummary(summary);
+      if (returnedContext) setActiveContext(returnedContext);
+      setMessages((prev) => [...prev, { role: "assistant", text: res.data.answer || "I couldn't process that question.", summary }]);
     } catch (e) {
       setMessages((prev) => [...prev, { role: "assistant", text: `Sorry, I encountered an error: ${e.response?.data?.error || e.message}. Please try again.` }]);
     }
@@ -152,7 +167,7 @@ export default function AIAssistant() {
               {messages.length === 0 && (
                 <div className="space-y-3">
                   <div className="rounded-xl bg-[#0A1628]/60 p-3">
-                    <p className="text-sm text-slate-300">👋 Ask in your own words—even with small spelling mistakes. I show the numbers, what they prove, what still needs checking, and questions for the GM.</p>
+                  <p className="text-sm text-slate-300">👋 Ask naturally—even with small spelling mistakes. I remember the property, date, and topic you were discussing, show proof and data limits, then give practical GM questions. I never invent a cause.</p>
                   </div>
                   <p className="text-xs text-slate-500">Try asking:</p>
                   {SUGGESTIONS.map((s) => (
@@ -164,6 +179,13 @@ export default function AIAssistant() {
                       {s}
                     </button>
                   ))}
+                </div>
+              )}
+
+              {activeContext && (
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-[#00D4FF]/20 bg-[#00D4FF]/[0.06] px-3 py-2 text-xs">
+                  <span className="text-[#8fe8ff]">Continuing: {activeContext.propertyLabel} · {activeContext.from === activeContext.to ? activeContext.from : `${activeContext.from} → ${activeContext.to}`} · {String(activeContext.topic || "daily summary").replace(/_/g, " ")}</span>
+                  <button type="button" onClick={() => setActiveContext(null)} className="shrink-0 text-slate-400 hover:text-white">Clear</button>
                 </div>
               )}
 
@@ -230,7 +252,7 @@ export default function AIAssistant() {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") handleAsk(input); }}
-                  placeholder="Ask why money is low, channel revenue, cash…"
+                  placeholder="Ask naturally: “what about Expedia?” or “why was it low?”"
                   className="flex-1 rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]"
                   disabled={loading}
                 />

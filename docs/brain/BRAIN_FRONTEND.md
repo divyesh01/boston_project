@@ -88,6 +88,16 @@ number of rows below, verified against `src/pages/*.jsx` (excluding `*.test.jsx`
 
 ---
 
+## 18. Owner Analyst — evidence-only owner questions
+
+Owner Analyst corrects only a narrow set of hotel-operational spelling mistakes; property names, dates, and amounts are never fuzzy-corrected. Weekday explanations show imported occupancy, revenue, ADR, channel, and refund facts, while operational causes remain verification tasks. “Why is money kept down?” compares the requested period with the immediately preceding equal-length period and decomposes the change into revenue, refunds, payroll, and operating costs. “What is wrong today?” gives an owner briefing from the latest imported business day and its preceding-day baseline. Missing baselines, channel reports, or operational records are stated as limits, never filled with a guess.
+
+The in-panel conversation can carry the last confirmed property, date range, and operational topic into a short follow-up such as “why was it low?” or “what about Expedia?”. Topics are deliberately limited to revenue/money kept, occupancy, channels, refunds, costs, cash, and a daily summary. The active context is shown and can be cleared. A new explicit date overrides it, a dashboard-filter change clears it, and the context is only a client-side default: authorization always remains session-derived in the function layer. Topic-aware answers compare the preceding equal-length period when its imported report exists; otherwise they state the missing evidence rather than infer a cause.
+
+## 19. Clerk Audit — refund evidence and room-rent leakage
+
+The Clerk Audit classifies AdjustmentRefund records from evidence, not a dollar shortcut. A note that explicitly identifies a guest/security/incidental deposit return is a proved **Deposit Return** and is excluded from room-rent leakage. A non-deposit refund is surfaced as a **Room-Rent Refund** (or possible room-rent refund when the note lacks a service/rate reason). An exact `$100` refund with no deposit-return wording is **Needs Review**—it is neither silently excluded nor accused as leakage. Cash room-rent refunds receive the strongest visual emphasis because they need prompt folio and approval review. The audit identifies the clerk who processed an entry; it never attributes the operational cause to that clerk without supporting evidence.
+
 # 5. ALL 90+ LIBRARIES (The Engines Under The Hood)
 
 These are the files in `src/lib/` -- the brains of the app. Grouped by what they do.

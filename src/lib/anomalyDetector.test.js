@@ -13,24 +13,25 @@ const mkRefund = (overrides = {}) => ({
 });
 
 describe("deposit vs room-rent refund classification", () => {
-  it("flags an exact $100 refund as a deposit refund (LOW severity)", () => {
+  it("flags a note-confirmed deposit refund as LOW severity", () => {
     const { flaggedAnomalies } = detectClerkAnomalies({
-      refunds: [mkRefund({ amount: 100 })],
+      refunds: [mkRefund({ amount: 90.94, remarks: "cash deposit refund" })],
     });
 
     const deposit = flaggedAnomalies.filter((f) => f.ruleId === CLERK_ANOMALY_TYPES.DEPOSIT_REFUND);
     expect(deposit).toHaveLength(1);
     expect(deposit[0].severity).toBe("LOW");
-    expect(deposit[0].amount).toBe(100);
+    expect(deposit[0].amount).toBe(90.94);
   });
 
-  it("never flags a $100 amount as a room-rent refund at the same time", () => {
+  it("does not silently classify an unlabeled $100 as a deposit or room-rent refund", () => {
     const { flaggedAnomalies } = detectClerkAnomalies({
       refunds: [mkRefund({ amount: 100 })],
     });
 
-    const roomRent = flaggedAnomalies.filter((f) => f.ruleId === CLERK_ANOMALY_TYPES.ROOM_RENT_REFUND);
-    expect(roomRent).toHaveLength(0);
+    expect(flaggedAnomalies.some((f) => f.ruleId === CLERK_ANOMALY_TYPES.DEPOSIT_REFUND)).toBe(false);
+    expect(flaggedAnomalies.some((f) => f.ruleId === CLERK_ANOMALY_TYPES.ROOM_RENT_REFUND)).toBe(false);
+    expect(flaggedAnomalies.some((f) => f.ruleId === "refund_needs_review")).toBe(true);
   });
 
   it("flags a non-$100 refund as a room-rent refund (MEDIUM severity)", () => {
@@ -44,18 +45,18 @@ describe("deposit vs room-rent refund classification", () => {
     expect(roomRent[0].amount).toBe(84);
   });
 
-  it("respects the deposit tolerance (100.009 ≈ $100)", () => {
+  it("uses note evidence rather than a $100 tolerance", () => {
     const { flaggedAnomalies } = detectClerkAnomalies({
-      refunds: [mkRefund({ amount: 100.009 })],
+      refunds: [mkRefund({ amount: 100.009, remarks: "guest deposit return" })],
     });
 
     const deposit = flaggedAnomalies.filter((f) => f.ruleId === CLERK_ANOMALY_TYPES.DEPOSIT_REFUND);
     expect(deposit).toHaveLength(1);
   });
 
-  it("treats $100 ± beyond tolerance as a room-rent refund", () => {
+  it("treats a non-deposit refund as a room-rent refund", () => {
     const { flaggedAnomalies } = detectClerkAnomalies({
-      refunds: [mkRefund({ amount: 100.02 })],
+      refunds: [mkRefund({ amount: 100.02, remarks: "customer satisfaction" })],
     });
 
     const deposit = flaggedAnomalies.filter((f) => f.ruleId === CLERK_ANOMALY_TYPES.DEPOSIT_REFUND);
@@ -67,8 +68,8 @@ describe("deposit vs room-rent refund classification", () => {
   it("builds per-clerk deposit vs room-rent risk totals", () => {
     const { clerkRiskScores } = detectClerkAnomalies({
       refunds: [
-        mkRefund({ amount: 100 }),
-        mkRefund({ amount: 100, date: "2026-07-05" }),
+        mkRefund({ amount: 100, remarks: "deposit refund" }),
+        mkRefund({ amount: 100, date: "2026-07-05", remarks: "deposit refund" }),
         mkRefund({ amount: 84 }),
       ],
     });

@@ -2,6 +2,7 @@ import React, { useMemo, useState, useEffect } from "react";
 import { money2 } from "@/lib/hotel";
 import { AlertTriangle, DollarSign, UserX, FileWarning, X, ChevronUp, ChevronDown, CheckCircle2, TrendingUp, Sparkles, Clock, LogOut } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { classifyRefund, REFUND_CLASSIFICATION } from "@/lib/refundClassification";
 
 export default function ClerkAuditMatrix({ 
   flaggedAnomalies = [], 
@@ -14,7 +15,7 @@ export default function ClerkAuditMatrix({
   
   // Refunds Ledger: payment method filter + two-tier amount sorting
   const [selectedMethod, setSelectedMethod] = useState('ALL'); // 'ALL' | 'CASH' | 'CARD' | 'DIRECT_BILL'
-  const [hideStandard100, setHideStandard100] = useState(false);
+  const [hideDepositReturns, setHideDepositReturns] = useState(false);
 
   // Adjustments Ledger: reason / method filters + smart anomaly grouping
   const [adjReasonFilter, setAdjReasonFilter] = useState('ALL'); // 'ALL' | 'AR_BILLING' | 'HOSPITALITY'
@@ -83,20 +84,11 @@ export default function ClerkAuditMatrix({
   const totalAnomalies = flaggedAnomalies.length;
   const displayAnomalies = useRollingNumber(totalAnomalies);
   
-  const totalCashRefunds = refunds.reduce((acc, r) => String(r.paymentTypeRefunded || '').toUpperCase() === 'CASH' ? acc + Math.abs(Number(r.amount) || 0) : acc, 0);
-  const displayCashRefunds = useRollingNumber(totalCashRefunds);
-  
-  // Deposit refund detection: exactly $100 = deposit return, other amounts = room rent refund
-  const DEPOSIT_REFUND_AMOUNT = 100;
-  const DEPOSIT_TOLERANCE = 0.01;
-  const totalDepositRefunds = refunds.reduce((acc, r) => {
-    const amt = Math.abs(Number(r.amount) || 0);
-    return Math.abs(amt - DEPOSIT_REFUND_AMOUNT) <= DEPOSIT_TOLERANCE ? acc + amt : acc;
-  }, 0);
-  const totalRoomRentRefunds = refunds.reduce((acc, r) => {
-    const amt = Math.abs(Number(r.amount) || 0);
-    return Math.abs(amt - DEPOSIT_REFUND_AMOUNT) > DEPOSIT_TOLERANCE ? acc + amt : acc;
-  }, 0);
+  const classifiedRefunds = useMemo(() => refunds.map((refund) => ({ ...refund, refundClassification: classifyRefund(refund) })), [refunds]);
+  const totalDepositRefunds = classifiedRefunds.filter((r) => r.refundClassification.kind === REFUND_CLASSIFICATION.DEPOSIT_RETURN).reduce((acc, r) => acc + r.refundClassification.amount, 0);
+  const totalRoomRentRefunds = classifiedRefunds.filter((r) => r.refundClassification.kind === REFUND_CLASSIFICATION.ROOM_RENT_REFUND).reduce((acc, r) => acc + r.refundClassification.amount, 0);
+  const totalNeedsReviewRefunds = classifiedRefunds.filter((r) => r.refundClassification.kind === REFUND_CLASSIFICATION.NEEDS_REVIEW).reduce((acc, r) => acc + r.refundClassification.amount, 0);
+  const totalCashRoomRentRefunds = classifiedRefunds.filter((r) => r.refundClassification.kind === REFUND_CLASSIFICATION.ROOM_RENT_REFUND && r.refundClassification.isCash).reduce((acc, r) => acc + r.refundClassification.amount, 0);
   
   const highRiskClerks = clerkRiskScores.filter(c => c.riskLevel === 'HIGH').length;
   const displayHighRisk = useRollingNumber(highRiskClerks);
@@ -144,31 +136,25 @@ export default function ClerkAuditMatrix({
     setSortConfig({ key, direction });
   };
 
-  // Two-tier Refunds Ledger processing: filter by payment method, optionally
-  // hide $100 deposit returns, and force non-$100 (audit-risk) amounts to the top.
+  // Evidence-first refund ledger: confirmed deposit returns may be hidden, while
+  // cash room-rent refunds, room-rent refunds, and unclear records rise to top.
   const processedRefunds = useMemo(() => {
     if (!selectedClerk) return [];
-    const clerkRefunds = refunds.filter(r => r.username === selectedClerk.username);
+    const clerkRefunds = classifiedRefunds.filter(r => r.username === selectedClerk.username);
     return clerkRefunds
       .filter(row => {
         if (selectedMethod === 'ALL') return true;
         return getPaymentCategory(row) === selectedMethod;
       })
       .filter(row => {
-        if (!hideStandard100) return true;
-        const amt = Math.abs(parseFloat(row.amount || 0));
-        return amt !== 100;
+        return !hideDepositReturns || row.refundClassification.kind !== REFUND_CLASSIFICATION.DEPOSIT_RETURN;
       })
       .sort((a, b) => {
-        const amtA = Math.abs(parseFloat(a.amount || 0));
-        const amtB = Math.abs(parseFloat(b.amount || 0));
-        const is100A = amtA === 100;
-        const is100B = amtB === 100;
-        if (!is100A && is100B) return -1;
-        if (is100A && !is100B) return 1;
+        const priority = (row) => row.refundClassification.isCash && row.refundClassification.kind === REFUND_CLASSIFICATION.ROOM_RENT_REFUND ? 0 : row.refundClassification.kind === REFUND_CLASSIFICATION.ROOM_RENT_REFUND ? 1 : row.refundClassification.kind === REFUND_CLASSIFICATION.NEEDS_REVIEW ? 2 : 3;
+        if (priority(a) !== priority(b)) return priority(a) - priority(b);
         return new Date(b.time || b.date).getTime() - new Date(a.time || a.date).getTime();
       });
-  }, [refunds, selectedClerk, selectedMethod, hideStandard100]);
+  }, [classifiedRefunds, selectedClerk, selectedMethod, hideDepositReturns]);
 
   // Adjustments Ledger processing: filter by reason + method, optionally hide
   // $0.00 lines, then 3-tier sort — rapid/repeat overrides (Tier 1), high-value
@@ -272,12 +258,13 @@ export default function ClerkAuditMatrix({
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }} className="space-y-6 pb-20">
       
       {/* 1. Immersive KPI Bar */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {[
           { label: "Anomalies Flagged", val: Math.round(displayAnomalies), raw: totalAnomalies, icon: AlertTriangle, color: "#FF6B6B" },
-          { label: "Cash Refunds (Risk)", val: money2(displayCashRefunds), raw: totalCashRefunds, icon: DollarSign, color: "#FFB547" },
-          { label: "Deposit Refunds ($100)", val: money2(totalDepositRefunds), raw: totalDepositRefunds, icon: CheckCircle2, color: "#00E096" },
-          { label: "Room Rent Refunds", val: money2(totalRoomRentRefunds), raw: totalRoomRentRefunds, icon: AlertTriangle, color: "#FF9F7A" },
+          { label: "Cash Room-Rent Risk", val: money2(totalCashRoomRentRefunds), raw: totalCashRoomRentRefunds, icon: DollarSign, color: "#FF6B6B" },
+          { label: "Deposit Returns (Proved)", val: money2(totalDepositRefunds), raw: totalDepositRefunds, icon: CheckCircle2, color: "#00E096" },
+          { label: "Room-Rent Refunds", val: money2(totalRoomRentRefunds), raw: totalRoomRentRefunds, icon: AlertTriangle, color: "#FF9F7A" },
+          { label: "Refunds Need Review", val: money2(totalNeedsReviewRefunds), raw: totalNeedsReviewRefunds, icon: FileWarning, color: "#FFB547" },
           { label: "High-Risk Clerks", val: Math.round(displayHighRisk), raw: highRiskClerks, icon: UserX, color: "#FF6B6B" },
           { label: "Total Adjusted", val: money2(displayAdjusted), raw: totalAdjusted, icon: LogOut, color: "#6C63FF" },
         ].map((kpi, i) => (
@@ -319,8 +306,9 @@ export default function ClerkAuditMatrix({
                   <th className="px-6 py-4 font-medium">Clerk Name</th>
                 <th className="px-6 py-4 font-medium text-right">Adjustments</th>
                 <th className="px-6 py-4 font-medium text-right">Cash Refunds</th>
-                <th className="px-6 py-4 font-medium text-right" style={{ color: "#00E096" }}>Dep. Refs</th>
+                <th className="px-6 py-4 font-medium text-right" style={{ color: "#00E096" }}>Deposit Returns</th>
                 <th className="px-6 py-4 font-medium text-right" style={{ color: "#FFB547" }}>Rm Rent Refs</th>
+                <th className="px-6 py-4 font-medium text-right" style={{ color: "#FFB547" }}>Needs Review</th>
                 <th className="px-6 py-4 font-medium text-right">Flags</th>
                 <th className="px-6 py-4 font-medium">AI Behavior Analysis</th>
                 <th className="px-6 py-4 font-medium text-center">Risk Level</th>
@@ -341,6 +329,7 @@ export default function ClerkAuditMatrix({
                     <td className="px-6 py-4 text-right text-slate-300 font-mono">{money2(clerk.totalRefundedAmount)}</td>
                     <td className="px-6 py-4 text-right text-[#00E096] font-mono">{money2(clerk.totalDepositRefunds || 0)}</td>
                     <td className="px-6 py-4 text-right text-[#FFB547] font-mono">{money2(clerk.totalRoomRentRefunds || 0)}  </td>
+                    <td className="px-6 py-4 text-right text-[#FFB547] font-mono">{money2(clerk.totalNeedsReviewRefunds || 0)}</td>
                     <td className="px-6 py-4 text-right font-mono">
                       <span className={`px-2.5 py-1 rounded-md bg-white/5 border border-white/10 ${clerk.totalFlags > 0 ? 'text-[#FF6B6B]' : 'text-slate-400'}`}>
                         {clerk.totalFlags}
@@ -484,11 +473,15 @@ export default function ClerkAuditMatrix({
                   <div className="mt-2 flex flex-wrap gap-3 text-xs">
                     <span className="flex items-center gap-1 text-slate-400">
                       <span className="w-2 h-2 rounded-full bg-[#00E096]"></span>
-                      Deposit Refunds: {money2(selectedClerk.totalDepositRefunds || 0)} ({selectedClerk.depositRefundCount || 0})
+                      Deposit Returns (proved): {money2(selectedClerk.totalDepositRefunds || 0)} ({selectedClerk.depositRefundCount || 0})
                     </span>
                     <span className="flex items-center gap-1 text-slate-400">
                       <span className="w-2 h-2 rounded-full bg-[#FFB547]"></span>
-                      Room Rent Refunds: {money2(selectedClerk.totalRoomRentRefunds || 0)} ({selectedClerk.roomRentRefundCount || 0})
+                      Room-Rent Refunds: {money2(selectedClerk.totalRoomRentRefunds || 0)} ({selectedClerk.roomRentRefundCount || 0})
+                    </span>
+                    <span className="flex items-center gap-1 text-[#FFB547]">
+                      <span className="w-2 h-2 rounded-full bg-[#FFB547]"></span>
+                      Needs Review: {money2(selectedClerk.totalNeedsReviewRefunds || 0)} ({selectedClerk.needsReviewRefundCount || 0})
                     </span>
                   </div>
                 </div>
@@ -703,11 +696,11 @@ export default function ClerkAuditMatrix({
                     <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-400">
                       <input
                         type="checkbox"
-                        checked={hideStandard100}
-                        onChange={(e) => setHideStandard100(e.target.checked)}
+                          checked={hideDepositReturns}
+                          onChange={(e) => setHideDepositReturns(e.target.checked)}
                         className="w-4 h-4 rounded accent-cyan-500 cursor-pointer"
                       />
-                      Hide $100 Deposit Returns
+                      Hide confirmed deposit returns
                     </label>
                   </div>
 
@@ -717,7 +710,7 @@ export default function ClerkAuditMatrix({
                         <tr>
                           <th className="px-5 py-3.5 font-medium">Time</th>
                           <th className="px-5 py-3.5 font-medium">Room</th>
-                          <th className="px-5 py-3.5 font-medium">Type & Code</th>
+                          <th className="px-5 py-3.5 font-medium">Evidence & classification</th>
                           <th className="px-5 py-3.5 font-medium text-right">Amount</th>
                         </tr>
                       </thead>
@@ -725,9 +718,11 @@ export default function ClerkAuditMatrix({
                         {(() => {
                           const rows = processedRefunds.map((ref, i) => {
                             const isFlagged = flaggedAnomalies.some(f => f.transaction === ref || (f.username === ref.username && f.date === ref.date && f.time === ref.time && f.amount === ref.amount));
-                            const isCash = String(ref.paymentTypeRefunded || '').toUpperCase() === 'CASH';
+                            const classification = ref.refundClassification || classifyRefund(ref);
+                            const isCash = classification.isCash;
+                            const isCashRoomRent = isCash && classification.kind === REFUND_CLASSIFICATION.ROOM_RENT_REFUND;
                             return (
-                              <tr key={i} className={`hover:bg-white/[0.04] transition-colors ${isFlagged ? 'bg-[#FF6B6B]/[0.05] border-l-[3px] border-l-[#FF6B6B]' : 'border-l-[3px] border-l-transparent'}`}>
+                              <tr key={i} className={`hover:bg-white/[0.04] transition-colors ${isCashRoomRent ? 'bg-[#FF6B6B]/[0.10] border-l-[3px] border-l-[#FF6B6B]' : isFlagged ? 'bg-[#FFB547]/[0.06] border-l-[3px] border-l-[#FFB547]' : 'border-l-[3px] border-l-transparent'}`}>
                                 <td className="px-5 py-3 text-slate-300 whitespace-nowrap font-mono text-xs flex flex-col">
                                   <span>{ref.date}</span>
                                   <span className="text-slate-500">{ref.time}</span>
@@ -735,8 +730,10 @@ export default function ClerkAuditMatrix({
                                 <td className="px-5 py-3 text-slate-200 font-mono">{ref.roomNumber}</td>
                                 <td className="px-5 py-3">
                                   <div className={`font-bold mb-1 text-[11px] uppercase tracking-wider ${isCash ? 'text-amber-400' : 'text-slate-400'}`}>{ref.paymentTypeRefunded}</div>
+                                  <div className={`mb-1 text-[10px] font-bold uppercase tracking-wider ${classification.kind === REFUND_CLASSIFICATION.DEPOSIT_RETURN ? 'text-[#00E096]' : classification.kind === REFUND_CLASSIFICATION.NEEDS_REVIEW ? 'text-[#FFB547]' : isCashRoomRent ? 'text-[#FF6B6B]' : 'text-[#FF9F7A]'}`}>{isCashRoomRent ? 'Cash · ' : ''}{classification.label}</div>
                                   <div className="text-slate-300 text-xs mb-1">{ref.refundCode}</div>
-                                  <div className="text-slate-500 text-[11px] leading-tight max-w-[200px] truncate" title={ref.remarks}>{ref.remarks || 'No remarks'}</div>
+                                  <div className="text-slate-500 text-[11px] leading-tight max-w-[200px] truncate" title={classification.reason}>{classification.reason}</div>
+                                  <div className="text-slate-600 text-[10px] leading-tight max-w-[200px] truncate" title={ref.remarks}>{ref.remarks || 'No remarks'}</div>
                                 </td>
                                 <td className="px-5 py-3 text-right font-mono text-slate-200 whitespace-nowrap">
                                   {money2(ref.amount)}
@@ -746,21 +743,7 @@ export default function ClerkAuditMatrix({
                             );
                           });
 
-                          const tier1 = processedRefunds.filter(r => Math.abs(parseFloat(r.amount || 0)) !== 100);
-                          const tier2 = processedRefunds.filter(r => Math.abs(parseFloat(r.amount || 0)) === 100);
-                          const rendered = [
-                            ...tier1.map((ref, i) => rows[i]),
-                            tier1.length > 0 && tier2.length > 0 ? (
-                              <tr key="divider">
-                                <td colSpan={4} className="px-5 py-2 text-[10px] uppercase tracking-[0.2em] text-slate-500 bg-white/[0.02] border-y border-white/5">
-                                  Standard $100 Incidental Deposit Returns
-                                </td>
-                              </tr>
-                            ) : null,
-                            ...tier2.map((ref, i) => rows[tier1.length + i]),
-                          ].filter(Boolean);
-
-                          return rendered;
+                          return rows;
                         })()}
                         {processedRefunds.length === 0 && (
                           <tr><td colSpan={4} className="px-5 py-8 text-center text-slate-500">No refunds posted.</td></tr>

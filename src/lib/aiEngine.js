@@ -3,7 +3,8 @@ import { formatNumber, sumCents, fromCents } from "@/lib/decimal";
 import { refundTotal } from "@/lib/paymentNorm";
 import { filterCommittedPay } from "@/lib/payrollCalc";
 import { getDailyAggregates, buildSyntheticRows } from "@/lib/dailyAggregates";
-import { normalizeOwnerQuestion, requestedWeekdays, weekdayPerformanceAnalysis } from "@/lib/ownerAnalysis";
+import { normalizeOwnerQuestion, priorComparableRange, requestedWeekdays, weekdayPerformanceAnalysis } from "@/lib/ownerAnalysis";
+import { topicFromQuestion } from "@/lib/conversationContext";
 
 const MONTH_NAMES = [
   "january", "february", "march", "april", "may", "june",
@@ -676,6 +677,194 @@ async function intentProfit({ prop, range }) {
   };
 }
 
+function profitSnapshot(occupancyRows, paymentRows, expenseRows, payrollRows) {
+  const occupancy = occTotals(occupancyRows);
+  const payments = payTotals(paymentRows);
+  const costs = costTotals(expenseRows, payrollRows);
+  const netRevenue = occupancy.revenue - payments.refunds;
+  return { occupancy, payments, costs, profit: netRevenue - costs.total };
+}
+
+async function loadProfitSnapshot(prop, range) {
+  const [occupancyRows, paymentRows, expenseRows, payrollRows, sourceRows] = await Promise.all([
+    load("OccupancyDay", prop, range.from, range.to),
+    load("PaymentDay", prop, range.from, range.to),
+    load("Expense", prop, range.from, range.to, "expense_date"),
+    load("PayrollRun", prop, range.from, range.to, "pay_period_start"),
+    load("SourceDay", prop, range.from, range.to),
+  ]);
+  return {
+    ...profitSnapshot(occupancyRows || [], paymentRows || [], expenseRows || [], payrollRows || []),
+    occupancyRows: occupancyRows || [], sourceRows: sourceRows || [],
+  };
+}
+
+function largestChannelChanges(currentRows, priorRows) {
+  const items = new Map();
+  channelTotals(priorRows).forEach((row) => items.set(row.name, { name: row.name, prior: row.gross, current: 0 }));
+  channelTotals(currentRows).forEach((row) => {
+    const item = items.get(row.name) || { name: row.name, prior: 0, current: 0 };
+    item.current = row.gross;
+    items.set(row.name, item);
+  });
+  return [...items.values()]
+    .map((item) => ({ ...item, change: item.current - item.prior }))
+    .filter((item) => Math.abs(item.change) > 0.005)
+    .sort((a, b) => Math.abs(b.change) - Math.abs(a.change))
+    .slice(0, 3);
+}
+
+async function intentWhyMoneyChanged({ prop, range }) {
+  const prior = priorComparableRange(range.from, range.to);
+  const current = await loadProfitSnapshot(prop, range);
+  if (!current.occupancyRows.length) return { heading: "", lines: [], noData: "occupancy" };
+  if (!prior) return null;
+  const baseline = await loadProfitSnapshot(prop, prior);
+  if (!baseline.occupancyRows.length) return {
+    heading: "", noData: null, interpretation: "Current money kept; prior-period baseline unavailable",
+    lines: [
+      `**Money kept — ${prop.label} · ${fmtRange(range)}**`,
+      `- Current net profit: **${signedMoney(current.profit)}**.`,
+      `- I cannot prove why it changed because no occupancy baseline is imported for ${prior.from} → ${prior.to}.`,
+      "- Import that matching prior period, then I can show the revenue, refund, payroll, and operating-cost changes.",
+    ],
+  };
+  const delta = {
+    profit: current.profit - baseline.profit,
+    revenue: current.occupancy.revenue - baseline.occupancy.revenue,
+    refunds: current.payments.refunds - baseline.payments.refunds,
+    payroll: current.costs.payrollTotal - baseline.costs.payrollTotal,
+    operating: current.costs.operating - baseline.costs.operating,
+    rooms: current.occupancy.roomsSold - baseline.occupancy.roomsSold,
+    occupancy: current.occupancy.occupancy - baseline.occupancy.occupancy,
+    adr: current.occupancy.adr - baseline.occupancy.adr,
+  };
+  const direction = delta.profit < 0 ? "down" : delta.profit > 0 ? "up" : "unchanged";
+  const channels = largestChannelChanges(current.sourceRows, baseline.sourceRows);
+  const lines = [
+    `**Answer — money kept is ${direction} ${money(Math.abs(delta.profit))}** versus the immediately preceding matching period.`,
+    `- Current: ${signedMoney(current.profit)} for ${fmtRange(range)} · baseline: ${signedMoney(baseline.profit)} for ${prior.from} → ${prior.to}.`,
+    "", "**What the imported data proves**",
+    `- Gross room revenue: ${signedMoney(delta.revenue)}; refunds/adjustments: ${signedMoney(delta.refunds)}; payroll: ${signedMoney(delta.payroll)}; operating costs: ${signedMoney(delta.operating)}.`,
+    `- Rooms sold: ${delta.rooms >= 0 ? "+" : ""}${num(delta.rooms)} · occupancy: ${delta.occupancy >= 0 ? "+" : ""}${(delta.occupancy * 100).toFixed(1)} points · ADR: ${signedMoney(delta.adr, 2)}.`,
+  ];
+  if (channels.length) lines.push(`- Largest channel changes: ${channels.map((item) => `${item.name} ${signedMoney(item.change)}`).join("; ")}.`);
+  else lines.push("- No Source Summary change can be shown because channel data is not imported for both periods.");
+  lines.push("", "**What this does not prove**");
+  lines.push("- A channel change is not a channel failure. Confirm availability, rate parity, cancellations, out-of-order rooms, group business, and local demand before naming a cause.");
+  lines.push("", "**Ask the GM**");
+  lines.push("1. What changed in availability, rates, or restrictions compared with the prior matching period?");
+  lines.push("2. Which cancellations, group blocks, or out-of-order rooms affected the lower-revenue dates?");
+  lines.push("3. What supports the payroll and operating-cost change, and is it one-time or recurring?");
+  lines.push("", `**Data quality:** Both ranges have occupancy data. Payroll uses committed runs whose pay-period start falls in each range; verify allocation if a pay period spans the comparison boundary.`);
+  return { heading: "", lines, noData: null, interpretation: "Money kept vs immediately preceding equal-length period" };
+}
+
+async function intentWhyTopicChanged({ prop, range }, topic) {
+  if (["daily_summary", "revenue", "money_kept"].includes(topic)) return intentWhyMoneyChanged({ prop, range });
+  const prior = priorComparableRange(range.from, range.to);
+  if (!prior) return null;
+
+  if (topic === "occupancy") {
+    const [currentRows, priorRows] = await Promise.all([
+      load("OccupancyDay", prop, range.from, range.to),
+      load("OccupancyDay", prop, prior.from, prior.to),
+    ]);
+    if (!currentRows.length) return { heading: "", lines: [], noData: "occupancy" };
+    if (!priorRows.length) return {
+      heading: "", noData: null, interpretation: "Occupancy baseline unavailable",
+      lines: [`**Occupancy — ${prop.label} · ${fmtRange(range)}**`, `- Current occupancy is ${pct(occTotals(currentRows).occupancy)}. I cannot prove why it changed without imported occupancy data for ${prior.from} → ${prior.to}.`],
+    };
+    const current = occTotals(currentRows); const baseline = occTotals(priorRows);
+    const rooms = current.roomsSold - baseline.roomsSold;
+    const occupancy = current.occupancy - baseline.occupancy;
+    return {
+      heading: "", noData: null, interpretation: "Occupancy vs immediately preceding equal-length period",
+      lines: [
+        `**Answer — occupancy is ${occupancy < 0 ? "down" : occupancy > 0 ? "up" : "unchanged"} ${Math.abs(occupancy * 100).toFixed(1)} points** versus ${prior.from} → ${prior.to}.`,
+        `- Current: ${pct(current.occupancy)} (${num(current.roomsSold)} rooms sold of ${num(current.capacity)}) · baseline: ${pct(baseline.occupancy)} (${num(baseline.roomsSold)} rooms sold of ${num(baseline.capacity)}).`,
+        "", "**What the imported data proves**", `- Rooms sold changed by ${rooms >= 0 ? "+" : ""}${num(rooms)}; room revenue changed by ${signedMoney(current.revenue - baseline.revenue)}; ADR changed by ${signedMoney(current.adr - baseline.adr, 2)}.`,
+        "", "**What still needs verification**", "- The data does not show whether the difference came from availability, rate restrictions, cancellations, out-of-order rooms, group business, or local demand.",
+        "", "**Ask the GM**", "1. Were rooms unavailable, out of order, or blocked in this period?", "2. Were rates or inventory restricted on any major channel?", "3. Which cancellations or group changes explain the room-night difference?",
+      ],
+    };
+  }
+
+  if (topic === "channels") {
+    const [currentRows, priorRows] = await Promise.all([
+      load("SourceDay", prop, range.from, range.to),
+      load("SourceDay", prop, prior.from, prior.to),
+    ]);
+    if (!currentRows.length) return { heading: "", lines: [], noData: "sources" };
+    if (!priorRows.length) return { heading: "", noData: null, interpretation: "Channel baseline unavailable", lines: [`**Channel revenue — ${prop.label} · ${fmtRange(range)}**`, `- Current Source Summary data is imported, but I cannot prove a change without ${prior.from} → ${prior.to}.`] };
+    const changes = largestChannelChanges(currentRows, priorRows);
+    return {
+      heading: "", noData: null, interpretation: "Channel revenue vs immediately preceding equal-length period",
+      lines: [
+        `**Channel change — ${prop.label} · ${fmtRange(range)}**`,
+        `- Compared with ${prior.from} → ${prior.to}: ${changes.length ? changes.map((item) => `${item.name} ${signedMoney(item.change)}`).join("; ") : "no channel revenue change"}.`,
+        "", "**What this proves**", "- These are reported channel-revenue differences, not proof that Expedia, Booking.com, or another channel caused the performance change.",
+        "", "**Ask the GM**", "1. Were rates and inventory open on each channel for the full period?", "2. Were there cancellations, channel outages, or mapping problems?", "3. What changed in direct, group, or walk-in demand?",
+      ],
+    };
+  }
+
+  if (topic === "refunds") {
+    const [currentRows, priorRows] = await Promise.all([
+      load("PaymentDay", prop, range.from, range.to),
+      load("PaymentDay", prop, prior.from, prior.to),
+    ]);
+    if (!currentRows.length) return { heading: "", lines: [], noData: "payments" };
+    if (!priorRows.length) return { heading: "", noData: null, interpretation: "Refund baseline unavailable", lines: [`**Refunds — ${prop.label} · ${fmtRange(range)}**`, `- Current refunds/adjustments are ${money(payTotals(currentRows).refunds)}. I need Payment Summary data for ${prior.from} → ${prior.to} to prove a change.`] };
+    const change = payTotals(currentRows).refunds - payTotals(priorRows).refunds;
+    return {
+      heading: "", noData: null, interpretation: "Refunds vs immediately preceding equal-length period",
+      lines: [`**Refunds & adjustments — ${prop.label}**`, `- Current: ${money(payTotals(currentRows).refunds)} · baseline: ${money(payTotals(priorRows).refunds)} · change: ${signedMoney(change)}.`, "", "**What still needs verification**", "- Payment totals do not identify the operational reason for each adjustment. Review the linked folios, authorizations, and manager approvals.", "", "**Ask the GM**", "1. Which folios caused the largest refunds or adjustments?", "2. Were they guest-service recoveries, duplicate charges, or processing corrections?", "3. Does each adjustment have approval and evidence?"],
+    };
+  }
+
+  if (topic === "expenses") {
+    const current = await loadProfitSnapshot(prop, range);
+    const baseline = await loadProfitSnapshot(prop, prior);
+    if (!current.occupancyRows.length) return { heading: "", lines: [], noData: "occupancy" };
+    return {
+      heading: "", noData: null, interpretation: "Costs vs immediately preceding equal-length period",
+      lines: [`**Costs — ${prop.label} · ${fmtRange(range)}**`, `- Payroll changed ${signedMoney(current.costs.payrollTotal - baseline.costs.payrollTotal)}; operating costs changed ${signedMoney(current.costs.operating - baseline.costs.operating)}.`, "", "**What still needs verification**", "- A total-cost change does not identify the underlying invoice, schedule, or one-time event. Review the supporting records before deciding a cause.", "", "**Ask the GM**", "1. Which invoices or labor shifts explain the change?", "2. Is it one-time or recurring?", "3. What owner, deadline, and evidence will close the exception?"],
+    };
+  }
+  return null;
+}
+
+async function intentOwnerBriefing({ prop, range }) {
+  const date = range.to;
+  const current = await loadProfitSnapshot(prop, { from: date, to: date });
+  if (!current.occupancyRows.length) return { heading: "", lines: [], noData: "occupancy" };
+  const prior = priorComparableRange(date, date);
+  const baseline = prior ? await loadProfitSnapshot(prop, prior) : null;
+  const lines = [
+    `**Owner briefing — ${prop.label} · ${date}**`,
+    `- Revenue ${money(current.occupancy.revenue)} · occupancy ${pct(current.occupancy.occupancy)} · ${num(current.occupancy.roomsSold)} rooms sold · ADR ${money(current.occupancy.adr, 2)}.`,
+    `- Refunds/adjustments ${money(current.payments.refunds)} · committed payroll ${money(current.costs.payrollTotal)} · operating costs ${money(current.costs.operating)}.`,
+    "", "**Attention items proven by imported data**",
+  ];
+  const attention = [];
+  if (baseline?.occupancyRows.length) {
+    const revenueChange = current.occupancy.revenue - baseline.occupancy.revenue;
+    const roomsChange = current.occupancy.roomsSold - baseline.occupancy.roomsSold;
+    const refundsChange = current.payments.refunds - baseline.payments.refunds;
+    if (revenueChange < 0) attention.push(`- Revenue is ${money(-revenueChange)} below the preceding imported day.`);
+    if (roomsChange < 0) attention.push(`- Rooms sold are ${Math.abs(roomsChange).toFixed(1)} below the preceding imported day.`);
+    if (refundsChange > 0) attention.push(`- Refunds/adjustments are ${money(refundsChange)} above the preceding imported day.`);
+  }
+  if (!attention.length) attention.push("- No day-over-day negative change can be proven from the imported baseline. This is not a claim that operations are problem-free.");
+  lines.push(...attention, "", "**Ask the GM today**");
+  lines.push("1. Which rooms were out of order, unavailable, or blocked today?");
+  lines.push("2. Did any channel have a rate, inventory, cancellation, or payment issue today?");
+  lines.push("3. What corrective action, owner, deadline, and evidence will close each exception?");
+  lines.push("", `**Data quality:** ${baseline?.occupancyRows.length ? "Compared with the preceding imported business day." : "No preceding-day occupancy baseline is imported."} The briefing cannot see incidents, maintenance, or rate changes unless those records are imported.`);
+  return { heading: "", lines, noData: null, interpretation: "Owner daily briefing" };
+}
+
 /**
  * Owner-style explanation for questions such as "why Monday money low Friday
  * high?" The answer is assembled from imported figures, not generated from an
@@ -954,14 +1143,24 @@ async function answerQuestion({ question, propertyId, from, to, allowedPropertyI
   const latest = await latestDate(allowedPropertyIds);
   const defaultFilter = propertyId && propertyId !== "all" ? propertyId : null;
 
-  const prop = await resolveProperty(q, defaultFilter, allowedPropertyIds);
+  // Property names must be resolved from the original wording. Operational typo
+  // normalization is intentionally never allowed to rewrite a property name.
+  const prop = await resolveProperty(input, defaultFilter, allowedPropertyIds);
   const range = resolveRange(q, { from, to, latestDate: latest, year: new Date().getFullYear() });
 
   const ctx = { prop, range, q, question: q, allowedPropertyIds };
+  const conversationTopic = topicFromQuestion(q);
 
   let result = null;
 
   result = await intentWhyWeekdayDifference(ctx);
+
+  if (!result && /\b(?:what(?:'s| is) wrong|owner briefing|ask (?:the )?gm|gm questions?)\b/i.test(q)) result = await intentOwnerBriefing(ctx);
+  if (!result && /\bwhy\b/i.test(q)) result = await intentWhyTopicChanged(ctx, conversationTopic);
+  // A short follow-up such as "why was it low?" inherits the confirmed date
+  // defaults supplied by the chat. Treat it as a money-kept explanation rather
+  // than returning an unrelated portfolio summary.
+  if (!result && /\bwhy\b/i.test(q) && (/\b(?:profit|money\s*(?:kept|low|high|down|up)|net\s*(?:income|profit))\b/i.test(q) || /\b(?:it|this|that)\b/i.test(q))) result = await intentWhyMoneyChanged(ctx);
 
   if (/\b(compare|versus|vs\.?|vs)\b/i.test(q)) {
     result = await intentCompare(ctx);
@@ -972,7 +1171,7 @@ async function answerQuestion({ question, propertyId, from, to, allowedPropertyI
     const has = (re) => re.test(q);
     if (has(/vacant|available/i)) result = await intentRooms(ctx);
     if (!result && has(/expense|spend|cost/i)) result = await intentExpenses(ctx);
-    if (!result && has(/profit/i)) result = await intentProfit(ctx);
+    if (!result && has(/profit|money\s+kept|net\s+(?:income|profit)/i)) result = await intentProfit(ctx);
     if (!result && has(/payment|refund|paid|received|tender/i)) result = await intentPayments(ctx);
     if (!result && has(/clerk|variance|short|over|audit/i)) result = await intentClerk(ctx);
     if (!result && has(/forecast|project|predict|next\s+week|next\s+month/i)) result = await intentForecast(ctx);
@@ -1016,6 +1215,15 @@ async function answerQuestion({ question, propertyId, from, to, allowedPropertyI
       single: range.single,
       interpretation: result.interpretation || null,
       corrections: normalized.corrections,
+      // Returned only as a UI convenience for the next question. It is not an
+      // access grant: base44Client derives the allowed properties from session.
+      context: {
+        propertyId: prop.isAll ? "all" : Array.from(prop.ids || []),
+        propertyLabel: prop.label,
+        from: range.from,
+        to: range.to,
+        topic: conversationTopic,
+      },
     },
   };
 }

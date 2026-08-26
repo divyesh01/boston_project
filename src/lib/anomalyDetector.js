@@ -1,3 +1,5 @@
+import { classifyRefund, REFUND_CLASSIFICATION } from "@/lib/refundClassification";
+
 // Automated financial anomaly & fraud detection engine.
 //
 // Pure, zero-dependency detection over normalized transaction rows (the shape
@@ -274,8 +276,6 @@ export const CLERK_THRESHOLDS = {
   microSkimMaxAmount: 20,         // under $20 is considered a micro-skim
   graveyardStart: 1,              // 01:00 AM
   graveyardEnd: 5,                // 05:00 AM
-  depositRefundAmount: 100,       // exactly $100 = likely deposit refund
-  depositRefundTolerance: 0.01,   // tolerance for floating point
 };
 
 const VAGUE_REASON_CODES = new Set([
@@ -314,12 +314,12 @@ function detectCashRefundSkimming(refunds, thresholds) {
   for (const r of refunds) {
     const pt = String(r.paymentTypeRefunded || "").toUpperCase().trim();
     const amt = Math.abs(Number(r.amount) || 0);
-    if (pt === "CASH" && amt >= min) {
+    if (pt === "CASH" && classifyRefund(r).kind !== REFUND_CLASSIFICATION.DEPOSIT_RETURN && amt >= min) {
       flags.push(clerkAlertFor(
         CLERK_ANOMALY_TYPES.CASH_REFUND_SKIMMING,
-        "Cash Refund / Deposit Skimming",
+        "Cash Refund Needs Review",
         "CRITICAL",
-        "Cash Refund / Deposit Skimming",
+        "Cash Refund Review",
         r,
         r.amount,
       ));
@@ -409,7 +409,7 @@ function detectMicroSkimming(refunds, thresholds) {
   for (const r of refunds) {
     const pt = String(r.paymentTypeRefunded || "").toUpperCase().trim();
     const amt = Math.abs(Number(r.amount) || 0);
-    if (pt === "CASH" && amt > 0 && amt <= thresholds.microSkimMaxAmount) {
+    if (pt === "CASH" && classifyRefund(r).kind !== REFUND_CLASSIFICATION.DEPOSIT_RETURN && amt > 0 && amt <= thresholds.microSkimMaxAmount) {
       const key = `${r.username || "?"}|${(r.date || "").slice(0, 10)}`;
       if (!buckets.has(key)) buckets.set(key, []);
       buckets.get(key).push(r);
@@ -440,7 +440,7 @@ function detectGraveyardCashGrabs(refunds, thresholds) {
   const flags = [];
   for (const r of refunds) {
     const pt = String(r.paymentTypeRefunded || "").toUpperCase().trim();
-    if (pt !== "CASH") continue;
+    if (pt !== "CASH" || classifyRefund(r).kind === REFUND_CLASSIFICATION.DEPOSIT_RETURN) continue;
     
     const hour = hourOfTime(r.time);
     if (hour === null || hour < thresholds.graveyardStart || hour >= thresholds.graveyardEnd) continue;
@@ -519,31 +519,37 @@ function detectRoundNumberFraud(rows) {
   return flags;
 }
 
-// Rule 10: Deposit Refund Detection
-// Exactly $100.00 refunds are typically deposit returns (guest gets deposit back)
-// Other amounts (79, 84, 107, etc.) are likely room rent adjustments
+// Rule 10: refund classification. A deposit note is evidence; an amount alone
+// is not. An unclear exact $100 stays visible for owner review.
 function detectDepositRefunds(refunds, thresholds) {
   const flags = [];
   for (const r of refunds) {
     const amt = Math.abs(Number(r.amount) || 0);
-    const isDepositRefund = Math.abs(amt - thresholds.depositRefundAmount) <= thresholds.depositRefundTolerance;
-    
-    if (isDepositRefund) {
+    const classification = classifyRefund(r);
+    if (classification.kind === REFUND_CLASSIFICATION.DEPOSIT_RETURN) {
       flags.push(clerkAlertFor(
         CLERK_ANOMALY_TYPES.DEPOSIT_REFUND,
-        "Deposit Refund Returned",
+        "Deposit Return (note confirmed)",
         "LOW",
         "Deposit Refund",
         r,
         r.amount,
       ));
-    } else if (amt > 0) {
-      // Room rent refund - flag for review
+    } else if (classification.kind === REFUND_CLASSIFICATION.ROOM_RENT_REFUND && amt > 0) {
       flags.push(clerkAlertFor(
         CLERK_ANOMALY_TYPES.ROOM_RENT_REFUND,
-        "Room Rent Refund",
+        classification.label,
         "MEDIUM",
         "Room Rent Refund",
+        r,
+        r.amount,
+      ));
+    } else if (amt > 0) {
+      flags.push(clerkAlertFor(
+        "refund_needs_review",
+        "Refund Needs Classification",
+        "MEDIUM",
+        "Unclear Refund",
         r,
         r.amount,
       ));
@@ -565,8 +571,11 @@ function buildClerkRiskScores(flaggedAnomalies, adjustments, refunds, thresholds
         totalCashRefunded: 0,
         totalDepositRefunds: 0,
         totalRoomRentRefunds: 0,
+        totalNeedsReviewRefunds: 0,
+        totalCashRoomRentRefunds: 0,
         depositRefundCount: 0,
         roomRentRefundCount: 0,
+        needsReviewRefundCount: 0,
         riskLevel: "LOW",
         behaviorAnalysis: "",
       });
@@ -592,17 +601,20 @@ function buildClerkRiskScores(flaggedAnomalies, adjustments, refunds, thresholds
       const u = ensure(r.username);
       const amt = Math.abs(Number(r.amount) || 0);
       u.totalRefundedAmount += amt;
-      if (String(r.paymentTypeRefunded || "").toUpperCase().trim() === "CASH") {
+      const classification = classifyRefund(r);
+      if (classification.isCash) {
         u.totalCashRefunded += amt;
       }
-      // Classify as deposit refund ($100) or room rent refund (other amounts)
-      const isDepositRefund = Math.abs(amt - thresholds.depositRefundAmount) <= thresholds.depositRefundTolerance;
-      if (isDepositRefund) {
+      if (classification.kind === REFUND_CLASSIFICATION.DEPOSIT_RETURN) {
         u.totalDepositRefunds += amt;
         u.depositRefundCount += 1;
-      } else if (amt > 0) {
+      } else if (classification.kind === REFUND_CLASSIFICATION.ROOM_RENT_REFUND && amt > 0) {
         u.totalRoomRentRefunds += amt;
         u.roomRentRefundCount += 1;
+        if (classification.isCash) u.totalCashRoomRentRefunds += amt;
+      } else if (amt > 0) {
+        u.totalNeedsReviewRefunds += amt;
+        u.needsReviewRefundCount += 1;
       }
     }
   }
@@ -614,6 +626,8 @@ function buildClerkRiskScores(flaggedAnomalies, adjustments, refunds, thresholds
     score.totalCashRefunded = round2(score.totalCashRefunded);
     score.totalDepositRefunds = round2(score.totalDepositRefunds);
     score.totalRoomRentRefunds = round2(score.totalRoomRentRefunds);
+    score.totalNeedsReviewRefunds = round2(score.totalNeedsReviewRefunds);
+    score.totalCashRoomRentRefunds = round2(score.totalCashRoomRentRefunds);
     
     let cashRatio = 0;
     if (score.totalRefundedAmount > 0) {
@@ -624,7 +638,7 @@ function buildClerkRiskScores(flaggedAnomalies, adjustments, refunds, thresholds
     // AI Behavior string generation
     let insights = [];
     if (cashRatio > 0.8 && score.totalCashRefunded > 100) {
-      insights.push(`Highly abnormal cash refund ratio (${Math.round(cashRatio * 100)}%). Probable cash skimming.`);
+      insights.push(`High cash-refund ratio (${Math.round(cashRatio * 100)}%). Review folios and approvals.`);
     }
     if (score.totalFlags >= thresholds.highRiskFlagCount) {
       insights.push(`Frequent flagged behavior.`);
@@ -634,14 +648,17 @@ function buildClerkRiskScores(flaggedAnomalies, adjustments, refunds, thresholds
     }
     // Deposit vs Room Rent analysis
     if (score.depositRefundCount > 0) {
-      insights.push(`${score.depositRefundCount} deposit refund(s) totaling ${round2(score.totalDepositRefunds).toFixed(2)} — likely legitimate guest deposit returns.`);
+      insights.push(`${score.depositRefundCount} deposit return(s) totaling ${round2(score.totalDepositRefunds).toFixed(2)} — confirmed by refund notes.`);
     }
     if (score.roomRentRefundCount > 0) {
       insights.push(`${score.roomRentRefundCount} room rent refund(s) totaling ${round2(score.totalRoomRentRefunds).toFixed(2)} — review for rate disputes or comps.`);
     }
+    if (score.needsReviewRefundCount > 0) {
+      insights.push(`${score.needsReviewRefundCount} refund(s) totaling ${round2(score.totalNeedsReviewRefunds).toFixed(2)} need classification; amount alone is not proof.`);
+    }
     // High room rent refund ratio could indicate issues
     if (score.roomRentRefundCount > 3 && score.totalRoomRentRefunds > 200) {
-      insights.push(`High volume of room rent refunds — possible rate override abuse.`);
+      insights.push(`High volume of room-rent refunds — review supporting folios and approvals.`);
     }
     
     score.behaviorAnalysis = insights.length > 0 ? insights.join(" ") : "Normal behavior baseline.";

@@ -1,9 +1,10 @@
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect, useRef } from "react";
 import { money2 } from "@/lib/hotel";
 import { AlertTriangle, DollarSign, UserX, FileWarning, X, ChevronUp, ChevronDown, CheckCircle2, TrendingUp, Sparkles, Clock, LogOut } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { classifyRefund, REFUND_CLASSIFICATION } from "@/lib/refundClassification";
 import { filterAuditRefunds, REFUND_FILTERS_DEFAULT, refundFilterTotal } from "@/lib/refundAuditFilters";
+import { clampAuditDrawerWidth, DEFAULT_AUDIT_DRAWER_WIDTH } from "@/lib/auditDrawerResize";
 
 export default function ClerkAuditMatrix({ 
   flaggedAnomalies = [], 
@@ -12,6 +13,8 @@ export default function ClerkAuditMatrix({
   refunds = [] 
 }) {
   const [selectedClerk, setSelectedClerk] = useState(null);
+  const [auditDrawerWidth, setAuditDrawerWidth] = useState(null);
+  const drawerResizeStart = useRef(null);
   const [sortConfig, setSortConfig] = useState({ key: 'severityScore', direction: 'desc' });
   
   // Refunds Ledger: payment method filter + two-tier amount sorting
@@ -22,6 +25,35 @@ export default function ClerkAuditMatrix({
   const [adjReasonFilter, setAdjReasonFilter] = useState('ALL'); // 'ALL' | 'AR_BILLING' | 'HOSPITALITY'
   const [adjMethodFilter, setAdjMethodFilter] = useState('ALL'); // 'ALL' | 'DIRECT_BILL' | 'CARD' | 'CASH'
   const [hideZeroAdj, setHideZeroAdj] = useState(false);
+
+  const setClampedAuditDrawerWidth = (width) => {
+    setAuditDrawerWidth(clampAuditDrawerWidth(width, window.innerWidth));
+  };
+
+  const startDrawerResize = (event) => {
+    event.preventDefault();
+    const startWidth = auditDrawerWidth ?? clampAuditDrawerWidth(DEFAULT_AUDIT_DRAWER_WIDTH, window.innerWidth);
+    drawerResizeStart.current = { x: event.clientX, width: startWidth };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
+  const resizeDrawer = (event) => {
+    if (!drawerResizeStart.current) return;
+    const { x, width } = drawerResizeStart.current;
+    setClampedAuditDrawerWidth(width + (x - event.clientX));
+  };
+
+  const stopDrawerResize = (event) => {
+    drawerResizeStart.current = null;
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const resizeDrawerWithKeyboard = (event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const width = auditDrawerWidth ?? clampAuditDrawerWidth(DEFAULT_AUDIT_DRAWER_WIDTH, window.innerWidth);
+    setClampedAuditDrawerWidth(width + (event.key === 'ArrowLeft' ? 80 : -80));
+  };
 
   function getAdjustmentMethodCode(row) {
     const str = [row.transactionType, row.chargeType, row.reasonCode, row.remarks]
@@ -449,8 +481,27 @@ export default function ClerkAuditMatrix({
               animate={{ x: 0, opacity: 1 }} 
               exit={{ x: '100%', opacity: 0.5 }}
               transition={{ type: "spring", bounce: 0, duration: 0.4 }}
-              className="fixed inset-y-0 right-0 z-50 w-full max-w-3xl bg-[#0F1F35] border-l border-white/10 shadow-[-20px_0_50px_rgba(0,0,0,0.5)] flex flex-col"
+              style={{ width: auditDrawerWidth ? `${auditDrawerWidth}px` : 'min(48rem, calc(100vw - 1rem))' }}
+              className="fixed inset-y-0 right-0 z-50 max-w-none bg-[#0F1F35] border-l border-white/10 shadow-[-20px_0_50px_rgba(0,0,0,0.5)] flex flex-col"
             >
+              <div
+                role="slider"
+                aria-label="Resize audit drawer"
+                aria-orientation="vertical"
+                aria-valuemin={600}
+                aria-valuemax={typeof window === 'undefined' ? undefined : Math.max(0, window.innerWidth - 16)}
+                aria-valuenow={auditDrawerWidth ?? DEFAULT_AUDIT_DRAWER_WIDTH}
+                tabIndex={0}
+                onPointerDown={startDrawerResize}
+                onPointerMove={resizeDrawer}
+                onPointerUp={stopDrawerResize}
+                onPointerCancel={stopDrawerResize}
+                onKeyDown={resizeDrawerWithKeyboard}
+                title="Drag left for more space. Use Left and Right arrow keys after focusing."
+                className="absolute inset-y-0 -left-3 z-10 hidden w-6 cursor-col-resize items-center justify-center touch-none lg:flex focus:outline-none"
+              >
+                <span className="h-16 w-1 rounded-full bg-cyan-400/60 shadow-[0_0_10px_rgba(34,211,238,0.45)] transition-colors hover:bg-cyan-300" />
+              </div>
               {/* Header */}
               <div className="flex items-center justify-between px-8 py-6 border-b border-white/10 bg-[#0A1628]">
                 <div>

@@ -653,4 +653,12 @@ B4 sweep, and `:103` pulls `property` from `useGlobalFilters` for display. Not a
 `useUploads` and `useProperties` are property-agnostic on purpose. No code change was made
 for any of this, deliberately.
 
+## 18. Clerk Audit drawer width
+
+The selected-clerk audit drawer is anchored to the right of the viewport but is resizable
+from its left edge. Dragging left gives the owner more room for folio evidence and refund
+classification; dragging right makes the panel narrower. Arrow Left and Arrow Right work on
+the focused resize handle. Width is clamped to a readable minimum and the available viewport,
+so it cannot be dragged off-screen.
+
 ---

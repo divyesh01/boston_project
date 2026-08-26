@@ -65,7 +65,10 @@ export function priorComparableRange(from, to) {
   const start = new Date(`${from}T12:00:00`);
   const end = new Date(`${to}T12:00:00`);
   if (Number.isNaN(start.valueOf()) || Number.isNaN(end.valueOf()) || end < start) return null;
-  const days = Math.round((end - start) / 86400000) + 1;
+  // Date subtraction is accepted by JavaScript but rejected by the project's
+  // JavaScript typecheck. Millisecond values make the calendar calculation
+  // explicit and keep CI aligned with the runtime.
+  const days = Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
   const shift = (date, amount) => {
     const result = new Date(date);
     result.setDate(result.getDate() + amount);

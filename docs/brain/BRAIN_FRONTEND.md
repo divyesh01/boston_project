@@ -659,6 +659,9 @@ The selected-clerk audit drawer is anchored to the right of the viewport but is 
 from its left edge. Dragging left gives the owner more room for folio evidence and refund
 classification; dragging right makes the panel narrower. Arrow Left and Arrow Right work on
 the focused resize handle. Width is clamped to a readable minimum and the available viewport,
-so it cannot be dragged off-screen.
+so it cannot be dragged off-screen. Each refund row wraps — rather than truncates — its full
+classification explanation and every available imported evidence field (remarks, refund code,
+payment detail, reason code, and charge type). If the source record itself contains only a
+short value, the UI states that limitation instead of inventing a fuller note.
 
 ---

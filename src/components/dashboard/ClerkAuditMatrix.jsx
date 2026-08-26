@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect, useRef } from "react";
 import { money2 } from "@/lib/hotel";
 import { AlertTriangle, DollarSign, UserX, FileWarning, X, ChevronUp, ChevronDown, CheckCircle2, TrendingUp, Sparkles, Clock, LogOut } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { classifyRefund, REFUND_CLASSIFICATION } from "@/lib/refundClassification";
+import { classifyRefund, REFUND_CLASSIFICATION, refundEvidenceText } from "@/lib/refundClassification";
 import { filterAuditRefunds, REFUND_FILTERS_DEFAULT, refundFilterTotal } from "@/lib/refundAuditFilters";
 import { clampAuditDrawerWidth, DEFAULT_AUDIT_DRAWER_WIDTH } from "@/lib/auditDrawerResize";
 
@@ -772,6 +772,7 @@ export default function ClerkAuditMatrix({
                           const rows = processedRefunds.map((ref, i) => {
                             const isFlagged = flaggedAnomalies.some(f => f.transaction === ref || (f.username === ref.username && f.date === ref.date && f.time === ref.time && f.amount === ref.amount));
                             const classification = ref.refundClassification || classifyRefund(ref);
+                            const sourceEvidence = refundEvidenceText(ref);
                             const isCash = classification.isCash;
                             const isCashRoomRent = isCash && classification.kind === REFUND_CLASSIFICATION.ROOM_RENT_REFUND;
                             return (
@@ -784,9 +785,9 @@ export default function ClerkAuditMatrix({
                                 <td className="px-5 py-3">
                                   <div className={`font-bold mb-1 text-[11px] uppercase tracking-wider ${isCash ? 'text-amber-400' : 'text-slate-400'}`}>{ref.paymentTypeRefunded}</div>
                                   <div className={`mb-1 text-[10px] font-bold uppercase tracking-wider ${classification.kind === REFUND_CLASSIFICATION.DEPOSIT_RETURN ? 'text-[#00E096]' : classification.kind === REFUND_CLASSIFICATION.NEEDS_REVIEW ? 'text-[#FFB547]' : isCashRoomRent ? 'text-[#FF6B6B]' : 'text-[#FF9F7A]'}`}>{isCashRoomRent ? 'Cash · ' : ''}{classification.label}</div>
-                                  <div className="text-slate-300 text-xs mb-1">{ref.refundCode}</div>
-                                  <div className="text-slate-500 text-[11px] leading-tight max-w-[200px] truncate" title={classification.reason}>{classification.reason}</div>
-                                  <div className="text-slate-600 text-[10px] leading-tight max-w-[200px] truncate" title={ref.remarks}>{ref.remarks || 'No remarks'}</div>
+                                  <div className="text-slate-200 text-xs mb-1 whitespace-normal break-words">{ref.refundCode || 'No refund code'}</div>
+                                  <div className="text-slate-400 text-[11px] leading-relaxed whitespace-normal break-words"><span className="font-semibold text-slate-300">Classification:</span> {classification.reason}</div>
+                                  <div className="mt-1 text-slate-300 text-[11px] leading-relaxed whitespace-normal break-words"><span className="font-semibold text-slate-200">Source evidence:</span> {sourceEvidence || 'No note or reason was included in the imported folio record.'}</div>
                                 </td>
                                 <td className="px-5 py-3 text-right font-mono text-slate-200 whitespace-nowrap">
                                   {money2(ref.amount)}

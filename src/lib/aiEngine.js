@@ -3,6 +3,7 @@ import { formatNumber, sumCents, fromCents } from "@/lib/decimal";
 import { refundTotal } from "@/lib/paymentNorm";
 import { filterCommittedPay } from "@/lib/payrollCalc";
 import { getDailyAggregates, buildSyntheticRows } from "@/lib/dailyAggregates";
+import { normalizeOwnerQuestion, requestedWeekdays, weekdayPerformanceAnalysis } from "@/lib/ownerAnalysis";
 
 const MONTH_NAMES = [
   "january", "february", "march", "april", "may", "june",
@@ -675,6 +676,59 @@ async function intentProfit({ prop, range }) {
   };
 }
 
+/**
+ * Owner-style explanation for questions such as "why Monday money low Friday
+ * high?" The answer is assembled from imported figures, not generated from an
+ * LLM. Channel changes are reported as facts; operational reasons are explicitly
+ * labelled as checks because this dataset does not prove rate/inventory decisions.
+ */
+async function intentWhyWeekdayDifference({ prop, range, question }) {
+  const weekdays = requestedWeekdays(question);
+  if (weekdays.length < 2 || !/\bwhy\b/i.test(question)) return null;
+  const [firstDay, secondDay] = weekdays;
+  const occupancyRows = await load("OccupancyDay", prop, range.from, range.to) || [];
+  const sourceRows = await load("SourceDay", prop, range.from, range.to) || [];
+  const paymentRows = await load("PaymentDay", prop, range.from, range.to) || [];
+  const analysis = weekdayPerformanceAnalysis({ occupancyRows, sourceRows, paymentRows, firstDay, secondDay });
+  if (!analysis.available) return { heading: "", lines: [], noData: "occupancy" };
+
+  const { first, second, delta } = analysis;
+  const direction = delta.revenue >= 0 ? "higher" : "lower";
+  const evidence = [
+    `**Answer:** ${secondDay} averaged **${money(Math.abs(delta.revenue))} ${direction}** room revenue than ${firstDay}. The imported data shows ${Math.abs(delta.rooms).toFixed(1)} ${delta.rooms >= 0 ? "more" : "fewer"} rooms sold and an ADR ${delta.adr >= 0 ? "increase" : "decrease"} of ${money(Math.abs(delta.adr), 2)}.`,
+    "",
+    `**The numbers — average per matching business day**`,
+    `- ${firstDay} (${analysis.firstDates} imported day${analysis.firstDates === 1 ? "" : "s"}): revenue ${money(first.revenue)}, occupancy ${pct(first.occupancy)}, ${num(first.rooms)} rooms sold, ADR ${money(first.adr, 2)}`,
+    `- ${secondDay} (${analysis.secondDates} imported day${analysis.secondDates === 1 ? "" : "s"}): revenue ${money(second.revenue)}, occupancy ${pct(second.occupancy)}, ${num(second.rooms)} rooms sold, ADR ${money(second.adr, 2)}`,
+    "",
+    "**What the data proves**",
+  ];
+
+  evidence.push(`- Rooms sold: ${delta.rooms >= 0 ? "+" : ""}${num(delta.rooms)} · occupancy: ${delta.occupancy >= 0 ? "+" : ""}${(delta.occupancy * 100).toFixed(1)} points · ADR: ${signedMoney(delta.adr, 2)}.`);
+  if (analysis.sourceDataAvailable) {
+    const channelLines = analysis.channels.slice(0, 3).filter((channel) => Math.abs(channel.change) > 0);
+    if (channelLines.length) {
+      evidence.push(`- Channel contribution: ${channelLines.map((channel) => `${channel.name} ${signedMoney(channel.change)}`).join("; ")} per matching day.`);
+    } else {
+      evidence.push("- Source-report data is present, but no channel contribution changed between these weekdays.");
+    }
+  } else {
+    evidence.push("- I cannot confirm an Expedia, Booking.com, or direct-booking effect because no Source Summary data is imported for these weekdays.");
+  }
+  if (analysis.refundDataAvailable && Math.abs(delta.refunds) > 0.005) {
+    evidence.push(`- Refunds/adjustments changed by ${signedMoney(delta.refunds)} per matching day.`);
+  }
+
+  evidence.push("", "**What still needs verification**");
+  evidence.push("- Lower channel revenue does not prove a channel failed. Check availability, rate parity, cancellations, closed inventory, and local demand before assigning a cause.");
+  evidence.push("", "**Ask the GM**");
+  evidence.push(`1. Were any rooms out of order or unavailable on ${firstDay}?`);
+  evidence.push(`2. Were Expedia, Booking.com, or direct rates/inventory restricted on ${firstDay}?`);
+  evidence.push(`3. What explains the ${Math.abs(delta.rooms).toFixed(1)}-room difference between ${firstDay} and ${secondDay}?`);
+  evidence.push("", `**Data quality:** Occupancy data is available for ${analysis.firstDates} ${firstDay} and ${analysis.secondDates} ${secondDay} business day${analysis.firstDates === 1 && analysis.secondDates === 1 ? "" : "s"} in ${fmtRange(range)}. ${analysis.sourceDataAvailable ? "Channel data is included." : "Channel data is missing."}`);
+  return { heading: "", lines: evidence, noData: null, interpretation: `${firstDay} vs ${secondDay} weekday comparison` };
+}
+
 async function intentPayments({ prop, range }) {
   const rows = await load("PaymentDay", prop, range.from, range.to) || [];
   if (!rows.length) return { heading: "", lines: [], noData: "payments" };
@@ -892,7 +946,9 @@ async function intentCompare({ prop, range, q, question, allowedPropertyIds }) {
 }
 
 async function answerQuestion({ question, propertyId, from, to, allowedPropertyIds = null }) {
-  const q = String(question || "").trim();
+  const input = String(question || "").trim();
+  const normalized = normalizeOwnerQuestion(input);
+  const q = normalized.normalized.trim();
   if (!q) return { answer: "Please ask a question about your hotel data.", summary: null };
 
   const latest = await latestDate(allowedPropertyIds);
@@ -904,6 +960,8 @@ async function answerQuestion({ question, propertyId, from, to, allowedPropertyI
   const ctx = { prop, range, q, question: q, allowedPropertyIds };
 
   let result = null;
+
+  result = await intentWhyWeekdayDifference(ctx);
 
   if (/\b(compare|versus|vs\.?|vs)\b/i.test(q)) {
     result = await intentCompare(ctx);
@@ -956,6 +1014,8 @@ async function answerQuestion({ question, propertyId, from, to, allowedPropertyI
       property: prop.label,
       range: range.label || `${range.from}→${range.to}`,
       single: range.single,
+      interpretation: result.interpretation || null,
+      corrections: normalized.corrections,
     },
   };
 }

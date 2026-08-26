@@ -10,16 +10,14 @@ import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { getDailyAggregates, buildSyntheticRows } from "@/lib/dailyAggregates";
 
 const SUGGESTIONS = [
-  "Show today's executive summary",
-  "What was my ADR in March for RRI1416?",
-  "Show Middleboro on April 26, 2026",
-  "How many rooms were sold and vacant this week?",
-  "How much revenue did Expedia generate this month?",
-  "Which OTA generated the most revenue?",
-  "What were today's payments and refunds?",
-  "Which clerk had the largest cash variance?",
-  "What were last week's expenses?",
-  "Compare March vs April",
+  "What is wrong today?",
+  "Why Monday money low and Friday high?",
+  "Why is money kept down this week?",
+  "Did Expedia or Booking.com bring less revenue than usual?",
+  "Are payments and refunds unusual?",
+  "Which clerk has the largest cash variance?",
+  "What should I ask the GM today?",
+  "Compare this month with last month",
 ];
 
 export default function AIAssistant() {
@@ -56,7 +54,7 @@ export default function AIAssistant() {
         busyRef.current = false;
         return;
       }
-    } catch (e) {
+    } catch {
       setMessages((prev) => [...prev, { role: "assistant", text: "Rate limiter check failed. Please try again." }]);
       setLoading(false);
       busyRef.current = false;
@@ -140,8 +138,8 @@ export default function AIAssistant() {
                   <Bot className="h-4 w-4 text-white" />
                 </div>
                 <div>
-                  <p className="text-sm font-semibold text-white">AI Assistant</p>
-                  <p className="text-[10px] text-slate-500">Local database · No internet needed</p>
+                  <p className="text-sm font-semibold text-white">Owner Analyst</p>
+                  <p className="text-[10px] text-slate-500">Imported data only · explains, never guesses</p>
                 </div>
               </div>
               <button onClick={() => setOpen(false)} aria-label="Close" className="text-slate-400 hover:text-white">
@@ -154,7 +152,7 @@ export default function AIAssistant() {
               {messages.length === 0 && (
                 <div className="space-y-3">
                   <div className="rounded-xl bg-[#0A1628]/60 p-3">
-                    <p className="text-sm text-slate-300">👋 Ask me anything about your hotel data. I can answer questions about revenue, occupancy, payments, expenses, and more.</p>
+                    <p className="text-sm text-slate-300">👋 Ask in your own words—even with small spelling mistakes. I show the numbers, what they prove, what still needs checking, and questions for the GM.</p>
                   </div>
                   <p className="text-xs text-slate-500">Try asking:</p>
                   {SUGGESTIONS.map((s) => (
@@ -197,6 +195,8 @@ export default function AIAssistant() {
                             <span className="rounded-full bg-[#6C63FF]/10 px-2 py-0.5 text-[#9B8CFF]">{msg.summary.property}</span>
                             <span className="rounded-full bg-white/5 px-2 py-0.5">{msg.summary.range}</span>
                             {msg.summary.single && <span className="rounded-full bg-[#00D4FF]/10 px-2 py-0.5 text-[#00D4FF]">Daily</span>}
+                            {msg.summary.interpretation && <span className="rounded-full bg-[#00E096]/10 px-2 py-0.5 text-[#00E096]">{msg.summary.interpretation}</span>}
+                            {msg.summary.corrections?.length > 0 && <span className="rounded-full bg-[#FFB020]/10 px-2 py-0.5 text-[#FFB020]">Understood: {msg.summary.corrections.map((c) => c.to).join(", ")}</span>}
                           </div>
                         )}
                         {msg.summary && msg.summary.intent === "missing" && (
@@ -230,7 +230,7 @@ export default function AIAssistant() {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") handleAsk(input); }}
-                  placeholder="Ask about revenue, occupancy, payments…"
+                  placeholder="Ask why money is low, channel revenue, cash…"
                   className="flex-1 rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]"
                   disabled={loading}
                 />

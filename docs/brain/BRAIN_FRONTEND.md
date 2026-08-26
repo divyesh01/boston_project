@@ -1,5 +1,28 @@
 # 4. ALL 34 PAGES (What Users See)
 
+## Owner Analyst: grounded financial answers
+
+`src/components/AIAssistant.jsx` is an owner-facing analyst surface in the
+standalone deployment. It calls the local `answerQuestion` path; it must never
+claim that an external AI model inspected the data. The assistant can explain
+revenue, occupancy, ADR, RevPAR, payments, refunds, expenses, payroll, channels
+and clerk variance from imported records only.
+
+For questions such as “why Monday money low Friday high?”,
+`src/lib/ownerAnalysis.js` computes a deterministic weekday comparison before
+the response is rendered. It shows average matching business days, rooms sold,
+occupancy, ADR, channel contribution and available refund evidence. A channel
+revenue change is a fact; rate parity, inventory, cancellations and local demand
+are **verification questions**, never asserted causes unless corresponding data
+exists. The standard response order is: direct answer, numbers, proven drivers,
+what still needs verification, GM questions, and data-quality statement.
+
+Small spelling mistakes are corrected only against a narrow hotel vocabulary
+(for example `mony` → `money`, `fridy` → `friday`). Do not fuzzy-correct dates,
+dollar amounts, or property names. The UI exposes the interpretation/correction
+so an owner can catch a misunderstanding. Regression coverage lives in
+`src/lib/ownerAnalysis.test.js`.
+
 Every page in the app, what it does, and what files it depends on. The count is the
 number of rows below, verified against `src/pages/*.jsx` (excluding `*.test.jsx`):
 34 on disk, 34 documented, no drift in either direction. This heading read "36" until

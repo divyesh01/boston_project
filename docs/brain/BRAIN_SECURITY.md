@@ -87,6 +87,44 @@ Rules that are easy to break by accident:
 | `accountant` | Financial data only | View-only financial reports |
 | `read_only` | Limited dashboard only | View-only, no actions |
 
+### Standalone Local Administration (Cloudflare deployment)
+
+The deployed standalone build intentionally sets `VITE_USE_LOCAL_AUTH=true` and
+`VITE_STANDALONE_LOCAL=true`. In that mode, `src/api/base44Client.js` implements
+the user-administration contract locally because the retired Base44 functions are
+not the runtime path. This is a **consistency and operator-safety control**, not a
+network security boundary: Cloudflare Access must protect the Worker, and a person
+with developer tools on an admitted device can alter browser-resident data.
+
+Rules that must remain true in `handleLocalUserAdmin`:
+
+- `list`, `search`, and `getById` require an authenticated `owner` or `admin`.
+  A front-desk or other non-admin account must never receive the local roster.
+- Create and update validate username, email, role, duplicate username/email, and
+  password strength before writing IndexedDB. Roles are limited to the local role
+  defaults plus the compatibility `user` role.
+- There must always be one active owner. A different administrator cannot demote,
+  disable, lock, or delete the final active owner; an actor also cannot disable or
+  lock their own account through the administrative status action.
+- Public user responses are an explicit allowlist. Never return password hashes,
+  salts, MFA secrets, reset-token material, or session metadata from local user
+  operations.
+- An administrator reset/set-password action broadcasts `SESSION_REVOKED` for the
+  target user. If the target is the actor, clear that local session too. A normal
+  own-password change keeps the initiating tab alive but revokes the user's other
+  tabs through `sessionChannel.js`.
+
+The matching remote `custom_user_admin` function may expose only two actionable
+authentication errors: a password-policy message beginning `Password must ` and
+`Current password is incorrect.` All other client responses are the fixed strings
+`Forbidden.` or `Request could not be completed.` Internal error text belongs only
+in server logs.
+
+Regression coverage: `src/api/authLocal.test.js`,
+`scripts/test_bulletproof_auth.mjs`, `scripts/test_realtime_revocation.mjs`, and
+`scripts/probe-auth-hardening.mjs`. If this contract changes, update these tests
+and this section in the same change.
+
 ### Row-Level Security (RLS) -- The Second, Independent Boundary
 
 RBAC above is enforced in the CLIENT (`src/lib/permissions.js`). RLS is enforced by the

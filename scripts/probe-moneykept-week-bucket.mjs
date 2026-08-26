@@ -72,5 +72,5 @@ if (eastOfUtc) {
   eq("OLD agrees with NEW west of UTC (bug dormant here)", oldWeekKey("2026-02-04"), newWeekKey("2026-02-04"));
 }
 
-console.log(`\n${fail === 0 ? "GREEN" : "RED"}  ${pass} passed, ${fail} failed`);
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

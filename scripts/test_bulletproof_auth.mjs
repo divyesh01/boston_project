@@ -120,6 +120,10 @@ async function run() {
 
   const { ownerId, victimId } = await seedUsers();
   const ownerActor = { id: ownerId, role: 'owner' };
+  const setVictimStatus = async (status) => {
+    await db.auth.login('boss', 'S3cure!Pass');
+    return db.users.setStatus(ownerActor, victimId, status);
+  };
 
   // ══════════════════════════════════════════════════════════════
   // TEST GROUP 1: Cross-tab broadcast revocation
@@ -127,7 +131,9 @@ async function run() {
   console.log('=== Test 1: Cross-tab instant revocation via BroadcastChannel ===');
 
   // Tab B (the victim's open tab) subscribes and is watching.
-  const tabB = createTab('TabB', null, 'staff');
+  // The harness has one shared storage object, so pin Tab B to the victim
+  // instead of deriving its identity from Tab A's owner session.
+  const tabB = createTab('TabB', victimId, 'staff');
   const unsubB = subscribeSessionRevoked((m) => tabB.handleRevocation(m));
 
   // Victim logs in -> active session exists in shared storage.
@@ -136,7 +142,7 @@ async function run() {
   assert((await db.auth.isAuthenticated()) === true, 'isAuthenticated() true before revocation');
 
   // Tab A (admin) disables the victim -> emits SESSION_REVOKED for victim.
-  await db.users.setStatus(ownerActor, victimId, 'disabled');
+  await setVictimStatus('disabled');
   await new Promise((r) => setTimeout(r, 50)); // let the broadcast deliver
 
   assert((await db.auth.getCurrentSession()) === null, 'Session cleared instantly (no 30s poll wait)');
@@ -155,20 +161,20 @@ async function run() {
   }
 
   // Re-enable + re-login for the remaining scenarios.
-  await db.users.setStatus(ownerActor, victimId, 'enabled');
+  await setVictimStatus('enabled');
   await db.auth.login('staff', 'S3cure!Pass');
 
   // ── Locked scenario ──
   console.log('\n=== Test 2: Cross-tab revocation for LOCKED account ===');
   tabB.restricted = null;
-  await db.users.setStatus(ownerActor, victimId, 'locked');
+  await setVictimStatus('locked');
   await new Promise((r) => setTimeout(r, 50));
   assert((await db.auth.getCurrentSession()) === null, 'Session cleared instantly (locked)');
   assert(tabB.restricted === 'locked', `Restricted banner state is 'locked' (${tabB.restricted})`);
 
   // ── SESSION_REVOKED_ALL broadcast form ──
   console.log('\n=== Test 3: SESSION_REVOKED_ALL revokes every open tab ===');
-  await db.users.setStatus(ownerActor, victimId, 'unlocked');
+  await setVictimStatus('unlocked');
   await db.auth.login('staff', 'S3cure!Pass');
   tabB.restricted = null;
   postSessionRevoked({ type: 'SESSION_REVOKED_ALL', targetUserId: null, reason: 'Admin revoked all sessions' });
@@ -178,7 +184,7 @@ async function run() {
 
   // ── Non-matching targetUserId is ignored ──
   console.log('\n=== Test 4: Broadcast for a different user is ignored ===');
-  await db.users.setStatus(ownerActor, victimId, 'unlocked');
+  await setVictimStatus('unlocked');
   await db.auth.login('staff', 'S3cure!Pass');
   const otherId = victimId + 9999;
   postSessionRevoked({ type: 'SESSION_REVOKED', targetUserId: otherId, status: 'disabled', reason: 'Someone else got disabled' });

@@ -322,7 +322,7 @@ export default async function (req) {
 
   } catch (err) {
     console.error("Audit verify error:", err);
-    return Response.json({ valid: false, error: err?.message || "Internal server error", source: "server" }, { status: 500 });
+    return Response.json({ valid: false, error: "Internal server error", source: "server" }, { status: 500 });
   }
 }
 

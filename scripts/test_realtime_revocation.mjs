@@ -31,6 +31,7 @@ if (globalThis.navigator === undefined) {
 const { db, browserHashPassword } = await import('@/api/base44Client');
 const localDb = (await import('@/api/localDb')).default;
 const { generateSalt } = await import('@/lib/security.js');
+const { secureStore } = await import('@/lib/securityUtils');
 const { hasAllPropertyAccess } = await import('@/lib/launchPolicy');
 
 let pass = 0;
@@ -104,6 +105,16 @@ async function run() {
 
   const { ownerId, targetId } = await seedUsers();
   const ownerActor = { id: ownerId, role: 'owner' };
+  const setTargetStatus = async (status) => {
+    await db.auth.login('owner', 'S3cure!Pass');
+    return db.users.setStatus(ownerActor, targetId, status);
+  };
+  const restoreTargetSession = async () => {
+    await secureStore('rr_local_session', JSON.stringify({
+      userId: targetId,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }));
+  };
 
   // ── Scenario 1: Active session validates OK ──
   console.log('=== Test 1: Active session remains valid ===');
@@ -120,7 +131,8 @@ async function run() {
   console.log('\n=== Test 2: Admin disables account -> instant revocation ===');
   const login2 = await db.auth.login('clerk', 'S3cure!Pass');
   assert(!!login2?.user, 'Login succeeds (Active)');
-  await db.users.setStatus(ownerActor, targetId, 'disabled'); // Users.jsx real action
+  await setTargetStatus('disabled'); // Users.jsx real action
+  await restoreTargetSession();
   const r2 = await validateCurrentAccountStatus();
   // The security property: the session must stop validating. That is what these
   // assert, and it holds.
@@ -146,10 +158,11 @@ async function run() {
 
   // ── Scenario 3: Locked account revoked instantly ──
   console.log('\n=== Test 3: Admin locks account -> instant revocation ===');
-  await db.users.setStatus(ownerActor, targetId, 'enabled');
+  await setTargetStatus('enabled');
   const login3 = await db.auth.login('clerk', 'S3cure!Pass');
   assert(!!login3?.user, 'Login succeeds (Active again)');
-  await db.users.setStatus(ownerActor, targetId, 'locked'); // Users.jsx real action
+  await setTargetStatus('locked'); // Users.jsx real action
+  await restoreTargetSession();
   const r3 = await validateCurrentAccountStatus();
   // Same label gap as Scenario 2: locked users are dropped by both backends
   // before the caller sees the record, so this reports 'revoked'.
@@ -165,7 +178,7 @@ async function run() {
   // account keep browsing on a week-old session, so AuthContext re-checks it on
   // every navigation. This is the negative case for that.
   console.log('\n=== Test 4: Owner narrows property access -> instant revocation ===');
-  await db.users.setStatus(ownerActor, targetId, 'enabled');
+  await setTargetStatus('enabled');
   const login4a = await db.auth.login('clerk', 'S3cure!Pass');
   assert(!!login4a?.user, 'Login succeeds while entitled to all properties');
   await localDb.User.update(targetId, { property_access: ['prop_1'] });
@@ -182,7 +195,7 @@ async function run() {
 
   // ── Scenario 5: Deleted user revoked instantly ──
   console.log('\n=== Test 5: Admin deletes user -> instant revocation ===');
-  await db.users.setStatus(ownerActor, targetId, 'enabled');
+  await setTargetStatus('enabled');
   const login4 = await db.auth.login('clerk', 'S3cure!Pass');
   assert(!!login4?.user, 'Login succeeds (Active again)');
   await localDb.User.delete(targetId);

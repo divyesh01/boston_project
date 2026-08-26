@@ -69,5 +69,5 @@ eq("year(2026-08-01)", yearFromISO("2026-08-01"), 2026);
 eq("month(2026-08-01)", newMonth("2026-08-01"), 7);
 eq("year(2026-12-31)", yearFromISO("2026-12-31"), 2026);
 
-console.log(`\n${fail === 0 ? "GREEN" : "RED"}  ${pass} passed, ${fail} failed`);
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

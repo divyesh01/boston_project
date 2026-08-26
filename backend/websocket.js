@@ -147,7 +147,13 @@ server.on('upgrade', async (req, socket, head) => {
   }
 
   try {
-    const base44 = createClient({ appId: process.env.BASE44_APP_ID || '6a7d6856ee1cc714b1803c0e', token });
+    const appId = process.env.BASE44_APP_ID;
+    if (!appId) {
+      console.error('[WS] Cannot authenticate: BASE44_APP_ID is not configured');
+      socket.destroy();
+      return;
+    }
+    const base44 = createClient({ appId, token });
     const user = await base44.auth.me();
     
     if (!user) {

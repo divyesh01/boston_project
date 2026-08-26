@@ -8,7 +8,8 @@ import { hasAllPropertyAccess, allPropertyRequiredError } from '@/lib/launchPoli
 import { postSessionRevoked } from '@/lib/sessionChannel';
 import { publishChange } from '@/lib/realtime';
 import { recalculationService } from '@/lib/recalculationService';
-import { isValidEmail } from '@/lib/validator';
+import { isValidEmail, isValidUsername } from '@/lib/validator';
+import { validatePasswordStrength } from '@/lib/security';
 import { createClient } from '@base44/sdk';
 import * as otplib from 'otplib';
 
@@ -1556,18 +1557,28 @@ function generateLocalId() {
 
 function publicUserLocal(user) {
   if (!user) return null;
-  // Never return credential material to the client/session. `mfa_secret_pending`
-  // belongs here for the same reason as `mfa_secret`: handleLocalEnableMfa writes
-  // a live TOTP enrolment seed to it a few lines below, and this function is what
-  // the local list/update/login shims return. It was missing, exactly as it was
-  // missing from the three server-side copies of publicUser() — the shared cause
-  // being a denylist, which is public-by-default for every column added later.
-  const {
-    password, password_hash, salt, mfa_secret, mfa_secret_pending, mfa_last_counter,
-    reset_token_hash, reset_token_expires_at,
-    ...safe
-  } = user;
-  return safe;
+  // This allowlist deliberately excludes password_hash, salt, mfa_secret,
+  // mfa_secret_pending, reset_token_hash, reset_token_expires_at,
+  // mfa_last_counter, session_created, and session_expires.
+  return {
+    id: user.id,
+    username: user.username,
+    email: user.email,
+    full_name: user.full_name,
+    role: user.role,
+    permissions: user.permissions,
+    property_access: user.property_access,
+    is_active: user.is_active,
+    is_locked: user.is_locked,
+    must_change_password: user.must_change_password,
+    mfa_enabled: user.mfa_enabled,
+    email_confirmed: user.email_confirmed,
+    last_login: user.last_login,
+    failed_login_count: user.failed_login_count,
+    locked_until: user.locked_until,
+    created_date: user.created_date,
+    updated_date: user.updated_date,
+  };
 }
 
 function getAllLocalUsers() {
@@ -1660,26 +1671,111 @@ const ROLE_DEFAULTS_LOCAL = {
   },
 };
 const defaultPermissionsForRoleLocal = (role) => ({ ...(ROLE_DEFAULTS_LOCAL[role] || ROLE_DEFAULTS_LOCAL.read_only) });
+const LOCAL_ALLOWED_ROLES = [...Object.keys(ROLE_DEFAULTS_LOCAL), 'user'];
 
 async function handleLocalUserAdmin(params = {}) {
   const { action } = params;
+  const actor = await getLocalSessionUser();
+  const requireLocalAdmin = () => {
+    if (!actor || !['owner', 'admin'].includes(actor.role)) {
+      throw new Error('Only the Owner/Admin can manage users.');
+    }
+  };
+  const hashLocalPassword = async (password) => {
+    const strengthError = validatePasswordStrength(password);
+    if (strengthError) throw new Error(strengthError);
+    const salt = generateLocalId().replace(/-/g, '').substring(0, 32);
+    return { salt, password_hash: '$pbkdf2$' + await browserHashPassword(password, salt) };
+  };
   if (action === 'initialized') {
     const all = await getAllLocalUsers();
     const owners = all.filter((u) => u.role === 'owner');
     return { initialized: owners.length > 0 };
   }
   if (action === 'list') {
+    requireLocalAdmin();
     const all = await getAllLocalUsers();
     return { users: all.map(publicUserLocal) };
   }
   if (action === 'search') {
+    requireLocalAdmin();
     const all = await getAllLocalUsers();
-    return { users: all.map(publicUserLocal) };
+    const query = String(params.query || '').trim().toLowerCase();
+    const users = query ? all.filter((user) =>
+      [user.username, user.email, user.full_name, user.role]
+        .some((value) => String(value || '').toLowerCase().includes(query))
+    ) : all;
+    return { users: users.map(publicUserLocal) };
+  }
+  if (action === 'getById') {
+    requireLocalAdmin();
+    const user = await localDb.User.get(params.id);
+    return { user: publicUserLocal(user) };
+  }
+  if (action === 'create') {
+    requireLocalAdmin();
+    const data = params.data || {};
+    const username = String(data.username || '').trim();
+    const email = String(data.email || '').trim().toLowerCase();
+    if (!isValidUsername(username)) throw new Error('Username must be 3-30 alphanumeric or underscore characters.');
+    if (!isValidEmail(email)) throw new Error('Invalid email address.');
+    if (!data.password) throw new Error('Password is required.');
+    if (await findLocalUser(username) || await findLocalUser(email)) {
+      throw new Error('A user with that username or email already exists.');
+    }
+    const credentials = await hashLocalPassword(data.password);
+    const role = data.role || 'read_only';
+    if (!LOCAL_ALLOWED_ROLES.includes(role)) throw new Error('Invalid role.');
+    const user = {
+      id: generateLocalId(), username, email, full_name: String(data.full_name || '').trim(),
+      role,
+      permissions: data.permissions || defaultPermissionsForRoleLocal(role),
+      property_access: data.property_access || 'all', is_active: data.is_active !== false,
+      is_locked: false, must_change_password: data.must_change_password !== false,
+      failed_login_count: 0, ...credentials,
+      created_date: new Date().toISOString(), updated_date: new Date().toISOString(),
+    };
+    await localDb.User.add(user);
+    return { user: publicUserLocal(user) };
+  }
+  if (action === 'update') {
+    const user = await localDb.User.get(params.id);
+    if (!user) throw new Error('User not found.');
+    const self = actor && String(actor.id) === String(user.id);
+    if (!self) requireLocalAdmin();
+    const data = params.data || {};
+    const patch = {
+      username: data.username === undefined ? user.username : String(data.username).trim(),
+      email: data.email === undefined ? user.email : String(data.email).trim().toLowerCase(),
+      full_name: data.full_name === undefined ? user.full_name : String(data.full_name || '').trim(),
+      updated_date: new Date().toISOString(),
+    };
+    if (!isValidUsername(patch.username)) throw new Error('Username must be 3-30 alphanumeric or underscore characters.');
+    if (!isValidEmail(patch.email)) throw new Error('Invalid email address.');
+    const duplicate = (await getAllLocalUsers()).some((candidate) =>
+      String(candidate.id) !== String(user.id) &&
+      (candidate.username.toLowerCase() === patch.username.toLowerCase() || candidate.email.toLowerCase() === patch.email.toLowerCase())
+    );
+    if (duplicate) throw new Error('A user with that username or email already exists.');
+    if (!self) Object.assign(patch, {
+      role: data.role === undefined ? user.role : data.role,
+      permissions: data.permissions === undefined ? user.permissions : data.permissions,
+      property_access: data.property_access === undefined ? user.property_access : data.property_access,
+    });
+    if (!self && !LOCAL_ALLOWED_ROLES.includes(patch.role)) throw new Error('Invalid role.');
+    if (!self && user.role === 'owner' && patch.role !== 'owner') await assertNotLastOwner(user);
+    await localDb.User.update(user.id, patch);
+    return { user: publicUserLocal({ ...user, ...patch }) };
   }
   if (action === 'set_status') {
+    requireLocalAdmin();
     const { id, status } = params || {};
     const user = await localDb.User.get(id);
     if (!user) throw new Error('User not found');
+    if (String(actor.id) === String(id) && (status === 'disabled' || status === 'locked')) {
+      throw new Error('You cannot perform this action on your own account.');
+    }
+    if ((status === 'disabled' || status === 'locked') && user.role === 'owner') await assertNotLastOwner(user);
     let updates;
     if (status === 'disabled') updates = { is_active: false, is_locked: false };
     else if (status === 'enabled') updates = { is_active: true, is_locked: false };
@@ -1693,14 +1789,38 @@ async function handleLocalUserAdmin(params = {}) {
     }
     return { user: publicUserLocal({ ...user, ...updates }) };
   }
+  if (action === 'reset_password' || action === 'set_password') {
+    requireLocalAdmin();
+    const user = await localDb.User.get(params.id);
+    if (!user) throw new Error('User not found.');
+    const credentials = await hashLocalPassword(params.newPassword);
+    await localDb.User.update(user.id, {
+      ...credentials, must_change_password: action === 'reset_password',
+      failed_login_count: 0, is_locked: false, updated_date: new Date().toISOString(),
+    });
+    postSessionRevoked({ type: 'SESSION_REVOKED', targetUserId: user.id, reason: 'Password changed' });
+    if (String(actor.id) === String(user.id)) await secureStore(LOCAL_SESSION_KEY, '');
+    return { success: true };
+  }
+  if (action === 'change_own_password') {
+    const user = await localDb.User.get(params.id);
+    if (!actor || !user || String(actor.id) !== String(user.id)) throw new Error('You can only change your own password.');
+    const actual = '$pbkdf2$' + await browserHashPassword(params.currentPassword || '', user.salt);
+    if (actual !== user.password_hash) throw new Error('Current password is incorrect.');
+    const credentials = await hashLocalPassword(params.newPassword);
+    await localDb.User.update(user.id, {
+      ...credentials, must_change_password: false, failed_login_count: 0, updated_date: new Date().toISOString(),
+    });
+    postSessionRevoked({ type: 'SESSION_REVOKED', targetUserId: user.id, reason: 'Password changed' });
+    return { success: true };
+  }
   // NOTE ON DIVERGENCE: the branches below do not implement the step-up password,
-  // the TOTP replay guard, the verification throttle or the session revocation
-  // that custom_user_admin/entry.js enforces. They are reachable only when
-  // VITE_USE_LOCAL_AUTH=true (.env.development), which is off in every deployed
-  // build — production always takes the `!USE_LOCAL_AUTH` early return above and
-  // talks to the real function. A `currentPassword` sent by the UI is accepted and
-  // ignored here rather than checked, so MFA flows stay usable offline; do not
-  // read these as the security model.
+  // the TOTP replay guard or verification throttle that custom_user_admin/entry.js
+  // enforces. The standalone deployment uses this local path behind its upstream
+  // identity proxy; it remains a convenience lock, not a server-side security
+  // boundary. A `currentPassword` sent by the UI is accepted and ignored here so
+  // MFA flows remain usable offline; do not read these branches as the security
+  // model.
   if (action === 'enable_mfa') {
     const { id } = params;
     const secret = otplib.generateSecret();
@@ -1724,7 +1844,12 @@ async function handleLocalUserAdmin(params = {}) {
     return { success: true };
   }
   if (action === 'delete') {
+    requireLocalAdmin();
     const { id } = params;
+    if (String(actor.id) === String(id)) throw new Error('You cannot perform this action on your own account.');
+    const user = await localDb.User.get(id);
+    if (!user) throw new Error('User not found.');
+    await assertNotLastOwner(user);
     await localDb.User.delete(id);
     return { success: true };
   }

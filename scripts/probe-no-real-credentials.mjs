@@ -173,6 +173,8 @@ const ALLOWED_TEST_FIXTURES = new Map([
   // A deliberately DIFFERENT password, proving a second owner registration is
   // refused for a reason other than a duplicate password.
   ['Another!Pass2026', 'authLocal.test.js second-owner rejection case'],
+  ['AdminPass#2026x', 'authLocal.test.js local-admin authorization fixture'],
+  ['ClerkPass#2026x', 'authLocal.test.js local roster-access fixture'],
   // The import-rollback suite needs any valid-strength value; this is the most
   // obviously synthetic one possible.
   ['Password1!', 'base44Client.importRollback.test.js sign-in fixture'],

@@ -58,5 +58,5 @@ eq("overstatement equals the whole payroll", keptOnSilentPayrollFail - trueKept,
 eq("payroll failure is gated, so the overstated figure is never rendered",
    newGate({ ...NONE, payErr: true }) !== null, true);
 
-console.log(`\n${fail === 0 ? "GREEN" : "RED"}  ${pass} passed, ${fail} failed`);
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

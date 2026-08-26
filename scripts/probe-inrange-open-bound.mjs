@@ -42,5 +42,5 @@ T("empty date string is rejected", inRange("", "2026-08-01", "2026-08-31") === f
 T("null date is rejected", inRange(null, "", "") === false);
 T("undefined date is rejected", inRange(undefined, "", "") === false);
 
-console.log(`\n${pass} passed, ${fail} failed`);
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

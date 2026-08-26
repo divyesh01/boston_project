@@ -143,3 +143,33 @@ describe("local owner auth lifecycle (setup → login → me → logout)", () =>
     expect(await db.auth.me()).toBeNull();
   });
 });
+
+describe("local user administration", () => {
+  it("refuses a last-owner demotion", async () => {
+    await registerOwner();
+    await db.auth.login(OWNER.email, OWNER.password);
+    await db.users.create(null, {
+      username: "admin1", email: "admin1@test.local", full_name: "Admin", role: "admin",
+      property_access: "all", password: "AdminPass#2026x", must_change_password: false,
+    });
+    const owner = (await db.users.list()).find((user) => user.username === OWNER.username);
+    await db.auth.login("admin1", "AdminPass#2026x");
+
+    await expect(db.users.update(null, owner.id, {
+      username: OWNER.username, email: OWNER.email, full_name: OWNER.full_name, role: "read_only",
+    })).rejects.toThrow(/last Owner/i);
+  });
+
+  it("does not expose the roster to a non-admin account", async () => {
+    await registerOwner();
+    await db.auth.login(OWNER.email, OWNER.password);
+    await db.users.create(null, {
+      username: "clerk1", email: "clerk1@test.local", full_name: "Clerk", role: "front_desk",
+      property_access: "all", password: "ClerkPass#2026x", must_change_password: false,
+    });
+    await db.auth.login("clerk1", "ClerkPass#2026x");
+
+    await expect(db.users.list()).rejects.toThrow(/Owner\/Admin/);
+    await expect(db.users.search("owner")).rejects.toThrow(/Owner\/Admin/);
+  });
+});

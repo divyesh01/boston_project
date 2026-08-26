@@ -1043,7 +1043,11 @@ export default async function (req) {
 
   } catch (err) {
     const status = /Forbidden/.test(err.message) || /cannot|only|Not allowed|your own/.test(err.message) ? 403 : 400;
-    return Response.json({ error: err.message || 'Internal server error' }, { status });
+    const message = String(err?.message || '');
+    const safeError = /^Password must /.test(message) || message === 'Current password is incorrect.'
+      ? message
+      : status === 403 ? 'Forbidden.' : 'Request could not be completed.';
+    return Response.json({ error: safeError }, { status });
   }
 }
 

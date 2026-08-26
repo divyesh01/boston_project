@@ -3,6 +3,7 @@ import { money2 } from "@/lib/hotel";
 import { AlertTriangle, DollarSign, UserX, FileWarning, X, ChevronUp, ChevronDown, CheckCircle2, TrendingUp, Sparkles, Clock, LogOut } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { classifyRefund, REFUND_CLASSIFICATION } from "@/lib/refundClassification";
+import { filterAuditRefunds, REFUND_FILTERS_DEFAULT, refundFilterTotal } from "@/lib/refundAuditFilters";
 
 export default function ClerkAuditMatrix({ 
   flaggedAnomalies = [], 
@@ -15,7 +16,7 @@ export default function ClerkAuditMatrix({
   
   // Refunds Ledger: payment method filter + two-tier amount sorting
   const [selectedMethod, setSelectedMethod] = useState('ALL'); // 'ALL' | 'CASH' | 'CARD' | 'DIRECT_BILL'
-  const [hideDepositReturns, setHideDepositReturns] = useState(false);
+  const [refundFilters, setRefundFilters] = useState(REFUND_FILTERS_DEFAULT);
 
   // Adjustments Ledger: reason / method filters + smart anomaly grouping
   const [adjReasonFilter, setAdjReasonFilter] = useState('ALL'); // 'ALL' | 'AR_BILLING' | 'HOSPITALITY'
@@ -141,20 +142,11 @@ export default function ClerkAuditMatrix({
   const processedRefunds = useMemo(() => {
     if (!selectedClerk) return [];
     const clerkRefunds = classifiedRefunds.filter(r => r.username === selectedClerk.username);
-    return clerkRefunds
-      .filter(row => {
-        if (selectedMethod === 'ALL') return true;
-        return getPaymentCategory(row) === selectedMethod;
-      })
-      .filter(row => {
-        return !hideDepositReturns || row.refundClassification.kind !== REFUND_CLASSIFICATION.DEPOSIT_RETURN;
-      })
-      .sort((a, b) => {
-        const priority = (row) => row.refundClassification.isCash && row.refundClassification.kind === REFUND_CLASSIFICATION.ROOM_RENT_REFUND ? 0 : row.refundClassification.kind === REFUND_CLASSIFICATION.ROOM_RENT_REFUND ? 1 : row.refundClassification.kind === REFUND_CLASSIFICATION.NEEDS_REVIEW ? 2 : 3;
-        if (priority(a) !== priority(b)) return priority(a) - priority(b);
-        return new Date(b.time || b.date).getTime() - new Date(a.time || a.date).getTime();
-      });
-  }, [classifiedRefunds, selectedClerk, selectedMethod, hideDepositReturns]);
+    const paymentScoped = selectedMethod === 'ALL' ? clerkRefunds : clerkRefunds.filter((row) => getPaymentCategory(row) === selectedMethod);
+    return filterAuditRefunds(paymentScoped, refundFilters);
+  }, [classifiedRefunds, selectedClerk, selectedMethod, refundFilters]);
+  const filteredRefundTotal = useMemo(() => refundFilterTotal(processedRefunds), [processedRefunds]);
+  const changeRefundFilter = (key, value) => setRefundFilters((current) => ({ ...current, [key]: value }));
 
   // Adjustments Ledger processing: filter by reason + method, optionally hide
   // $0.00 lines, then 3-tier sort — rapid/repeat overrides (Tier 1), high-value
@@ -668,8 +660,9 @@ export default function ClerkAuditMatrix({
                     <h4 className="text-xl font-semibold text-white tracking-tight">Refunds Ledger</h4>
                   </div>
 
-                  {/* Filter Control Bar */}
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
+                  {/* Owner filters stay inside the selected clerk drawer, so a
+                      portfolio-level date filter never prevents a folio audit. */}
+                  <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3 space-y-3 mb-4">
                     <div className="flex flex-wrap items-center gap-2">
                       {[
                         { key: 'ALL', label: 'ALL' },
@@ -693,15 +686,24 @@ export default function ClerkAuditMatrix({
                         );
                       })}
                     </div>
-                    <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-400">
-                      <input
-                        type="checkbox"
-                          checked={hideDepositReturns}
-                          onChange={(e) => setHideDepositReturns(e.target.checked)}
-                        className="w-4 h-4 rounded accent-cyan-500 cursor-pointer"
-                      />
-                      Hide confirmed deposit returns
-                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                      <select value={refundFilters.classification} onChange={(e) => changeRefundFilter('classification', e.target.value)} className="rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-xs text-slate-200 outline-none focus:border-cyan-400">
+                        <option value="ALL">All classifications</option>
+                        <option value="CASH_ROOM_RENT">Cash room-rent risk</option>
+                        <option value="room_rent_refund">Room-rent refunds</option>
+                        <option value="needs_review">Needs review</option>
+                        <option value="deposit_return">Proved deposit returns</option>
+                      </select>
+                      <input value={refundFilters.room} onChange={(e) => changeRefundFilter('room', e.target.value)} placeholder="Room number" className="rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-xs text-slate-200 outline-none focus:border-cyan-400" />
+                      <input value={refundFilters.evidence} onChange={(e) => changeRefundFilter('evidence', e.target.value)} placeholder="Search note, reason, evidence…" className="rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-xs text-slate-200 outline-none focus:border-cyan-400" />
+                      <label className="text-[10px] uppercase tracking-wider text-slate-500">From<input type="date" value={refundFilters.from} onChange={(e) => changeRefundFilter('from', e.target.value)} className="mt-1 block w-full rounded-lg border border-white/10 bg-[#0A1628] px-2 py-1.5 text-xs normal-case tracking-normal text-slate-200 outline-none focus:border-cyan-400" /></label>
+                      <label className="text-[10px] uppercase tracking-wider text-slate-500">To<input type="date" value={refundFilters.to} onChange={(e) => changeRefundFilter('to', e.target.value)} className="mt-1 block w-full rounded-lg border border-white/10 bg-[#0A1628] px-2 py-1.5 text-xs normal-case tracking-normal text-slate-200 outline-none focus:border-cyan-400" /></label>
+                      <div className="grid grid-cols-2 gap-2"><input type="number" min="0" value={refundFilters.minAmount} onChange={(e) => changeRefundFilter('minAmount', e.target.value)} placeholder="Min $" className="rounded-lg border border-white/10 bg-[#0A1628] px-2 py-2 text-xs text-slate-200 outline-none focus:border-cyan-400" /><input type="number" min="0" value={refundFilters.maxAmount} onChange={(e) => changeRefundFilter('maxAmount', e.target.value)} placeholder="Max $" className="rounded-lg border border-white/10 bg-[#0A1628] px-2 py-2 text-xs text-slate-200 outline-none focus:border-cyan-400" /></div>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <label className="flex items-center gap-2 cursor-pointer select-none text-slate-400"><input type="checkbox" checked={refundFilters.hideDepositReturns} onChange={(e) => changeRefundFilter('hideDepositReturns', e.target.checked)} className="w-4 h-4 rounded accent-cyan-500 cursor-pointer" />Hide proved deposit returns</label>
+                      <div className="flex items-center gap-3"><span className="text-cyan-300">{processedRefunds.length} folio refund{processedRefunds.length === 1 ? '' : 's'} · {money2(filteredRefundTotal)}</span><button type="button" onClick={() => { setSelectedMethod('ALL'); setRefundFilters(REFUND_FILTERS_DEFAULT); }} className="rounded border border-white/10 px-2 py-1 text-slate-400 hover:border-white/20 hover:text-white">Clear filters</button></div>
+                    </div>
                   </div>
 
                   <div className="bg-[#040D1A]/80 border border-white/10 rounded-2xl overflow-hidden shadow-inner">

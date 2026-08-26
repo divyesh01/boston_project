@@ -100,6 +100,8 @@ The in-panel conversation can carry the last confirmed property, date range, and
 
 The Clerk Audit classifies AdjustmentRefund records from evidence, not a dollar shortcut. A note that explicitly identifies a guest/security/incidental deposit return is a proved **Deposit Return** and is excluded from room-rent leakage. A non-deposit refund is surfaced as a **Room-Rent Refund** (or possible room-rent refund when the note lacks a service/rate reason). An exact `$100` refund with no deposit-return wording is **Needs Review**—it is neither silently excluded nor accused as leakage. Cash room-rent refunds receive the strongest visual emphasis because they need prompt folio and approval review. The audit identifies the clerk who processed an entry; it never attributes the operational cause to that clerk without supporting evidence.
 
+Inside a selected clerk’s drawer, the owner can independently filter folio refunds by classification (including cash room-rent risk), payment method, date range, room number, evidence/notes, and inclusive minimum/maximum amount. The live result count and total always reflect every active filter. “Hide proved deposit returns” excludes only note-confirmed deposits; it never hides unclear `$100` items. Clear filters restores the complete selected-clerk ledger.
+
 # 5. ALL 90+ LIBRARIES (The Engines Under The Hood)
 
 These are the files in `src/lib/` -- the brains of the app. Grouped by what they do.

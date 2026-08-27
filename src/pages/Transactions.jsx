@@ -8,6 +8,7 @@ import KpiCard from "@/components/ui-exec/KpiCard";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { useTransactions, useSources } from "@/lib/useHotelData";
 import { money, money2, num, pct, C, CHART_COLORS, inRange } from "@/lib/hotel";
+import { sumCents, fromCents, subtract } from "@/lib/decimal";
 import { downloadCsv, downloadExcel, stampFilename, describeRange } from "@/lib/exportData";
 import { toast } from "@/components/ui/use-toast";
 import {
@@ -96,11 +97,16 @@ export default function Transactions() {
   const months12 = useMemo(() => monthlyBreakdown(scoped), [scoped]);
 
   const people = useMemo(() => employeeStats(scoped, { includeSystem }), [scoped, includeSystem]);
+  // "Written by people" vs "written by automation" is an owner-facing money split
+  // rendered to the cent (money2) and must sum back to stats.revenue exactly. Sum
+  // the cent-exact per-employee revenues in integer cents, and derive the
+  // automated remainder with subtract() so a float `a - b` cannot drift the two
+  // halves off the whole.
   const humanRevenue = useMemo(
-    () => employeeStats(scoped, { includeSystem: false }).reduce((a, e) => a + e.revenue, 0),
+    () => fromCents(sumCents(employeeStats(scoped, { includeSystem: false }).map((e) => e.revenue))),
     [scoped]
   );
-  const automatedRevenue = stats.revenue - humanRevenue;
+  const automatedRevenue = fromCents(subtract(stats.revenue, humanRevenue));
 
   if (isLoading) return <p className="text-slate-500">Loading transaction ledger…</p>;
 

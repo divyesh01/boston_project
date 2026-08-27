@@ -3,7 +3,9 @@ import { Link } from "react-router-dom";
 import { CreditCard, ExternalLink, Info } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import KpiCard from "@/components/ui-exec/KpiCard";
-import { money, money2, num, pct, C, commissionFor, inRange } from "@/lib/hotel";
+import { money, money2, num, pct, C, inRange } from "@/lib/hotel";
+import { CalculationService } from "@/lib/calculationService";
+import { sumCents, fromCents } from "@/lib/decimal";
 import { getCcFeeRate } from "@/lib/commissionRates";
 import { cardFeeBreakdown } from "@/lib/transactionAnalytics";
 
@@ -33,39 +35,32 @@ export default function CommissionsPanel({ rows = [], sourceRows = [], dateRange
     [rows, feeRate]
   );
 
-  // Channel commission over the same window, using the app's existing rules.
-  // commissionFor() re-reads localStorage on every call, so it is resolved once
-  // per channel here rather than once per row.
+  // Channel commission over the same window. Delegated to the single cent-exact
+  // channel engine (grossCents accumulator + multiply()) rather than re-summing
+  // net_revenue in float and applying the rate with `revenue * rate` — that is
+  // the same drift the OTA Channels page had, and this panel must reconcile to
+  // the cent with it. The engine reads the live commission rules internally, so
+  // no rule lookup is needed here. Re-sorted by commission (engine sorts by net).
   const channels = useMemo(() => {
     const inWindow = dateRange?.from && dateRange?.to
       ? sourceRows.filter((r) => inRange(r.date, dateRange.from, dateRange.to))
       : sourceRows;
 
-    const byChannel = new Map();
-    for (const r of inWindow) {
-      const key = r.source || r.code || "(unknown)";
-      let e = byChannel.get(key);
-      if (!e) { e = { name: key, revenue: 0, stays: 0 }; byChannel.set(key, e); }
-      e.revenue += Number(r.net_revenue) || 0;
-      e.stays += Number(r.stays) || 0;
-    }
-
-    return [...byChannel.values()]
-      .map((e) => {
-        const rule = commissionFor(e.name);
-        let commission = 0;
-        if (rule.type === "percentage") commission = e.revenue * rule.rate;
-        else if (rule.type === "fixed") commission = rule.rate * e.stays;
-        else if (rule.type === "actual") commission = rule.rate;
-        return { ...e, rule, commission };
-      })
-      .filter((e) => e.revenue > 0 || e.stays > 0)
+    return CalculationService.calculateChannelMetrics(inWindow)
+      .map((c) => ({
+        name: c.source,
+        revenue: c.gross,
+        rule: { type: c.type, rate: c.rate },
+        commission: c.commission,
+      }))
       .sort((a, b) => b.commission - a.commission);
   }, [sourceRows, dateRange]);
 
-  const channelTotal = channels.reduce((a, c) => a + c.commission, 0);
-  const channelRevenue = channels.reduce((a, c) => a + c.revenue, 0);
-  const totalCost = cards.fee + channelTotal;
+  // Owner-facing money totals: sum in integer cents so the KPI cards and the
+  // table footer reconcile to the cent with the per-channel rows and with OTA.
+  const channelTotal = fromCents(sumCents(channels.map((c) => c.commission)));
+  const channelRevenue = fromCents(sumCents(channels.map((c) => c.revenue)));
+  const totalCost = fromCents(sumCents([cards.fee, channelTotal]));
 
   return (
     <div className="space-y-4">

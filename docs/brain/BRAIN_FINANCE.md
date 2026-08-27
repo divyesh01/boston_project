@@ -370,6 +370,21 @@ ledger when they do not, and **returns `basis: "total" | "room"` so the UI can l
 room-only figure honestly.** If you must display the occupancy ledger directly, label it
 "Room Revenue" — see 12.6 for why the two figures legitimately differ.
 
+## 12.9 OTA channel commissions use the shared cent engine — MEASURED 2026-08-27
+
+OTA dashboard and transaction totals must come from
+`CalculationService.calculateChannelMetrics`, not from local JavaScript number sums.
+The engine converts each amount to integer cents, calculates commission there, and returns
+whole-cent gross, commission, and net totals. This matters because values such as `0.1 +
+0.2` cannot be represented exactly as JavaScript numbers; repeating that arithmetic in a
+screen can make a displayed commission disagree by a cent with the reconciled ledger.
+
+`OtaChannels.jsx` and the dashboard `OtaMatrix` both delegate to this engine. The
+`scripts/probe-channel-commission-cents.mjs` fixture proves the old floating-point
+calculation carries binary residue and verifies that both screens keep using the shared
+cent-exact path. When adding another OTA surface, reuse the engine; do not reconstruct its
+totals from `net_revenue` in the component.
+
 > [!NOTE]
 > An earlier revision of this repo's notes claimed `total_revenue_with_misc` was "$0.00 on
 > all 214 days — the occupancy CSV never populates them". That was wrong, and it was wrong

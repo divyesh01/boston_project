@@ -1,40 +1,28 @@
 import React from "react";
 import Card from "@/components/ui-exec/Card";
-import { commissionFor, money, pct, C } from "@/lib/hotel";
+import { money, pct, C } from "@/lib/hotel";
+import { CalculationService } from "@/lib/calculationService";
+import { sumCents, fromCents } from "@/lib/decimal";
 import { Lightbulb } from "lucide-react";
 import { useSettingsVersion } from "@/hooks/useSettingsVersion";
 
 export default function OtaMatrix({ rows }) {
   useSettingsVersion();
-  const map = new Map();
-  rows.forEach((r) => {
-    const key = r.source || r.code || "UNKNOWN";
-    const cur = map.get(key) || { source: key, gross: 0, stays: 0 };
-    cur.gross += Number(r.net_revenue) || 0;
-    cur.stays += Number(r.stays) || 0;
-    map.set(key, cur);
-  });
-  const channels = [...map.values()]
-    .filter((c) => c.gross > 0 || c.stays > 0)
-    .map((c) => {
-      const info = commissionFor(c.source);
-      let commission = 0;
-      if (info.type === "percentage") commission = c.gross * info.rate;
-      else if (info.type === "fixed") commission = info.rate * c.stays;
-      else if (info.type === "actual") commission = info.rate;
-      return { ...c, rate: info.rate, commission, net: c.gross - commission, margin: c.gross ? (c.gross - commission) / c.gross : 0 };
-    })
-    .sort((a, b) => b.net - a.net);
+  // Cent-exact channel engine (integer cents via toCents/multiply) — the same
+  // source OtaChannels and Money Kept read, so the subtitle totals reconcile to
+  // the cent instead of re-summing net_revenue and applying commission in float.
+  const channels = CalculationService.calculateChannelMetrics(rows);
 
-  const totalGross = channels.reduce((a, c) => a + c.gross, 0);
-  const totalCommission = channels.reduce((a, c) => a + c.commission, 0);
+  const totalGross = fromCents(sumCents(channels.map((c) => c.gross)));
+  const totalCommission = fromCents(sumCents(channels.map((c) => c.commission)));
+  const totalNet = fromCents(sumCents(channels.map((c) => c.net)));
   const bestDirect = channels.filter((c) => c.rate === 0).sort((a, b) => b.gross - a.gross)[0] || null;
   const worstOta = channels.filter((c) => c.rate > 0).sort((a, b) => b.commission - a.commission)[0] || null;
 
   return (
     <Card
       title="OTA Channel Net Profitability Matrix"
-      subtitle={`Gross ${money(totalGross)} · Commission leakage ${money(totalCommission)} · Net ${money(totalGross - totalCommission)}`}
+      subtitle={`Gross ${money(totalGross)} · Commission leakage ${money(totalCommission)} · Net ${money(totalNet)}`}
     >
       <div className="overflow-x-auto">
         <table className="w-full text-sm">

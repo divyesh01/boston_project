@@ -2,12 +2,17 @@ import React from "react";
 import { Trophy, TrendingDown } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { money, money2, pct, perPropertyStats } from "@/lib/hotel";
+import { sumCents, fromCents } from "@/lib/decimal";
 
 export default function PropertyRanking({ occRows, properties }) {
   const stats = perPropertyStats(occRows, properties);
   if (!stats.length) return null;
 
-  const totalRev = stats.reduce((a, s) => a + s.revenue, 0);
+  // Portfolio revenue is owner-facing money and must reconcile to the cent with
+  // the per-property figures it sums. A float `reduce((a, s) => a + s.revenue)`
+  // over the cent-exact per-property revenues re-introduces binary residue, so
+  // sum in integer cents and convert back once.
+  const totalRev = fromCents(sumCents(stats.map((s) => s.revenue)));
   const totalRoomsSold = stats.reduce((a, s) => a + s.roomsSold, 0);
   const totalCapacity = stats.reduce((a, s) => a + s.capacity, 0);
   const portfolioOcc = totalCapacity ? totalRoomsSold / totalCapacity : 0;

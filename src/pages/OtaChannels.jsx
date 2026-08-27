@@ -7,7 +7,9 @@ import { useSources, usePaymentData } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { exportToPdf } from "@/lib/pdfExport";
-import { C, money, money2, pct, num, inRange, commissionFor } from "@/lib/hotel";
+import { C, money, money2, pct, num, inRange } from "@/lib/hotel";
+import { CalculationService } from "@/lib/calculationService";
+import { sumCents, fromCents } from "@/lib/decimal";
 import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, COMMISSION_TYPES } from "@/lib/commissionRates";
 import { ErrorState } from "@/components/ui/status";
 
@@ -45,31 +47,19 @@ export default function OtaChannels() {
 
   const srcRows = useMemo(() => sources.filter((r) => inRange(r.date, dateRange.from, dateRange.to)), [sources, dateRange]);
 
-  const channels = useMemo(() => {
-    const map = new Map();
-    srcRows.forEach((r) => {
-      const key = r.source || r.code || "UNKNOWN";
-      const cur = map.get(key) || { source: key, gross: 0, stays: 0 };
-      cur.gross += Number(r.net_revenue) || 0;
-      cur.stays += Number(r.stays) || 0;
-      map.set(key, cur);
-    });
-    return [...map.values()]
-      .filter((c) => c.gross > 0 || c.stays > 0)
-      .map((c) => {
-        const info = commissionFor(c.source);
-        let commission = 0;
-        if (info.type === "percentage") commission = c.gross * info.rate;
-        else if (info.type === "fixed") commission = info.rate * c.stays;
-        else if (info.type === "actual") commission = info.rate;
-        return { ...c, ...info, commission, net: c.gross - commission, margin: c.gross ? (c.gross - commission) / c.gross : 0 };
-      })
-      .sort((a, b) => b.net - a.net);
-  }, [srcRows, rates]);
+  // Delegate to the cent-exact channel engine (integer cents via toCents/multiply)
+  // rather than re-summing net_revenue and applying commission in float — the two
+  // must reconcile with Money Kept to the cent. `rates` stays in the deps so an
+  // inline rate edit (which writes storage before setRates) re-runs the memo, and
+  // commissionFor inside the engine reads that same live storage.
+  const channels = useMemo(
+    () => CalculationService.calculateChannelMetrics(srcRows),
+    [srcRows, rates]
+  );
 
-  const totalGross = channels.reduce((a, c) => a + c.gross, 0);
-  const totalCommission = channels.reduce((a, c) => a + c.commission, 0);
-  const totalNet = channels.reduce((a, c) => a + c.net, 0);
+  const totalGross = fromCents(sumCents(channels.map((c) => c.gross)));
+  const totalCommission = fromCents(sumCents(channels.map((c) => c.commission)));
+  const totalNet = fromCents(sumCents(channels.map((c) => c.net)));
 
   const updateRate = (source, field, value) => {
     const updated = { ...rates };

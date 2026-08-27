@@ -9,14 +9,14 @@ import { X, Wallet } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { usePaymentData } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
-import { money, money2, pct, sum, inRange, C, CHART_COLORS, commissionFor, grossRevenueForPeriod, rowAncillaryRevenueCents } from "@/lib/hotel";
+import { money, money2, pct, sum, inRange, C, CHART_COLORS, commissionFor, grossUpFromNetCents, grossRevenueForPeriod, rowAncillaryRevenueCents } from "@/lib/hotel";
 import { fromCents, toCents, multiply } from "@/lib/decimal";
 import { getCcFeeRate, getCcFeeOnRefunds } from "@/lib/commissionRates";
 import { getTaxConfig } from "@/lib/taxConfig";
 import { getEffectiveTaxRates, getTaxSettings } from "@/lib/taxSettings";
 import { expenseLabel, STANDARD_CATEGORY_KEYS, expenseBucket, chooseActualOrEstimate, DERIVED_COST_BUCKETS } from "@/lib/expenseCategories";
 import { buildTaxObject } from "@/lib/taxLiability";
-import { CARD_METHODS, refundOf } from "@/lib/paymentNorm";
+import { CARD_METHODS, refundPeriodBreakdown } from "@/lib/paymentNorm";
 import { filterCommittedPay } from "@/lib/payrollCalc";
 import { useSettingsVersion } from "@/hooks/useSettingsVersion";
 import { CountUp } from "@/lib/useCountUp";
@@ -202,27 +202,34 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     occRows.forEach((r) => bump(String(r.date).slice(0, 10), "gross", Number(r.room_revenue) || 0));
     grossInPeriod.forEach((r) => bump(String(r.date).slice(0, 10), "gross", fromCents(rowAncillaryRevenueCents(r))));
     srcRows.forEach((r) => {
-      const rev = Number(r.net_revenue) || 0;
       const stays = Number(r.stays) || 0;
       const info = commissionFor(r.source || r.code);
-      // INTEGER CENTS, not float dollars. rev * info.rate let each row land on
-      // either side of a half-cent depending on nothing but binary rounding, and
-      // the errors accumulated across every source row of the period — the same
-      // defect class fixed in calculationService.calculateChannelMetrics. multiply()
-      // is the cents-safe primitive: (cents, rate) -> cents, exact.
-      let commCents = 0;
-      if (info.type === "percentage") commCents = multiply(rev, info.rate);
-      else if (info.type === "fixed") commCents = toCents(info.rate) * stays;
-      else if (info.type === "actual") commCents = toCents(info.rate);
-      bump(String(r.date).slice(0, 10), "commission", fromCents(commCents));
+      // net_revenue is POST-commission NET (owner model, 2026-08-27): the channel
+      // commission is gross − net, where gross is the grossed-up booking value.
+      // grossUpFromNetCents keeps the whole thing in integer cents, the same
+      // cents-safe discipline as calculationService.calculateChannelMetrics.
+      const { commissionCents } = grossUpFromNetCents(toCents(r.net_revenue), info, stays);
+      bump(String(r.date).slice(0, 10), "commission", fromCents(commissionCents));
     });
+    // Card processing fee per day: sum the card-method columns (unchanged basis).
     payRows.forEach((r) => {
       const date = String(r.date).slice(0, 10);
       const card = CARD_METHODS.reduce((a, k) => a + (Number(r[k]) || 0), 0);
       bump(date, "ccFee", card * ccFee);
-      const refund = Math.abs(refundOf(r));
-      bump(date, "refunds", refund);
-      if (ccFeeRefunds) bump(date, "refundFee", refund * ccFee);
+    });
+    // Refunds are stored SIGNED (REFUND_FIELDS in paymentNorm.js). The period
+    // refund is the MAGNITUDE of the sum of EVERY signed refund row in the period
+    // (abs ONCE — the shared contract calculationService.calculateMoneyKept and the
+    // Payments page both use). Taking abs() per row OR per day inflates whenever a
+    // positive correction offsets a refund on a different row/day (Day1 -500 +
+    // Day2 +300 is a 200 refund, not 800). refundPeriodBreakdown returns that single
+    // period magnitude plus per-day allocations oriented by the period's direction,
+    // so the daily trend reconciles EXACTLY to the headline in integer cents; a day
+    // that opposes the period shows as a negative offset rather than an abs'd add.
+    const refundBreakdown = refundPeriodBreakdown(payRows);
+    refundBreakdown.byDay.forEach((info, date) => {
+      bump(date, "refunds", info.allocation);
+      if (ccFeeRefunds) bump(date, "refundFee", info.allocation * ccFee);
     });
 
     // ── Tax estimate base: net revenue of taxable booking sources per day/property.
@@ -251,7 +258,12 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       // 2. The per-source commission rate entry does NOT have taxExempt === true
       const srcInfo = commissionFor(r.source || r.code);
       if (taxableSources.has(classifyTaxSource(r)) && !srcInfo.taxExempt) {
-        taxBaseByKey.set(key, (taxBaseByKey.get(key) || 0) + (Number(r.net_revenue) || 0));
+        // Gross up the tax base too (owner directive 2026-08-27): net_revenue is
+        // POST-commission net, so the taxable base is the grossed-up booking value.
+        // Each term is a whole-cent dollar value (fromCents) to keep the map in the
+        // same dollar units its consumer already expects.
+        const { grossCents } = grossUpFromNetCents(toCents(r.net_revenue), srcInfo, r.stays);
+        taxBaseByKey.set(key, (taxBaseByKey.get(key) || 0) + fromCents(grossCents));
       }
       pushDateKey(key);
     });
@@ -365,20 +377,16 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     srcRows.forEach((r) => {
       const src = r.source || r.code || "UNKNOWN";
       const info = commissionFor(src);
-      const rev = Number(r.net_revenue) || 0;
       const stays = Number(r.stays) || 0;
-      // Same integer-cents rule as the day ledger above: accumulate commission in
-      // cents via multiply(), convert once for display. The per-source `comm`
-      // figure feeds a headline deduction item, so float drift here was visible
-      // money, not noise.
-      let commCents = 0;
-      if (info.type === "percentage") commCents = multiply(rev, info.rate);
-      else if (info.type === "fixed") commCents = toCents(info.rate) * stays;
-      else if (info.type === "actual") commCents = toCents(info.rate);
+      // net_revenue is POST-commission NET (owner model, 2026-08-27): gross up to
+      // the booking value and take commission as gross − net, in integer cents.
+      // `gross` accumulates the grossed-up dollars so the "Gross … @ rate" detail
+      // shows the true booking value, not the post-commission net.
+      const { grossCents, commissionCents } = grossUpFromNetCents(toCents(r.net_revenue), info, stays);
       const cur = srcMap.get(src) || { name: src, gross: 0, stays: 0, commCents: 0, rate: info.rate };
-      cur.gross += rev;
+      cur.gross += fromCents(grossCents);
       cur.stays += stays;
-      cur.commCents += commCents;
+      cur.commCents += commissionCents;
       srcMap.set(src, cur);
     });
     const otaRecords = [...srcMap.values()]
@@ -398,21 +406,29 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       })
       .filter((x) => x.amount > 0);
 
-    const refundRecords = dayTotals.filter((d) => d.refunds > 0).map((d) => ({
+    // Detail rows for the trend/breakdown. A day whose signed refund opposes the
+    // period direction is a negative offset — kept (Math.abs > 0.004) so the rows
+    // reconcile to the period magnitude instead of dropping the offset.
+    const refundRecords = dayTotals.filter((d) => Math.abs(d.refunds) > 0.004).map((d) => ({
       name: d.date,
       detail: "Closed balance folio + loyalty discount",
       amount: d.refunds,
     }));
 
-    // Total refunded amount across the period — excluded from the keep-rate
-    // denominator because money returned to the guest was never truly "kept".
-    const refundsTotal = refundRecords.reduce((a, x) => a + x.amount, 0);
+    // Period refund total — abs ONCE over every signed row (the shared contract).
+    // Excluded from the keep-rate denominator: money returned to the guest was
+    // never truly "kept". This is refundBreakdown.magnitude, equal to the shared
+    // paymentNorm period magnitude and to calculationService.calculateMoneyKept's basis.
+    const refundsTotal = refundBreakdown.magnitude;
 
-    const refundFeeRecords = dayTotals.filter((d) => d.refundFee > 0).map((d) => ({
+    const refundFeeRecords = dayTotals.filter((d) => Math.abs(d.refundFee) > 0.004).map((d) => ({
       name: d.date,
       detail: `Refund ${money2(d.refunds)} @ ${pct(ccFee, 2)} refund fee`,
       amount: d.refundFee,
     }));
+    // Period refund CC-fee derived from the SAME period basis calculationService
+    // uses (multiply = cent-exact), so the two surfaces agree to the cent.
+    const refundFeeTotal = ccFeeRefunds ? fromCents(multiply(refundsTotal, ccFee)) : 0;
 
     // ── Deduction items ──
     const items = [];
@@ -456,7 +472,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       // The statement already contains what the processor charged on refunds, so
       // the derived refund fee rides with the estimate only.
       if (ccFeeRefunds) {
-        pushItem("refund_fee", "CC Fee on Refunds", refundFeeRecords.reduce((a, x) => a + x.amount, 0), refundFeeRecords);
+        pushItem("refund_fee", "CC Fee on Refunds", refundFeeTotal, refundFeeRecords);
       }
     }
 
@@ -502,7 +518,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       pushItem(b, expenseLabel(b), expAmt(b), expRows(b).map(expRecord));
     });
     pushItem("other", "Other Expenses", expAmt("other"), expRows("other").map(expRecord));
-    pushItem("refunds", "Refunds", refundRecords.reduce((a, x) => a + x.amount, 0), refundRecords);
+    pushItem("refunds", "Refunds", refundsTotal, refundRecords);
 
     // INTEGER CENTS on the headline figure (CLAUDE.md §4). `pushItem` already
     // snaps each amount to 2dp, but summing a dozen of them with `+` and then

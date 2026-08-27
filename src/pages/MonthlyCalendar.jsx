@@ -8,7 +8,8 @@ import Card from "@/components/ui-exec/Card";
 import { useOccupancy, useSources } from "@/lib/useHotelData";
 import { useGlobalFilters, MONTHS_LONG } from "@/lib/useGlobalFilters";
 import { Link } from "react-router-dom";
-import { money, money2, pct, num, inRange, C, occupancyStats, commissionFor, formatDayLabel } from "@/lib/hotel";
+import { money, money2, pct, num, inRange, C, occupancyStats, commissionFor, grossUpFromNetCents, formatDayLabel } from "@/lib/hotel";
+import { toCents, fromCents } from "@/lib/decimal";
 import { getRevenueThresholds, getRevenueColor, getRevenueGroup, getRevenueGroupLabel } from "@/lib/revenueThresholds";
 import { calendarMonths, daysInMonth, MAX_GRIDS } from "@/lib/calendarGrids";
 import { getEventsInRange, DEMAND_ORDER, DEMAND_COLORS, peakDemand, distanceColor } from "@/lib/eventSchedule";
@@ -194,21 +195,19 @@ export default function MonthlyCalendar() {
     if (!selectedSources.length) return [];
     const ranked = selectedSources
       .map((s) => {
-        // Actually subtract commission — the panel is titled "Ranked by Net
-        // Revenue" but used to set commission: 0 and net = gross, so an OTA
-        // booking outranked a direct booking of the same value.
-        const gross = s.net_revenue || 0;
+        // net_revenue is POST-commission NET (owner model, 2026-08-27): gross up to
+        // the booking value and rank by net. Integer-cents math via the shared
+        // helper so this ranking agrees to the cent with the OTA channel engine.
         const info = commissionFor(s.source || s.code);
-        let commission = 0;
-        if (info.type === "percentage") commission = gross * info.rate;
-        else if (info.type === "fixed") commission = info.rate * (s.stays || 0);
-        else if (info.type === "actual") commission = info.rate;
+        const stays = s.stays || 0;
+        const netCents = toCents(s.net_revenue);
+        const { grossCents, commissionCents } = grossUpFromNetCents(netCents, info, stays);
         return {
           name: s.source || s.code || "Unknown",
-          gross,
-          commission,
-          net: gross - commission,
-          stays: s.stays || 0,
+          gross: fromCents(grossCents),
+          commission: fromCents(commissionCents),
+          net: fromCents(netCents),
+          stays,
         };
       })
       .sort((a, b) => b.net - a.net);

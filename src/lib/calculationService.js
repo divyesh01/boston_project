@@ -2,7 +2,7 @@ import {
   toCents, fromCents, fromRate, add, subtract, multiply, divide, divideRate,
   sumCents
 } from '@/lib/decimal';
-import { commissionFor, grossRevenueForPeriod } from '@/lib/hotel';
+import { commissionFor, grossRevenueForPeriod, grossUpFromNetCents } from '@/lib/hotel';
 import { getTaxConfig, TAX_SOURCES } from '@/lib/taxConfig';
 import { getEffectiveTaxRates, getTaxSettings } from '@/lib/taxSettings';
 import { getCcFeeRate, getCcFeeOnRefunds } from '@/lib/commissionRates';
@@ -156,29 +156,25 @@ export class CalculationService {
     // channel arrived in. That is how the live ledger and the pre-aggregated daily
     // cache — which collapses several rows per channel per day into one — came out
     // a cent apart on total deductions for the same period.
+    // net_revenue is POST-commission NET (owner model, 2026-08-27). Accumulate it
+    // as net in integer CENTS, then gross UP once per channel via the shared
+    // grossUpFromNetCents helper — so the single division is rounded exactly once
+    // per channel and every surface derives the identical gross/commission.
     const map = new Map();
     srcRows.forEach((r) => {
       const key = r.source || r.code || 'UNKNOWN';
-      const cur = map.get(key) || { source: key, grossCents: 0, stays: 0 };
-      cur.grossCents += toCents(r.net_revenue);
+      const cur = map.get(key) || { source: key, netCents: 0, stays: 0 };
+      cur.netCents += toCents(r.net_revenue);
       cur.stays += Number(r.stays) || 0;
       map.set(key, cur);
     });
 
     return [...map.values()]
-      .filter((c) => c.grossCents > 0 || c.stays > 0)
+      .filter((c) => c.netCents > 0 || c.stays > 0)
       .map((c) => {
         const info = commissionFor(c.source);
-        const gross = fromCents(c.grossCents);
-        let commissionCents = 0;
-        if (info.type === 'percentage') commissionCents = multiply(gross, info.rate);
-        // A fixed commission is money-per-stay, so it scales by a COUNT: toCents
-        // then multiply by the integer, never multiply() (which would divide by
-        // RATE_SCALE and return a figure 10,000x too small).
-        else if (info.type === 'fixed') commissionCents = Math.round(toCents(info.rate) * c.stays);
-        else if (info.type === 'actual') commissionCents = toCents(info.rate);
-        const commission = fromCents(commissionCents);
-        const netCents = c.grossCents - commissionCents;
+        const { grossCents, commissionCents } = grossUpFromNetCents(c.netCents, info, c.stays);
+        const gross = fromCents(grossCents);
         // grossCents is an internal accumulator and is deliberately NOT spread into
         // the result: a cents-scaled field sitting next to dollar fields is exactly
         // how a consumer ends up rendering a number 100x too large.
@@ -187,9 +183,9 @@ export class CalculationService {
           stays: c.stays,
           ...info,
           gross,
-          commission,
-          net: fromCents(netCents),
-          margin: c.grossCents ? fromRate(divideRate(fromCents(netCents), gross)) : 0,
+          commission: fromCents(commissionCents),
+          net: fromCents(c.netCents),
+          margin: grossCents ? fromRate(divideRate(fromCents(c.netCents), gross)) : 0,
         };
       })
       .sort((a, b) => b.net - a.net);
@@ -233,7 +229,10 @@ export class CalculationService {
       const info = commissionFor(r.source || r.code);
       if (!src || !src.taxable || info.taxExempt) return;
       const d = String(r.date).slice(0, 10);
-      taxBase.set(d, (taxBase.get(d) || 0) + toCents(r.net_revenue));
+      // net_revenue is POST-commission NET; the taxable base is the grossed-up
+      // booking value (gross up the tax base too — owner directive 2026-08-27).
+      const { grossCents } = grossUpFromNetCents(toCents(r.net_revenue), info, r.stays);
+      taxBase.set(d, (taxBase.get(d) || 0) + grossCents);
     });
 
     const taxImp = new Map();

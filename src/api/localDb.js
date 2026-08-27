@@ -186,15 +186,10 @@ localDb.version(13).stores({
 // [property_id+date] on the four daily ledgers is the driving index for every
 // property-scoped date-range read (Dashboard, Payments, Sources, occupancy
 // pages). It sits alongside the existing [date+property_id] so trend scans that
-// start from the date axis stay indexed too. [property_id+status] on Expense was
-// added for status scoping, but it is INERT: the field Expense rows actually
-// carry is `payment_status` (declared in base44/entities/Expense.jsonc, written
-// by src/pages/Expenses.jsx), so no row ever has a `status` key to index. It is
-// left in place because dropping an index costs another version bump and buys
-// nothing. Do not route a query onto it, and do not assume a payment-state
-// filter is indexed — it is a full scan today. Adding
-// indexes is a non-destructive upgrade: Dexie backfills the new indexes from
-// existing rows without touching data.
+// start from the date axis stay indexed too. This version also added `status`
+// indexes to Expense, but that field never belonged to the Expense entity; v24
+// replaces them with the real `payment_status` indexes. The historical v14
+// declaration stays unchanged because Dexie migrations are append-only.
 localDb.version(14).stores({
   OccupancyDay:     '++id, date, property_id, [date+property_id], [property_id+date], import_id, created_date',
   SourceDay:        '++id, date, property_id, code, source, [date+property_id], [property_id+date], import_id, created_date',
@@ -293,6 +288,18 @@ localDb.version(22).stores({
 // property_id, so an id must be unique across the whole account, not per hotel.
 localDb.version(23).stores({
   IdSequence: 'prefix, last_seq, updated_date',
+});
+
+// v24 — repair the Expense payment-state indexes.
+//
+// The Base44 entity and every real writer use `payment_status` (paid, unpaid,
+// scheduled, overdue). v14 indexed `status` instead, so real rows never entered
+// either status index; worse, benchmark_performance.mjs seeded the imaginary
+// field and therefore reported the broken schema as fast. Re-declaring only the
+// changed store makes Dexie drop the two obsolete indexes and backfill the two
+// correct ones from existing rows. The Expense records themselves are untouched.
+localDb.version(24).stores({
+  Expense: '++id, property_id, expense_date, category, payment_status, [property_id+expense_date], [property_id+payment_status], import_id, created_date',
 });
 
 // Guard: a table whose name collides with a Dexie instance property is created

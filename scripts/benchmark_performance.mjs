@@ -4,13 +4,20 @@
 // rows, then measures the property-scoped read both ways against the REAL
 // shipped code:
 //   scan    — table.toArray().filter(...)  (the pre-optimization behaviour)
-//   indexed — entity proxy → [property_id+date] / [property_id+status] range
+//   indexed — entity proxy → [property_id+date] /
+//             [property_id+payment_status] range
 //             query planned by base44Client.js
 //
-// Asserts the indexed path is < 10ms, strictly faster than the scan, and that
-// both paths return identical result sets (so the optimization is safe).
+// Asserts each indexed path is meaningfully faster than its full scan from the
+// SAME process, and that both return identical results. Relative comparisons
+// stay honest on fast and slow machines; absolute millisecond ceilings do not.
 //
 // Run: node scripts/benchmark_performance.mjs
+
+// This is an isolated fake-indexeddb benchmark. Enable the local entity/auth
+// path before base44Client is dynamically imported below, so the documented
+// bare command never tries to call a real backend or depend on Vite env loading.
+process.env.VITE_USE_LOCAL_AUTH ??= "true";
 
 import { register } from "node:module";
 register(new URL("./resolve-alias.mjs", import.meta.url));
@@ -129,22 +136,27 @@ T("indexed returns the identical row count", occIndexed.median.rows.length === o
   `${occIndexed.median.rows.length} vs ${occScan.median.rows.length}`);
 T("indexed returns identical data (rooms_sold checksum)", sumSold(occIndexed.median.rows) === sumSold(occScan.median.rows),
   `${sumSold(occIndexed.median.rows)} vs ${sumSold(occScan.median.rows)}`);
-T(`indexed best latency < 10ms (${occIndexed.min.dt.toFixed(3)}ms)`, occIndexed.min.dt < 10, ms(occIndexed.min.dt));
-T(`full-table scan > 200ms (${occScan.median.dt.toFixed(1)}ms median)`, occScan.median.dt > 200, ms(occScan.median.dt));
-T("indexed (median) faster than scan (median)", occIndexed.median.dt < occScan.median.dt,
-  `${ms(occIndexed.median.dt)} vs ${ms(occScan.median.dt)}`);
+// Absolute wall-clock floors punish faster machines and pass slower ones. Compare
+// both paths inside this same process instead: the index must remove enough work
+// to stay at least one order of magnitude faster than cloning all 50,000 rows.
+const occSpeedup = occScan.median.dt / occIndexed.median.dt;
+T(`indexed median at least 10x faster (${occSpeedup.toFixed(1)}x)`, occSpeedup >= 10,
+  `${ms(occIndexed.median.dt)} indexed vs ${ms(occScan.median.dt)} scan`);
 
-// ─────────────────────────────── 2. expense: property + status ───────────────────────────────
+// ─────────────────────────── 2. expense: property + payment status ──────────────────────────
 const EXP_COUNT = 10000;
 const expRows = [];
 for (let p = 1; p <= 5; p++) {
   for (let i = 0; i < EXP_COUNT / 5; i++) {
     expRows.push({
       property_id: `prop_${p}`,
+      expense_name: `Utility bill ${i}`,
       expense_date: fmtDate(new Date(base + i * 86400000)),
-      category: "Utilities",
-      status: i % 3 === 0 ? "approved" : i % 3 === 1 ? "committed" : "pending",
-      amount_cents: 1000 + i,
+      category: "utilities",
+      frequency: "one_time",
+      payment_status: i % 3 === 0 ? "paid" : i % 3 === 1 ? "unpaid" : "scheduled",
+      amount: (1000 + i) / 100,
+      taxable: true,
       created_date: new Date().toISOString(),
     });
   }
@@ -153,30 +165,30 @@ await localDb.Expense.bulkAdd(expRows, { allKeys: true });
 
 const scanExp = async () => {
   const all = await localDb.Expense.toArray();
-  return all.filter((r) => r.property_id === "prop_2" && r.status === "approved");
+  return all.filter((r) => r.property_id === "prop_2" && r.payment_status === "paid");
 };
 const indexedExp = () =>
-  db.entities.Expense.filter({ property_id: "prop_2", status: "approved" }, "-expense_date", 1000000);
+  db.entities.Expense.filter({ property_id: "prop_2", payment_status: "paid" }, "-expense_date", 1000000);
 
 const expScan = await measureSet(scanExp, 9);
 const expIndexed = await measureSet(indexedExp, 9);
 
-console.log(`\n=== Expense: property prop_2, status "approved" (10,000 rows in table) ===`);
+console.log(`\n=== Expense: property prop_2, payment status "paid" (10,000 rows in table) ===`);
 console.log(`  full-table scan : median ${ms(expScan.median.dt)} / min ${ms(expScan.min.dt)}  (10,000 rows cloned)`);
-console.log(`  indexed range   : median ${ms(expIndexed.median.dt)} / min ${ms(expIndexed.min.dt)}  ([property_id+status])`);
+console.log(`  indexed range   : median ${ms(expIndexed.median.dt)} / min ${ms(expIndexed.min.dt)}  ([property_id+payment_status])`);
+const expSpeedup = expScan.median.dt / expIndexed.median.dt;
+console.log(`  speedup (median) : ${expSpeedup.toFixed(1)}x`);
 
-const sumAmounts = (rows) => rows.reduce((a, r) => a + r.amount_cents, 0);
+const sumAmounts = (rows) => rows.reduce((cents, row) => cents + Math.round(Number(row.amount) * 100), 0);
 T("expense: identical row count", expIndexed.median.rows.length === expScan.median.rows.length,
   `${expIndexed.median.rows.length} vs ${expScan.median.rows.length}`);
 T("expense: identical data (amount checksum)", sumAmounts(expIndexed.median.rows) === sumAmounts(expScan.median.rows),
   `${sumAmounts(expIndexed.median.rows)} vs ${sumAmounts(expScan.median.rows)}`);
-// The strict <10ms bar is asserted on the primary 50,000-row benchmark above.
-// The expense case is a supplementary proof that the second compound index is
-// planned and used; the honest assertion here is that it stays an order of
-// magnitude below the scan it replaces.
-T(`expense: indexed best latency < 25ms (${expIndexed.min.dt.toFixed(3)}ms)`, expIndexed.min.dt < 25, ms(expIndexed.min.dt));
-T("expense: indexed faster than the scan", expIndexed.median.dt < expScan.median.dt,
-  `${ms(expIndexed.median.dt)} vs ${ms(expScan.median.dt)}`);
+// Expense returns a third of one property's rows, so its selectivity is lower
+// than the date window above. Requiring 2x proves the index removes meaningful
+// work without pretending every machine, Node build and disk has one latency.
+T(`expense: indexed median at least 2x faster (${expSpeedup.toFixed(1)}x)`, expSpeedup >= 2,
+  `${ms(expIndexed.median.dt)} indexed vs ${ms(expScan.median.dt)} scan`);
 
 // ─────────────────────────────── 3. property isolation still applies ───────────────────────────────
 const otherProp = await db.entities.OccupancyDay.filter({ property_id: "prop_9", date: { $gte: from, $lte: to } }, "date", 1000000);

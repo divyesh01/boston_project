@@ -13,9 +13,11 @@ const execFileAsync = promisify(execFile);
 const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = path.resolve(SCRIPTS_DIR, '_fixtures-suite-integrity');
 
-// Suite discovery. MUST stay in step with `isSuite` in scripts/verify-all.mjs — a file
-// this auditor cannot see is a file whose summary contract nobody enforces, and a file
-// verify-all cannot see is a file nobody runs. `test_` (underscore, not dash) was added
+// Suite discovery. MUST stay in step with `isSuite` in scripts/verify-all.mjs, except
+// that this auditor intentionally excludes itself to avoid auditing the auditor. Its
+// count is therefore exactly one lower than verify-all's. Any other difference means a
+// file this auditor cannot see is unenforced, or a file verify-all cannot see is never
+// run. `test_` (underscore, not dash) was added
 // 2026-08-23: seven long-standing suites used that older convention and were invisible
 // to both walks. Defined once because the predicate was duplicated at two call sites
 // below and the two copies are exactly the kind of thing that drifts apart.

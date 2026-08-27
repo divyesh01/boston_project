@@ -340,6 +340,14 @@ export interface UploadedReport {
 
 export interface User {
   username: string;
+  /**
+   * Normalized email address used for sign-in, password resets, and account notifications.
+   */
+  email: string;
+  /**
+   * The user's full name as shown in account-management views.
+   */
+  full_name?: string;
   display_name?: string;
   /**
    * Highest privilege in the app. `owner` (app admin) and `admin` (manager) bypass per-property restrictions; the remaining roles are restricted to `property_access`.
@@ -383,6 +391,14 @@ export interface User {
    */
   mfa_secret?: string;
   /**
+   * Temporary TOTP secret during setup before verification.
+   */
+  mfa_secret_pending?: string;
+  /**
+   * The last 30-second TOTP counter accepted for this account. A code stays valid across a +/-1 window (about 90 seconds), so without recording which counter was spent an accepted code could be presented again and accepted again. Compared as a strict lower bound by every TOTP verifier.
+   */
+  mfa_last_counter?: number;
+  /**
    * Hashed single-use password-reset token.
    */
   reset_token_hash?: string;
@@ -420,21 +436,23 @@ declare module '@base44/sdk' {
   interface FunctionNameRegistry {
     "autoPayroll": true;
     "aiAssistant": true;
-    "backupToDrive": true;
     "audit_clear": true;
+    "audit_verify": true;
+    "backupToDrive": true;
+    "custom_auth_check": true;
     "audit_list": true;
     "custom_auth_login": true;
+    "custom_auth_logout": true;
     "audit_log": true;
     "custom_auth_register": true;
-    "custom_auth_reset_request": true;
-    "custom_auth_logout": true;
-    "custom_auth_me": true;
-    "custom_user_admin": true;
     "custom_auth_reset_password": true;
-    "importDriveFile": true;
+    "custom_user_admin": true;
     "deleteAccount": true;
+    "custom_auth_me": true;
     "getWeather": true;
+    "custom_auth_reset_request": true;
     "listDriveFiles": true;
+    "importDriveFile": true;
   }
   
   interface ConnectorTypeRegistry {

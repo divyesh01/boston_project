@@ -100,3 +100,38 @@ export function refundTotal(rows) {
 export function refundTotalFromTotals(methodTotals) {
   return Math.abs(fromCents(sumCents(REFUND_FIELDS.map((f) => methodTotals?.[f]))));
 }
+
+// Selected-period refund breakdown — the shared, cent-exact refund contract for
+// any surface that needs BOTH the period total and a reconciling daily trend.
+//
+// The period refund is the MAGNITUDE of the sum of every signed refund row in
+// the selected period (abs ONCE), never the sum of per-row or per-day magnitudes:
+// a positive closed_balance_folio / loyalty_discount correction must OFFSET a
+// refund, and taking abs() at the row or day boundary turns that offset into an
+// inflating addition whenever it lands on a different row/day than the refund it
+// corrects (Day1 -500 + Day2 +300 is a 200 refund, not 800).
+//
+// For a daily trend that must reconcile to that single period magnitude, each
+// day's signed total is oriented by the PERIOD's direction (sign):
+//   Sum(dayAlloc) = direction * Sum(daySigned) = direction * periodSigned = |periodSigned|
+// so the oriented daily allocations sum EXACTLY to the period magnitude in integer
+// cents. A day whose sign opposes the period reads as a negative allocation — an
+// honest offset — rather than an abs()'d addition. magnitude === refundTotal(rows).
+export function refundPeriodBreakdown(rows, dateOf = (r) => String(r?.date ?? "").slice(0, 10)) {
+  const dayCents = new Map();
+  let periodCents = 0;
+  for (const r of rows || []) {
+    const c = sumCents(REFUND_FIELDS.map((f) => r?.[f])); // signed cents for this row
+    periodCents += c;
+    const d = dateOf(r);
+    dayCents.set(d, (dayCents.get(d) || 0) + c);
+  }
+  const direction = periodCents < 0 ? -1 : 1; // default +1 when the period nets to zero
+  const magnitudeCents = Math.abs(periodCents);
+  const byDay = new Map();
+  for (const [d, c] of dayCents) {
+    const allocationCents = direction * c;
+    byDay.set(d, { signedCents: c, allocationCents, allocation: fromCents(allocationCents) });
+  }
+  return { periodCents, magnitudeCents, magnitude: fromCents(magnitudeCents), direction, byDay };
+}

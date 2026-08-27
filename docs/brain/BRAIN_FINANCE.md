@@ -227,6 +227,77 @@ assertions were mutation-tested against the pre-fix source and each fails on it.
 node --import ./scripts/_loader-boot.mjs scripts/verify-money-kept.mjs   # 29/0
 ```
 
+## 12.5.3 Refund magnitude — the abs-once period contract — FIXED 2026-08-27
+
+Refund adjustment fields (`REFUND_FIELDS` = `closed_balance_folio`, `loyalty_discount`
+in `src/lib/paymentNorm.js`) are stored **signed**. The period refund is the
+**magnitude of the sum of every signed refund row in the selected period** — abs
+taken **once**, at the period boundary. A positive `closed_balance_folio` correction
+must **offset** a refund, not add to it.
+
+Two wrong shapes shipped before the contract held. Both take `abs()` too early:
+
+```js
+// WRONG 1 — abs PER ROW (original MoneyKept.jsx):
+sum( abs(refundOf(row)) for each row )
+// WRONG 2 — abs PER DAY (the first, incomplete fix): group rows by day, then
+sum( abs(sum of signed rows in that day) for each day )
+// CONTRACT (calculationService.calculateMoneyKept, Payments.jsx):
+abs( sum of every signed refund row in the period )
+```
+
+Cross-day reproduction — Day 1 `closed_balance_folio -500`, Day 2 `+300`:
+
+```
+contract          abs(-500 + 300)      = 200
+per-day / per-row  abs(-500) + abs(300) = 800   → overstates by 600
+```
+
+Per-row and per-day `abs()` agree with the contract **only** when no positive
+correction lands on a different row/day than the refund it offsets — which is why
+the earlier same-day-only probe passed while the widget still reported 800.
+
+**Fix — one shared, cent-exact helper.** `refundPeriodBreakdown(rows)` in
+`src/lib/paymentNorm.js` sums signed cents once over the whole period, takes the
+magnitude once, and returns both the period total (`magnitude`, equal to
+`refundTotal(rows)`) and per-day allocations oriented by the period's **direction**
+(sign). `MoneyKept.jsx` consumes it so the refund deduction, `refundsTotal`, the
+refund CC-fee (`multiply(refundsTotal, ccFee)` — the same basis
+`calculationService` uses), the keep-rate denominator, total deductions, and the
+daily trend all derive from that one breakdown.
+
+**Daily reconciliation invariant** — the trend must sum to the single period total:
+
+```
+Σ dayAllocation = direction · Σ daySigned = direction · periodSigned = |periodSigned| = period magnitude
+```
+
+A day whose sign opposes the period reads as a **negative** allocation (an honest
+offset), never an `abs()`'d addition. The allocations are integer cents, so they
+reconcile to the headline exactly.
+
+```
+node --import ./scripts/_loader-boot.mjs scripts/probe-moneykept-refund-signed.mjs   # 48/0
+```
+
+Mutation-tested: reintroducing WRONG 1 (per-row abs) fails the probe 20/48;
+reintroducing WRONG 2 (per-day abs) fails it 7/48 on the cross-day case. Both
+mutations restored afterward.
+
+**Separate gross-up contract (proven, then reconciled 2026-08-27).** `hotel.js`
+`grossUpFromNetCents` treats persisted `net_revenue` as POST-commission NET
+(owner-declared model): percentage channels gross up `gross = round(net/(1-rate))`,
+`commission = gross - net`, and the taxable base is that gross. Proof it is the
+adopted contract, not a stray edit: it is wired into both engines in
+`calculationService.js`, and `probe-channel-commission-cents.mjs` was rewritten to
+assert it (19/0). Two fixtures still encoded the superseded "net_revenue AS gross"
+model and were realigned to the gross-up figures (not weakened): in
+`probe-money-kept-double-count.mjs` the taxable base of $1000 net grosses to
+$1176.47 so 7% tax = $82.35 (was 70); in `verify-actioncenter.mjs` the EXPEDIA
+estimate on $300000 net = gross($352,941.18) − net = $52,941.18 (was 45000). Both
+suites now pass; the full run is `list d5fd02ce (132 discovered)` → 130 passed,
+0 failed, 1 skipped, 1 diagnostic.
+
 ## 12.6 Real Numbers — RESOLVED 2026-08-20
 
 Measured, not transcribed. `scripts/probe-money-kept-gross.mjs` drives the real

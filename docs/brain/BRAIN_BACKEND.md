@@ -320,6 +320,55 @@ into `vite.config.js` and that the CI build step supplies both flags.
 
 ---
 
+## 9.1 Expense payment status: one field name from entity to index
+
+`payment_status` is the only Expense payment-state field. It is declared by
+`base44/entities/Expense.jsonc` and written by `src/pages/Expenses.jsx`. The local Dexie
+schema must therefore expose both `payment_status` and
+`[property_id+payment_status]` indexes.
+
+Dexie v14 mistakenly indexed `status`. Real Expense rows never populated those indexes,
+while `scripts/benchmark_performance.mjs` seeded the same imaginary field and made the
+broken path look fast. Dexie v24 replaces both indexes and backfills them from existing
+rows without rewriting or deleting any Expense record. The benchmark now uses the real
+entity shape: lowercase category values, dollar `amount`, and the real payment-state enum.
+
+Gate: `scripts/probe-expense-payment-status-index.mjs`. It checks the entity, page, live
+schema, a real compound lookup, a v23-to-v24 upgrade with data preservation, and the
+benchmark fixture and command contract. The proof run on 2026-08-27 was 20 passed,
+0 failed. The corrected
+10,000-row benchmark read the same rows and amount checksum through both paths. Its
+performance assertion is relative to the full scan from the same process; absolute
+millisecond floors are deliberately forbidden because a faster machine made the old
+`scan > 200 ms` assertion fail while the indexed path was still 32.8 times faster.
+Absolute ceilings were removed for the same reason: a slow CI worker can still prove an
+index is correct and substantially faster. The benchmark enables its isolated local-auth
+path before importing `base44Client.js`, so its documented bare Node command cannot fall
+through to a nonexistent backend and die with `Invalid URL` before measuring anything.
+
+---
+
+## 9.2 User authentication fields are part of the entity contract
+
+The custom authentication backend creates, filters, and returns `User.email`, and account
+management also writes and displays `User.full_name`. Those fields were absent from
+`base44/entities/User.jsonc`, so Base44's generated `User` interface denied fields the
+running application requires. The entity now declares a required, email-formatted
+`email` and an optional `full_name`; `base44 types generate` keeps the SDK declarations
+in sync.
+
+Gate: `scripts/probe-user-schema-contract.mjs`. It proves registration and login consume
+the fields, the entity declares the same contract, and the generated type exposes it.
+The proof run on 2026-08-27 was 6 passed, 0 failed.
+
+Verification scripts must also tell the runner whether they proved anything. Assertive
+probes print a standard `PASSED` or `FAILED` summary and expose a non-zero failure path.
+Read-only impact reports use `DIAGNOSTIC: no assertions` so they cannot be mistaken for
+tests. `scripts/probe-suite-integrity.mjs` checks this contract across the whole suite;
+its 2026-08-27 audit classified all 130 inspected scripts correctly.
+
+---
+
 # 10. ALL TEST SCRIPTS — counts RE-MEASURED 2026-08-22
 
 Measured, not estimated. The heading here previously read "106 Files", which matched

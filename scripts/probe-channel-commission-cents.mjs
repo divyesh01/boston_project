@@ -21,11 +21,13 @@
  * same data — a BUSINESS-directive violation (owner-facing money must reconcile).
  *
  * WHAT THIS PROBE DOES
- *   §1 EXECUTION — proves the defect was real and the engine is exact: on a fixture
- *      whose net_revenue rows sum to a float value carrying binary residue
- *      (0.1 + 0.2 = 0.30000000000000004), the old inline float algorithm carries
- *      that residue into gross and commission, while the engine returns whole-cent
- *      figures, and the two totals diverge.
+ *   §1 EXECUTION — proves the engine is cent-exact and implements the POST-commission
+ *      gross-up contract: persisted `net_revenue` is the NET the owner keeps, so the
+ *      engine grosses up per channel (percentage: gross = round(net / (1 - rate))) and
+ *      derives commission = gross − net. On a fixture whose net rows carry IEEE-754
+ *      residue (0.1 + 0.2 = 0.30000000000000004), a naive float accumulation drifts
+ *      off the cent, while the engine sums net in integer cents (toCents) first, so
+ *      gross, commission, and net are all whole-cent and reconcile exactly.
  *   §2 SOURCE CONTRACT — pins that both files now delegate to the engine and no
  *      longer contain the float aggregation pattern.
  *
@@ -66,7 +68,6 @@ function ok(label, cond, detail) {
 
 const { CalculationService } = await import('@/lib/calculationService');
 const { toCents, fromCents, sumCents } = await import('@/lib/decimal');
-const { commissionFor } = await import('@/lib/hotel');
 const { setCommissionRates } = await import('@/lib/commissionRates');
 
 // Deterministic rate card: a percentage channel and a zero-commission direct one.
@@ -75,8 +76,9 @@ setCommissionRates({
   DIRECT: { type: 'percentage', rate: 0, taxExempt: false },
 });
 
-// Rows chosen so the FLOAT accumulation carries IEEE-754 residue: 0.1 + 0.2 in a
-// channel's gross is 0.30000000000000004, and a float `gross * 0.5` inherits it.
+// Rows chosen so a naive FLOAT accumulation of net carries IEEE-754 residue:
+// EXPEDIA's two net rows are 0.1 + 0.2 = 0.30000000000000004 in float, but the
+// engine sums net in integer cents (10 + 20 = 30c) before grossing up.
 const srcRows = [
   { source: 'EXPEDIA', net_revenue: 0.1, stays: 1, date: '2026-01-01' },
   { source: 'EXPEDIA', net_revenue: 0.2, stays: 1, date: '2026-01-02' },
@@ -84,63 +86,37 @@ const srcRows = [
   { source: 'DIRECT', net_revenue: 0.15, stays: 1, date: '2026-01-04' },
 ];
 
-// The OLD inline float algorithm, transcribed verbatim from the pre-fix pages.
-function floatChannels(rows) {
-  const map = new Map();
-  rows.forEach((r) => {
-    const key = r.source || r.code || 'UNKNOWN';
-    const cur = map.get(key) || { source: key, gross: 0, stays: 0 };
-    cur.gross += Number(r.net_revenue) || 0;
-    cur.stays += Number(r.stays) || 0;
-    map.set(key, cur);
-  });
-  return [...map.values()]
-    .filter((c) => c.gross > 0 || c.stays > 0)
-    .map((c) => {
-      const info = commissionFor(c.source);
-      let commission = 0;
-      if (info.type === 'percentage') commission = c.gross * info.rate;
-      else if (info.type === 'fixed') commission = info.rate * c.stays;
-      else if (info.type === 'actual') commission = info.rate;
-      return { ...c, ...info, commission, net: c.gross - commission };
-    });
-}
-
-const floats = floatChannels(srcRows);
 const engine = CalculationService.calculateChannelMetrics(srcRows);
-
-const floatExp = floats.find((c) => c.source === 'EXPEDIA');
 const engExp = engine.find((c) => c.source === 'EXPEDIA');
+const engDir = engine.find((c) => c.source === 'DIRECT');
 
-console.log('§1 execution — float carries residue, engine is cent-exact');
+console.log('§1 execution — engine is cent-exact and grosses up from net');
 
-// The float gross for EXPEDIA is 0.1 + 0.2, which is NOT 0.30 in IEEE-754.
-ok('float EXPEDIA gross carries binary residue',
-  floatExp.gross !== 0.3,
-  `float gross was exactly ${floatExp.gross} (expected the 0.30000000000000004 residue)`);
+// A naive float accumulation of EXPEDIA's net rows carries binary residue.
+const floatNet = (Number(srcRows[0].net_revenue) || 0) + (Number(srcRows[1].net_revenue) || 0);
+ok('naive float net accumulation carries binary residue',
+  floatNet !== 0.3,
+  `float net was exactly ${floatNet} (expected the 0.30000000000000004 residue)`);
 
-// The engine gross is a whole number of cents.
-ok('engine EXPEDIA gross is cent-exact 0.30',
-  toCents(engExp.gross) === 30 && engExp.gross === fromCents(30),
+// The engine sums net in integer cents: 10c + 20c = 30c → exactly 0.30.
+ok('engine EXPEDIA net is cent-exact 0.30',
+  toCents(engExp.net) === 30 && engExp.net === fromCents(30),
+  `engine net was ${engExp.net} (${toCents(engExp.net)} cents)`);
+
+// net is POST-commission: gross up a 50% channel → gross = round(30c / 0.5) = 60c.
+ok('engine EXPEDIA gross = round(net / (1 - rate)) = 0.60',
+  toCents(engExp.gross) === 60 && engExp.gross === fromCents(60),
   `engine gross was ${engExp.gross} (${toCents(engExp.gross)} cents)`);
 
-// The engine commission is a whole number of cents (multiply(), not float *).
-ok('engine EXPEDIA commission is whole cents',
-  Number.isInteger(toCents(engExp.commission)) && toCents(engExp.commission) === 15,
+// commission = gross − net = 60c − 30c = 30c, a whole number of cents.
+ok('engine EXPEDIA commission = gross − net = 0.30',
+  toCents(engExp.commission) === 30 && engExp.commission === fromCents(30),
   `engine commission was ${engExp.commission} (${toCents(engExp.commission)} cents)`);
 
-// The float commission inherits the residue and is NOT the exact 0.15.
-ok('float EXPEDIA commission drifts off the cent',
-  floatExp.commission !== 0.15,
-  `float commission was exactly ${floatExp.commission}`);
-
-// The two total-commission figures diverge — the defect is observable, not cosmetic.
-const engineTotalCommissionCents = sumCents(engine.map((c) => c.commission));
-const floatTotalCommission = floats.reduce((a, c) => a + c.commission, 0);
-ok('engine vs float total commission diverge',
-  toCents(floatTotalCommission) !== engineTotalCommissionCents
-    || floatTotalCommission !== fromCents(engineTotalCommissionCents),
-  `float total ${floatTotalCommission}, engine total ${fromCents(engineTotalCommissionCents)}`);
+// A 0% channel is NOT grossed up: gross === net, commission === 0.
+ok('engine DIRECT (0%) gross === net, commission === 0',
+  toCents(engDir.gross) === toCents(engDir.net) && toCents(engDir.commission) === 0,
+  `DIRECT gross ${engDir.gross}, net ${engDir.net}, commission ${engDir.commission}`);
 
 // The engine totals reconcile exactly in cents: gross - commission === net.
 const gC = sumCents(engine.map((c) => c.gross));
@@ -180,8 +156,36 @@ for (const rel of targets) {
     'totals are not summed via sumCents/fromCents');
 }
 
+// ── §3 CommissionsPanel delegation ───────────────────────────────────────────
+// CommissionsPanel re-implemented the same float channel aggregation under
+// different variable names (`e.revenue += Number(r.net_revenue)`, then
+// `commission = e.revenue * rule.rate`) feeding the "Channel commission" and
+// "Total cost of sale" KPIs. It must now delegate to the same engine so its
+// numbers reconcile to the cent with the OTA Channels page.
+console.log('§3 source contract — CommissionsPanel delegates to the engine');
+
+{
+  const rel = 'src/components/transactions/CommissionsPanel.jsx';
+  const src = read(rel);
+  ok(`${rel} calls CalculationService.calculateChannelMetrics`,
+    /CalculationService\.calculateChannelMetrics\s*\(/.test(src),
+    'no call to the cent-exact engine found');
+  ok(`${rel} dropped the float revenue accumulator`,
+    !/\.revenue\s*\+=\s*Number\(\s*r\.net_revenue/.test(src),
+    'still accumulates revenue with float += Number(r.net_revenue)');
+  ok(`${rel} dropped the float commission = revenue * rule.rate`,
+    !/=\s*e\.revenue\s*\*\s*rule\.rate/.test(src),
+    'still computes commission with float e.revenue * rule.rate');
+  ok(`${rel} aggregates totals in cents (sumCents/fromCents)`,
+    /sumCents\s*\(/.test(src) && /fromCents\s*\(/.test(src),
+    'totals are not summed via sumCents/fromCents');
+  ok(`${rel} dropped the float channel total reduce`,
+    !/channels\.reduce\(\s*\(a,\s*c\)\s*=>\s*a\s*\+\s*c\.(commission|revenue)/.test(src),
+    'still reduces channel totals in float');
+}
+
 // ── Summary ────────────────────────────────────────────────────────────────
-console.log(`\nprobe-channel-commission-cents: ${pass} passed, ${fail} failed`);
+console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 if (fail) {
   console.log('FAILURES:\n  - ' + failures.join('\n  - '));
   process.exit(1);

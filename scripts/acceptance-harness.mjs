@@ -562,23 +562,19 @@ console.log('\n=== 2. FINANCIAL METRICS: Dashboard vs Source ===');
   const expDash = sRows.filter((r) => String(r.source || r.code).trim().toUpperCase() === 'EXPEDIA HOTEL COLLECT').reduce((a, r) => a + Number(r.net_revenue || 0), 0);
   T('2.12 Expedia revenue (Jan) — EHC channel net', expedia?.net ?? 0, expDash, (expedia?.net ?? 0) - expDash, { note: 'exact EHC channel; app keeps channel-level granularity (no Expedia-family aggregation)' });
 
-  // commissions (documented model: commission = net × configured rate)
+  // commissions (owner model 2026-08-27: net_revenue is POST-commission net, so
+  // commission = grossed-up gross − net; per-row cents via hotel.grossUpFromNetCents,
+  // matching CalculationService and MoneyKept.jsx).
   const calcComm = (rows) => rows.reduce((a, r) => {
     const info = hotel.commissionFor(r.source || r.code);
-    if (info.type === 'percentage') return a + (Number(r.net_revenue) || 0) * info.rate;
-    if (info.type === 'fixed') return a + info.rate * (Number(r.stays) || 0);
-    if (info.type === 'actual') return a + info.rate;
-    return a;
+    return a + decimal.fromCents(hotel.grossUpFromNetCents(decimal.toCents(r.net_revenue), info, r.stays).commissionCents);
   }, 0);
   const commJan = calcComm(sRows);
-  const srcCommJan = srcJan.bySource.reduce((a, c) => {
-    const info = hotel.commissionFor(c.name);
-    if (info.type === 'percentage') return a + c.net * info.rate;
-    if (info.type === 'fixed') return a + info.rate * c.stays;
-    if (info.type === 'actual') return a + info.rate;
-    return a;
+  const srcCommJan = srcJan.rows.reduce((a, r) => {
+    const info = hotel.commissionFor(r.source || r.code);
+    return a + decimal.fromCents(hotel.grossUpFromNetCents(decimal.toCents(r.net), info, r.stays).commissionCents);
   }, 0);
-  T('2.13 OTA commissions (Jan) — net×rate model', srcCommJan, commJan, srcCommJan - commJan, { note: `rates: EHC=${commission.getCommissionRates()['EXPEDIA']?.rate}, model documented (source nets OTA commission already)` });
+  T('2.13 OTA commissions (Jan) — gross-up model', srcCommJan, commJan, srcCommJan - commJan, { note: `rates: EHC=${commission.getCommissionRates()['EXPEDIA']?.rate}, net_revenue is post-commission net → gross up (gross=net/(1-rate))` });
 
   // taxes (no tax columns in source reports → estimated at configured rates)
   const eff = taxSettings.getEffectiveTaxRates(String(pid1), '2026-01-15');
@@ -603,13 +599,13 @@ const mk = await moneyKeptMirror({ from: JAN[0], to: JAN[1], pid: String(pid1), 
   const pS = payWindow(paySrc, ...JAN);
   const ccRate = commission.getCcFeeRate();
   const eff = taxSettings.getEffectiveTaxRates(String(pid1), '2026-01-15');
-  const taxBaseSrc = srcJan.rows.filter((r) => taxConfig.TAX_SOURCES.find((s) => s.key === classifySrc(r.source || r.code))?.taxable).reduce((a, r) => a + r.net, 0);
-  const srcComm = srcJan.bySource.reduce((a, c) => {
-    const info = hotel.commissionFor(c.name);
-    if (info.type === 'percentage') return a + c.net * info.rate;
-    if (info.type === 'fixed') return a + info.rate * c.stays;
-    if (info.type === 'actual') return a + info.rate;
-    return a;
+  // net_revenue is POST-commission NET (owner model 2026-08-27): the taxable base
+  // is the grossed-up booking value, and channel commission is gross − net. Both
+  // mirror the per-row cents math in MoneyKept.jsx via hotel.grossUpFromNetCents.
+  const taxBaseSrc = srcJan.rows.filter((r) => taxConfig.TAX_SOURCES.find((s) => s.key === classifySrc(r.source || r.code))?.taxable).reduce((a, r) => a + decimal.fromCents(hotel.grossUpFromNetCents(decimal.toCents(r.net), hotel.commissionFor(r.source || r.code), r.stays).grossCents), 0);
+  const srcComm = srcJan.rows.reduce((a, r) => {
+    const info = hotel.commissionFor(r.source || r.code);
+    return a + decimal.fromCents(hotel.grossUpFromNetCents(decimal.toCents(r.net), info, r.stays).commissionCents);
   }, 0);
   // component model: per-day card sum, negative-card (refund) days contribute 0
   const byDay = new Map();
@@ -1042,7 +1038,10 @@ async function moneyKeptMirror({ from, to, pid, label: _label }) {
     const src = taxConfig.TAX_SOURCES.find((s) => s.key === classifySrc(r.source || r.code));
     if (!src || !src.taxable) return;
     const d = String(r.date).slice(0, 10);
-    taxBase.set(d, (taxBase.get(d) || 0) + (Number(r.net_revenue) || 0));
+    // Gross up the tax base too (owner directive 2026-08-27): net_revenue is
+    // post-commission net, taxable base is the grossed-up booking value.
+    const { grossCents } = hotel.grossUpFromNetCents(decimal.toCents(r.net_revenue), hotel.commissionFor(r.source || r.code), r.stays);
+    taxBase.set(d, (taxBase.get(d) || 0) + decimal.fromCents(grossCents));
   });
   const dayMap = new Map();
   const bump = (date, key, v) => {
@@ -1064,14 +1063,10 @@ async function moneyKeptMirror({ from, to, pid, label: _label }) {
     decimal.fromCents(hotel.rowAncillaryRevenueCents(r)),
   ));
   srcRows.forEach((r) => {
-    const rev = Number(r.net_revenue) || 0;
-    const stays = Number(r.stays) || 0;
     const info = hotel.commissionFor(r.source || r.code);
-    let comm = 0;
-    if (info.type === 'percentage') comm = rev * info.rate;
-    else if (info.type === 'fixed') comm = info.rate * stays;
-    else if (info.type === 'actual') comm = info.rate;
-    bump(String(r.date).slice(0, 10), 'commission', comm);
+    // net_revenue is POST-commission net: commission = grossed-up gross − net.
+    const { commissionCents } = hotel.grossUpFromNetCents(decimal.toCents(r.net_revenue), info, r.stays);
+    bump(String(r.date).slice(0, 10), 'commission', decimal.fromCents(commissionCents));
   });
   payRows.forEach((r) => {
     const date = String(r.date).slice(0, 10);
@@ -1120,14 +1115,11 @@ async function moneyKeptMirror({ from, to, pid, label: _label }) {
   srcRows.forEach((r) => {
     const src = r.source || r.code || 'UNKNOWN';
     const info = hotel.commissionFor(src);
-    const rev = Number(r.net_revenue) || 0;
     const stays = Number(r.stays) || 0;
-    let comm = 0;
-    if (info.type === 'percentage') comm = rev * info.rate;
-    else if (info.type === 'fixed') comm = info.rate * stays;
-    else if (info.type === 'actual') comm = info.rate;
+    // net_revenue is POST-commission net: gross up to the booking value, commission = gross − net.
+    const { grossCents, commissionCents } = hotel.grossUpFromNetCents(decimal.toCents(r.net_revenue), info, stays);
     const cur = srcMap.get(src) || { name: src, gross: 0, stays: 0, comm: 0, rate: info.rate };
-    cur.gross += rev; cur.stays += stays; cur.comm += comm;
+    cur.gross += decimal.fromCents(grossCents); cur.stays += stays; cur.comm += decimal.fromCents(commissionCents);
     srcMap.set(src, cur);
   });
   const otaRecords = [...srcMap.values()].filter((x) => x.gross > 0 || x.comm > 0);

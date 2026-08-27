@@ -1,1 +1,0 @@
-{"nodes": [{"id": "$graphify-root$_anthropic_raw_claude_sonnet_4_6_no_tools_raw_md", "label": "claude-sonnet-4.6-no-tools-raw.md", "file_type": "document", "node_kind": "page", "source_file": "Anthropic/raw/claude-sonnet-4.6-no-tools-raw.md", "source_location": "L1"}], "edges": [], "input_tokens": 0, "output_tokens": 0}

@@ -110,7 +110,7 @@ for (const [name, trailer, rowCount] of FILES) {
 
 // ─────────────────────────────────────────────── 2. section selection
 console.log("\n=== 2. Section 5 chosen, sections 1-4 not double-counted ===");
-for (const [name, scan, trailer, rowCount] of scans) {
+for (const [name, scan, _trailer, rowCount] of scans) {
   const used = scan.sections.filter((s) => s.used);
   T(`${name}: exactly one section used`, used.length === 1, JSON.stringify(scan.sections));
   T(`${name}: used the 34-column section`, used[0]?.columns === 34, `columns=${used[0]?.columns}`);
@@ -219,7 +219,7 @@ T("every dedupe_key is unique", new Set(all.map((r) => r.dedupe_key)).size === a
 
 // ─────────────────────────────────────────────── 8. idempotent re-import
 console.log("\n=== 8. Re-importing the same files is a no-op ===");
-for (const [name, , trailer, rowCount] of FILES) {
+for (const [name] of FILES) {
   const csvText = readFileSync(join(UPLOADS, name), "utf8");
   const scan = await scanReport("auto", `blob:local#${encodeURIComponent(name)}`, {
     propertyId: PROPERTY_ID, propertyName: "Test Property",

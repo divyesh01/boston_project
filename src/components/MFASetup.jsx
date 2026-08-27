@@ -17,13 +17,13 @@ export default function MFASetup({
   onComplete, 
   onCancel,
   backupCodes = [],
-  isEnabling = true 
+  isEnabling: _isEnabling = true
 }) {
   const [currentStep, setCurrentStep] = useState(1);
   const [totpToken, setTotpToken] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(-1);
-  const [showBackupCodes, setShowBackupCodes] = useState(false);
+  const [, setShowBackupCodes] = useState(false);
   const [savedBackupCodes, setSavedBackupCodes] = useState(false);
   const qrCanvasRef = useRef(/** @type {HTMLCanvasElement | null} */ (null));
   const backupCodesRef = useRef(backupCodes);

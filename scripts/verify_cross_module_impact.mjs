@@ -1,7 +1,7 @@
 // Cross-Module Integration Verification Script
 // Verifies that auth changes don't break existing functionality and have no side-effect collisions
 
-import { hashPassword, verifyPassword, generateSalt, generateToken, isCryptoAvailable, validatePasswordStrength } from '../src/lib/security.js';
+import { hashPassword, verifyPassword, generateSalt, generateToken, validatePasswordStrength } from '../src/lib/security.js';
 
 // Mock audit log chain secret
 let auditChainSecret = 'test-secret';
@@ -100,22 +100,6 @@ async function verifyAuditChain() {
 // Mock in-memory stores
 const users = new Map();
 const passwordResetRequests = new Map();
-const sessionStore = new Map();
-
-function findUserByIdentity(identifier) {
-  const term = String(identifier || '').trim().toLowerCase();
-  if (!term) return null;
-  for (const user of users.values()) {
-    if ((user.username || '').toLowerCase() === term || (user.email || '').toLowerCase() === term) {
-      return user;
-    }
-  }
-  return null;
-}
-
-function findUserById(id) {
-  return users.get(id) || null;
-}
 
 // Test 1: Side-effect isolation - verify localStorage keys are not touched
 async function testSideEffectIsolation() {
@@ -311,7 +295,6 @@ async function testPermissionIsolation() {
   assert(testPerms.import_reports === false, 'canUser should not mutate input');
   
   // ROUTE_PERMISSIONS should be immutable-like
-  const originalRoutes = { ...ROUTE_PERMISSIONS };
   // (We don't mutate it, just verify structure)
   assert(ROUTE_PERMISSIONS['/users'] === 'manage_users', 'Route permissions should be correct');
   assert(ROUTE_PERMISSIONS['/settings'] === 'manage_settings', 'Route permissions should be correct');
@@ -370,7 +353,7 @@ async function testStorageKeyCollisions() {
   
   // New code uses Dexie (PasswordResetRequest table) - no new localStorage keys
   // Verify no new localStorage keys introduced
-  for (const key of knownKeys) {
+  for (const _key of knownKeys) {
     // Just verify they're documented - actual existence varies
   }
   

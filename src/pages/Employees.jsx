@@ -20,7 +20,6 @@ export default function Employees() {
   const anomaliesQ = useClerkAnomalies(dateRange, property);
   const { data: records = [], isLoading } = recordsQ;
   const { data: adjRef = [], isLoading: isLoadingAdj } = adjRefQ;
-  const { data: allAnomalies = [] } = anomaliesQ;
   const [selected, setSelected] = useState(null);
   const [clerkFilter, setClerkFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");

@@ -1,5 +1,5 @@
 // Compliant test suite fixture
-import assert from 'node:assert';
+import _assert from 'node:assert';
 
 let passed = 0;
 let failed = 0;

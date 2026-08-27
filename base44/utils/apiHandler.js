@@ -1,6 +1,4 @@
-import { z } from "npm:zod";
-
-export function createApiHandler({ bodySchema, querySchema, paramsSchema, headersSchema }, handler) {
+export function createApiHandler({ bodySchema, querySchema, headersSchema }, handler) {
   return async (req, ...args) => {
     try {
       let body = {};

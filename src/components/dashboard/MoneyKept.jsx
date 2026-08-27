@@ -88,8 +88,8 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
   const [active, setActive] = useState(null);
   const [trendMode, setTrendMode] = useState("week");
 
-  const propFilter = useMemo(() => buildPropertyFilter(property), [property]);
-  const propertyKey = useMemo(() => propKey(property), [property]);
+  const _propFilter = useMemo(() => buildPropertyFilter(property), [property]);
+  const _propertyKey = useMemo(() => propKey(property), [property]);
 
   const { months } = useGlobalFilters();
   const { data: payRecords = [] } = usePaymentData(dateRange, property, months);

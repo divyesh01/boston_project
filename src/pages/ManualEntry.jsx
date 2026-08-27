@@ -13,10 +13,12 @@ import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrf
 import { parseManualEntryCsv, parseManualEntryPaste } from "@/lib/manualEntryImport";
 import { saveManualRows } from "@/lib/manualEntrySave";
 import { draftKeyFor, readDraft, writeDraft, clearDraft } from "@/lib/manualDraft";
+import { MAX_IMPORT_BYTES } from "@/lib/csvParser";
 
-// An uploaded file is hostile input. 10MB matches the cap fetchCsvRows enforces on
-// the report-import path, so both importers refuse the same oversized file.
-const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
+// An uploaded file is hostile input. MAX_IMPORT_BYTES is imported from csvParser —
+// the single source of truth the report-import path (fetchCsvRows, uploadGuard,
+// getRowsArray) also enforces — so every importer refuses the same oversized file
+// and the cap can never drift to two different limits on the same upload.
 
 // Colour by severity. Written as a lookup rather than a ternary chain so a new tone
 // cannot silently fall through to green, which is how the original single-colour
@@ -339,7 +341,7 @@ export default function ManualEntry() {
     e.target.value = "";
     if (!file) return;
     if (file.size > MAX_IMPORT_BYTES) {
-      setSaveMsg(`Not imported — that file is ${(file.size / 1024 / 1024).toFixed(1)}MB, over the 10MB limit.`);
+      setSaveMsg(`Not imported — that file is ${(file.size / 1024 / 1024).toFixed(1)}MB, over the ${MAX_IMPORT_BYTES / 1024 / 1024}MB limit.`);
       setMsgTone("error");
       setImportWarnings([]);
       return;
@@ -625,7 +627,7 @@ export default function ManualEntry() {
             <label className="mb-1.5 block text-xs text-slate-400">Property</label>
             <ResponsiveSelect
               value={Array.isArray(property) ? property[0] : property}
-              onValueChange={(v) => { /* handled by global filters */ }}
+              onValueChange={() => { /* handled by global filters */ }}
               options={propertyOpts}
               placeholder="Select property…"
             />

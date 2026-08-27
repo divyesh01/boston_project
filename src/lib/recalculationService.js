@@ -68,7 +68,7 @@ class RecalculationService {
   }
 
   // Invalidate React Query caches for an entity
-  invalidateEntityCache(entityName, changes) {
+  invalidateEntityCache(entityName, _changes) {
     const queryKeys = this.getQueryKeysForEntity(entityName);
     queryKeys.forEach(key => {
       queryClientInstance.invalidateQueries({ queryKey: key, exact: false });

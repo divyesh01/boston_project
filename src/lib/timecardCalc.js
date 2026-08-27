@@ -38,7 +38,7 @@ import { toCents, fromCents } from '@/lib/decimal';
  * a full datetime is read separately, by `normalisePunch`.
  */
 
-const MS_PER_MIN = 60 * 1000;
+const _MS_PER_MIN = 60 * 1000;
 const MIN_PER_HOUR = 60;
 const MIN_PER_DAY = 24 * 60;
 const DEFAULT_WEEKLY_OT_HOURS = 40;

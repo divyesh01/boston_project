@@ -33,7 +33,7 @@
 
 const {
   VectorClock, ORMap, LWWElementSet,
-  makeDot, parseDot, compareDots,
+  parseDot, compareDots,
   ShiftCRDT, RoomStatusCRDT, TransactionCRDT,
   createSyncEngine,
 } = await import("@/lib/crdtSync");

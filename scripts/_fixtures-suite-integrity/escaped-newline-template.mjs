@@ -1,5 +1,5 @@
 // Fixture: Escaped newline template string (\nPASSED: ...)
-import assert from 'node:assert';
+import _assert from 'node:assert';
 
 let pass = 0;
 let fail = 0;

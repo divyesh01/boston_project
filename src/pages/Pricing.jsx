@@ -241,6 +241,41 @@ export default function Pricing() {
       </div>
 
       <Card
+        title="Base Rates"
+        subtitle="The rack rate per room type the engine multiplies — the anchor for every recommended and pushed rate"
+      >
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          {ROOM_TYPES.map((type) => {
+            const cents = cfg.baseRates?.[type] ?? 0;
+            return (
+              // key includes the stored cents so a blur that rounds the entry
+              // (129.999 → $130.00) remounts the field showing the canonical value.
+              <Input key={`${type}-${cents}`} label={type} hint={money2(fromCents(cents))}>
+                <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-[#0A1628] px-2 py-1.5 focus-within:border-[#6C63FF]/50">
+                  <span className="text-slate-500">$</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    inputMode="decimal"
+                    defaultValue={(cents / 100).toFixed(2)}
+                    onBlur={(e) => updateBaseRate(type, e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                    aria-label={`${type} base rate in dollars`}
+                    className="w-full bg-transparent text-sm tabular-nums text-white outline-none"
+                  />
+                </div>
+              </Input>
+            );
+          })}
+        </div>
+        <p className="mt-3 text-xs text-slate-500">
+          Changes save on blur, cent-exact. The engine clamps every recommendation between{" "}
+          {Math.round((cfg.minMultiplier ?? 0) * 100)}% and {Math.round((cfg.maxMultiplier ?? 0) * 100)}% of these.
+        </p>
+      </Card>
+
+      <Card
         title="Rate Forecast"
         subtitle={`Recommended sell rate per room type (${horizon}-day view)`}
         right={

@@ -16,7 +16,6 @@ import {
 import { ErrorState } from "@/components/ui/status";
 
 const SENTIMENT_COLOR = { positive: "#00E096", neutral: "#FFB547", negative: "#FF6B6B" };
-const CHART_COLORS = ["#6C63FF", "#00D4FF", "#00E096", "#FFB547", "#FF6B6B"];
 
 export default function Reviews() {
   const { dateRange, property } = useGlobalFilters();
@@ -28,7 +27,7 @@ export default function Reviews() {
 
   const [replyId, setReplyId] = useState(null);
   const [draft, setDraft] = useState("");
-  const [showSeed, setShowSeed] = useState(false);
+  const [_showSeed, _setShowSeed] = useState(false);
 
   const stats = useMemo(() => aggregateRating(reviews.map((r) => ({ ...r, sentiment: r.sentiment || scoreSentiment(r.body).sentiment }))), [reviews]);
   const pending = useMemo(() => needsResponse(reviews), [reviews]);

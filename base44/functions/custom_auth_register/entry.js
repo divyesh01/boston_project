@@ -3,8 +3,6 @@ import crypto from "node:crypto";
 import { z } from "npm:zod";
 import { secrets } from "base44:runtime";
 
-const ALLOWED_ROLES = ['owner', 'admin', 'manager', 'front_desk', 'accountant', 'read_only', 'user'];
-
 // ─── APP_ORIGIN_V1 ───────────────────────────────────────────────────────────
 // Where this app lives, for links inside outgoing email.
 //

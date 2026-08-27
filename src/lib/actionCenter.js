@@ -379,7 +379,7 @@ export function buildActionCenter({
         const tier = demandTierOrder[e.demand] || 0;
         return tier > max ? tier : max;
       }, 0);
-      const maxDemandLabel = Object.keys(demandTierOrder).find(k => demandTierOrder[k] === maxDemand) || 'Moderate';
+      const _maxDemandLabel = Object.keys(demandTierOrder).find(k => demandTierOrder[k] === maxDemand) || 'Moderate';
       const closestEvent = dayEvents.reduce((closest, e) => 
         (e.distance || 999) < (closest.distance || 999) ? e : closest
       );

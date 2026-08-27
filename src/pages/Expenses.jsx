@@ -17,6 +17,7 @@ import { sum, inRange, pct, C, money2 } from "@/lib/hotel";
 import { formatNumber } from "@/lib/decimal";
 import { calculatePay, filterCommittedPay } from "@/lib/payrollCalc";
 import { refundTotal } from "@/lib/paymentNorm";
+import { CalculationService } from "@/lib/calculationService";
 import { toast } from "sonner";
 import { EXPENSE_CATEGORIES, EXPENSE_FREQUENCIES, EXPENSE_STATUSES, expenseLabel, frequencyLabel, isStandardCategory, slugifyCategory } from "@/lib/expenseCategories";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeCsvCell } from "@/lib/securityUtils";
@@ -97,12 +98,26 @@ export default function Expenses() {
   const occRows = useMemo(() => occ.filter((r) => inRange(r.date, dateRange.from, dateRange.to)), [occ, dateRange]);
   const payRows = useMemo(() => payRecords.filter((r) => inRange(r.date, dateRange.from, dateRange.to)), [payRecords, dateRange]);
 
-  // Revenue calculations
-  const grossRevenue = sum(occRows, "room_revenue");
+  // Revenue, cost and profit — all cent-exact through the shared
+  // CalculationService (single source of truth). This block was previously
+  // computed inline with uncoerced float reduces: `a + (e.amount || 0)`
+  // silently collapsed operating expenses to $0 when an imported Expense.amount
+  // was the STRING "1250.00" (string concatenation → non-finite → toCents()=0),
+  // and it dropped payroll-category expense rows from totalCosts entirely.
+  // See scripts/probe-expenses-profit-cents.mjs.
   const refundsAndAdjustments = refundTotal(payRows);
-  const netRevenue = grossRevenue - refundsAndAdjustments;
+  const {
+    grossRevenue,
+    netRevenue,
+    totalPayroll,
+    operatingExpenses,
+    totalCosts,
+    operatingProfit,
+    profitMargin,
+  } = CalculationService.calculateProfitMetrics(occRows, payRows, expenses, payroll, dateRange);
 
-  // Cost calculations (scoped to the selected period so they match the revenue window)
+  // Row arrays for the "N records / N entries" counts, scoped to the same window
+  // the service aggregates over so the counts match the money.
   const expensesInPeriod = useMemo(
     () => expenses.filter((e) => inRange(e.expense_date, dateRange.from, dateRange.to)),
     [expenses, dateRange]
@@ -112,15 +127,9 @@ export default function Expenses() {
     () => filterCommittedPay(payroll).filter((p) => inRange(p.pay_period_start, dateRange.from, dateRange.to)),
     [payroll, dateRange]
   );
-  const totalPayroll = sum(payrollInPeriod, "total_pay");
-  const operatingExpenses = (expensesInPeriod || [])
-    .filter((e) => e.category !== "payroll")
-    .reduce((a, e) => a + (e.amount || 0), 0);
-  const totalCosts = totalPayroll + operatingExpenses;
 
-  // Profit
-  const operatingProfit = netRevenue - totalCosts;
-  const profitMargin = netRevenue > 0 ? operatingProfit / netRevenue : 0;
+  // Target-margin planner: what-if guidance derived from the cent-exact
+  // totalCosts/netRevenue. Not a reconciled total, so the ratio math stays float.
   const targetRevenue = targetMargin > 0 ? totalCosts / (1 - targetMargin / 100) : 0;
   const revenueRemaining = targetRevenue - netRevenue;
 
@@ -214,8 +223,8 @@ export default function Expenses() {
 
   const taxableExpenses = expenses.filter((e) => e.taxable !== false);
   const exemptExpenses = expenses.filter((e) => e.taxable === false);
-  const taxableAmount = taxableExpenses.reduce((a, e) => a + (e.amount || 0), 0);
-  const exemptAmount = exemptExpenses.reduce((a, e) => a + (e.amount || 0), 0);
+  const taxableAmount = sum(taxableExpenses, "amount");
+  const exemptAmount = sum(exemptExpenses, "amount");
 
   const expParentRef = useRef();
   const expVirtualizer = useVirtualizer({

@@ -52,7 +52,7 @@ const T = (name, cond, detail = "") => {
 const DATA = join(dirname(fileURLToPath(import.meta.url)), "data");
 const localDb = (await import("@/api/localDb")).default;
 const {
-  createImportSession, failImportSession, rollbackImportSession, listImportSessions,
+  createImportSession, rollbackImportSession, listImportSessions,
 } = await import("@/api/base44Client");
 const { scanReport, importReport } = await import("@/lib/reportParsers");
 // db.entities fails closed for an unauthenticated caller (blocker B3). Without a

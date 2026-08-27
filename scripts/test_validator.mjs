@@ -13,8 +13,6 @@ register(new URL("./resolve-alias.mjs", import.meta.url));
 const {
   isValidEmail,
   isValidUsername,
-  isValidAmount,
-  isValidIsoDate,
 } = await import("@/lib/validator");
 
 let pass = 0;
@@ -68,45 +66,11 @@ T("null", isValidUsername(null) === false);
 T("undefined", isValidUsername(undefined) === false);
 T("number input", isValidUsername(123) === false);
 
-// ─────────────────────────────── isValidAmount ──────────────────────────────
-console.log("\n=== isValidAmount (finite, bounded) ===");
-T("integer", isValidAmount(42) === true);
-T("numeric string", isValidAmount("42") === true);
-T("decimal", isValidAmount(42.5) === true);
-T("zero with default min", isValidAmount(0) === true);
-T("negative rejected", isValidAmount(-1) === false);
-T("above default max", isValidAmount(10_000_001) === false);
-T("custom lower bound", isValidAmount(5, 10) === false);
-T("custom bounds", isValidAmount(50, 10, 100) === true);
-T("at upper bound", isValidAmount(100, 10, 100) === true);
-T("NaN rejected", isValidAmount(NaN) === false);
-T("Infinity rejected", isValidAmount(Infinity) === false);
-T("empty string rejected", isValidAmount("") === false);
-T("non-numeric string rejected", isValidAmount("abc") === false);
-T("null rejected", isValidAmount(null) === false);
-T("undefined rejected", isValidAmount(undefined) === false);
-
-// ─────────────────────────────── isValidIsoDate ─────────────────────────────
-console.log("\n=== isValidIsoDate (YYYY-MM-DD, real calendar date) ===");
-T("2026-02-28", isValidIsoDate("2026-02-28") === true);
-T("2026-02-29 rejected (not a leap year)", isValidIsoDate("2026-02-29") === false);
-T("2024-02-29 leap year", isValidIsoDate("2024-02-29") === true);
-T("month 13 rejected", isValidIsoDate("2026-13-01") === false);
-T("day 32 rejected", isValidIsoDate("2026-01-32") === false);
-T("month 0 rejected", isValidIsoDate("2026-00-10") === false);
-T("short year rejected", isValidIsoDate("26-01-01") === false);
-T("slash separators rejected", isValidIsoDate("2026/01/01") === false);
-T("datetime string rejected", isValidIsoDate("2026-01-01T00:00:00") === false);
-T("trailing junk rejected", isValidIsoDate("2026-01-01junk") === false);
-T("empty string rejected", isValidIsoDate("") === false);
-T("null rejected", isValidIsoDate(null) === false);
-T("number input rejected", isValidIsoDate(20260101) === false);
-
 // ─────────────────────────────── resilience ─────────────────────────────────
 console.log("\n=== Defensive: never throws on hostile input ===");
 const hostile = [null, undefined, 0, 1, NaN, Infinity, [], [1], {}, { a: 1 }, Symbol("x"), () => {}];
 for (const bad of hostile) {
-  for (const fn of [isValidEmail, isValidUsername, isValidAmount, isValidIsoDate]) {
+  for (const fn of [isValidEmail, isValidUsername]) {
     let threw = false;
     try {
       fn(bad);

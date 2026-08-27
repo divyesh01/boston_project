@@ -72,7 +72,7 @@ if (guardMatch) {
     !/import\.meta/.test(rewritten),
     'import.meta is a SyntaxError inside new Function, so a miss here would be silent');
   try {
-    // eslint-disable-next-line no-new-func
+     
     evalGuard = new Function('env', `return !!(${rewritten});`);
   } catch (e) {
     check('the extracted condition is evaluable', false, e.message);
@@ -132,7 +132,7 @@ if (rawLine && endLine) {
   check('the extracted resolution contains no un-rewritten import.meta',
     !/import\.meta/.test(src), 'would be a silent SyntaxError otherwise');
   try {
-    // eslint-disable-next-line no-new-func
+     
     evalEndpoint = new Function('env', src);
   } catch (e) {
     check('the extracted resolution is evaluable', false, e.message);

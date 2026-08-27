@@ -34,6 +34,22 @@ function headerAliases(field) {
   return [normalizeHeader(field.key), normalizeHeader(field.label)].filter(Boolean);
 }
 
+// parseAmount is built on parseFloat, which reads a leading number and DISCARDS
+// any trailing garbage: "12abc" -> 12, "1.2.3" -> 1.2, "12%" -> 12. That is a
+// partial read, and this grid's contract (see header) is that nothing is silently
+// defaulted. So before trusting a numeric cell we confirm it is a CLEAN number —
+// the same normalisation parseAmount applies ($ , whitespace, the three negative
+// conventions), with the residue required to be a bare decimal. A cell that only
+// partially parses is treated as unreadable: blanked, with a paired warning.
+function isCleanNumber(raw) {
+  let body = String(raw).trim().replace(/[$,\s]/g, "");
+  if (body.startsWith("(") && body.endsWith(")")) body = body.slice(1, -1);
+  if (body.startsWith("-")) body = body.slice(1);
+  else if (body.endsWith("-")) body = body.slice(0, -1);
+  body = body.replace(/[()]/g, "");
+  return /^(\d+\.?\d*|\.\d+)$/.test(body);
+}
+
 // One cell -> the value the grid stores. Numbers go through parseAmount so
 // "$1,234.56" and "(50.00)" read correctly instead of failing Number() at save
 // time; dates go through convertDate so "04/01/2026" normalises to ISO.
@@ -46,7 +62,7 @@ function coerceCell(raw, field) {
   if (!val) return { value: '' };
   if (field.type === 'number') {
     const n = parseAmount(val);
-    if (n === null) return { value: '', problem: `"${val}" is not a number` };
+    if (n === null || !isCleanNumber(val)) return { value: '', problem: `"${val}" is not a number` };
     return { value: n };
   }
   if (field.type === 'date') {

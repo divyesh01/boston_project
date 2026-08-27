@@ -374,9 +374,10 @@ console.log("\n7. the row caps that silently dropped the newest rows are gone");
   ok("reportParsers passes no row limit to any read either",
     !CAPPED_READ.test(code(rp)),
     "sorted ascending then sliced, so the rows dropped were the ones just imported");
-  ok("…including the transaction dedupe read, on the ledger that must reconcile to the cent",
-    /TransactionLine\.filter\(\s*restMeta\.propertyId[^;]*?"date"\s*\)/s.test(code(rp)),
-    "1000000 rows sorted by date ascending, then sliced");
+  ok("…including the transaction dedupe read — now a date-bounded indexed lookup on the ledger that must reconcile to the cent",
+    /existingTxnDedupeKeys\(\s*db\.entities\.TransactionLine/.test(code(rp)) &&
+    /query\.date\s*=\s*\{\s*\$gte:/.test(code(rp)),
+    "the whole-property materialization was replaced by a [property_id+date] window read (see scripts/probe-dedupe-indexed-lookup.mjs)");
   ok("…and skipExisting still narrows by the dates it is importing",
     /filter\[dateField\]\s*=\s*\{\s*\$in:\s*dates\s*\}/.test(code(rp)));
   ok("…and dedupePropertyRows still reads the whole property, which is its job",

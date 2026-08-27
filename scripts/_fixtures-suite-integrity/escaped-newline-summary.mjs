@@ -1,11 +1,11 @@
 // Fixture: Escaped newline string prefix (\nPASSED: ...)
-import assert from 'node:assert';
+import _assert from 'node:assert';
 
-let passed = 0;
+let _passed = 0;
 let failed = 0;
 
 if (Math.abs(-5) === 5) {
-  passed++;
+  _passed++;
 } else {
   failed++;
 }

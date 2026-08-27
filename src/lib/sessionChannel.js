@@ -23,7 +23,7 @@ function getPostChannel() {
   if (typeof BroadcastChannel === 'undefined') return null;
   try {
     postChannel = new BroadcastChannel(CHANNEL_NAME);
-  } catch (e) {
+  } catch {
     postChannel = null;
   }
   return postChannel;
@@ -42,13 +42,13 @@ export function postSessionRevoked(payload) {
   if (ch) {
     try {
       ch.postMessage(message);
-    } catch (e) {
+    } catch {
       // BroadcastChannel failed; storage fallback below still fires.
     }
   }
   try {
     localStorage.setItem(REVOCATION_KEY, JSON.stringify(message));
-  } catch (e) {
+  } catch {
     // Storage unavailable; nothing more we can do here.
   }
 }
@@ -70,7 +70,7 @@ export function subscribeSessionRevoked(handler) {
       try {
         const data = JSON.parse(e.newValue);
         if (isRevocationMessage(data)) handler(data);
-      } catch (err) {
+      } catch {
         // Ignore malformed sentinel writes.
       }
     }
@@ -84,7 +84,7 @@ export function subscribeSessionRevoked(handler) {
       ch.onmessage = null;
       try {
         ch.close();
-      } catch (e) {
+      } catch {
         // Already closed.
       }
     }

@@ -41,7 +41,7 @@
 //
 // Run: node scripts/probe-no-real-credentials.mjs
 
-import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { REPO_ROOT } from './_repo-root.mjs';
 

@@ -31,8 +31,8 @@ export default function RoomBoard() {
   const tasksQ = useHousekeepingTasks(dateRange, property);
   const { data: occ = [], isLoading } = occQ;
   const { data: rooms = [], isLoading: roomsLoading } = roomsQ;
-  const { data: stays = [], isLoading: staysLoading } = staysQ;
-  const { data: tasks = [], isLoading: tasksLoading } = tasksQ;
+  const { data: stays = [] } = staysQ;
+  const { data: tasks = [] } = tasksQ;
   const { data: reservations = [], isLoading: reservationsLoading } = useReservations(dateRange, property);
   const { data: weatherSnapshots = [] } = useWeatherSnapshots(property);
 

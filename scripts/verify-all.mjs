@@ -44,7 +44,7 @@
 import { readdirSync, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 // The verdict logic lives in _verdict.mjs so it can be regression-tested on its
@@ -302,7 +302,7 @@ if (AS_JSON) {
     badExit: badExit.length,
     skipped: skipped.length,
     diagnostics: diagnostics.length,
-    suites: results.map(({ output, ...rest }) => rest),
+    suites: results.map(({ output: _output, ...rest }) => rest),
   }, null, 2));
 } else {
   console.log(`\n${"─".repeat(78)}`);

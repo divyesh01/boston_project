@@ -99,7 +99,7 @@ function amt(s) {
   s = String(s).trim();
   if (!s) return 0;
   const neg = (s.startsWith('(') && s.endsWith(')')) || s.startsWith('-');
-  const n = parseFloat(s.replace(/[\$,\(\)\s]/g, ''));
+  const n = parseFloat(s.replace(/[$,()\s]/g, ''));
   return Number.isFinite(n) ? (neg ? -n : n) : 0;
 }
 function isoDate(s) {
@@ -497,20 +497,20 @@ const WEEK = ['2026-01-04', '2026-01-10'];
 
 const occSrc = srcOccupancy('Occupancy Summary midelboro.csv');
 const paySrc = srcPayments('Payments Summary.csv');
-const pay1Src = srcPayments('Payments Summary (1).csv');
-const pay2Src = srcPayments('Payments Summary (2).csv');
+const _pay1Src = srcPayments('Payments Summary (1).csv');
+const _pay2Src = srcPayments('Payments Summary (2).csv');
 const grossSrc = srcGross('Gross Revenue Report midelboro.csv');
 const src1 = srcSource('Source Summary (1).csv');
 const srcJan = srcWindow(src1, ...JAN);
-const srcJul = srcWindow(src1, ...JUL);
-const srcApr = srcWindow(srcSource('Source Summary (2).csv'), ...APR);
-const srcFull = srcWindow(src1, ...FULL);
+const _srcJul = srcWindow(src1, ...JUL);
+const _srcApr = srcWindow(srcSource('Source Summary (2).csv'), ...APR);
+const _srcFull = srcWindow(src1, ...FULL);
 
 const occAll = await db.entities.OccupancyDay.list('date');
 const payAll = await db.entities.PaymentDay.list('date');
 const srcAll = await db.entities.SourceDay.list('date');
 const grossAll = await db.entities.GrossRevenueDay.list('date');
-const clerkAll = await db.entities.ClerkShiftRecord.list('-created_date');
+const _clerkAll = await db.entities.ClerkShiftRecord.list('-created_date');
 
 const occIn = (from, to) => occAll.filter((r) => hotel.inRange(r.date, from, to));
 const payIn = (from, to) => payAll.filter((r) => hotel.inRange(r.date, from, to));
@@ -547,7 +547,7 @@ console.log('\n=== 2. FINANCIAL METRICS: Dashboard vs Source ===');
   const pRows = payIn(f, t);
   T('2.6 Payments (Jan) — Total col', pS.total, hotel.sum(pRows, 'total'), pS.total - hotel.sum(pRows, 'total'));
   T('2.7 Card volume (Jan)', pS.cardVolume, hotel.sum(pRows, 'visa') + hotel.sum(pRows, 'master') + hotel.sum(pRows, 'amex') + hotel.sum(pRows, 'discover'), pS.cardVolume - (hotel.sum(pRows, 'visa') + hotel.sum(pRows, 'master') + hotel.sum(pRows, 'amex') + hotel.sum(pRows, 'discover')));
-  const refundsDash = hotel.sum(pRows, 'closed_balance_folio') + hotel.sum(pRows, 'loyalty_discount');
+  const _refundsDash = hotel.sum(pRows, 'closed_balance_folio') + hotel.sum(pRows, 'loyalty_discount');
   T('2.8 Refunds (Jan) — |closed balance folio|+|loyalty discount|', pS.refunds, Math.abs(hotel.sum(pRows, 'closed_balance_folio')) + Math.abs(hotel.sum(pRows, 'loyalty_discount')), pS.refunds - (Math.abs(hotel.sum(pRows, 'closed_balance_folio')) + Math.abs(hotel.sum(pRows, 'loyalty_discount'))), { note: 'refund model per aiEngine/MoneyKept' });
 
   const gSrc = grossWindow(grossSrc, f, t);
@@ -774,7 +774,7 @@ if (!skipSection('5')) {
   }
   const weekBuckets = [...weeks.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   const wk1 = weekBuckets[0];
-  const wk1Src = aggWindow(occSrc, wk1[0], new Date(`${wk1[0]}T00:00:00`).toISOString() !== '' ? wk1[0] : wk1[0]);
+  const _wk1Src = aggWindow(occSrc, wk1[0], new Date(`${wk1[0]}T00:00:00`).toISOString() !== '' ? wk1[0] : wk1[0]);
   // expected = sum of source rows within that ISO week window
   const wk1End = new Date(new Date(`${wk1[0]}T00:00:00`).getTime() + 6 * 86400000).toISOString().slice(0, 10);
   const wk1SrcSum = aggWindow(occSrc, wk1[0], wk1End).revenue;
@@ -826,7 +826,7 @@ if (!skipSection('6')) {
   await db.entities.PayrollRun.create({ property_id: pid1, pay_period_start: '2026-02-01', pay_period_end: '2026-02-15', employee_name: 'Front Desk', total_pay: 3400.00, payroll_status: 'completed', created_date: new Date().toISOString() });
 
   mk2 = await moneyKeptMirror({ from: f, to: t, pid: String(pid1), label: PROP.name });
-  const expRow = mk2.items.find((i) => i.key === 'laundry' || i.key === 'other');
+  const _expRow = mk2.items.find((i) => i.key === 'laundry' || i.key === 'other');
   T('6.1 Expense entry appears in deductions', 1450.75, (mk2.items.find((i) => i.key === 'laundry')?.amount || 0) + (mk2.items.find((i) => i.key === 'other')?.amount || 0), 1450.75 - ((mk2.items.find((i) => i.key === 'laundry')?.amount || 0) + (mk2.items.find((i) => i.key === 'other')?.amount || 0)));
   T('6.2 Payroll counted in window (Jan: 2 of 3 periods)', 6800, mk2.items.find((i) => i.key === 'payroll')?.amount || 0, 6800 - (mk2.items.find((i) => i.key === 'payroll')?.amount || 0), { note: 'recurring biweekly payroll; Feb period excluded from Jan window' });
 
@@ -972,7 +972,7 @@ if (!skipSection('9')) {
 
   // Q5 taxes — no tax intent; documented fallback
   const q5 = await ask('What were my taxes in January 2026?', '', '');
-  const hasTaxInfo = /tax/i.test(q5.answer);
+  const _hasTaxInfo = /tax/i.test(q5.answer);
   T('9.5 AI taxes question returns (documented: summary fallback, no tax intent)', 'summary-fallback', q5.answer.slice(0, 60), undefined, { ok: !/missing|couldn't find/i.test(q5.answer), note: q5.answer.replace(/\n/g, ' | ').slice(0, 120) });
 
   // Q6 expenses
@@ -1018,7 +1018,7 @@ async function countDupes(table, keyFn) {
 
 // Mirror of the MoneyKept.jsx calculation (component uses these exact steps; this
 // port exists so we can drive it in Node. It imports the same lib functions.)
-async function moneyKeptMirror({ from, to, pid, label }) {
+async function moneyKeptMirror({ from, to, pid, label: _label }) {
   const occRows = (await db.entities.OccupancyDay.list('date')).filter((r) => hotel.inRange(r.date, from, to));
   const srcRows = (await db.entities.SourceDay.list('date')).filter((r) => hotel.inRange(r.date, from, to));
   const grossRows = (await db.entities.GrossRevenueDay.list('date')).filter((r) => hotel.inRange(r.date, from, to));

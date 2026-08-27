@@ -1,5 +1,12 @@
 // Direct CSV parser — handles date formats like "1-Jan-26", currency "$1,337.80", negatives "($100.00)"
 
+// Single source of truth for the import file-size ceiling. Every parse-path
+// gate (fetchCsvRows, getRowsArray's pre-read text branch, uploadGuard,
+// ManualEntry) reads THIS constant so the app never enforces two different
+// limits on the same upload. Sized to admit a real ~100k-row transactions
+// export (~15–30 MB) with headroom while still rejecting absurd files.
+export const MAX_IMPORT_BYTES = 50 * 1024 * 1024; // 50 MB
+
 const MONTH_MAP = {
   jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
   jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
@@ -292,22 +299,15 @@ export function detectSections(rawRows) {
   return sections;
 }
 
-export async function fetchCsvRows(fileUrl) {
-  // Strip the hash fragment from the URL before fetching to prevent fetch errors with blob URLs in some environments
-  const cleanUrl = fileUrl.split('#')[0];
-  const res = await fetch(cleanUrl);
-  if (!res.ok) throw new Error(`Failed to fetch CSV: ${res.statusText}`);
-  
-  const contentLength = res.headers.get('content-length');
-  if (contentLength && parseInt(contentLength, 10) > 10 * 1024 * 1024) {
-    throw new Error('File exceeds 10MB size limit');
-  }
-
-  const text = await res.text();
-  if (text.length > 10 * 1024 * 1024) {
-    throw new Error('File exceeds 10MB size limit');
-  }
-
+// Offload a CSV string to the parse worker and resolve its tokenised rows.
+//
+// This is the ONE place a Worker is constructed for CSV parsing, shared by
+// fetchCsvRows (fetched files) and reportParsers.getRowsArray (files the UI
+// pre-read into meta.csvText). Routing the pre-read path here too is what keeps
+// a 100k-row import off the main thread — parsing a string of that size inline
+// froze the tab. The worker's handler is synchronous, so the test harness runs
+// it in-process (scripts/_dom-shims.mjs) with identical row output.
+export function parseTextInWorker(text) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./parser.worker.js', import.meta.url), { type: 'module' });
     worker.onmessage = (e) => {
@@ -321,6 +321,25 @@ export async function fetchCsvRows(fileUrl) {
     };
     worker.postMessage({ text });
   });
+}
+
+export async function fetchCsvRows(fileUrl) {
+  // Strip the hash fragment from the URL before fetching to prevent fetch errors with blob URLs in some environments
+  const cleanUrl = fileUrl.split('#')[0];
+  const res = await fetch(cleanUrl);
+  if (!res.ok) throw new Error(`Failed to fetch CSV: ${res.statusText}`);
+
+  const contentLength = res.headers.get('content-length');
+  if (contentLength && parseInt(contentLength, 10) > MAX_IMPORT_BYTES) {
+    throw new Error(`File exceeds ${MAX_IMPORT_BYTES / (1024 * 1024)}MB size limit`);
+  }
+
+  const text = await res.text();
+  if (text.length > MAX_IMPORT_BYTES) {
+    throw new Error(`File exceeds ${MAX_IMPORT_BYTES / (1024 * 1024)}MB size limit`);
+  }
+
+  return parseTextInWorker(text);
 }
 
 export function isCsvFile(fileUrl) {

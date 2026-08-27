@@ -7,7 +7,7 @@ if (!globalThis.crypto) {
 }
 globalThis.sessionStorage = { getItem: () => null, setItem: () => {} };
 
-const token = getCsrfToken();
+getCsrfToken();
 console.log("Cookie generated:", document.cookie);
 
 let pass = 0;

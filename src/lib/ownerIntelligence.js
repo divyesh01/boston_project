@@ -1,6 +1,5 @@
 import { CalculationService } from '@/lib/calculationService';
-import { getAlertThresholds } from '@/lib/alertThresholds';
-import { sumCents, toCents, fromCents } from '@/lib/decimal';
+import { sumCents, fromCents } from '@/lib/decimal';
 import { refundOf } from '@/lib/paymentNorm';
 import { filterCommittedPay } from '@/lib/payrollCalc';
 import { money, inRange } from '@/lib/hotel';
@@ -135,7 +134,7 @@ export class OwnerIntelligenceService {
   }
   
   // OTA profitability analysis
-  static analyzeOtaProfitability(srcRows = [], occRows = [], properties = []) {
+  static analyzeOtaProfitability(srcRows = [], occRows = [], _properties = []) {
     const channelMetrics = CalculationService.calculateChannelMetrics(srcRows);
     const occMetrics = CalculationService.calculateOccupancyMetrics(occRows, {});
     
@@ -153,7 +152,7 @@ export class OwnerIntelligenceService {
   }
   
   // Upcoming high-demand dates
-  static findUpcomingHighDemand(occRows = [], properties = [], daysAhead = 30) {
+  static findUpcomingHighDemand(occRows = [], _properties = [], daysAhead = 30) {
     // This would need future booking data; for now, use historical patterns
     const now = new Date();
     const upcoming = [];
@@ -195,7 +194,7 @@ export class OwnerIntelligenceService {
   // file reported a ratio and a dollar figure that described no real period.
   // When no range is supplied the arrays are taken as already scoped by the
   // caller, since there is nothing to scope them by.
-  static detectProfitLeakage(occRows = [], payRows = [], expenses = [], payroll = [], srcRows = [], properties = [], dateRange = { from: '', to: '' }) {
+  static detectProfitLeakage(occRows = [], payRows = [], expenses = [], payroll = [], srcRows = [], _properties = [], dateRange = { from: '', to: '' }) {
     const leaks = [];
     
     // 1. High OTA commission leakage
@@ -265,7 +264,7 @@ export class OwnerIntelligenceService {
   }
   
   // Comprehensive executive summary
-  static generateExecutiveInsights(occRows = [], payRows = [], expenses = [], payroll = [], srcRows = [], grossRows = [], properties = [], dateRange = { from: '', to: '' }) {
+  static generateExecutiveInsights(occRows = [], payRows = [], expenses = [], payroll = [], srcRows = [], _grossRows = [], properties = [], dateRange = { from: '', to: '' }) {
     const insights = [];
     
     // Revenue trend

@@ -45,9 +45,9 @@ const T = (name, cond, detail = "") => {
 
 const { scanReport, importReport, REPORT_TYPES } = await import("@/lib/reportParsers");
 const localDb = (await import("@/api/localDb")).default;
-const { db } = await import("@/api/base44Client");
+await import("@/api/base44Client");
 const {
-  normalisePunch, shiftDurationMinutes, reconcileTimecards, applyBreaks,
+  normalisePunch, shiftDurationMinutes, reconcileTimecards,
 } = await import("@/lib/timecardCalc");
 // db.entities fails closed for an unauthenticated caller (blocker B3), so the
 // suite has to sign in before it reads or writes a single row.

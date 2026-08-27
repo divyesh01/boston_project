@@ -106,7 +106,7 @@ export default function DataIntelligence() {
   const { data: files = [], refetch } = filesQ;
   const { data: existingData = {} } = entitiesQ;
 
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab] = useState('dashboard');
   const [scanning, setScanning] = useState(false);
   const [scanResults, setScanResults] = useState([]);
   const [automationRules, setAutomationRules] = useState([]);
@@ -293,7 +293,7 @@ export default function DataIntelligence() {
     return fullReport;
   };
 
-  const handleExportReport = async (format = 'json') => {
+  const handleExportReport = async (_format = 'json') => {
     const report = await generateReport();
     toast.success(`Generated analysis report for ${scanResults.length} file(s)`);
     return report;

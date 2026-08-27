@@ -1,7 +1,7 @@
 // This file mentions FAIL in a comment only:
 // FAIL if something went wrong
 // It has assertions and an exit path, but NO real summary
-import assert from 'node:assert';
+import _assert from 'node:assert';
 
 let failed = 0;
 if (2 * 2 !== 4) {

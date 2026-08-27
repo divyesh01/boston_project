@@ -994,7 +994,7 @@ section("17. The TOTP seed never leaves the server except once, for enrolment");
     // allowlist. This is the check that would have caught mfa_secret_pending on
     // the day it was added, without anyone having to think of it.
     const schema = read("base44/entities/User.jsonc");
-    const declared = [...schema.matchAll(/^    "([a-z_]+)": \{/gm)].map((m) => m[1]);
+    const declared = [...schema.matchAll(/^ {4}"([a-z_]+)": \{/gm)].map((m) => m[1]);
     // `must_change_password` matches the word "password" but is a boolean flag,
     // not credential material — the UI needs it to force the change-password
     // screen, so it is public on purpose. Named explicitly rather than tightened

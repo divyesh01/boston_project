@@ -156,6 +156,54 @@ the wrong package — always use `npm run typecheck`.**
 > this OneDrive mount — verify with `git hash-object <path>` against
 > `git rev-parse HEAD:<path>`. Check `PROTECTED_FILES.md` before editing anything.
 
+> [!NOTE]
+> **Audit remediation batch, 2026-08-26 → 2026-08-27.** An owner-directed sweep of the
+> read-only audit problem-list landed, most-critical first, each fix root-caused
+> upstream and pinned by a standalone probe in `scripts/`. Money-math (integer-cents
+> per the BUSINESS directive): `Expenses.jsx`, `Payments.jsx` and `Payroll.jsx` re-did
+> inline float `reduce` aggregation over persisted dollar fields — string amounts like
+> `"1250.00"` silently collapsed operating expenses toward zero and IEEE-754 residue
+> leaked into KPIs and reconciliation — all replaced with `sumCents`/`fromCents`/
+> `subtract` from `decimal.js` (probes `probe-expenses-profit-cents`,
+> `probe-payments-cent-aggregation`, `probe-payroll-cent-aggregation`).
+> `ownerIntelligence.detectProfitLeakage` was already cent-exact and left intact.
+> Property isolation: `reportParsers.importReport` now fails closed on a missing/blank
+> `propertyId` before any row is written (empty id degraded `skipExisting` to a
+> cross-property scan), and the dormant cloud `aiAssistant` function gained real
+> server-side row scoping via the new Node-testable `base44/utils/aiScope.js`
+> (`resolveAllowedIds` + `scopeSyntheticRows`), which the live local `aiEngine.js` path
+> already enforced (probes `probe-import-property-guard`, `probe-aiassistant-scope`).
+> Ingestion: CSV parsing was offloaded to the worker via `parseTextInWorker` with a
+> single-source `MAX_IMPORT_BYTES` (10MB → 50MB, owner-chosen) threaded through
+> `csvParser.js`, `reportParsers.js`, `uploadGuard.js` and `ManualEntry.jsx`; the
+> timecard punch path now rejects non-ISO dates with `isIsoDate` (matching the ledger
+> and flat-table paths); and `manualEntryImport.coerceCell` stopped silently truncating
+> partial numbers like `"12abc"` (probes `probe-csv-worker-offload`,
+> `probe-timecard-date-guard`, `probe-manual-entry-import`). Tax: the `Payments.jsx`
+> "Tax Management" card was rebuilt on `CalculationService.calculateTaxLiability` — the
+> same per-property, date-windowed engine Money Kept deducts from — replacing a
+> divergent flat per-source model (probe `probe-payments-tax-liability`). Performance:
+> the `TransactionLine` import dedupe read stopped materializing the whole property
+> ledger, now issuing a date-windowed indexed lookup via `existingTxnDedupeKeys` with a
+> full-scan fallback for non-ISO dates (probe `probe-dedupe-indexed-lookup`, regression
+> gate built first). Dead code: `validator.js` shed the unused `isValidAmount`/
+> `isValidIsoDate` exports (test-only importer updated). UI: `MtdGrowth.jsx` KPI cards
+> gained a 3-state flat indicator and `Pricing.jsx` got its wired base-rate editor.
+> Hygiene: the hidden lint warnings were unhidden and burned down 214 → 48 with 0
+> errors — the residual 48 are 32 in PROTECTED files plus 16 `react-hooks/exhaustive-deps`
+> left by standing instruction — via behaviour-neutral `_`-prefixing of genuinely-unused
+> bindings (ESLint allows `/^_/`), which accounts for the many small 2–4 line diffs in
+> this batch; and `graphify-out/` (399 tracked scratch files, already git-ignored) was
+> untracked. Owner-decision items left open and surfaced, not blind-edited: reviving
+> User/Session RLS (cloud backend retired), the accepted browser-trust boundary, the
+> `--quiet` flag still on the `package.json` lint script, and root doc consolidation
+> (the CLAUDE.md directive hierarchy references the root `*.md` files by path). Verified
+> across the batch (Observed): `npm run typecheck` 0 errors, `eslint .` 0 errors,
+> `npx vitest run` 42 files/333 tests, and the money/ingestion/isolation regression
+> suites (`verify-transactions`, `verify-coexistence`, `verify-statistics`,
+> `verify-anomaly-ingestion`, `probe-money-kept*`, `probe-float-money`,
+> `probe-decimal-integration`) green.
+
 PHASE 4.5: SECURITY VALIDATION (INSERT BEFORE LAUNCH)
 
 Input: The complete codebase + the security checklist

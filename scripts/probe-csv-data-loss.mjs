@@ -147,7 +147,7 @@ console.log('\n=== 6. A column literally named __proto__ ===');
     JSON.stringify(Object.values(obj)));
   T('all three cells are present', Object.keys(obj).length === 3, `keys=${Object.keys(obj).join(',')}`);
   T('nothing was written to Object.prototype',
-    // eslint-disable-next-line no-prototype-builtins
+     
     ({}).MUST_SURVIVE === undefined && Object.prototype.MUST_SURVIVE === undefined);
 
   // Two of them: previously this produced {} — both cells lost.

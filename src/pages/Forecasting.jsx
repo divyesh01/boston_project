@@ -31,7 +31,7 @@ function buildPropertyFilter(property) {
 }
 
 export default function Forecasting() {
-  const { property, properties, accessibleProperties, dateRange, months, year } = useGlobalFilters();
+  const { property, properties, dateRange, months } = useGlobalFilters();
   const occQ = useOccupancy(dateRange, property, months);
   const { data: occ = [] } = occQ;
   const propertyKey = Array.isArray(property) ? property.join(",") : property;
@@ -136,8 +136,6 @@ export default function Forecasting() {
     Historical: d.historical,
     Forecast: d.forecast,
   }));
-
-  const propOpts = (accessibleProperties.length ? accessibleProperties : properties).map((p) => [p.id, p.name]);
 
   return (
     <div className="space-y-6">

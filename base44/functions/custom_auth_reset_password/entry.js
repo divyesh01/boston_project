@@ -34,7 +34,7 @@ function validatePasswordStrength(password) {
   if (!/[a-z]/.test(password)) return 'Password must include at least one lowercase letter.';
   if (!/[A-Z]/.test(password)) return 'Password must include at least one uppercase letter.';
   if (!/[0-9]/.test(password)) return 'Password must include at least one number.';
-  if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) return 'Password must include at least one special character.';
+  if (!/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(password)) return 'Password must include at least one special character.';
   if (/(.)\1{2,}/.test(password)) return 'Password must not contain repeating characters.';
   if (/[\n\r\u2028\u2029]/.test(password)) return 'Password must not contain line breaks.';
   return null;

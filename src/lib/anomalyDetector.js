@@ -521,7 +521,7 @@ function detectRoundNumberFraud(rows) {
 
 // Rule 10: refund classification. A deposit note is evidence; an amount alone
 // is not. An unclear exact $100 stays visible for owner review.
-function detectDepositRefunds(refunds, thresholds) {
+function detectDepositRefunds(refunds, _thresholds) {
   const flags = [];
   for (const r of refunds) {
     const amt = Math.abs(Number(r.amount) || 0);

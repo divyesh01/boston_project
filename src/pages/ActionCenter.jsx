@@ -225,10 +225,6 @@ export default function ActionCenter() {
         {upcomingDays.length > 0 ? (
           <div className="space-y-3">
             {upcomingDays.map(([date, dayEvents]) => {
-                  const maxDemand = dayEvents.reduce((max, e) => {
-                    const order = { 'Maximum': 4, 'Very High': 3, 'High': 2, 'Moderate to High': 1.5, 'Moderate': 1 };
-                    return Math.max(max, order[e.demand] || 0);
-                  }, 0);
                   const demandColors = {
                     'Maximum': 'bg-red-500/20 text-red-400 border-red-500/30',
                     'Very High': 'bg-orange-500/20 text-orange-400 border-orange-500/30',

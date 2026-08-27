@@ -36,7 +36,7 @@ function blip({ freq = 520, end = 900, dur = 0.06, type = "sine", gain = 0.045, 
     g.connect(ac.destination);
     osc.start(t0);
     osc.stop(t0 + dur + 0.01);
-  } catch (e) {
+  } catch {
     /* audio is best-effort only */
   }
 }
@@ -57,7 +57,7 @@ function noiseBurst({ dur = 0.08, gain = 0.05 }) {
     src.connect(g);
     g.connect(ac.destination);
     src.start(t0);
-  } catch (e) {
+  } catch {
     /* ignored */
   }
 }

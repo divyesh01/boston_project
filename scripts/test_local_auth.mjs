@@ -1,7 +1,7 @@
 // Local Auth Implementation Test Harness
 // Tests the core authentication logic without requiring IndexedDB
 
-import { hashPassword, verifyPassword, generateSalt, generateToken, isCryptoAvailable, validatePasswordStrength } from '../src/lib/security.js';
+import { hashPassword, verifyPassword, generateSalt, generateToken, validatePasswordStrength } from '../src/lib/security.js';
 
 // Mock audit log chain secret
 let auditChainSecret = 'test-secret';
@@ -111,10 +111,6 @@ function findUserByIdentity(identifier) {
     }
   }
   return null;
-}
-
-function findUserById(id) {
-  return users.get(id) || null;
 }
 
 // Test functions

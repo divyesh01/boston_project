@@ -32,9 +32,12 @@
 // upload call would arrive after the hostile bytes had already reached the
 // parser. Validate first, then read.
 
-/** Largest file we will accept. Matches csvParser.js:302/307, which reject a
- *  larger payload later anyway — enforcing it here fails fast and cheaply. */
-export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+/** Largest file we will accept. Re-exported from csvParser's MAX_IMPORT_BYTES,
+ *  the single source of truth the parser itself enforces later — so this
+ *  fail-fast door and the parse-time ceiling can never drift to two different
+ *  limits on the same upload. */
+import { MAX_IMPORT_BYTES } from "@/lib/csvParser";
+export const UPLOAD_MAX_BYTES = MAX_IMPORT_BYTES;
 
 /** The only extensions the import pipeline can parse. */
 const ALLOWED_EXT = /\.(csv|xlsx|xls)$/i;
@@ -68,7 +71,7 @@ export async function inspectUploadFile(file) {
   }
 
   if (Number(file.size) > UPLOAD_MAX_BYTES) {
-    return { ok: false, reason: `File ${name} exceeds the 10MB limit and will not be processed.` };
+    return { ok: false, reason: `File ${name} exceeds the ${UPLOAD_MAX_BYTES / (1024 * 1024)}MB limit and will not be processed.` };
   }
 
   // Magic-byte inspection. Only the first four bytes are needed, so this never

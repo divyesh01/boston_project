@@ -617,7 +617,7 @@ export default function Payroll() {
         // Audit log for bulk historical posting
         // Total the records actually written rather than reading it off the
         // preview, so the audit line stays true even if the preview is stale.
-        const postedTotal = recordsToCreate.reduce((a, r) => a + (Number(r.total_pay) || 0), 0);
+        const postedTotal = fromCents(sumCents(recordsToCreate.map((r) => r.total_pay || 0)));
         try {
           await db.audit.log({
             username: "system",
@@ -726,11 +726,11 @@ export default function Payroll() {
       return {
         source: "Actual",
         count: actual.length,
-        regular: actual.reduce((a, p) => a + (p.regular_pay || 0), 0),
-        overtime: actual.reduce((a, p) => a + (p.overtime_pay || 0), 0),
-        bonus: actual.reduce((a, p) => a + (p.bonus || 0), 0),
-        deductions: actual.reduce((a, p) => a + (p.deductions || 0), 0),
-        total: actual.reduce((a, p) => a + (p.total_pay || 0), 0),
+        regular: fromCents(sumCents(actual.map((p) => p.regular_pay || 0))),
+        overtime: fromCents(sumCents(actual.map((p) => p.overtime_pay || 0))),
+        bonus: fromCents(sumCents(actual.map((p) => p.bonus || 0))),
+        deductions: fromCents(sumCents(actual.map((p) => p.deductions || 0))),
+        total: fromCents(sumCents(actual.map((p) => p.total_pay || 0))),
       };
     }
     let count = 0, regular = 0, overtime = 0, bonus = 0, deductions = 0;
@@ -792,13 +792,13 @@ export default function Payroll() {
   };
 
   // ─── KPIs ───
-  const totalPay = payroll.reduce((a, p) => a + (p.total_pay || 0), 0);
+  const totalPay = fromCents(sumCents(payroll.map((p) => p.total_pay || 0)));
   // What the dashboard actually deducts: approved + paid only. Showing it next
   // to the gross total is what tells the owner why the two figures differ.
   const committedPay = sumCommittedPay(payroll);
-  const totalOT = payroll.reduce((a, p) => a + (p.overtime_pay || 0), 0);
-  const totalBonus = payroll.reduce((a, p) => a + (p.bonus || 0), 0);
-  const totalDeductions = payroll.reduce((a, p) => a + (p.deductions || 0), 0);
+  const totalOT = fromCents(sumCents(payroll.map((p) => p.overtime_pay || 0)));
+  const totalBonus = fromCents(sumCents(payroll.map((p) => p.bonus || 0)));
+  const totalDeductions = fromCents(sumCents(payroll.map((p) => p.deductions || 0)));
   const draftCount = payroll.filter((p) => p.payroll_status === "draft").length;
   const approvedCount = payroll.filter((p) => p.payroll_status === "approved").length;
   const paidCount = payroll.filter((p) => p.payroll_status === "paid").length;

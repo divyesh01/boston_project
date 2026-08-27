@@ -28,7 +28,7 @@ function SidebarBrand() {
 export default function Layout() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  const { canAccessRoute, hasPermission, user, logout } = useAuth();
+  const { canAccessRoute, user, logout } = useAuth();
   const [moreOpen, setMoreOpen] = useState(false);
   const visibleNav = NAV.filter((n) => canAccessRoute(n.to));
   const active = NAV.find((n) => n.to === pathname);

@@ -1,5 +1,5 @@
 // Assertions and exit path, but no column-0 PASSED:/FAILED: summary
-import assert from 'node:assert';
+import _assert from 'node:assert';
 
 let failed = 0;
 if (Math.max(1, 2) !== 2) {

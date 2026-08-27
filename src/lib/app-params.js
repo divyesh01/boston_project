@@ -60,7 +60,7 @@ const getAppParams = () => {
 				if (allowedDomains.some(d => parsed.hostname === d || parsed.hostname.endsWith('.' + d))) {
 					return url;
 				}
-			} catch (e) {}
+			} catch {}
 			return import.meta.env.VITE_BASE44_APP_BASE_URL;
 		})(),
 	}

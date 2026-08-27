@@ -11,7 +11,6 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 
 const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(SCRIPTS_DIR, '..');
 const FIXTURES_DIR = path.resolve(SCRIPTS_DIR, '_fixtures-suite-integrity');
 
 // Suite discovery. MUST stay in step with `isSuite` in scripts/verify-all.mjs — a file
@@ -49,8 +48,8 @@ export function classifySuite(filePath, rawContent) {
   const ternaryToken = '\\$\\{\\s*[^}]*\\?\\s*["\'`](?:PASSED|FAILED)["\'`]\\s*:\\s*["\'`](?:FAILED|PASSED)["\'`]\\s*\\}';
   const tokenPattern = `(?:PASSED:|FAILED:|${ternaryToken}:?)`;
 
-  const summaryPattern = new RegExp(`console\\.(?:log|error|info)\\s*\\(\\s*[\`\'"](?:\\\\[rn]|\\s)*${tokenPattern}`, 'm');
-  const multiLineSummaryPattern = new RegExp(`console\\.(?:log|error|info)\\s*\\(\\s*[\`\'"][\\s\\S]*?[\\r\\n]+(?:\\\\[rn]|\\s)*${tokenPattern}`, 'm');
+  const summaryPattern = new RegExp(`console\\.(?:log|error|info)\\s*\\(\\s*[\`'"](?:\\\\[rn]|\\s)*${tokenPattern}`, 'm');
+  const multiLineSummaryPattern = new RegExp(`console\\.(?:log|error|info)\\s*\\(\\s*[\`'"][\\s\\S]*?[\\r\\n]+(?:\\\\[rn]|\\s)*${tokenPattern}`, 'm');
 
   const hasSummary = summaryPattern.test(noComments) || multiLineSummaryPattern.test(noComments);
 

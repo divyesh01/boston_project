@@ -3,7 +3,7 @@ import { secrets } from "base44:runtime";
 import crypto from "node:crypto";
 import { z } from "npm:zod";
 
-const UserDataSchema = z.object({
+const _UserDataSchema = z.object({
   username: z.string().optional(),
   email: z.string().optional(),
   password: z.string().optional(),
@@ -15,20 +15,6 @@ const UserDataSchema = z.object({
   is_locked: z.boolean().optional(),
   must_change_password: z.boolean().optional(),
 }).strict();
-
-const RequestBodySchema = z.object({
-  action: z.string(),
-  id: z.union([z.string(), z.number()]).optional(),
-  data: UserDataSchema.optional(),
-  query: z.string().optional(),
-  status: z.string().optional(),
-  newPassword: z.string().optional(),
-  currentPassword: z.string().optional(),
-  token: z.union([z.string(), z.number()]).optional(),
-  email: z.string().optional(),
-  role: z.string().optional(),
-}).strict();
-
 
 const PBKDF2_ITERATIONS = 300000;
 const SALT_BYTES = 32;
@@ -456,7 +442,7 @@ function validatePasswordStrength(password) {
   if (!/[a-z]/.test(password)) return 'Password must include at least one lowercase letter.';
   if (!/[A-Z]/.test(password)) return 'Password must include at least one uppercase letter.';
   if (!/[0-9]/.test(password)) return 'Password must include at least one number.';
-  if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) return 'Password must include at least one special character.';
+  if (!/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(password)) return 'Password must include at least one special character.';
   if (/(.)\1{2,}/.test(password)) return 'Password must not contain repeating characters.';
   if (/[\n\r\u2028\u2029]/.test(password)) return 'Password must not contain line breaks.';
   return null;

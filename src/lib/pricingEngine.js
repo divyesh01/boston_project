@@ -190,7 +190,7 @@ export function computeOptimalElasticPrice({ baseCents, targetOccupancy, current
 
 // ─── Pickup Velocity & Booking Pace Forecasting ────────────────────────
 
-export function computeBookingPace(occupancyHistory = [], daysToArrival = 7) {
+export function computeBookingPace(occupancyHistory = [], _daysToArrival = 7) {
   // Simplified velocity: difference between current occupancy trajectory
   // and historical baseline at same lead time.
   const pace = (occupancyHistory || []).map((o) => Number(o) || 0);

@@ -85,9 +85,7 @@ const chain = await verifyAuditChain();
 T("audit chain verifies (SHA-256 HMAC)", chain.valid, chain.valid ? "" : JSON.stringify(chain));
 
 // Re-import the same file: file-hash guard should short-circuit and not duplicate alerts.
-const t2 = performance.now();
 const result2 = await importReport(scan, meta);
-const tReimport = performance.now() - t2;
 T("re-import short-circuits (already-imported)", result2.reason === "already-imported" || result2.count === 0, JSON.stringify(result2));
 const alertsAfterReimport = await localDb.AnomalyAlert.where("property_id").equals("prop_smoke").toArray();
 T("re-import does not stack duplicate alerts", alertsAfterReimport.length === alerts.length, `${alerts.length} -> ${alertsAfterReimport.length}`);

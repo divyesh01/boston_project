@@ -30,8 +30,6 @@ if (globalThis.navigator === undefined) {
 const { db, listImportSessions } = await import("@/api/base44Client");
 const { default: localDb } = await import("@/api/localDb");
 const PINNED = { year: 2026, month: 2 }; // March 2026 (0-based)
-const PERIOD_START = "2026-03-01";
-const PERIOD_END = "2026-03-31";
 
 async function seedStaff(name, baseRate, hours = 0) {
   await localDb.Staff.add({
@@ -53,8 +51,6 @@ async function seedStaff(name, baseRate, hours = 0) {
 // without one. Every test therefore seeds an owner + logs in so the function
 // exercises its normal (authorized) path rather than the forbidden branch.
 const OWNER_USER = "owner_pin";
-const OWNER_EMAIL = "owner_pin@test.local";
-const OWNER_PASSWORD = "OwnerPass!2026x";
 
 async function loginOwner() {
   db.auth.me = async () => ({ id: 'mock-owner', username: OWNER_USER, role: 'owner', is_active: true, is_locked: false });

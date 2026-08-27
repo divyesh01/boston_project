@@ -47,7 +47,7 @@ import aiAssistant from "../../base44/functions/aiAssistant/entry.ts";
 describe("AI Assistant validation", () => {
   const headers = { get: (name) => name === 'cookie' ? 'base44_session=mocktoken' : '' };
   const getReq = (body, url = "/") => ({ headers, json: async () => body, url });
-  const getRawReq = (rawBody, url = "/") => ({ headers, json: async () => { if(typeof rawBody === 'string' && !rawBody.startsWith('{')) throw new Error('bad'); return JSON.parse(rawBody); }, url });
+  const _getRawReq = (rawBody, url = "/") => ({ headers, json: async () => { if(typeof rawBody === 'string' && !rawBody.startsWith('{')) throw new Error('bad'); return JSON.parse(rawBody); }, url });
 
   it("Case A (Valid Input): Returns HTTP 200", async () => {
     const res = await aiAssistant(getReq({ question: "hello" }));

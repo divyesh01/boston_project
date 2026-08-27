@@ -1,7 +1,6 @@
 import {
-  toCents, fromCents, toRate, fromRate, add, subtract, multiply, divide, divideRate,
-  sumCents, avgCents, weightedAvg, formatCents, formatRate,
-  portfolioOccupancy, portfolioAdr, portfolioRevpar
+  toCents, fromCents, fromRate, add, subtract, multiply, divide, divideRate,
+  sumCents
 } from '@/lib/decimal';
 import { commissionFor, grossRevenueForPeriod } from '@/lib/hotel';
 import { getTaxConfig, TAX_SOURCES } from '@/lib/taxConfig';
@@ -26,10 +25,6 @@ function inRange(dateStr, from, to) {
 
 function sum(rows, key) {
   return fromCents(sumCents((rows || []).map(r => r[key])));
-}
-
-function avg(rows, key) {
-  return (rows || []).length ? sum(rows, key) / rows.length : 0;
 }
 
 // Classify booking source into tax bucket
@@ -559,7 +554,7 @@ export class CalculationService {
    * end (see BUSINESS.md).
    */
   static calculateForecast(historicalData, assumptions) {
-    const { dailyRevenue, dailyOccupancy, dailyAdr, dailyRevpar, days } = historicalData;
+    const { dailyRevenue, dailyOccupancy, dailyAdr } = historicalData;
     const { rateAdjust, occupancyAdjust, adrAdjust, availableRooms, otaCommission, expenseAdjust, horizonDays } = assumptions;
 
     const adjRate = 1 + (rateAdjust || 0) / 100;
@@ -587,7 +582,7 @@ export class CalculationService {
     };
   }
 
-  static calculatePortfolioComparison(currentRows = [], previousRows = [], propertyRoomCounts = {}, properties = []) {
+  static calculatePortfolioComparison(currentRows = [], previousRows = [], propertyRoomCounts = {}, _properties = []) {
     const current = this.calculateOccupancyMetrics(currentRows, propertyRoomCounts);
     const previous = this.calculateOccupancyMetrics(previousRows, propertyRoomCounts);
 

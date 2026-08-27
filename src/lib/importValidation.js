@@ -279,7 +279,7 @@ export function validateTypes({ coercions = [], dateFailures = 0, totalRows = 0 
 // ── Layer 3: constraint ────────────────────────────────────────────────────
 //
 // Per-field legality, independent of any other row.
-export function validateConstraints({ rows = [], type }) {
+export function validateConstraints({ rows = [], type: _type }) {
   const out = [];
   if (!rows.length) return out;
 

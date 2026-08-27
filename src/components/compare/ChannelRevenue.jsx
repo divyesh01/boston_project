@@ -37,7 +37,7 @@ export default function ChannelRevenue({ rows, dateRange }) {
   const totalNet = channels.reduce((a, c) => a + c.net, 0);
   const totalCommission = channels.reduce((a, c) => a + c.commission, 0);
 
-  const chartData = channels.slice(0, 10).map((c, i) => ({
+  const chartData = channels.slice(0, 10).map((c) => ({
     name: c.source,
     value: Math.round(c.net),
   }));

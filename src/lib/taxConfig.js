@@ -6,6 +6,7 @@
 import { notifySettingsChanged } from "@/lib/settingsBus";
 import { getTaxSettings, saveTaxSettings } from "@/lib/taxSettings";
 import { readObjectSetting, writeJsonSetting } from "@/lib/settingsStore";
+import { multiply, fromCents } from "@/lib/decimal";
 
 const TAX_KEY = "rri_tax_config_v1";
 
@@ -81,10 +82,17 @@ export function isSourceTaxable(sourceKey) {
 
 // Calculate tax for a given room rent and source
 // Tax = Room Rent × Tax Rate (if source is taxable and tax is enabled)
+//
+// Cent-exact: the raw `rent * getTaxRate()` float carried IEEE-754 sub-cent
+// residue (e.g. 1000.10 × 0.117 = 117.01170000000001) into a figure BUSINESS.md
+// requires exact to the cent, and the number diverged from the authoritative
+// per-property tax in CalculationService, which computes the same product via
+// decimal.multiply. Route through the same helper so both models round a taxed
+// line to the cent identically.
 export function calculateTax(roomRent, sourceKey) {
   const rent = Number(roomRent) || 0;
   if (!isSourceTaxable(sourceKey)) return 0;
-  return rent * getTaxRate();
+  return fromCents(multiply(rent, getTaxRate()));
 }
 
 export function formatTaxRate(rate) {

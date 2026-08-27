@@ -234,5 +234,28 @@ console.log("\n=== 16. Paste: a headerless block stays positional ===");
   T("no header warning", !warnings.some((w) => /header row/i.test(w)), JSON.stringify(warnings));
 }
 
+console.log("\n=== 17. A partially-numeric cell is warned about, not silently truncated ===");
+{
+  // parseAmount is parseFloat-based: "12abc" -> 12, "1.2.3" -> 1.2, "12%" -> 12.
+  // Before the fix these imported silently (a partial read the user never saw),
+  // violating the module's "nothing is silently defaulted" contract.
+  const csv = 'date,source,code,net_revenue,stays,adr\n2026-03-01,EXPEDIA,EX,12abc,1,100\n';
+  const { rows, warnings } = parseManualEntryCsv(csv, SOURCE_FIELDS);
+  T('"12abc" is NOT truncated to 12', rows[0]?.net_revenue !== 12, `net_revenue=${JSON.stringify(rows[0]?.net_revenue)}`);
+  T('"12abc" cell is blanked', rows[0]?.net_revenue === "", `net_revenue=${JSON.stringify(rows[0]?.net_revenue)}`);
+  T('"12abc" is named as not-a-number', warnings.some((w) => /^Row 2:/.test(w) && /12abc/.test(w)), JSON.stringify(warnings));
+
+  const csv2 = 'date,source,code,net_revenue,stays,adr\n2026-03-01,EXPEDIA,EX,1.2.3,1,100\n';
+  const r2 = parseManualEntryCsv(csv2, SOURCE_FIELDS);
+  T('"1.2.3" is not read as 1.2', r2.rows[0]?.net_revenue === "", `net_revenue=${JSON.stringify(r2.rows[0]?.net_revenue)}`);
+
+  // Legitimate numeric forms must still pass unharmed (no false rejections).
+  const csv3 = 'date,source,code,net_revenue,stays,adr\n2026-03-01,EXPEDIA,EX,"(1,234.50)",.5,1234.\n';
+  const r3 = parseManualEntryCsv(csv3, SOURCE_FIELDS);
+  T('"(1,234.50)" still reads as -1234.5', r3.rows[0]?.net_revenue === -1234.5, `net_revenue=${JSON.stringify(r3.rows[0]?.net_revenue)}`);
+  T('".5" still reads as 0.5', r3.rows[0]?.stays === 0.5, `stays=${JSON.stringify(r3.rows[0]?.stays)}`);
+  T('"1234." still reads as 1234', r3.rows[0]?.adr === 1234, `adr=${JSON.stringify(r3.rows[0]?.adr)}`);
+}
+
 console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

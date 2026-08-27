@@ -1,7 +1,7 @@
 import fs from 'fs';
 import { parseCsvText } from '../src/lib/csvParser.js';
 
-function scanAdjustmentsRefunds(rawRows, meta) {
+function scanAdjustmentsRefunds(rawRows, _meta) {
   const adjustments = [];
   const refunds = [];
   const summary = {};

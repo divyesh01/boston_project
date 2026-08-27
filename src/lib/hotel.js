@@ -3,7 +3,7 @@ import { getAlertThresholds } from "@/lib/alertThresholds";
 import { getRevenueColor, getRevenueGroup } from "@/lib/revenueThresholds";
 export { getRevenueColor, getRevenueGroup };
 
-import { toCents, fromCents, toRate, fromRate, add, subtract, multiply, divide, divideRate, sumCents, formatCents, formatRate, formatNumber, portfolioOccupancy, portfolioAdr, portfolioRevpar } from '@/lib/decimal';
+import { toCents, fromCents, toRate, fromRate, divide, divideRate, sumCents, formatCents, formatRate, formatNumber } from '@/lib/decimal';
 import { neutralizeFormula } from '@/lib/securityUtils';
 
 // Default property — used as fallback when no Property records exist yet

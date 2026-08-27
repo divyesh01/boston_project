@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hashPassword, verifyPassword, generateSalt, generateToken, isCryptoAvailable, validatePasswordStrength } from '../src/lib/security.js';
 
 // Mock audit log chain secret
 let auditChainSecret = 'test-secret';
@@ -100,7 +99,7 @@ async function verifyAuditChain() {
 }
 
 // Reference mock of the pre-fix entity proxy pattern (simulating pre-fix AuditLog behavior without protections)
-function createVulnerableEntityProxy(tableName) {
+function createVulnerableEntityProxy(_tableName) {
 
   const store = new Map();
   let nextId = 1;
@@ -319,7 +318,7 @@ async function testVulnerableProxy() {
   
   // Test DELETE - should succeed in pre-fix reference mock
   try {
-    const result = await auditLogProxy.delete(testId);
+    const _result = await auditLogProxy.delete(testId);
     console.log('✓ Reference pre-fix behavior: delete() succeeded in pre-fix reference mock');
     results.deleteBlocked = false;
   } catch (e) {
@@ -332,7 +331,7 @@ async function testVulnerableProxy() {
     await createAuditEntry('Test Action 2', { userId: 2, username: 'testuser2', result: 'success' });
     const newLogs = [...auditLogs];
     const ids = newLogs.map(l => l.id);
-    const result = await auditLogProxy.bulkDelete(ids);
+    const _result = await auditLogProxy.bulkDelete(ids);
     console.log('✓ Reference pre-fix behavior: bulkDelete() succeeded in pre-fix reference mock');
     results.bulkDeleteBlocked = false;
   } catch (e) {
@@ -343,7 +342,7 @@ async function testVulnerableProxy() {
   // Test CLEAR
   try {
     await createAuditEntry('Test Action 3', { userId: 3, username: 'testuser3', result: 'success' });
-    const result = await auditLogProxy.clear();
+    const _result = await auditLogProxy.clear();
     console.log('✓ Reference pre-fix behavior: clear() succeeded in pre-fix reference mock');
     results.clearBlocked = false;
   } catch (e) {
@@ -406,7 +405,7 @@ async function testProtectedProxy() {
   
   // Test UPDATE - should be BLOCKED in protected version
   try {
-    const updated = await auditLogProxy.update(testId, { detail: 'MALICIOUS MODIFICATION' });
+    const _updated = await auditLogProxy.update(testId, { detail: 'MALICIOUS MODIFICATION' });
     console.log('✗ FAIL: update() succeeded - should have been blocked!');
     results.updateBlocked = false;
   } catch (e) {
@@ -421,7 +420,7 @@ async function testProtectedProxy() {
   
   // Test DELETE - should be BLOCKED
   try {
-    const result = await auditLogProxy.delete(testId);
+    const _result = await auditLogProxy.delete(testId);
     console.log('✗ FAIL: delete() succeeded - should have been blocked!');
     results.deleteBlocked = false;
   } catch (e) {
@@ -439,7 +438,7 @@ async function testProtectedProxy() {
     await createAuditEntry('Test Action 2', { userId: 2, username: 'testuser2', result: 'success' });
     const newLogs = [...auditLogs];
     const ids = newLogs.map(l => l.id);
-    const result = await auditLogProxy.bulkDelete(ids);
+    const _result = await auditLogProxy.bulkDelete(ids);
     console.log('✗ FAIL: bulkDelete() succeeded - should have been blocked!');
     results.bulkDeleteBlocked = false;
   } catch (e) {
@@ -455,7 +454,7 @@ async function testProtectedProxy() {
   // Test CLEAR - should be BLOCKED
   try {
     await createAuditEntry('Test Action 3', { userId: 3, username: 'testuser3', result: 'success' });
-    const result = await auditLogProxy.clear();
+    const _result = await auditLogProxy.clear();
     console.log('✗ FAIL: clear() succeeded - should have been blocked!');
     results.clearBlocked = false;
   } catch (e) {

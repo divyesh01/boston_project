@@ -46,7 +46,7 @@ function MiniStat({ label, value, pctCh }) {
 }
 
 export default function MtdGrowth() {
-  const { dateRange, compareDateRange, compareOn, property, properties, period, months, compareMonths } = useGlobalFilters();
+  const { dateRange, compareDateRange, compareOn, property, properties, months, compareMonths } = useGlobalFilters();
 
   const occQ = useOccupancy(dateRange, property, months);
   const prevOccQ = useOccupancy(compareOn ? compareDateRange : { from: "", to: "" }, property, compareOn ? compareMonths : [], compareOn);
@@ -291,8 +291,8 @@ export default function MtdGrowth() {
                     <span className="text-slate-500">Previous: N/A</span>
                   ) : (
                     <span className="inline-flex items-center gap-1.5">
-                      <span className={`font-medium ${up ? "text-[#00E096]" : "text-[#FF6B6B]"}`}>
-                        {up ? "▲" : "▼"} {Math.abs(m.pctCh).toFixed(1)}%
+                      <span className={`font-medium ${flat ? "text-slate-400" : up ? "text-[#00E096]" : "text-[#FF6B6B]"}`}>
+                        {flat ? "—" : up ? "▲" : "▼"} {Math.abs(m.pctCh).toFixed(1)}%
                       </span>
                       <span className="text-slate-500">vs {m.fmt(m.prev)}</span>
                     </span>

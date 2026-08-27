@@ -6,12 +6,15 @@ import UniversalChart from "@/components/charts/UniversalChart";
 import ChartToolbar from "@/components/charts/ChartToolbar";
 import TaxConfigModal from "@/components/TaxConfigModal";
 import { ErrorState } from "@/components/ui/status";
-import { usePaymentData, useOccupancy, useClerkRecords, useSources } from "@/lib/useHotelData";
+import { usePaymentData, useOccupancy, useClerkRecords, useSources, useGrossRevenue } from "@/lib/useHotelData";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { money2, sum, inRange, C } from "@/lib/hotel";
+import { sumCents, fromCents, subtract } from "@/lib/decimal";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { PAYMENT_METHOD_FIELDS, CARD_METHODS, refundTotalFromTotals } from "@/lib/paymentNorm";
-import { getTaxConfig, calculateTax, formatTaxRate, TAX_SOURCES } from "@/lib/taxConfig";
+import { getTaxConfig, formatTaxRate } from "@/lib/taxConfig";
+import { getEffectiveTaxRates } from "@/lib/taxSettings";
+import CalculationService from "@/lib/calculationService";
 import { exportReconciliationToCsv } from "@/lib/reconciliationExport";
 
 export default function Payments() {
@@ -22,6 +25,8 @@ export default function Payments() {
   const { data: clerk = [] } = useClerkRecords(dateRange, property);
   const srcQ = useSources(dateRange, property, months);
   const { data: sourceRows = [] } = srcQ;
+  const grossQ = useGrossRevenue(dateRange, property, months);
+  const { data: grossRecords = [] } = grossQ;
   const chartRef = useRef(null);
   const { pullDist, refreshing } = usePullToRefresh(refetch);
 
@@ -36,6 +41,10 @@ export default function Payments() {
   const srcRows = useMemo(
     () => sourceRows.filter((r) => inRange(r.date, dateRange.from, dateRange.to)),
     [sourceRows, dateRange]
+  );
+  const grossRows = useMemo(
+    () => grossRecords.filter((r) => inRange(r.date, dateRange.from, dateRange.to)),
+    [grossRecords, dateRange]
   );
 
   // Aggregate payment methods from PaymentDay columns.
@@ -59,17 +68,18 @@ export default function Payments() {
     return out;
   }, [payRows, activeMethods]);
 
-  const cardTotal = CARD_METHODS.reduce((a, k) => a + (methodTotals[k] || 0), 0);
+  const cardTotal = fromCents(sumCents(CARD_METHODS.map((k) => methodTotals[k] || 0)));
   const cashTotal = methodTotals.cash || 0;
   // When one tender is selected, "collected" means that tender — otherwise the
-  // stored row total, which is the authoritative sum across all methods.
+  // stored row total, which is the authoritative sum across all methods. Both
+  // branches aggregate in integer cents so the KPI carries no float residue.
   const totalCollected = methodFiltered
-    ? activeMethods.reduce((a, [key]) => a + (methodTotals[key] || 0), 0)
+    ? fromCents(sumCents(activeMethods.map(([key]) => methodTotals[key] || 0)))
     : sum(payRows, "total");
   const refunds = refundTotalFromTotals(methodTotals);
-  const netPaymentCollected = totalCollected - refunds;
+  const netPaymentCollected = fromCents(subtract(totalCollected, refunds));
   const expectedRevenue = sum(occRows, "room_revenue");
-  const variance = totalCollected - expectedRevenue;
+  const variance = fromCents(subtract(totalCollected, expectedRevenue));
 
   // Payment distribution data for chart — exclude zero values
   const paymentData = useMemo(() => {
@@ -131,10 +141,10 @@ export default function Payments() {
       const variance = pmsCard + pmsCash - pmsTotal;
       return { date, pmsTotal, pmsCard, pmsCash, merchantSettledNet, bankDeposited, cardVariance, status: Math.abs(variance) < 1 ? "Balanced" : "Review" };
     }).sort((a, b) => a.date.localeCompare(b.date));
-    const totalPmsRevenue = days.reduce((a, d) => a + d.pmsTotal, 0);
-    const totalMerchantSettled = days.reduce((a, d) => a + d.merchantSettledNet, 0);
-    const totalBankDeposited = days.reduce((a, d) => a + d.bankDeposited, 0);
-    const netVariance = days.reduce((a, d) => a + (d.pmsCard + d.pmsCash - d.pmsTotal), 0);
+    const totalPmsRevenue = fromCents(sumCents(days.map((d) => d.pmsTotal)));
+    const totalMerchantSettled = fromCents(sumCents(days.map((d) => d.merchantSettledNet)));
+    const totalBankDeposited = fromCents(sumCents(days.map((d) => d.bankDeposited)));
+    const netVariance = fromCents(days.reduce((a, d) => a + subtract(d.pmsCard + d.pmsCash, d.pmsTotal), 0));
     return {
       days,
       periodSummary: {
@@ -212,46 +222,47 @@ export default function Payments() {
   const [taxModalOpen, setTaxModalOpen] = useState(false);
   const [taxConfig, setTaxConfig] = useState(getTaxConfig());
 
-  // Classify booking-source rows (SourceDay) into the configured tax buckets.
-  // Matching is based on the source/code text since the imported reports
-  // carry channel names like "EXPEDIA HOTEL COLLECT", "WALK-IN", "PRP"...
-  const classifySource = (r) => {
-    const text = `${r.source || ""} ${r.code || ""}`.toUpperCase();
-    if (/EXPEDIA.*HOTEL COLLECT|EHC/.test(text)) return "EXPEDIA_HC";
-    if (/BOOKING\.?COM.*HOTEL COLLECT|BHC/.test(text)) return "BOOKING_HC";
-    if (/WALK|WIN/.test(text)) return "WALK_IN";
-    if (/PROPERTY BOOKING|PRP|RR WEBSITE|WEB|RED ROOF APP|APP|CONTACT CENTER|CRS/.test(text)) return "PROPERTY_BOOKING";
-    return "OTHER_OTA";
-  };
+  // Authoritative tax liability — the SAME per-property, date-windowed engine the
+  // MoneyKept dashboard deducts from (CalculationService.calculateTaxLiability), so
+  // the two pages can never print different tax on the same period. It layers:
+  // PMS-imported tax lines (state/city/other on GrossRevenueDay) take precedence
+  // per date; days with no imported tax are estimated from the property's effective
+  // rates. Replaces the old flat per-source table, which applied one legacy rate to
+  // every booking source and diverged from the reconciled figure.
+  //
+  // A single property id feeds per-property rates; "all"/an array of ids has no one
+  // property to window rates by, so null selects the catch-all ("*") schedule.
+  const resolvedPropertyId =
+    property && property !== "all" && !Array.isArray(property) ? property : null;
 
-  const taxCalculations = useMemo(() => {
-    const buckets = {};
-    srcRows.forEach((r) => {
-      const key = classifySource(r);
-      buckets[key] = (buckets[key] || 0) + (Number(r.net_revenue) || 0);
-    });
-    return TAX_SOURCES.map((src) => {
-      const rent = buckets[src.key] || 0;
-      const tax = calculateTax(rent, src.key);
-      return { ...src, rent, tax };
-    });
-  }, [srcRows, taxConfig]);
-  const totalTaxCollected = taxCalculations.reduce((a, c) => a + c.tax, 0);
+  const taxLiability = useMemo(
+    () => CalculationService.calculateTaxLiability(srcRows, grossRows, resolvedPropertyId, dateRange),
+    [srcRows, grossRows, resolvedPropertyId, dateRange]
+  );
+
+  // Effective rates for the header labels only (the money above is cent-exact from
+  // the engine). Rates are date-windowed, so show the schedule in force at the end
+  // of the selected period — the most recent rate that applies to it.
+  const effectiveRates = useMemo(
+    () => getEffectiveTaxRates(resolvedPropertyId, dateRange.to || dateRange.from || ""),
+    [resolvedPropertyId, dateRange]
+  );
 
   if (isLoading) return <p className="text-slate-500">Loading payment data…</p>;
 
   // A failed read used to fall through to the dashboard below, which sums an empty
   // array and prints $0.00 collected and $0.00 tax. Those are real-looking figures for
   // a day that simply could not be read, so the page must stop here instead.
-  // occ feeds Expected Revenue and the variance alarm; sources feed the tax table —
-  // a failure in either is just as corrupting as a payment-read failure.
-  if (isError || occQ.isError || srcQ.isError) {
+  // occ feeds Expected Revenue and the variance alarm; sources + gross feed the tax
+  // liability card — a failure in any of them is just as corrupting as a
+  // payment-read failure, so the page must stop rather than print a false $0 tax.
+  if (isError || occQ.isError || srcQ.isError || grossQ.isError) {
     return (
       <ErrorState
         title="Could not load payment data"
         description="Payment totals and tax figures are not shown because the read failed — they are not zero."
-        error={error || occQ.error || srcQ.error}
-        onRetry={() => { refetch(); occQ.refetch(); srcQ.refetch(); }}
+        error={error || occQ.error || srcQ.error || grossQ.error}
+        onRetry={() => { refetch(); occQ.refetch(); srcQ.refetch(); grossQ.refetch(); }}
       />
     );
   }
@@ -285,73 +296,49 @@ export default function Payments() {
           </button>
         }
       >
-        <div className="grid gap-4 lg:grid-cols-3">
-          {/* Tax Rate & Formula */}
+        <div className="grid gap-4 lg:grid-cols-2">
+          {/* Tax buckets — State / City / Other at the effective rates */}
           <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">
             <div className="flex items-center gap-2">
               <Percent className="h-4 w-4 text-[#00D4FF]" />
-              <p className="text-[10px] uppercase tracking-widest text-slate-500">Tax Rate</p>
+              <p className="text-[10px] uppercase tracking-widest text-slate-500">Tax Liability by Bucket</p>
             </div>
-            <p className="mt-2 font-heading text-3xl font-semibold text-white">
-              {formatTaxRate(taxConfig.taxRate)}
-            </p>
-            <div className="mt-3 rounded-lg bg-[#040D1A] p-2.5">
-              <p className="text-xs text-slate-500">Formula</p>
-              <p className="mt-0.5 font-mono text-xs text-[#00D4FF]">
-                Tax = Room Rent × {formatTaxRate(taxConfig.taxRate)}
-              </p>
-            </div>
-            <div className="mt-2 space-y-0.5 text-xs text-slate-500">
-              <p>$100 → ${(100 * taxConfig.taxRate).toFixed(2)} tax</p>
-              <p>$200 → ${(200 * taxConfig.taxRate).toFixed(2)} tax</p>
-              <p>$300 → ${(300 * taxConfig.taxRate).toFixed(2)} tax</p>
+            <div className="mt-3 space-y-2">
+              <div className="flex items-center justify-between rounded-lg bg-[#040D1A]/60 px-3 py-2">
+                <span className="text-sm text-slate-300">State <span className="text-slate-500">({formatTaxRate(effectiveRates.state)})</span></span>
+                <span className="tabular-nums text-sm text-slate-100">{money2(taxLiability.state)}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-lg bg-[#040D1A]/60 px-3 py-2">
+                <span className="text-sm text-slate-300">City <span className="text-slate-500">({formatTaxRate(effectiveRates.city)})</span></span>
+                <span className="tabular-nums text-sm text-slate-100">{money2(taxLiability.city)}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-lg bg-[#040D1A]/60 px-3 py-2">
+                <span className="text-sm text-slate-300">Other <span className="text-slate-500">({formatTaxRate(effectiveRates.other)})</span></span>
+                <span className="tabular-nums text-sm text-slate-100">{money2(taxLiability.other)}</span>
+              </div>
             </div>
           </div>
-
-          {/* Per-Source Tax Breakdown */}
-          <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-4 lg:col-span-2">
-            <p className="text-[10px] uppercase tracking-widest text-slate-500">Tax Breakdown by Booking Source</p>
-            <div className="mt-3 overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-[11px] uppercase tracking-widest text-slate-500">
-                    <th className="pb-2 pr-4">Booking Source</th>
-                    <th className="pb-2 pr-4 text-right">Room Rent</th>
-                    <th className="pb-2 pr-4 text-right">Tax Rate</th>
-                    <th className="pb-2 pr-4 text-right">Tax Amount</th>
-                    <th className="pb-2 text-center">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {taxCalculations.map((c) => (
-                    <tr key={c.key} className="border-t border-white/5">
-                      <td className="py-2.5 pr-4 text-slate-200">{c.label}</td>
-                      <td className="py-2.5 pr-4 text-right tabular-nums text-slate-300">{money2(c.rent)}</td>
-                      <td className="py-2.5 pr-4 text-right tabular-nums text-slate-400">
-                        {c.taxable ? formatTaxRate(taxConfig.taxRate) : "—"}
-                      </td>
-                      <td className="py-2.5 pr-4 text-right tabular-nums text-[#00D4FF]">{money2(c.tax)}</td>
-                      <td className="py-2.5 text-center">
-                        {c.taxable ? (
-                          <span className="rounded-full bg-[#00E096]/10 px-2 py-0.5 text-[10px] text-[#00E096]">Taxable</span>
-                        ) : (
-                          <span className="rounded-full bg-slate-700/30 px-2 py-0.5 text-[10px] text-slate-400">Exempt</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t-2 border-white/10 bg-[#040D1A]/80">
-                    <td className="py-3 pr-4 font-semibold text-white">TOTAL</td>
-                    <td className="py-3 pr-4 text-right tabular-nums text-slate-300">{money2(taxCalculations.reduce((a, c) => a + c.rent, 0))}</td>
-                    <td className="py-3 pr-4 text-right text-slate-500">—</td>
-                    <td className="py-3 pr-4 text-right font-heading text-lg font-semibold text-[#00D4FF]">{money2(totalTaxCollected)}</td>
-                    <td className="py-3 text-center text-xs text-slate-500">{taxConfig.taxEnabled ? "Active" : "Off"}</td>
-                  </tr>
-                </tfoot>
-              </table>
+          {/* Imported (pass-through) vs Estimated (owner cost) + total liability */}
+          <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">
+            <p className="text-[10px] uppercase tracking-widest text-slate-500">Pass-through vs Owner Cost</p>
+            <div className="mt-3 space-y-2">
+              <div className="flex items-center justify-between rounded-lg bg-[#040D1A]/60 px-3 py-2">
+                <span className="text-sm text-slate-300">Imported <span className="text-slate-500">(pass-through)</span></span>
+                <span className="tabular-nums text-sm text-slate-100">{money2(taxLiability.imported)}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-lg bg-[#040D1A]/60 px-3 py-2">
+                <span className="text-sm text-slate-300">Estimated <span className="text-slate-500">(owner cost)</span></span>
+                <span className="tabular-nums text-sm text-[#FFB020]">{money2(taxLiability.estimated)}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-lg border border-[#00D4FF]/20 bg-[#040D1A] px-3 py-3">
+                <span className="text-sm font-semibold text-white">TOTAL LIABILITY</span>
+                <span className="tabular-nums font-heading text-lg font-semibold text-[#00D4FF]">{money2(taxLiability.total)}</span>
+              </div>
             </div>
+            <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
+              PMS-imported tax lines take precedence per day; estimated fills days with no
+              imported tax, using the property&apos;s effective rates. Figures match the Money Kept dashboard.
+            </p>
           </div>
         </div>
         <TaxConfigModal open={taxModalOpen} onClose={() => { setTaxModalOpen(false); setTaxConfig(getTaxConfig()); }} />

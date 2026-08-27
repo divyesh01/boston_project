@@ -167,7 +167,7 @@ localDb.version(11).stores({
   const carried = await tx.table('ImportSession').toArray();
   const ledgerRows = carried
     .filter((r) => Array.isArray(r.record_ids) && r.record_ids.length)
-    .map(({ id, ...row }) => ({ ...row, status: row.status || 'active' }));
+    .map(({ id: _id, ...row }) => ({ ...row, status: row.status || 'active' }));
   if (ledgerRows.length) await tx.table('ImportRecordIds').bulkAdd(ledgerRows);
 });
 

@@ -1,11 +1,10 @@
 import { db, runInTransaction, createImportSession, completeImportSession, failImportSession, addImportRecordIds } from '@/api/base44Client';
-import localDb from '@/api/localDb';
 
 import {
-  fetchCsvRows, rowsToObjects, convertDate, isIsoDate, parseAmount, isCsvFile, detectSections, parseCsvText,
+  fetchCsvRows, parseTextInWorker, MAX_IMPORT_BYTES, rowsToObjects, convertDate, isIsoDate, parseAmount, isCsvFile, detectSections,
 } from "@/lib/csvParser";
 
-import { parseHotelReport, makeFileDedupKey, generateFileHash } from '@/lib/universalParser';
+import { parseHotelReport, generateFileHash } from '@/lib/universalParser';
 
 import {
   TXN_SIGNATURE, TXN_COLUMN_MAP, mapTransactionRow, isTrailerRow, assignDedupeKeys,
@@ -24,7 +23,7 @@ export { neutralizeFormula };
 
 // Serialize report imports to prevent double-click/parallel duplicate writes.
 let importQueue = Promise.resolve();
-async function serial(target) {
+async function _serial(target) {
   const run = importQueue.then(
     () => target,
     () => target
@@ -278,7 +277,7 @@ export const ENTITY = {
   transactions: "TransactionLine",
   adjustments_refunds: "AdjustmentRefund",
 };
-const REVENUE_COL = {
+const _REVENUE_COL = {
   occupancy: "room_revenue",
   source: "net_revenue",
   gross: "room_rent",
@@ -401,9 +400,15 @@ function withLazyObjects(rawRows, eager) {
 // hotel.js csvCell. It must NEVER be applied on import: prefixing a value like
 // '-12.50' with an apostrophe before parsing corrupts numeric data into NaN.
 async function getRowsArray(type, fileUrl, meta) {
-  // If CSV text was pre-read from the File object, parse it directly (no fetch needed)
+  // If CSV text was pre-read from the File object, parse it in the worker (no
+  // fetch needed). This branch used to call parseCsvText synchronously on the
+  // main thread with no size guard, so a 100k-row paste froze the tab and
+  // bypassed the ceiling fetchCsvRows enforces. Offloading here fixes both.
   if (meta?.csvText) {
-    return withLazyObjects(parseCsvText(meta.csvText));
+    if (String(meta.csvText).length > MAX_IMPORT_BYTES) {
+      throw new Error(`File exceeds ${MAX_IMPORT_BYTES / (1024 * 1024)}MB size limit`);
+    }
+    return withLazyObjects(await parseTextInWorker(meta.csvText));
   }
   // Use sourceFile for detection if available, fallback to fileUrl
   const checkUrl = meta?.sourceFile || fileUrl;
@@ -715,7 +720,7 @@ async function scanHotelStatistics(rawRows, fileUrl, meta) {
   });
   
   // Convert metrics to preview format
-  const preview = parseResult.metrics.slice(0, 20).map(m => ({
+  const _preview = parseResult.metrics.slice(0, 20).map(m => ({
     section: m.section,
     metric: m.metric_name,
     category: m.metric_category,
@@ -1384,7 +1389,12 @@ function scanTimecard(rawRows, meta, objects) {
     const inTime = String(out.clock_in || "").trim();
     const outTime = String(out.clock_out || "").trim();
 
-    if (!employee || !date || !inTime || !outTime) {
+    // A punch date must be a real ISO calendar date, exactly like the transaction
+    // ledger (line ~896) and the flat-table path (line ~620) already require.
+    // convertDate returns the raw string when it recognises no format, so a bare
+    // `!date` truthiness check let a malformed date like "2026.01.01" through and
+    // persisted it as shift_date; isIsoDate closes that to the same reject path.
+    if (!employee || !isIsoDate(date) || !inTime || !outTime) {
       rejected.push({ ...out, _reason: "missing employee, date, or in/out time" });
       continue;
     }
@@ -1415,8 +1425,59 @@ function scanTimecard(rawRows, meta, objects) {
 }
 
 // ─── CSV report importer ────────────────────────────────────────────────
+
+// Existing-row dedupe read for the TransactionLine ledger, bounded by the
+// incoming date window instead of the whole property history.
+//
+// A duplicate is defined by transactionDedupeKey (src/lib/transactionNorm.js),
+// whose SECOND component is the row's ISO date. A stored row can therefore only
+// collide with an incoming row when they share a date, which makes the incoming
+// date window a LOSSLESS filter: reading only [minDate, maxDate] over the
+// [property_id+date] index cannot miss a duplicate, and planQuery() in
+// base44Client.js already compiles { property_id, date:{$gte,$lte} } into a
+// .between() on that compound index. The upper bound is padded with U+FFFF
+// because a legacy row may store its date as a full timestamp
+// ("2026-01-31T23:30:00Z"); an unpadded between() would clip it out of the 31st
+// and make an already-stored row look new — a double-import on the ledger that
+// has to reconcile to the cent.
+//
+// If ANY incoming row lacks a clean ISO date (so the key's date component is not
+// order-comparable), the bound is dropped and the full property read is used —
+// correctness over the optimization. Selection is byte-identical to the old
+// full-table scan either way; only the number of rows materialised changes.
+export async function existingTxnDedupeKeys(entity, propertyId, rows) {
+  const query = propertyId ? { property_id: propertyId } : {};
+  let lo = null, hi = null, bounded = true;
+  for (const r of rows) {
+    const d = String(r.date || "");
+    if (!isIsoDate(d)) { bounded = false; break; }
+    const day = d.slice(0, 10);
+    if (lo === null || day < lo) lo = day;
+    if (hi === null || day > hi) hi = day;
+  }
+  if (bounded && lo !== null) {
+    query.date = { $gte: lo, $lte: `${hi}￿` };
+  }
+  const existing = await entity.filter(query, "date");
+  return new Set(existing.map((r) => r.dedupe_key));
+}
+
 export async function importReport(scanResult, meta = {}) {
   const { forceImport = false, sourceFile = "", propertyId = "", propertyName = "", ...restMeta } = meta;
+
+  // Fail-closed at the persist boundary: a missing, empty, whitespace-only, or
+  // non-string propertyId is refused before any session or row is created.
+  // Downstream, addMeta stamps `property_id: propertyId || ""` and skipExisting
+  // degrades an empty id to `filter({})` — a dedupe/scan across EVERY property.
+  // Refusing here keeps the "Property A cannot see Property B" isolation
+  // invariant intact even when a non-UI caller reaches this boundary without a
+  // property selected. The UI already disables import while none is chosen; this
+  // is defense-in-depth for every other path.
+  if (typeof propertyId !== "string" || propertyId.trim() === "") {
+    const err = /** @type {Error & { code: string }} */ (new Error("Import refused: a non-empty propertyId is required to persist rows (property isolation boundary)."));
+    err.code = "IMPORT_PROPERTY_REQUIRED";
+    throw err;
+  }
 
   // Block corrupting imports unless the user explicitly forces them. The scan
   // already showed these errors in the preview; without force, a file that
@@ -1789,19 +1850,13 @@ async function doImport(scanResult, meta, importId) {
 
     let newRows = rows;
     if (!forceImport) {
-      // No row cap. `seen` below is what decides whether an incoming row is a
-      // duplicate, so truncating this read does not make the import faster — it
-      // makes rows that ARE already stored look new and imports them a second
-      // time, on the ledger whose totals have to reconcile to the cent. The old
-      // 1000000 cap sorted by "date" ASCENDING and then sliced, so the rows it
-      // dropped were the most recent ones: exactly where a re-export overlaps.
-      // It never bounded memory either — the proxy materializes the whole table
-      // before slicing it.
-      const existing = await db.entities.TransactionLine.filter(
-        restMeta.propertyId ? { property_id: restMeta.propertyId } : {},
-        "date"
-      );
-      const seen = new Set(existing.map((r) => r.dedupe_key));
+      // The whole property ledger used to be materialized here just to build a
+      // Set of dedupe_keys — a 100k-row read to answer "have I seen these ≤17k
+      // rows before". existingTxnDedupeKeys narrows that to the incoming date
+      // window over the [property_id+date] index (see its definition for why that
+      // is lossless), so the read is bounded by the import size, not the ledger's
+      // history. Selection is byte-identical: `seen` still decides every row.
+      const seen = await existingTxnDedupeKeys(db.entities.TransactionLine, restMeta.propertyId, rows);
       newRows = rows.filter((r) => !seen.has(r.dedupe_key));
     }
 

@@ -178,7 +178,6 @@ function dateToWeekRange(dateStr) {
   return { from: iso(start), to: iso(end) };
 }
 
-const MONTH_RE = /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b/i;
 const CODE_RE = /\b([a-z]{1,4}\d{3,5})\b/i;
 const ORDINAL_WEEK_RE = /\b(first|1st|second|2nd|third|3rd|fourth|4th)\s+week\s+of\s+([a-z]+)(?:\s*,?\s*(\d{4}))?\b/i;
 
@@ -203,7 +202,6 @@ function resolveRange(question, defaults = {}) {
     return { from: ex.date, to: ex.date, single: true, label: ex.date, specified: true };
   }
   if (ex && !ex.explicitYear && ex.day && /\b(on|show|date)\b/i.test(q)) {
-    const d = new Date();
     let y = defaults.year ?? new Date().getFullYear();
     if (latest) y = +String(latest).slice(0, 4);
     const dd = `${y}-${pad(ex.month + 1)}-${pad(ex.day)}`;
@@ -597,7 +595,7 @@ async function intentSummary({ prop, range }) {
   return { heading: "", lines, noData: null };
 }
 
-async function intentMetric({ prop, range, metric, question }) {
+async function intentMetric({ prop, range, metric }) {
   const occRows = await load("OccupancyDay", prop, range.from, range.to) || [];
   const occ = occRows.length ? occTotals(occRows) : null;
   const labels = {
@@ -1036,7 +1034,7 @@ async function intentCompareProps({ q, range, allowedPropertyIds = null }) {
   return { heading: "", lines, noData: null };
 }
 
-async function intentTopOta({ prop, range, question }) {
+async function intentTopOta({ prop, range }) {
   const rows = await load("SourceDay", prop, range.from, range.to) || [];
   const channels = channelTotals(rows);
   if (!channels.length) return { heading: "", lines: [], noData: "sources" };
@@ -1096,7 +1094,7 @@ async function intentForecast({ prop, range, question, allowedPropertyIds }) {
   };
 }
 
-async function intentCompare({ prop, range, q, question, allowedPropertyIds }) {
+async function intentCompare({ prop, q, allowedPropertyIds }) {
   const pairs = findMonthPeriodPairs(q);
   const monthTok = findMonthTokens(q);
   if (pairs || monthTok.length >= 2) {
@@ -1179,10 +1177,10 @@ async function answerQuestion({ question, propertyId, from, to, allowedPropertyI
     if (!result && has(/most|top|biggest|which\b.*(ota|channel)/i)) result = await intentTopOta(ctx);
     if (!result && has(/(^|\b)ota|channel|expedia|booking\.com|airbnb|direct|walk\s*in/i)) result = await intentOta(ctx);
     if (!result && has(/rooms?\s+sold|how\s+many\s+rooms|rooms\s+did/i)) result = await intentRooms(ctx);
-    if (!result && has(/adr\b/i)) result = await intentMetric({ prop, range, metric: "adr", question: q });
-    if (!result && has(/revpar|rev\s*par/i)) result = await intentMetric({ prop, range, metric: "revpar", question: q });
-    if (!result && has(/occupanc/i)) result = await intentMetric({ prop, range, metric: "occupancy", question: q });
-    if (!result && has(/revenue|sold|gross|income|rooms\b/i)) result = await intentMetric({ prop, range, metric: "revenue", question: q });
+    if (!result && has(/adr\b/i)) result = await intentMetric({ prop, range, metric: "adr" });
+    if (!result && has(/revpar|rev\s*par/i)) result = await intentMetric({ prop, range, metric: "revpar" });
+    if (!result && has(/occupanc/i)) result = await intentMetric({ prop, range, metric: "occupancy" });
+    if (!result && has(/revenue|sold|gross|income|rooms\b/i)) result = await intentMetric({ prop, range, metric: "revenue" });
   }
 
   if (!result) result = await intentSummary(ctx);

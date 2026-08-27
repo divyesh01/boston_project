@@ -30,7 +30,7 @@ import { hasAllPropertyAccess } from "@/lib/launchPolicy";
 import PasswordConfirmDialog from "@/components/PasswordConfirmDialog";
 
 export default function Settings() {
-  const { user: me, logout, hasPermission } = useAuth();
+  const { user: me, logout } = useAuth();
   const [rates, setRates] = useState(() => getCommissionRates());
   const [ccFee, setCcFee] = useState(() => getCcFeeRate());
   const [ccRefunds, setCcRefunds] = useState(() => getCcFeeOnRefunds());
@@ -61,7 +61,7 @@ export default function Settings() {
   const [mfaSetupOpen, setMfaSetupOpen] = useState(false);
   const [mfaSecret, setMfaSecret] = useState(null);
   const [mfaUri, setMfaUri] = useState(null);
-  const [mfaBackupCodes, setMfaBackupCodes] = useState([]);
+  const [, setMfaBackupCodes] = useState([]);
   const [mfaVerifying, setMfaVerifying] = useState(false);
   const [mfaAction, setMfaAction] = useState(null); // 'enable' | 'disable'
   // Step-up prompt for MFA changes: { kind: 'enable' | 'disable', busy, error }.

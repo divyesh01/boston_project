@@ -3,7 +3,7 @@
  */
 import { parseCsvText, rowsToObjects, detectSections } from './csvParser.js';
 
-function scanChunkedByteStream(chunks, chunkSize = 65536) {
+function scanChunkedByteStream(chunks, _chunkSize = 65536) {
   const totalLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
   const combined = new Uint8Array(totalLength);
   let offset = 0;

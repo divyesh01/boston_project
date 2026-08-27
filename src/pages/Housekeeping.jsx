@@ -40,7 +40,7 @@ export default function Housekeeping() {
   const [taskType, setTaskType] = useState("cleaning");
   const [taskDate, setTaskDate] = useState(latestDate || new Date().toISOString().slice(0, 10));
   const [expandedTask, setExpandedTask] = useState(null);
-  const [checklist, setChecklist] = useState([]);
+  const [, setChecklist] = useState([]);
   const [notice, setNotice] = useState(null);
   const [showNew, setShowNew] = useState(false);
 

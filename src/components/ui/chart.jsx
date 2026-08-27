@@ -166,7 +166,7 @@ ${colorConfig
     const rawColor =
       itemConfig.theme?.[theme] ||
       itemConfig.color;
-    const color = rawColor ? String(rawColor).replace(/[^a-zA-Z0-9#(),. %\-]/g, '') : null;
+    const color = rawColor ? String(rawColor).replace(/[^a-zA-Z0-9#(),. %-]/g, '') : null;
     return color ? `  --color-${key}: ${color};` : null;
   })
   .join("\n")}

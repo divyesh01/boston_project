@@ -47,7 +47,7 @@ export function YDocProvider({ name, children }) {
           map.set(k, v);
         }
       }
-    } catch (e) {
+    } catch {
       // Ignore cache read errors
     }
 
@@ -81,7 +81,7 @@ export function YDocProvider({ name, children }) {
             // when ENDPOINT is set, which the shipped config leaves empty.
           }
         });
-      } catch (e) {
+      } catch {
         // WebSocket not available — operate fully offline
       }
     };

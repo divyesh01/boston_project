@@ -3,6 +3,7 @@ import * as crypto from 'node:crypto';
 import { z } from "npm:zod";
 
 import { createApiHandler } from "../../utils/apiHandler.js";
+import { resolveAllowedIds, scopeSyntheticRows } from "../../utils/aiScope.js";
 
 const BodySchema = z.object({
   question: z.string().max(2000),
@@ -75,17 +76,13 @@ export default createApiHandler({ bodySchema: BodySchema, querySchema: QuerySche
     if (!question) return Response.json({ error: "Question is required" }, { status: 400 });
 
     // ─── Property access enforcement ───
-    // owner/admin or property_access 'all' => unrestricted (null).
-    // Otherwise the user may only query the properties listed in their
-    // property_access. A missing/null property_access on a non-root account is
-    // treated as NO access (fail-closed), matching the frontend default.
-    const isRootRole = user.role === "owner" || user.role === "admin";
-    const accessAll = isRootRole || user.property_access === "all";
-    const allowedIds = accessAll
-      ? null
-      : (Array.isArray(user.property_access)
-          ? user.property_access.map(String)
-          : []);
+    // Resolve the caller's allowed property set from the session (null =
+    // owner/admin or property_access 'all' = unrestricted). This set is enforced
+    // TWICE: once on the requested propertyId (reject a scope the caller may not
+    // ask for), and once on the synthetic rows themselves further down (drop any
+    // row the caller may not read), so a crafted payload cannot smuggle another
+    // property's data past the requested-scope check.
+    const allowedIds = resolveAllowedIds(user); // Set<string> | null
 
     let propFilter = null;
     if (allowedIds !== null) {
@@ -93,8 +90,8 @@ export default createApiHandler({ bodySchema: BodySchema, querySchema: QuerySche
       const requested =
         propertyId && propertyId !== "all"
           ? (Array.isArray(propertyId) ? propertyId.map(String) : [String(propertyId)])
-          : allowedIds;
-      const denied = requested.filter((id) => !allowedIds.includes(id));
+          : [...allowedIds];
+      const denied = requested.filter((id) => !allowedIds.has(id));
       if (denied.length > 0) {
         return Response.json({ error: 'Forbidden: property access denied' }, { status: 403 });
       }
@@ -107,18 +104,11 @@ export default createApiHandler({ bodySchema: BodySchema, querySchema: QuerySche
       propFilter = Array.isArray(propertyId) ? { $in: propertyId } : propertyId;
     }
 
-    // Build filters
-    const dateFilter = (dateFrom && dateTo) ? { $gte: dateFrom, $lte: dateTo } : {};
-
-    function makeFilter() {
-      const f = {};
-      if (Object.keys(dateFilter).length > 0) f.date = dateFilter;
-      if (propFilter) f.property_id = propFilter;
-      return f;
-    }
-
-    // ─── Use pre-aggregated data from the client instead of scanning raw ledgers ───
-    const synthetic = body.synthetic || {};
+    // ─── Use pre-aggregated data from the client, SCOPED to the caller ───
+    // The rows are client-supplied and therefore untrusted: enforce the allowed
+    // property set on them BEFORE anything is summarised, so a restricted caller
+    // cannot post another property's rows and read them back.
+    const synthetic = scopeSyntheticRows(body.synthetic || {}, allowedIds);
     const occupancy = synthetic.occRows || [];
     const sources = synthetic.srcRows || [];
     const payments = synthetic.payRows || [];

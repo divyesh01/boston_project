@@ -1,5 +1,5 @@
-import { db, runInTransaction } from '@/api/base44Client';
-import { parseCsvText, rowsToObjects, convertDate, isIsoDate, parseAmount } from '@/lib/csvParser';
+import { db } from '@/api/base44Client';
+import { parseCsvText, convertDate, isIsoDate, parseAmount } from '@/lib/csvParser';
 
 export class DataScanner {
   constructor() {
@@ -8,7 +8,6 @@ export class DataScanner {
   }
 
   async loadAllFiles() {
-    const allFiles = [];
     // Scoped read. This walks every uploaded report and hands back its parsed
     // preview rows, so a raw table read exposed other properties' report contents.
     const allRows = await db.entities.UploadedReport.list();
@@ -37,7 +36,7 @@ export class DataScanner {
     return { headers, rows: dataRows, columns: headers };
   }
 
-  detectDuplicates(rows, headers) {
+  detectDuplicates(rows, _headers) {
     if (!rows.length) return [];
     const seen = new Map();
     const duplicateGroups = [];
@@ -272,12 +271,10 @@ export class DataScanner {
 
       let numeric = 0;
       let dateLike = 0;
-      let textLike = 0;
 
       values.forEach((v) => {
         if (parseAmount(v) !== null) numeric += 1;
         else if (convertDate(v) && isIsoDate(convertDate(v))) dateLike += 1;
-        else textLike += 1;
       });
 
       const total = values.length;
@@ -465,7 +462,7 @@ export class DataScanner {
     };
   }
 
-  generateInsights(issues, healthScore, rows, headers) {
+  generateInsights(issues, healthScore, _rows, _headers) {
     const insights = [];
 
     if (healthScore.score < 50) {

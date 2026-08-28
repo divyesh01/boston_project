@@ -1,4 +1,5 @@
 import React, { useMemo } from "react";
+import { CostCoverageNotice } from "@/components/OwnerTrustNotices";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
@@ -204,8 +205,11 @@ export default function ActionCenter() {
           error={failed.error}
           onRetry={retryAll}
         />
+      ) : reads.some((query) => query.isLoading) ? (
+        <p role="status" className="rounded-xl border border-white/10 p-4 text-sm text-slate-300">Loading the records behind your action list…</p>
       ) : (
         <>
+      <CostCoverageNotice expenses={expenses} payroll={payroll} dateRange={dateRange} />
       {/* ── Premise: snapshot of the money ── */}
       <Card title="Where you stand" subtitle="Computed from imported data for this period">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">

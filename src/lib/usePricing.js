@@ -1,6 +1,6 @@
 // Pricing data hook (feature 8).
 //
-// Assembles the live demand signals the pricing engine needs — the room
+// Assembles the local model inputs the pricing engine needs — the room
 // register, the reservation book, and the cached weather snapshots — and feeds
 // them to the pure buildPricingForecast() together with the operator's pricing
 // config (from localStorage). The result is a per-day, per-room-type
@@ -24,7 +24,7 @@ function weatherByDate(snapshots) {
   return map;
 }
 
-// Compute a pricing forecast for the active property using live data.
+// Compute a local pricing scenario; these records are not verified live feeds.
 //   days — how many days ahead (default 14)
 export function usePricingForecast(days = 14) {
   const { property, latestDate } = useGlobalFilters();
@@ -66,5 +66,6 @@ export function usePricingForecast(days = 14) {
     snapshotsQ.refetch();
   };
 
-  return { forecast, config, enabled: Boolean(config.enabled), days, isError, error, refetch };
+  const isLoading = roomsQ.isLoading || reservationsQ.isLoading || snapshotsQ.isLoading;
+  return { forecast, config, enabled: Boolean(config.enabled), days, isLoading, isError, error, refetch };
 }

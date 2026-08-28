@@ -204,10 +204,9 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     srcRows.forEach((r) => {
       const stays = Number(r.stays) || 0;
       const info = commissionFor(r.source || r.code);
-      // net_revenue is POST-commission NET (owner model, 2026-08-27): the channel
-      // commission is gross − net, where gross is the grossed-up booking value.
-      // grossUpFromNetCents keeps the whole thing in integer cents, the same
-      // cents-safe discipline as calculationService.calculateChannelMetrics.
+      // net_revenue IS the gross booked room revenue; the channel commission is a
+      // cost = round(net * rate), derived in integer cents by the shared helper —
+      // the same cents-safe discipline as calculationService.calculateChannelMetrics.
       const { commissionCents } = grossUpFromNetCents(toCents(r.net_revenue), info, stays);
       bump(String(r.date).slice(0, 10), "commission", fromCents(commissionCents));
     });
@@ -258,10 +257,10 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       // 2. The per-source commission rate entry does NOT have taxExempt === true
       const srcInfo = commissionFor(r.source || r.code);
       if (taxableSources.has(classifyTaxSource(r)) && !srcInfo.taxExempt) {
-        // Gross up the tax base too (owner directive 2026-08-27): net_revenue is
-        // POST-commission net, so the taxable base is the grossed-up booking value.
-        // Each term is a whole-cent dollar value (fromCents) to keep the map in the
-        // same dollar units its consumer already expects.
+        // net_revenue IS the gross booked room revenue, so it is itself the
+        // taxable base. grossUpFromNetCents returns grossCents === net_revenue
+        // under the authoritative model. Each term is a whole-cent dollar value
+        // (fromCents) to keep the map in the units its consumer expects.
         const { grossCents } = grossUpFromNetCents(toCents(r.net_revenue), srcInfo, r.stays);
         taxBaseByKey.set(key, (taxBaseByKey.get(key) || 0) + fromCents(grossCents));
       }
@@ -378,10 +377,9 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       const src = r.source || r.code || "UNKNOWN";
       const info = commissionFor(src);
       const stays = Number(r.stays) || 0;
-      // net_revenue is POST-commission NET (owner model, 2026-08-27): gross up to
-      // the booking value and take commission as gross − net, in integer cents.
-      // `gross` accumulates the grossed-up dollars so the "Gross … @ rate" detail
-      // shows the true booking value, not the post-commission net.
+      // net_revenue IS the gross booked room revenue; commission = round(net * rate)
+      // in integer cents. `gross` accumulates the booked revenue so the
+      // "Gross … @ rate" detail shows the true booking value.
       const { grossCents, commissionCents } = grossUpFromNetCents(toCents(r.net_revenue), info, stays);
       const cur = srcMap.get(src) || { name: src, gross: 0, stays: 0, commCents: 0, rate: info.rate };
       cur.gross += fromCents(grossCents);

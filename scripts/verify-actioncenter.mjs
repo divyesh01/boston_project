@@ -325,11 +325,11 @@ console.log("\n— actual OTA/CC invoices beat the rate-card estimate (no double
   ];
   const m = buildActionCenter({ occRows, srcRows, payRows, expenses, roomCounts: ROOMS, dateRange: RANGE });
 
-  // net_revenue $300000 is POST-commission NET (gross-up model): EXPEDIA (15%)
-  // grosses up to $352,941.18, so the derived OTA commission = gross - net =
-  // $52,941.18; CC fees = 100000*0.025 = 2500. With actual rows present, the
-  // actual amounts (12000 / 5000) must win and the estimates must be discarded —
-  // charging both would double the deduction.
+  // net_revenue $300000 IS the gross booked room revenue (authoritative model),
+  // so the derived OTA commission = 300000 * 0.15 = $45,000; CC fees =
+  // 100000*0.025 = 2500. With actual rows present, the actual amounts
+  // (12000 / 5000) must win and the estimates must be discarded — charging both
+  // would double the deduction.
   check("ota uses ACTUAL 12000", Math.abs(m.premise.otaCommission - 12000) < 1e-6, `got ${m.premise.otaCommission}`);
   check("cc uses ACTUAL 5000", Math.abs(m.premise.ccFees - 5000) < 1e-6, `got ${m.premise.ccFees}`);
   check("estimated OTA still visible for the OTA-leak card", m.premise.otaEstimated > 12000);
@@ -342,8 +342,8 @@ console.log("\n— no actual rows: rate-card estimate stands in —");
   const srcRows = [src({ date: "2025-02-01", source: "EXPEDIA", gross: 300000 })];
   const payRows = [pay({ date: "2025-02-15", visa: 100000 })];
   const m = buildActionCenter({ occRows, srcRows, payRows, roomCounts: ROOMS, dateRange: RANGE });
-  // net $300000 grosses up to $352,941.18 at 15%; commission = gross - net = $52,941.18.
-  check("commission estimated 52941.18 (gross-up model)", Math.abs(m.premise.otaCommission - 52941.18) < 0.005, `got ${m.premise.otaCommission}`);
+  // net_revenue $300000 IS the gross booked revenue; commission = 300000*0.15 = $45,000.
+  check("commission estimated 45000 (net_revenue * rate)", Math.abs(m.premise.otaCommission - 45000) < 0.005, `got ${m.premise.otaCommission}`);
   check("cc fees estimated ~2500", Math.abs(m.premise.ccFees - 2500) < 1e-6, `got ${m.premise.ccFees}`);
 }
 

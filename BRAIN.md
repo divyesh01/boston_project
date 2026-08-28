@@ -3,14 +3,26 @@
 > [!IMPORTANT]
 > **AI AGENTS:** You are currently in the HUB. To save tokens and maximize context window efficiency, this file only contains routing.
 > Read the specific Spoke files below based on your exact task. NEVER scan the entire project.
+>
+> **RUNTIME FACT:** Base44 is retired. Do not query or deploy through Base44. The
+> production site is a standalone Vite bundle deployed from GitHub `main` to the
+> Cloudflare Worker `boston-project`; the active database is Dexie/IndexedDB in the
+> user's browser. Names under `base44/` and `src/api/base44Client.js` are legacy
+> compatibility artifacts. See `README.md` and the BACKEND spoke before diagnosing
+> deployment or data issues.
 
 ## THE SPOKES (Context Segmentation)
+
+Active repairs: [Owner repair checklist](docs/OWNER_REPAIR_CHECKLIST.md). Read it
+before continuing owner-review work and have the checklist reviewer check each
+batch. It is the persistent record of what is fixed and what is still missing.
+
 | Domain | File | Use When... |
 |--------|------|-------------|
 | [FINANCE] | `docs/brain/BRAIN_FINANCE.md` | Math, formulas, CSV parsers, or reconciliation. |
 | [SECURITY] | `docs/brain/BRAIN_SECURITY.md` | Auth, MFA, sessions, or audit logs. |
 | [FRONTEND] | `docs/brain/BRAIN_FRONTEND.md` | React UI, pages, components, or hooks. |
-| [BACKEND] | `docs/brain/BRAIN_BACKEND.md` | Base44 entities, serverless functions, configs. |
+| [BACKEND] | `docs/brain/BRAIN_BACKEND.md` | Current Cloudflare/Dexie runtime plus legacy Base44 artifacts. |
 | [FIXES] | `docs/brain/BRAIN_TROUBLESHOOTING.md` | Diagnosing known problems or emergency playbook. |
 | [INDEX] | `docs/brain/BRAIN_INDEX.md` | Verify file paths (422-file complete catalog). |
 | [MAP] | `docs/brain/BRAIN_DEPENDENCIES.md`| See what breaks if you edit a file (Auto-Generated). |
@@ -18,23 +30,15 @@
 ## SYSTEM ARCHITECTURE
 ```mermaid
 graph TD
+    GitHub[GitHub main branch] -->|Cloudflare Workers Build| Host[Cloudflare Worker<br/>boston-project]
+    Host -->|serves dist/| UI
     subgraph Browser [User's Browser]
         UI[React Frontend<br/>(34 Pages, 40+ Components)]
-        DB_Local[(Local IndexedDB<br/>Offline Cache)]
+        DB_Local[(Dexie / IndexedDB<br/>Active Database)]
         UI <--> DB_Local
     end
-    subgraph Cloud [Base44 Cloud Server]
-        API[19 Serverless Functions]
-        DB_Cloud[(16 Database Entities)]
-        API <--> DB_Cloud
-    end
-    subgraph External [Integrations]
-        Drive[Google Drive Backups]
-        Weather[OpenWeather API]
-    end
-    UI <-->|HTTPS / WSS| API
-    API <-->|OAuth| Drive
-    API <-->|REST| Weather
+    Legacy[Legacy only:<br/>base44 entities/functions/config]
+    Legacy -.->|not deployed or connected| UI
 ```
 
 ## AI RULES (The 5-Step Workflow)

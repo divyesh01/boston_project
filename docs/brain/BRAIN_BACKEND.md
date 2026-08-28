@@ -240,9 +240,10 @@ node scripts/probe-cors-config.mjs        # 35/0, standalone — no loader neede
 ### Build & Deploy
 | File | What It Does | If You Edit This... |
 |------|-------------|-------------------|
-| `package.json` | NPM deps (React 18, Base44 SDK, Recharts, Dexie, Tailwind, Radix, Framer Motion), scripts (dev, build, test, lint, ws) | Build fails, tests fail, everything |
-| `vite.config.js` | Vite build: React plugin, Base44 plugin, standalone env guard, SRI hash generator, dev security headers, console stripping, vendor chunk splitting | Production build fails |
-| `vercel.json` | Vercel deploy: SPA routing (/* -> /index.html), 1-year immutable caching for /assets/*, production security headers | 404 on refresh, security headers lost |
+| `package.json` | NPM deps (including legacy Base44 compatibility packages), scripts (dev, build, test, lint, ws) | Build fails, tests fail, everything |
+| `vite.config.js` | Vite build: React plugin, retained Base44 compatibility plugin, standalone env guard, SRI hash generator, dev security headers, console stripping, vendor chunk splitting | Production build fails |
+| `wrangler.jsonc` | **Live host:** Cloudflare Worker name plus `dist/` static assets and SPA fallback | Git and local deploys can target the wrong Worker or fail on route refresh |
+| `vercel.json` | Retained security-header specification used by probes; Vercel is not the live host | Verification/header parity fails |
 | `sriPlugin.js` | Hashes every `/assets/` subresource in the built index.html. Digests are taken in `writeBundle` (the file ON DISK) and re-verified in `closeBundle`, after every other plugin has written | Move the hashing back into `transformIndexHtml` and the browser blocks the entry chunk: blank page, whole app down. See BRAIN_SECURITY "Subresource Integrity" |
 | `envGuardPlugin.js` | Fails a **production** build whose resolved `import.meta.env` does not have BOTH `VITE_USE_LOCAL_AUTH=true` and `VITE_STANDALONE_LOCAL=true` | It is the reason a broken deploy is now a 1-second build failure instead of a site nobody can log into. Since `.env.production` is committed it normally stays silent; it still catches that file being deleted, renamed, emptied, re-ignored, or holding a value other than the exact string `true` |
 | `eslint.config.js` | ESLint 9: React + Hooks rules, unused import removal | Linting breaks in CI |
@@ -253,6 +254,11 @@ node scripts/probe-cors-config.mjs        # 35/0, standalone — no loader neede
 | `postcss.config.js` | PostCSS: loads Tailwind and autoprefixer | CSS processing fails |
 
 ### Deploying: two paths, one worker
+
+> **Current runtime boundary:** Base44 is not connected to this deployment. Do not
+> run Base44 login, logs, entity push, function deploy, or site deploy commands for
+> production diagnosis. The `base44/` tree is retained legacy source/config and a
+> test fixture. It does not identify the live database.
 
 The site is the Cloudflare Worker **`boston-project`**
 (`boston-project.divyesh-boston.workers.dev`). Two things can update it, and the `name` in
@@ -310,13 +316,21 @@ probe agrees with itself, and would keep passing after the real guard was delete
 real `configResolved` hook against a table of environments, then assert the guard is wired
 into `vite.config.js` and that the CI build step supplies both flags.
 
-### Base44 Config
+### Legacy Base44 artifacts (not active infrastructure)
+
+These files remain because parts of the frontend, generated types, security-header
+parity probes, and historical backend tests still refer to their shapes. They do not
+mean the app is linked to or deployed on Base44. Do not use them to infer where a
+production record is stored.
+
 | File | What It Does |
 |------|-------------|
-| `base44/config.jsonc` | Build commands + production security headers (CSP, HSTS preload, X-Frame DENY, nosniff) |
-| `base44/.app.jsonc` | Links to cloud app ID: `6a7d6856ee1cc714b1803c0e` |
-| `base44/auth/config.jsonc` | Auth methods enabled: password + Google OAuth (MS/FB/Apple/SAML disabled) |
-| `base44/connectors/googledrive.jsonc` | Google Drive OAuth scopes (drive + email) |
+| `base44/config.jsonc` | Legacy host config; its security headers are still compared by verification scripts |
+| `base44/.app.jsonc` | Historical Base44 app link; not the production runtime target |
+| `base44/auth/config.jsonc` | Historical hosted-auth configuration; production uses standalone-local mode |
+| `base44/entities/*.jsonc` | Former hosted entity schemas and fixtures; active tables are declared in `src/api/localDb.js` |
+| `base44/functions/**` | Former serverless function sources and test fixtures; they are not deployed by the current Git-to-Cloudflare pipeline |
+| `base44/connectors/googledrive.jsonc` | Historical connector configuration; not proof of an active production connection |
 
 ---
 

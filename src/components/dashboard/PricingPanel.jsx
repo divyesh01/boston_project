@@ -8,15 +8,16 @@ import { useRealtimeInvalidation } from "@/lib/realtime";
 import { ErrorState } from "@/components/ui/status";
 import { money2 } from "@/lib/hotel";
 import { fromCents } from "@/lib/decimal";
+import { PricingScenarioNotice } from "@/components/OwnerTrustNotices";
 
 // Compact dynamic-pricing widget for the Executive Dashboard.
-// Shows the enabled state, today's recommended ADR vs base, the revenue uplift
+// Shows the enabled state, the dated scenario ADR vs base, the revenue uplift
 // the engine is projecting, and a 14-day recommended-rate trend so the owner
 // sees the pricing posture at a glance. The full forecast, settings, and
-// channel push live on the /pricing page.
+// local scenario controls live on the /pricing page. No OTA publishing exists.
 export default function PricingPanel() {
   useRealtimeInvalidation(["rooms", "reservations", "weather"]);
-  const { forecast, config, enabled, isError, error, refetch } = usePricingForecast(14);
+  const { forecast, config, enabled, isLoading, isError, error, refetch } = usePricingForecast(14);
 
   const today = forecast[0] || null;
   const baseAdrCents = today
@@ -54,21 +55,22 @@ export default function PricingPanel() {
 
   return (
     <Card
-      title="Dynamic Pricing"
-      subtitle={enabled ? "Recommended rates from live demand signals" : "Pricing engine is disabled"}
+      title="Pricing Scenario"
+      subtitle={enabled ? "Local model — not live market rates" : "Pricing scenario is disabled"}
       right={
         <Link to="/pricing" className="flex items-center gap-1.5 rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-300 hover:bg-white/5">
           <Settings2 className="h-3.5 w-3.5" /> Configure
         </Link>
       }
     >
+      <PricingScenarioNotice startDate={isLoading ? '' : today?.date} />
       {!enabled ? (
         <p className="text-sm text-slate-400">
           The pricing engine is off.{" "}
           <Link to="/pricing" className="text-[#00D4FF] underline">
             Enable it
           </Link>{" "}
-          to auto-adjust rates from demand.
+          to explore a local what-if scenario. This does not change live rates.
         </p>
       ) : isError ? (
         // Checked before `today`, because a failed read still yields a forecast:
@@ -81,11 +83,13 @@ export default function PricingPanel() {
           error={error}
           onRetry={refetch}
         />
+      ) : isLoading ? (
+        <p role="status" className="mt-3 text-sm text-slate-300">Loading local scenario inputs…</p>
       ) : today ? (
         <div>
           <div className="grid gap-3 sm:grid-cols-4">
             <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
-              <p className="text-[10px] uppercase tracking-widest text-slate-500">Today&rsquo;s Rate</p>
+              <p className="text-[10px] uppercase tracking-widest text-slate-400">Scenario Rate · {today.date}</p>
               <p className="mt-1 font-heading text-2xl font-semibold text-white">{money2(fromCents(recAdrCents))}</p>
               <div className="mt-0.5 flex items-center gap-1 text-xs">
                 {deltaCents >= 0 ? <TrendingUp className="h-3 w-3 text-[#00E096]" /> : <TrendingDown className="h-3 w-3 text-[#FF6B6B]" />}
@@ -95,7 +99,7 @@ export default function PricingPanel() {
             <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
               <p className="text-[10px] uppercase tracking-widest text-slate-500">Occupancy</p>
               <p className="mt-1 font-heading text-2xl font-semibold text-white">{Math.round(occ * 100)}%</p>
-              <p className="text-xs text-slate-400">forecast for tonight</p>
+              <p className="text-xs text-slate-400">model for {today.date}</p>
             </div>
             <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
               <p className="text-[10px] uppercase tracking-widest text-slate-500">7-Day Revenue</p>

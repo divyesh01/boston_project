@@ -195,9 +195,9 @@ export default function MonthlyCalendar() {
     if (!selectedSources.length) return [];
     const ranked = selectedSources
       .map((s) => {
-        // net_revenue is POST-commission NET (owner model, 2026-08-27): gross up to
-        // the booking value and rank by net. Integer-cents math via the shared
-        // helper so this ranking agrees to the cent with the OTA channel engine.
+        // net_revenue IS the gross booked room revenue; commission is a cost and
+        // net kept = gross − commission. Integer-cents math via the shared helper
+        // so this ranking agrees to the cent with the OTA channel engine.
         const info = commissionFor(s.source || s.code);
         const stays = s.stays || 0;
         const netCents = toCents(s.net_revenue);
@@ -206,7 +206,7 @@ export default function MonthlyCalendar() {
           name: s.source || s.code || "Unknown",
           gross: fromCents(grossCents),
           commission: fromCents(commissionCents),
-          net: fromCents(netCents),
+          net: fromCents(grossCents - commissionCents),
           stays,
         };
       })

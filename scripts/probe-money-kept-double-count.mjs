@@ -144,10 +144,9 @@ ok('a derived OTA commission exists to be displaced', base.otaCommissions > 0, `
 eq('derived card fee is 3% of $500 of visa', base.ccFees, 15);
 eq('refunds are the magnitude of the signed folio', base.refunds, 100);
 eq('derived refund fee is 3% of the $100 refunded', base.refundFees, 3);
-// net_revenue $1000 is POST-commission NET (owner-declared gross-up model,
-// hotel.js grossUpFromNetCents). EXPEDIA_HC (15%) grosses up to $1176.47, and
-// 5% state + 2% city = 7% of that taxable gross = $82.35.
-eq('estimated tax is 7% of the grossed-up taxable base', base.estimatedTaxes, 82.35);
+// net_revenue $1000 IS the gross booked room revenue (authoritative model). The
+// taxable base is that $1000, and 5% state + 2% city = 7% of $1000 = $70.00.
+eq('estimated tax is 7% of the taxable base', base.estimatedTaxes, 70);
 eq('no expenses means no operating expenses', base.operatingExpenses, 0);
 const E_OTA = base.otaCommissions;
 
@@ -186,10 +185,10 @@ console.log('\n[2] a merchant statement replaces the derived card fee');
 console.log('\n[3] a tax payment replaces the rate estimate');
 {
   const r = kept([exp('state_taxes', 40), exp('city_taxes', 25)]);
-  eq('the tax line reports the payments, not the 82.35 estimate', r.estimatedTaxes, 65);
+  eq('the tax line reports the payments, not the 70.00 estimate', r.estimatedTaxes, 65);
   eq('the payments are not also operating expenses', r.operatingExpenses, 0);
   eq('the tax line is labelled actual', basisOf(r, 'tax'), 'actual');
-  eq('total deductions fall by 82.35 - 65.00', Math.round((base.totalDeductions - r.totalDeductions) * 100) / 100, 17.35);
+  eq('total deductions fall by 70.00 - 65.00', Math.round((base.totalDeductions - r.totalDeductions) * 100) / 100, 5);
 
   // The generic "taxes" category counts too — MoneyKept.jsx reads all three.
   const r2 = kept([exp('taxes', 30, 'Occupancy tax remittance')]);
@@ -244,7 +243,7 @@ console.log('\n[6] expenses with no derived twin are unaffected');
   eq('ordinary categories sum into operating expenses', r.operatingExpenses, 345.5);
   eq('the OTA estimate still stands', r.otaCommissions, E_OTA);
   eq('the card estimate still stands', r.ccFees, 15);
-  eq('the tax estimate still stands', r.estimatedTaxes, 82.35);
+  eq('the tax estimate still stands', r.estimatedTaxes, 70);
   eq('the OTA line is labelled estimated', basisOf(r, 'ota'), 'estimated');
   eq('the card line is labelled estimated', basisOf(r, 'cc'), 'estimated');
   eq('the tax line is labelled estimated', basisOf(r, 'tax'), 'estimated');

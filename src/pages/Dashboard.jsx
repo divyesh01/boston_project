@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useRef, useEffect, lazy, Suspense } from "react";
 import confetti from "canvas-confetti";
+import { CostCoverageNotice } from "@/components/OwnerTrustNotices";
 import { DollarSign, BedDouble, Percent, Gauge, RefreshCw, FileDown, TrendingDown, Lightbulb, AlertTriangle, TrendingUp, Loader2 } from "lucide-react";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import Card from "@/components/ui-exec/Card";
@@ -64,12 +65,12 @@ export default function Dashboard() {
     ? (Array.isArray(property) ? { property_id: { $in: property } } : { property_id: property })
     : {};
   
-  const { data: expenses = [], isError: expensesError, error: expensesErrorObj, refetch: refExpenses } = useQuery({
+  const { data: expenses = [], isLoading: expensesLoading, isError: expensesError, error: expensesErrorObj, refetch: refExpenses } = useQuery({
     queryKey: ["expenses", propertyKey],
     queryFn: () => db.entities.Expense.filter(propFilter, "-expense_date", 100000),
   });
 
-  const { data: payroll = [], isError: payrollError, error: payrollErrorObj, refetch: refPayroll } = useQuery({
+  const { data: payroll = [], isLoading: payrollLoading, isError: payrollError, error: payrollErrorObj, refetch: refPayroll } = useQuery({
     queryKey: ["payroll", propertyKey],
     queryFn: () => db.entities.PayrollRun.filter(propFilter, "-pay_period_start", 100000),
   });
@@ -349,6 +350,7 @@ export default function Dashboard() {
         )}
 
         {/* Estimated Money Kept — net profit after all deductions */}
+        <CostCoverageNotice expenses={expenses} payroll={payroll} dateRange={dateRange} loading={expensesLoading || payrollLoading} failed={expensesError || payrollError} />
         <Suspense fallback={<div className="h-48 animate-pulse rounded-xl bg-slate-800/50" />}>
           <MoneyKept 
             occRows={occRows} 

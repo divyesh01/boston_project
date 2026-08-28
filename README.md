@@ -1,14 +1,32 @@
 # Red Roof Intelligence
 
-Hotel analytics and operations for a Red Roof property: revenue, occupancy, booking
-sources, payroll, expenses and a tamper-evident audit trail. It is a React + Vite
-single-page app on a [Base44](https://base44.com) backend, with a Dexie/IndexedDB
-cache so the front desk keeps working when the network does not.
+> [!IMPORTANT]
+> **Current runtime (August 2026): this project is not connected to Base44.**
+> Base44 was the original website builder and its name remains in legacy paths such
+> as `base44/`, `src/api/base44Client.js`, and two compatibility dependencies. Do
+> not use the Base44 CLI, dashboard, logs, entities, functions, secrets, or deploy
+> commands when diagnosing the live app unless the owner explicitly says that a
+> Base44 migration has been restarted.
+>
+> The live site is a standalone React/Vite bundle hosted by the Cloudflare Worker
+> `boston-project`. Cloudflare rebuilds it from the GitHub repository's `main`
+> branch after a push. The active database is Dexie/IndexedDB inside each user's
+> browser; there is no active Base44 cloud database or Base44 serverless backend.
 
-At the time of writing the app is 34 pages against 16 database entities and 19
-serverless functions.
+Hotel analytics and operations for a Red Roof property: revenue, occupancy, booking
+sources, payroll, expenses and an audit trail. It is a standalone React + Vite
+single-page app whose application data is stored locally in Dexie/IndexedDB.
+
+The `base44/entities/` schemas and `base44/functions/` sources are retained legacy
+artifacts and test fixtures. They describe the former hosted system; they are not
+the production database or executable production backend.
 
 ## Start here
+
+AI repair work: read [the owner repair checklist](docs/OWNER_REPAIR_CHECKLIST.md)
+before starting. It records verified fixes, unfinished work, and owner decisions.
+Re-engage an independent checklist reviewer for each batch; do not call the whole
+project finished because one batch passes its tests.
 
 ```bash
 npm install
@@ -17,16 +35,28 @@ npm run dev
 ```
 
 `.env.example` is the only place the required variable names are written down, and
-each one is annotated with the file and line that reads it. Two things in there are
-easy to get wrong and expensive: `VITE_USE_LOCAL_AUTH` must never be `true` in a
-deployed build (it moves authentication into the browser), and `VITE_BASE44_APP_ID`
-currently falls back to a hardcoded production app id, so an unconfigured build does
-not fail — it quietly talks to the production tenant. Set it explicitly everywhere.
+each one is annotated with the file and line that reads it. Development defaults to
+the local browser data path. The committed `.env.production` deliberately enables
+both `VITE_USE_LOCAL_AUTH` and `VITE_STANDALONE_LOCAL`; the build guard requires that
+pair for the current standalone deployment. Do not add secrets to either env file.
 
-Server-side secrets (`AUDIT_CHAIN_SECRET`, `OPENWEATHER_API_KEY`, `CRON_SECRET`) are
-**not** environment variables. The functions read them from the Base44 secret store
-via `secrets.get()`, so putting them in a `.env` file accomplishes nothing except
-risking a commit.
+Old Base44 app IDs, backend URLs, function secrets, and connector settings are not
+live production configuration. Before investigating a data problem, inspect
+`src/api/localDb.js` and the compatibility adapter in `src/api/base44Client.js`, then
+reproduce it in the same browser profile where the data lives.
+
+## Production and data flow
+
+1. Code is pushed to the GitHub repository `divyesh01/boston_project`, branch `main`.
+2. Cloudflare Workers Builds runs the Vite production build and deploys `dist/` to
+   the Worker named `boston-project` (configured by `wrangler.jsonc`).
+3. The browser runs the app in standalone-local mode.
+4. Records are stored in that browser profile's IndexedDB through Dexie. They do not
+   automatically sync to another browser, device, Base44, or a central SQL database.
+
+`vercel.json` and `base44/config.jsonc` remain as compatibility/security-header
+specifications used by verification scripts. Their presence does not mean either
+Vercel or Base44 hosts the live site.
 
 ## Commands
 

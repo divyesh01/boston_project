@@ -21,13 +21,13 @@
  * same data — a BUSINESS-directive violation (owner-facing money must reconcile).
  *
  * WHAT THIS PROBE DOES
- *   §1 EXECUTION — proves the engine is cent-exact and implements the POST-commission
- *      gross-up contract: persisted `net_revenue` is the NET the owner keeps, so the
- *      engine grosses up per channel (percentage: gross = round(net / (1 - rate))) and
- *      derives commission = gross − net. On a fixture whose net rows carry IEEE-754
- *      residue (0.1 + 0.2 = 0.30000000000000004), a naive float accumulation drifts
- *      off the cent, while the engine sums net in integer cents (toCents) first, so
- *      gross, commission, and net are all whole-cent and reconcile exactly.
+ *   §1 EXECUTION — proves the engine is cent-exact under the authoritative model:
+ *      persisted `net_revenue` IS the gross booked revenue, so the engine derives
+ *      commission = round(net * rate) per channel and net kept = gross − commission.
+ *      On a fixture whose net rows carry IEEE-754 residue (0.1 + 0.2 =
+ *      0.30000000000000004), a naive float accumulation drifts off the cent, while
+ *      the engine sums net in integer cents (toCents) first, so gross, commission,
+ *      and net are all whole-cent and reconcile exactly.
  *   §2 SOURCE CONTRACT — pins that both files now delegate to the engine and no
  *      longer contain the float aggregation pattern.
  *
@@ -90,7 +90,7 @@ const engine = CalculationService.calculateChannelMetrics(srcRows);
 const engExp = engine.find((c) => c.source === 'EXPEDIA');
 const engDir = engine.find((c) => c.source === 'DIRECT');
 
-console.log('§1 execution — engine is cent-exact and grosses up from net');
+console.log('§1 execution — engine is cent-exact; net_revenue IS gross booked revenue');
 
 // A naive float accumulation of EXPEDIA's net rows carries binary residue.
 const floatNet = (Number(srcRows[0].net_revenue) || 0) + (Number(srcRows[1].net_revenue) || 0);
@@ -98,20 +98,21 @@ ok('naive float net accumulation carries binary residue',
   floatNet !== 0.3,
   `float net was exactly ${floatNet} (expected the 0.30000000000000004 residue)`);
 
-// The engine sums net in integer cents: 10c + 20c = 30c → exactly 0.30.
-ok('engine EXPEDIA net is cent-exact 0.30',
-  toCents(engExp.net) === 30 && engExp.net === fromCents(30),
-  `engine net was ${engExp.net} (${toCents(engExp.net)} cents)`);
-
-// net is POST-commission: gross up a 50% channel → gross = round(30c / 0.5) = 60c.
-ok('engine EXPEDIA gross = round(net / (1 - rate)) = 0.60',
-  toCents(engExp.gross) === 60 && engExp.gross === fromCents(60),
+// net_revenue IS the gross booked revenue; the engine sums it in integer cents:
+// 10c + 20c = 30c → exactly 0.30, not the 0.30000000000000004 float residue.
+ok('engine EXPEDIA gross is cent-exact 0.30 (= net_revenue)',
+  toCents(engExp.gross) === 30 && engExp.gross === fromCents(30),
   `engine gross was ${engExp.gross} (${toCents(engExp.gross)} cents)`);
 
-// commission = gross − net = 60c − 30c = 30c, a whole number of cents.
-ok('engine EXPEDIA commission = gross − net = 0.30',
-  toCents(engExp.commission) === 30 && engExp.commission === fromCents(30),
+// commission is a cost = round(net * rate) = round(30c * 0.5) = 15c, whole cents.
+ok('engine EXPEDIA commission = round(net * rate) = 0.15',
+  toCents(engExp.commission) === 15 && engExp.commission === fromCents(15),
   `engine commission was ${engExp.commission} (${toCents(engExp.commission)} cents)`);
+
+// net kept = gross − commission = 30c − 15c = 15c, a whole number of cents.
+ok('engine EXPEDIA net kept = gross − commission = 0.15',
+  toCents(engExp.net) === 15 && engExp.net === fromCents(15),
+  `engine net was ${engExp.net} (${toCents(engExp.net)} cents)`);
 
 // A 0% channel is NOT grossed up: gross === net, commission === 0.
 ok('engine DIRECT (0%) gross === net, commission === 0',

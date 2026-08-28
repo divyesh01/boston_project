@@ -156,10 +156,10 @@ export class CalculationService {
     // channel arrived in. That is how the live ledger and the pre-aggregated daily
     // cache — which collapses several rows per channel per day into one — came out
     // a cent apart on total deductions for the same period.
-    // net_revenue is POST-commission NET (owner model, 2026-08-27). Accumulate it
-    // as net in integer CENTS, then gross UP once per channel via the shared
-    // grossUpFromNetCents helper — so the single division is rounded exactly once
-    // per channel and every surface derives the identical gross/commission.
+    // net_revenue IS the gross booked room revenue for a channel (authoritative
+    // model). Accumulate it in integer CENTS, then derive the commission COST once
+    // per channel via the shared grossUpFromNetCents helper — so every surface
+    // derives the identical gross/commission and the net kept reconciles.
     const map = new Map();
     srcRows.forEach((r) => {
       const key = r.source || r.code || 'UNKNOWN';
@@ -175,17 +175,19 @@ export class CalculationService {
         const info = commissionFor(c.source);
         const { grossCents, commissionCents } = grossUpFromNetCents(c.netCents, info, c.stays);
         const gross = fromCents(grossCents);
-        // grossCents is an internal accumulator and is deliberately NOT spread into
-        // the result: a cents-scaled field sitting next to dollar fields is exactly
-        // how a consumer ends up rendering a number 100x too large.
+        // net kept = gross booked − commission. grossCents/commissionCents are
+        // internal cent accumulators and are deliberately NOT spread into the
+        // result: a cents-scaled field beside dollar fields is exactly how a
+        // consumer ends up rendering a number 100x too large.
+        const netKeptCents = grossCents - commissionCents;
         return {
           source: c.source,
           stays: c.stays,
           ...info,
           gross,
           commission: fromCents(commissionCents),
-          net: fromCents(c.netCents),
-          margin: grossCents ? fromRate(divideRate(fromCents(c.netCents), gross)) : 0,
+          net: fromCents(netKeptCents),
+          margin: grossCents ? fromRate(divideRate(fromCents(netKeptCents), gross)) : 0,
         };
       })
       .sort((a, b) => b.net - a.net);
@@ -229,8 +231,10 @@ export class CalculationService {
       const info = commissionFor(r.source || r.code);
       if (!src || !src.taxable || info.taxExempt) return;
       const d = String(r.date).slice(0, 10);
-      // net_revenue is POST-commission NET; the taxable base is the grossed-up
-      // booking value (gross up the tax base too — owner directive 2026-08-27).
+      // net_revenue IS the gross booked room revenue, so it is itself the taxable
+      // base. grossUpFromNetCents returns grossCents === net_revenue under the
+      // authoritative model (no gross-up); the shared helper is kept so the base
+      // matches the channel engine to the cent.
       const { grossCents } = grossUpFromNetCents(toCents(r.net_revenue), info, r.stays);
       taxBase.set(d, (taxBase.get(d) || 0) + grossCents);
     });

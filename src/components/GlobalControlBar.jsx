@@ -14,6 +14,7 @@ import { queryClientInstance } from "@/lib/query-client";
 import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ReportFreshnessNotice } from "@/components/OwnerTrustNotices";
 
 const CUR_YEAR = new Date().getFullYear();
 const YEARS = [CUR_YEAR - 2, CUR_YEAR - 1, CUR_YEAR, CUR_YEAR + 1].map(String);
@@ -349,9 +350,10 @@ export default function GlobalControlBar() {
         </button>
         <span className="ml-auto text-xs tabular-nums text-slate-500">
           {f.dateRange.from || "—"} → {f.dateRange.to || "—"}
-          {f.latestDate && <span className="ml-2 text-[#00E096]">Data through: {f.latestDate}</span>}
+          {f.latestDate && <span className="ml-2 text-slate-300">Newest occupancy: {f.latestDate}</span>}
         </span>
       </div>
+      {["/", "/dashboard", "/action-center", "/pricing", "/forecasting"].includes(pageKey) && <ReportFreshnessNotice property={f.property} />}
     </div>
   );
 }

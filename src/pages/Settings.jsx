@@ -1234,6 +1234,7 @@ export default function Settings() {
                 There is no copy on a server. Clearing site data, resetting the machine or moving to
                 a different laptop loses all of it. A backup file is the only way to move the data or
                 get it back.
+                <span className="mt-2 block font-medium text-amber-200">Downloaded JSON backups are not encrypted. They contain private business records and account security fields. Keep them in secure storage; do not email them or upload them to a public repository.</span>
               </AlertDescription>
             </Alert>
 

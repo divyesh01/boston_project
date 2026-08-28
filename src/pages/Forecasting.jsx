@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { CostCoverageNotice } from "@/components/OwnerTrustNotices";
 import { useQuery } from "@tanstack/react-query";
 import { TrendingUp, DollarSign, Percent, Building2, BarChart3 } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
@@ -148,7 +149,7 @@ export default function Forecasting() {
         <p className="mt-2 text-xs text-slate-500">
           {propName} · Based on {histStats.days} days of historical data ·{" "}
           {histStats.hasExpenseData
-            ? `expenses from actual records (${money(histStats.dailyExpense)}/day)`
+            ? `recorded costs only (${money(histStats.dailyExpense)}/day); completeness not confirmed`
             : "no expense data yet — expenses assumed at 65% of revenue"}
         </p>
       </header>
@@ -166,6 +167,7 @@ export default function Forecasting() {
       )}
 
       {/* Historical baseline */}
+      <CostCoverageNotice expenses={expenses} payroll={payroll} dateRange={dateRange} loading={expensesQ.isLoading || payrollQ.isLoading} failed={expensesQ.isError || payrollQ.isError} />
       <Card title="Historical Baseline" subtitle={`From ${dateRange.from || "—"} to ${dateRange.to || "—"}`}>
         <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-5">
           <KpiCard label="Avg Daily Revenue" value={money(histStats.dailyRevenue)} accent={C.purple} icon={DollarSign} />

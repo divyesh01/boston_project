@@ -1,15 +1,15 @@
 import React, { useState } from "react";
-import { Settings2, RefreshCw, ArrowUpRight, CheckCircle, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
+import { Settings2, ArrowUpRight, CheckCircle, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { useRooms } from "@/lib/useHotelData";
-import { db } from "@/api/base44Client";
+import { PricingScenarioNotice } from "@/components/OwnerTrustNotices";
+import { forecastRevenueCents } from "@/lib/ownerTrust";
 import { usePricingForecast } from "@/lib/usePricing";
 import { getPricingConfig, savePricingConfig, DEFAULT_PRICING_CONFIG, ROOM_TYPES } from "@/lib/pricingSettings";
 import { money2 } from "@/lib/hotel";
 import { fromCents } from "@/lib/decimal";
 import { useRealtimeInvalidation } from "@/lib/realtime";
-import { applyDynamicRateOverride } from "@/lib/pricingOverride";
 import { ErrorState } from "@/components/ui/status";
 
 const toCentsFromDollars = (d) => Math.round((Number(d) || 0) * 100);
@@ -34,7 +34,6 @@ export default function Pricing() {
   useRealtimeInvalidation(["rooms", "reservations", "weather"]);
 
   const isPortfolio = property === "all" || Array.isArray(property);
-  const singlePropertyId = !isPortfolio ? property : null;
   const propName = isPortfolio
     ? (Array.isArray(property) ? `${property.length} Properties` : "Portfolio")
     : (properties.find((p) => p.id === property)?.name || "Property");
@@ -42,17 +41,16 @@ export default function Pricing() {
   const [cfg, setCfg] = useState(() => getPricingConfig());
   const [expanded, setExpanded] = useState(false);
   const [notice, setNotice] = useState(null);
-  const [pushing, setPushing] = useState(false);
   const [horizon, setHorizon] = useState(14);
 
-  const { forecast, enabled, isError: forecastError, error: forecastErr, refetch: refetchForecast } = usePricingForecast(horizon);
+  const { forecast, enabled, isLoading: forecastLoading, isError: forecastError, error: forecastErr, refetch: refetchForecast } = usePricingForecast(horizon);
 
   const update = (patch) => {
     const next = { ...cfg, ...patch };
     setCfg(next);
     const stored = savePricingConfig(next);
     // Clear only this page's own storage warning on a later success — any other
-    // notice (a preset confirmation, a push result) is left where it was.
+    // notice (a preset confirmation) is left where it was.
     setNotice((prev) =>
       stored ? (prev && prev.text === WRITE_REFUSED ? null : prev) : { type: "error", text: WRITE_REFUSED }
     );
@@ -84,44 +82,11 @@ export default function Pricing() {
 
   const reason = today
     ? occ > 0.8
-      ? `Occupancy forecast ${Math.round(occ * 100)}% tonight — demand is strong, so the engine raises rates toward the competitive set.`
+      ? `Occupancy forecast ${Math.round(occ * 100)}% for ${today.date} — the local model raises rates against the configured benchmark.`
       : occ > 0.6
       ? `Moderate demand (${Math.round(occ * 100)}% occupancy forecast) — rates hold at a modest premium on weekends.`
       : `Light demand (${Math.round(occ * 100)}% occupancy forecast) — prices ease within the floor to protect fill.`
     : "No room register yet to size demand.";
-
-  const handlePush = async () => {
-    if (isPortfolio) { setNotice({ type: "error", text: "Select a specific property to push rates." }); return; }
-    if (!today) return;
-    setPushing(true); setNotice(null);
-    try {
-      const rateMap = {};
-      for (const type of ROOM_TYPES) {
-        if (today.types && today.types[type]) rateMap[type] = fromCents(today.types[type].recommendedCents);
-      }
-      await db.integrations.ChannelManager.PushInventory(singlePropertyId, rateMap);
-      // Audit each applied rate override (best-effort — never blocks the push).
-      for (const type of ROOM_TYPES) {
-        const rec = today.types?.[type]?.recommendedCents;
-        if (rec) {
-          try {
-            await applyDynamicRateOverride({
-              propertyId: singlePropertyId,
-              newRate: fromCents(rec),
-              roomType: type,
-              justification: `Yield push to ${propName}`,
-              user: null,
-            });
-          } catch { /* audit trail is non-critical */ }
-        }
-      }
-      setNotice({ type: "ok", text: `Pushed recommended rates for ${propName} to connected channels.` });
-    } catch (e) {
-      setNotice({ type: "error", text: `Push failed: ${e.message}` });
-    } finally {
-      setPushing(false);
-    }
-  };
 
   const Input = ({ label, hint = "", children }) => (
     <label className="flex flex-col gap-1 text-xs text-slate-400">
@@ -135,8 +100,10 @@ export default function Pricing() {
       <header>
         <p className="text-[11px] uppercase tracking-[0.3em] text-[#6C63FF]">Revenue</p>
         <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Dynamic Pricing</h1>
-        <p className="mt-1 text-sm text-slate-400">Auto-adjust nightly rates from demand, seasonality, weather, and the competitive set · {propName}</p>
+        <p className="mt-1 text-sm text-slate-400">Model nightly rates locally; no automatic publishing · {propName}</p>
       </header>
+
+      <PricingScenarioNotice startDate={forecastLoading ? '' : today?.date} />
 
       {/* Without this, a failed room read still printed a full rate card — the page said
           "No room register yet to size demand", which reads as an empty hotel rather
@@ -146,7 +113,7 @@ export default function Pricing() {
       {(roomsQ.isError || forecastError) && (
         <ErrorState
           title="Could not load the demand signals"
-          description="The engine sizes demand from your room register, your reservation book and cached weather, and at least one of those reads failed. Any recommended rate, occupancy forecast, or revenue opportunity shown below was computed without that data — do not push these rates to your channels."
+          description="The engine sizes demand from your room register, your reservation book and cached weather, and at least one of those reads failed. Any recommended rate, occupancy forecast, or revenue opportunity shown below was computed without that data — do not act on this scenario until the reads succeed."
           error={roomsQ.error || forecastErr}
           onRetry={() => { roomsQ.refetch(); refetchForecast(); }}
         />
@@ -158,16 +125,19 @@ export default function Pricing() {
         </div>
       )}
 
+      {(roomsQ.isLoading || forecastLoading) ? (
+        <p role="status" className="text-sm text-slate-300">Loading local scenario inputs…</p>
+      ) : (roomsQ.isError || forecastError) ? null : <>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-2xl border border-white/5 bg-[#0F1F35]/80 p-4">
           <p className="text-[11px] uppercase tracking-widest text-slate-400">Engine Status</p>
-          <p className="mt-2 font-heading text-2xl font-semibold text-white">{enabled ? "Auto" : "Manual"}</p>
-          <p className="text-xs text-slate-500">{enabled ? "Rates auto-adjust daily" : "Rates are at base (rack)"}</p>
+          <p className="mt-2 font-heading text-2xl font-semibold text-white">{enabled ? "Scenario on" : "Scenario off"}</p>
+          <p className="text-xs text-slate-500">{enabled ? "Calculated locally while this page is open" : "Model uses base rates"}</p>
         </div>
         {today && (
           <>
             <div className="rounded-2xl border border-white/5 bg-[#0A1628]/60 p-4">
-              <p className="text-[11px] uppercase tracking-widest text-slate-500">Tonight's Recommended Rate</p>
+              <p className="text-[11px] uppercase tracking-widest text-slate-500">Scenario Rate · {today.date}</p>
               <p className="mt-2 font-heading text-2xl font-semibold text-white">{money2(fromCents(avgRecCents))}</p>
               <p className={`mt-0.5 text-xs ${avgRecCents >= avgBaseCents ? "text-[#00E096]" : "text-[#FF6B6B]"}`}>
                 {avgRecCents >= avgBaseCents ? "+" : ""}{money2(fromCents(avgRecCents - avgBaseCents))} vs base {money2(fromCents(avgBaseCents))}
@@ -179,7 +149,7 @@ export default function Pricing() {
               <p className="text-xs text-slate-500">{rooms.length} rooms on the register</p>
             </div>
             <div className="rounded-2xl border border-white/5 bg-[#0A1628]/60 p-4">
-              <p className="text-[11px] uppercase tracking-widest text-slate-500">{`${horizon}d Revenue Opportunity`}</p>
+              <p className="text-[11px] uppercase tracking-widest text-slate-400">{`${horizon}d Scenario difference vs base`}</p>
               <p className="mt-2 font-heading text-2xl font-semibold text-white">{money2(fromCents(upliftCents))}</p>
               <p className={`mt-0.5 text-xs ${upliftPct >= 0 ? "text-[#00E096]" : "text-[#FF6B6B]"}`}>{upliftPct >= 0 ? "+" : ""}{upliftPct}% vs base rates</p>
             </div>
@@ -187,7 +157,7 @@ export default function Pricing() {
         )}
       </div>
 
-      <Card title="Why this rate?" subtitle="Plain-English explanation of today's recommendation">
+      <Card title="Why this rate?" subtitle={`Local scenario for ${today?.date || 'the selected start date'}`}>
         <p className="text-sm text-slate-300">{reason}</p>
       </Card>
 
@@ -212,10 +182,10 @@ export default function Pricing() {
           <button onClick={() => update({ minMultiplier: DEFAULT_PRICING_CONFIG.minMultiplier, maxMultiplier: DEFAULT_PRICING_CONFIG.maxMultiplier, demandSensitivity: DEFAULT_PRICING_CONFIG.demandSensitivity, competitorWeight: DEFAULT_PRICING_CONFIG.competitorWeight })} className="mt-3 text-xs text-[#00D4FF] hover:underline">Reset to Balanced defaults</button>
         </Card>
 
-        <Card title="Competitive Set" subtitle="Your position vs the market benchmark">
+        <Card title="Configured Benchmark" subtitle="Model comparison against a manually entered rate">
           <div className="space-y-2 text-xs">
             <div className="flex items-center justify-between rounded-lg bg-[#0A1628]/40 px-3 py-2"><span className="text-slate-400">Your recommended ADR</span><span className="font-medium text-white">{money2(fromCents(avgRecCents))}</span></div>
-            <div className="flex items-center justify-between rounded-lg bg-[#0A1628]/40 px-3 py-2"><span className="text-slate-400">Comp set rate</span><span className="font-medium text-slate-300">{money2(fromCents(cfg.competitorRateCents))}</span></div>
+            <div className="flex items-center justify-between rounded-lg bg-[#0A1628]/40 px-3 py-2"><span className="text-slate-400">Configured benchmark (not live)</span><span className="font-medium text-slate-300">{money2(fromCents(cfg.competitorRateCents))}</span></div>
             <div className="flex items-center justify-between rounded-lg bg-[#0A1628]/40 px-3 py-2">
               <span className="text-slate-400">Position</span>
               <span className={`font-medium ${avgRecCents > cfg.competitorRateCents ? "text-[#FF6B6B]" : avgRecCents < cfg.competitorRateCents ? "text-[#00E096]" : "text-slate-300"}`}>
@@ -225,24 +195,21 @@ export default function Pricing() {
           </div>
         </Card>
 
-        <Card title="Push to Channels" subtitle="Send today's recommended rates to connected OTAs">
-          <p className="text-sm text-slate-400">Dispatches the current recommended rate for each room type to the channel manager, which pushes it to every connected OTA.</p>
+        <Card title="OTA publishing unavailable" subtitle="Local preview only — nothing is sent to an OTA">
+          <p className="text-sm text-slate-400">Review these scenario rates against your actual bookings and market prices. Apply any changes separately in your OTA dashboard.</p>
           <div className="mt-3 space-y-2">
             {ROOM_TYPES.map((type) => {
               const rec = today?.types?.[type]?.recommendedCents;
               return (<div key={type} className="flex items-center justify-between text-xs"><span className="text-slate-400">{type}</span><span className="font-medium text-white">{rec ? money2(fromCents(rec)) : "—"}</span></div>);
             })}
           </div>
-          <button onClick={handlePush} disabled={pushing || isPortfolio || !enabled || !today} className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-[#6C63FF] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#5b52e8] disabled:opacity-50">
-            <RefreshCw className={`h-4 w-4 ${pushing ? "animate-spin" : ""}`} />{pushing ? "Pushing…" : "Push Recommended Rates"}
-          </button>
-          {isPortfolio && <p className="mt-2 text-center text-xs text-amber-400"><AlertTriangle className="mr-1 inline h-3 w-3" /> Select a specific property to push.</p>}
+          <button type="button" disabled className="mt-4 min-h-11 w-full cursor-not-allowed rounded-lg border border-white/20 px-4 py-2.5 text-sm text-slate-400">OTA publishing unavailable</button>
         </Card>
       </div>
 
       <Card
         title="Base Rates"
-        subtitle="The rack rate per room type the engine multiplies — the anchor for every recommended and pushed rate"
+        subtitle="The rack rate per room type the engine multiplies — the anchor for every modeled rate"
       >
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {ROOM_TYPES.map((type) => {
@@ -288,9 +255,8 @@ export default function Pricing() {
         {!expanded && (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {[7, 14, 30, 90].map((d) => {
-              const slice = forecast.slice(0, d);
-              const rev = slice.reduce((s, x) => s + x.projectedRevenueCents, 0);
-              return (<div key={d} className="rounded-xl border border-white/5 bg-[#0A1628]/50 p-3"><p className="text-xs text-slate-400">{d}-day</p><p className="font-heading text-lg font-semibold text-white">{money2(fromCents(rev))}</p><p className="text-[10px] text-slate-500">projected revenue</p></div>);
+              const rev = forecastRevenueCents(forecast, d);
+              return (<div key={d} className="rounded-xl border border-white/5 bg-[#0A1628]/50 p-3"><p className="text-xs text-slate-400">{d}-day</p><p className="font-heading text-lg font-semibold text-white">{rev === null ? "Not calculated" : money2(fromCents(rev))}</p><p className="text-[10px] text-slate-500">{rev === null ? `Only ${forecast.length} days calculated` : "scenario revenue"}</p></div>);
             })}
           </div>
         )}
@@ -330,6 +296,7 @@ export default function Pricing() {
           </div>
         ) : null}
       </Card>
+      </>}
     </div>
   );
 }

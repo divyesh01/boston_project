@@ -17,14 +17,18 @@ export default function ChannelRevenue({ rows, dateRange }) {
       const net = Number(r.net_revenue || 0);
       const stays = Number(r.stays || 0);
       const info = commissionFor(src);
-      let gross = 0;
-      if (info.type === "percentage" && info.rate > 0) gross = net / (1 - info.rate);
-      else if (info.type === "fixed") gross = net + info.rate * stays;
-      else gross = net;
-      const commission = gross - net;
+      // net_revenue IS the gross booked room revenue; commission is a cost derived
+      // from it, and net profitability = gross − commission (authoritative model,
+      // matching CalculationService.calculateChannelMetrics).
+      let commission = 0;
+      if (info.type === "percentage" && info.rate > 0) commission = net * info.rate;
+      else if (info.type === "fixed") commission = info.rate * stays;
+      else if (info.type === "actual") commission = info.rate;
+      const gross = net;
+      const profit = gross - commission;
       const cur = map.get(src) || { source: src, gross: 0, net: 0, stays: 0, commission: 0, adr: 0 };
       cur.gross += gross;
-      cur.net += net;
+      cur.net += profit;
       cur.stays += stays;
       cur.commission += commission;
       cur.adr += Number(r.adr || 0);

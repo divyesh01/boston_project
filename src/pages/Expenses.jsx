@@ -1,4 +1,5 @@
 import { db } from '@/api/base44Client';
+import { CostCoverageNotice } from "@/components/OwnerTrustNotices";
 
 import React, { useState, useMemo } from "react";
 import { Plus, Trash2, TrendingUp, TrendingDown, Wallet, Receipt, Users, DollarSign } from "lucide-react";
@@ -393,6 +394,7 @@ export default function Expenses() {
       )}
 
       {/* SECTION 1: Revenue */}
+      <CostCoverageNotice expenses={expenses} payroll={payroll} dateRange={dateRange} loading={expensesQ.isLoading || payrollQ.isLoading} failed={Boolean(readFailed)} />
       <Card title="Revenue" subtitle="Gross revenue from imported reports, refunds & adjustments, and net revenue">
         <div className="grid gap-4 sm:grid-cols-3">
           <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">

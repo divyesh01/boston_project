@@ -223,12 +223,12 @@ console.log("\n[4] no cents-suffixed value is formatted as dollars");
   console.log(`        scanned ${callsScanned} money()/money2() calls, ${wrappedCorrectly} correctly bridged`);
 }
 
-// ── 5. The channel push sends a number, not a formatted string ──────────────
+// ── 5. No simulated push is exposed in the standalone UI ───────────────────
 //
-// A rate pushed to an OTA is not a label. money2() returns "$14,900.00": a dollar
-// sign, a thousands separator, and 100x the rate. The audit call two lines below
-// used a different conversion, so the trail and the push could not agree.
-console.log("\n[5] the OTA rate payload is numeric dollars");
+// The former payload conversion was tested here. Since 2026-08-28 that action
+// is removed: the adapter was a simulation, not a real OTA integration. Keep
+// the money-format checks, and prevent the fake publishing path returning.
+console.log("\n[5] standalone pricing cannot send simulated OTA payloads");
 {
   const stripComments = (s) =>
     s.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " ")).replace(/(^|[^:])\/\/.*$/gm, "$1");
@@ -237,17 +237,17 @@ console.log("\n[5] the OTA rate payload is numeric dollars");
   ok("the rate map is not built from a formatted string",
     !/rateMap\[[^\]]*\]\s*=\s*money2?\(/.test(pricing),
     "rateMap[type] = money2(...) pushes \"$14,900.00\" to the channel manager");
-  ok("the rate map is built from a cents-to-dollars conversion",
-    /rateMap\[[^\]]*\]\s*=\s*fromCents\(/.test(pricing));
-  ok("PushInventory is still the call being fed", /ChannelManager\.PushInventory\(/.test(pricing));
+  ok("the standalone UI does not call the simulated inventory push",
+    !/ChannelManager\.PushInventory\(/.test(pricing));
+  ok("publishing unavailability is explicit", /OTA publishing unavailable/.test(pricing));
 
   // The audit path recorded Math.round(cents / 100) — whole dollars — so a $149.50
   // override was logged as $150.00. The push and the trail must agree exactly.
   ok("the audit path no longer truncates cents off the rate",
     !/const toDollars\s*=\s*\(cents\)\s*=>\s*Math\.round/.test(pricing),
     "toDollars() rounded to whole dollars, losing $0.50 on a $149.50 rate");
-  ok("the override is handed dollars via fromCents",
-    /newRate:\s*fromCents\(/.test(pricing));
+  ok("the standalone UI does not log unapplied rate overrides",
+    !/applyDynamicRateOverride\(/.test(pricing));
   ok("Pricing.jsx imports fromCents", /import \{[^}]*fromCents[^}]*\} from "@\/lib\/decimal"/.test(pricing));
   ok("RoomBoard.jsx imports fromCents",
     /import \{[^}]*fromCents[^}]*\} from "@\/lib\/decimal"/.test(

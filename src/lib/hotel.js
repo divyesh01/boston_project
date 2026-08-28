@@ -37,26 +37,37 @@ export function commissionFor(source = "") {
   return best || { type: "none", rate: 0, taxExempt: false };
 }
 
-// net_revenue is POST-commission NET (owner-declared model, 2026-08-27). Recover
-// the gross booking value and the channel commission from it, in integer CENTS,
-// so every surface (channel engine, Money Kept ledger, calendar) derives the
-// SAME figure and cannot disagree to the cent.
-//   percentage: gross = round(net / (1 - rate))    commission = gross - net
-//   fixed:      commission = round(rate * stays)    gross = net + commission
-//   actual:     commission = flat rate              gross = net + commission
-//   none / 0% / rate>=1: gross = net                commission = 0
-// The single division is rounded straight to a whole cent — never accumulated as
-// a float — mirroring multiply()'s cents discipline.
+// net_revenue IS the gross booked room revenue for a channel — the authoritative
+// contract (BRAIN_FINANCE §12). sum(net_revenue) reconciles to the room ledger
+// $1,011,258.67 EXACTLY (probe-netrev-grossup-impact.mjs), leaving no room for a
+// grossed-up phantom, and the historical documented OTA commission ($50,287.65)
+// equals net_revenue × rate. The channel commission is a COST derived from that
+// gross, in integer CENTS, so every surface (channel engine, Money Kept ledger,
+// calendar) derives the SAME figure and cannot disagree to the cent.
+//   percentage: commission = round(net * rate)      gross = net
+//   fixed:      commission = round(rate * stays)    gross = net
+//   actual:     commission = flat rate              gross = net
+//   none / 0% / rate>=1: commission = 0             gross = net
+// The single multiplication is rounded straight to a whole cent — never
+// accumulated as a float — mirroring multiply()'s cents discipline.
+//
+// NAME NOTE: the identifier is retained (imported by four consumers) but there is
+// NO gross-up under the authoritative model — grossCents === net_revenue. A prior
+// "Model 2" gross-up (gross = round(net / (1 - rate)), commission = gross − net),
+// introduced 2026-08-27 and labeled "owner-declared" with no committed owner
+// declaration, over-stated commission and double-counted in Money Kept; it was
+// reverted here.
 export function grossUpFromNetCents(netCents, info = { type: "none", rate: 0 }, stays = 0) {
   const cents = Math.round(Number(netCents) || 0);
   let commissionCents = 0;
   if (info.type === "percentage" && info.rate > 0 && info.rate < 1) {
-    const grossCents = Math.round(cents / (1 - info.rate));
-    return { grossCents, commissionCents: grossCents - cents };
+    commissionCents = Math.round(cents * info.rate);
+  } else if (info.type === "fixed") {
+    commissionCents = Math.round(toCents(info.rate) * (Number(stays) || 0));
+  } else if (info.type === "actual") {
+    commissionCents = toCents(info.rate);
   }
-  if (info.type === "fixed") commissionCents = Math.round(toCents(info.rate) * (Number(stays) || 0));
-  else if (info.type === "actual") commissionCents = toCents(info.rate);
-  return { grossCents: cents + commissionCents, commissionCents };
+  return { grossCents: cents, commissionCents };
 }
 
 export const money = (v) => formatCents(toCents(v), 0);

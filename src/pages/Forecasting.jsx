@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { CostCoverageNotice } from "@/components/OwnerTrustNotices";
 import { useQuery } from "@tanstack/react-query";
-import { TrendingUp, DollarSign, Percent, Building2, BarChart3 } from "lucide-react";
+import { TrendingUp, DollarSign, Percent, Building2, BarChart3, RotateCcw, SlidersHorizontal } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import { db } from "@/api/base44Client";
@@ -10,6 +10,7 @@ import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { money, money2, sum, inRange, C } from "@/lib/hotel";
 import { filterCommittedPay } from "@/lib/payrollCalc";
 import { ErrorState } from "@/components/ui/status";
+import PremiumPageHero from "@/components/PremiumPageHero";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts";
 
 const HORIZONS = [
@@ -18,6 +19,15 @@ const HORIZONS = [
   { key: "month", label: "Next Month", days: 30 },
   { key: "quarter", label: "Next Quarter", days: 90 },
 ];
+
+const DEFAULT_ADJUSTMENTS = {
+  rateAdjust: 0,
+  occupancyAdjust: 0,
+  adrAdjust: 0,
+  availableRooms: 100,
+  otaCommission: 15,
+  expenseAdjust: 0,
+};
 
 function buildPropertyFilter(property) {
   const filter = {};
@@ -29,6 +39,14 @@ function buildPropertyFilter(property) {
     }
   }
   return filter;
+}
+
+function scrollToForecastAssumptions() {
+  const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  document.getElementById("forecast-assumptions")?.scrollIntoView({
+    behavior: reduceMotion ? "auto" : "smooth",
+    block: "start",
+  });
 }
 
 export default function Forecasting() {
@@ -77,14 +95,7 @@ export default function Forecasting() {
   }, [occRows, expenses, payroll, dateRange]);
 
   const [horizon, setHorizon] = useState("month");
-  const [adjustments, setAdjustments] = useState({
-    rateAdjust: 0,
-    occupancyAdjust: 0,
-    adrAdjust: 0,
-    availableRooms: 100,
-    otaCommission: 15,
-    expenseAdjust: 0,
-  });
+  const [adjustments, setAdjustments] = useState(DEFAULT_ADJUSTMENTS);
 
   const horizonDays = HORIZONS.find((h) => h.key === horizon)?.days || 30;
 
@@ -140,19 +151,32 @@ export default function Forecasting() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <p className="text-[11px] uppercase tracking-[0.3em] text-[#00D4FF]">Module 9</p>
-        <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Revenue Forecasting</h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Project future performance based on historical data. Adjust assumptions to model scenarios.
-        </p>
-        <p className="mt-2 text-xs text-slate-500">
-          {propName} · Based on {histStats.days} days of historical data ·{" "}
-          {histStats.hasExpenseData
-            ? `recorded costs only (${money(histStats.dailyExpense)}/day); completeness not confirmed`
-            : "no expense data yet — expenses assumed at 65% of revenue"}
-        </p>
-      </header>
+      <PremiumPageHero
+        eyebrow="Predictive planning"
+        title="Revenue Forecasting"
+        description="Shape rate, occupancy, inventory, and cost assumptions into an owner-ready view of future performance."
+        meta={`${propName} · Based on ${histStats.days} days of historical data · ${histStats.hasExpenseData
+          ? `recorded costs only (${money(histStats.dailyExpense)}/day); completeness not confirmed`
+          : "no expense data yet — expenses assumed at 65% of revenue"}`}
+        icon={BarChart3}
+        accent="emerald"
+        actions={[
+          {
+            label: "Tune assumptions",
+            onClick: scrollToForecastAssumptions,
+            icon: SlidersHorizontal,
+            variant: "primary",
+          },
+          {
+            label: "Reset scenario",
+            onClick: () => {
+              setHorizon("month");
+              setAdjustments(DEFAULT_ADJUSTMENTS);
+            },
+            icon: RotateCcw,
+          },
+        ]}
+      />
 
       {/* Without this, a failed read produced a full forecast off a zero baseline: $0
           projected revenue, and the header line claimed "no expense data yet" when the
@@ -180,7 +204,8 @@ export default function Forecasting() {
 
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Adjustment controls */}
-        <Card title="Forecast Assumptions" subtitle="Adjust to model different scenarios" className="lg:col-span-1">
+        <div id="forecast-assumptions" className="scroll-mt-6 lg:col-span-1">
+        <Card title="Forecast Assumptions" subtitle="Adjust to model different scenarios">
           <div className="space-y-4">
             <div>
               <label className="mb-1.5 block text-xs text-slate-400">Forecast Horizon</label>
@@ -245,6 +270,7 @@ export default function Forecasting() {
             />
           </div>
         </Card>
+        </div>
 
         {/* Forecast results */}
         <div className="space-y-4 lg:col-span-2">

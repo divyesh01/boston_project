@@ -16,6 +16,7 @@ import {
 } from "@/lib/statisticsAnalytics";
 import MetricExplorer from "@/components/statistics/MetricExplorer";
 import { ErrorState } from "@/components/ui/status";
+import PremiumPageHero from "@/components/PremiumPageHero";
 
 const tip = { background: "#0A1628", border: "1px solid #ffffff14", borderRadius: 12, color: "#e2e8f0" };
 const axis = { fill: "#64748b", fontSize: 10 };
@@ -53,7 +54,7 @@ function Segmented({ value, onChange, options }) {
           key={key}
           onClick={() => onChange(key)}
           title={hint}
-          className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
+          className={`min-h-11 rounded-md px-2.5 py-1 text-xs transition-colors ${
             value === key ? "bg-[#6C63FF] text-white" : "text-slate-400 hover:text-slate-200"
           }`}
         >
@@ -179,30 +180,35 @@ export default function Statistics() {
 
   return (
     <div className="space-y-6">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="text-[11px] uppercase tracking-[0.3em] text-[#00D4FF]">Property Performance</p>
-          <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Statistics</h1>
-          <p className="mt-1 text-sm text-slate-400">
-            Snapshot for {snapshot.date || "—"} · {num(snapshot.rows.length)} metrics
-            {dates.length > 1 ? ` · ${num(dates.length)} snapshots in range` : ""}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {dates.length > 1 && (
-            <select
-              value={snapshot.date}
-              onChange={(e) => setPickedDate(e.target.value)}
-              className="h-9 rounded-lg border border-white/10 bg-[#0A1628] px-3 text-sm text-slate-200 outline-none focus:border-[#6C63FF]"
-            >
-              {[...dates].reverse().map((d) => (
-                <option key={d} value={d}>{d}</option>
-              ))}
-            </select>
-          )}
-          <Segmented value={period} onChange={setPeriod} options={PERIODS} />
-        </div>
-      </header>
+      <PremiumPageHero
+        eyebrow="Property performance"
+        title="Statistics Studio"
+        description="Turn daily hotel snapshots into a focused view of demand, rates, revenue mix, and data quality."
+        meta={`Snapshot for ${snapshot.date || "—"} · ${num(snapshot.rows.length)} metrics${dates.length > 1 ? ` · ${num(dates.length)} snapshots in range` : ""}`}
+        icon={TrendingUp}
+        accent="cyan"
+        actions={[
+          { label: "Export CSV", onClick: () => exportSnapshot("csv"), icon: Download, variant: "primary" },
+          { label: "Export Excel", onClick: () => exportSnapshot("excel"), icon: Download },
+        ]}
+        controls={
+          <div className="flex flex-wrap items-center gap-2">
+            {dates.length > 1 && (
+              <select
+                aria-label="Statistics snapshot date"
+                value={snapshot.date}
+                onChange={(e) => setPickedDate(e.target.value)}
+                className="min-h-11 rounded-xl border border-[var(--line)] bg-[var(--s-overlay)] px-3 text-sm text-[var(--t-primary)] outline-none focus:border-[var(--brand)]"
+              >
+                {[...dates].reverse().map((d) => (
+                  <option key={d} value={d}>{d}</option>
+                ))}
+              </select>
+            )}
+            <Segmented value={period} onChange={setPeriod} options={PERIODS} />
+          </div>
+        }
+      />
 
       {/* The window being read is stated in words. "62" means something very
           different under Today than under Year to date, and the three windows

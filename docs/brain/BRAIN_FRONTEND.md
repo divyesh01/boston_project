@@ -665,3 +665,21 @@ payment detail, reason code, and charge type). If the source record itself conta
 short value, the UI states that limitation instead of inventing a fuller note.
 
 ---
+
+## 19. Premium analytics page heroes
+
+`src/components/PremiumPageHero.jsx` is the shared, presentation-only hero for the three
+highest-value analytics surfaces: `Dashboard.jsx`, `Statistics.jsx`, and
+`Forecasting.jsx`. It provides token-driven depth, a scoped CSS perspective stack, and a
+single Framer Motion entrance. Decorative layers are `aria-hidden` and ignore pointer
+events; spatial motion is removed when `prefers-reduced-motion` is active.
+
+The hero accepts real page actions rather than decorative controls. Dashboard keeps PDF
+export and adds data refresh, Statistics exposes its existing CSV/Excel exports and
+snapshot controls, and Forecasting exposes assumption navigation plus a reset to the
+declared default scenario. The component must stay presentation-only: financial values,
+query state, export implementations, and forecasting calculations remain owned by their
+pages. `scripts/probe-premium-page-heroes.mjs` holds the three-page scope, accessibility,
+action, and reduced-motion contract.
+
+---

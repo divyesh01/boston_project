@@ -27,6 +27,7 @@ import { useQuery } from "@tanstack/react-query";
 import { db } from "@/api/base44Client";
 import WeatherPanel from "@/components/dashboard/WeatherPanel";
 import PricingPanel from "@/components/dashboard/PricingPanel";
+import PremiumPageHero from "@/components/PremiumPageHero";
 import { useRealtimeInvalidation } from "@/lib/realtime";
 import { ErrorState } from "@/components/ui/status";
 
@@ -278,23 +279,29 @@ export default function Dashboard() {
         </div>
       )}
 
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="text-[11px] uppercase tracking-[0.3em] text-[#00D4FF]">Executive Mode</p>
-          <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Boss Decision Hub</h1>
-          <p className="mt-1 text-sm text-slate-400">
-            {propName} · {dateRange.from || "—"} → {dateRange.to || "—"} · {uniqueDays} days
-          </p>
-        </div>
-        <button
-          onClick={handleExport}
-          disabled={exporting}
-          className="flex h-11 items-center gap-2 rounded-lg bg-[#6C63FF] px-4 text-sm font-medium text-white transition-colors hover:bg-[#5b52e8] disabled:opacity-50"
-        >
-          <FileDown className="h-4 w-4" />
-          <span className="hidden sm:inline">{exporting ? "Generating…" : "Export PDF"}</span>
-        </button>
-      </header>
+      <PremiumPageHero
+        eyebrow="Executive intelligence"
+        title="Boss Decision Hub"
+        description="See revenue, occupancy, profitability, and operational risk in one decision-ready command center."
+        meta={`${propName} · ${dateRange.from || "—"} → ${dateRange.to || "—"} · ${uniqueDays} days`}
+        icon={Gauge}
+        accent="violet"
+        actions={[
+          {
+            label: exporting ? "Generating…" : "Export PDF",
+            onClick: handleExport,
+            icon: FileDown,
+            variant: "primary",
+            disabled: exporting,
+          },
+          {
+            label: refreshing ? "Refreshing…" : "Refresh data",
+            onClick: handleRefresh,
+            icon: RefreshCw,
+            disabled: refreshing,
+          },
+        ]}
+      />
 
       {exportError && (
         <div className="flex items-center gap-2 rounded-lg border border-[#FF6B6B]/30 bg-[#FF6B6B]/10 px-3 py-2 text-xs text-[#FF6B6B]">

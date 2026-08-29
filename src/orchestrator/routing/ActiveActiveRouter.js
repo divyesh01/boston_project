@@ -29,6 +29,14 @@ export class ActiveActiveRouter {
     this.roundRobinIndex = 0;
   }
 
+  resetMetrics() {
+    this.roundRobinIndex = 0;
+    this.providerStates.clear();
+    for (const p of this.primaryProviders) {
+      this._initProviderState(p);
+    }
+  }
+
   _initProviderState(providerName) {
     const norm = providerName.toUpperCase();
     this.providerStates.set(norm, {

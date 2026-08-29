@@ -18,8 +18,11 @@ This single markdown file gives **any AI model** a quick map of the entire codeb
 | Directory | Purpose | Important Files |
 |-----------|---------|-----------------|
 | `src/` | Front‑end React UI | `App.jsx`, `Dashboard.jsx`, `MoneyKept.jsx`, `Login.jsx` |
+| `src/orchestrator/` | API-First Multi-Agent Orchestrator | `Orchestrator.js`, `ExecutionLedger.js`, `ActiveActiveRouter.js`, `FallbackPolicy.js`, `PatchApplier.js` |
 | `base44/` | Back‑end functions & entities | `entry.js` (various), `RevenueReconciliation.js`, `securityUtils.js` |
 | `scripts/` | Build / test helpers | `run-tests.ps1`, `probe-*.mjs` |
+| `scripts/orchestrator/` | Multi-agent task & acceptance runners | `run_active_active_acceptance.mjs`, `run_luxury_button_task.mjs`, `probe_providers.mjs` |
+| `tests/orchestrator/` | Orchestrator unit & contract test suite | `active_active_router.test.js`, `executive_dashboard.test.js`, `patch_applier.test.js` |
 | `public/` | Static assets (HTML, icons) | `index.html` |
 | `.env.*` | Local configuration (do **not** commit) | — |
 

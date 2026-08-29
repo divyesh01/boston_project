@@ -1,0 +1,16 @@
+{
+  "sessionId": "session-acceptance-task-active-active-002",
+  "taskId": "acceptance-task-active-active-002",
+  "verdict": "PASS",
+  "completedAt": "2026-08-29T20:35:19.300Z",
+  "artifacts": [
+    "manifest.json",
+    "final-report.json",
+    "receipts/agent_receipts.txt",
+    "prompts/",
+    "responses/",
+    "patches/",
+    "tests/",
+    "logs/"
+  ]
+}

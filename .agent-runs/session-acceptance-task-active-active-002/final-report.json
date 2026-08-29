@@ -1,0 +1,33 @@
+{
+  "taskId": "acceptance-task-active-active-002",
+  "sessionId": "session-acceptance-task-active-active-002",
+  "verdict": "PASS",
+  "durationSeconds": 203.807,
+  "classification": {
+    "scale": "LARGE",
+    "rationale": "Substantial architecture, multi-agent swarm, or multi-file system upgrade detected.",
+    "claudeWorkersCount": 4,
+    "reviewerCount": 6,
+    "includeAdversarialReview": true
+  },
+  "patch": {
+    "patchHash": "a0b1ad3edba87ebd4c608d00215e1795704dcbf7318e9fd9450f4e39b3d24dc4",
+    "filesAffected": [
+      "src/lib/orchestratorVerificationProbe.js",
+      "tests/orchestrator/orchestrator_verification_probe.test.js"
+    ],
+    "linesAdded": 217,
+    "linesDeleted": 63
+  },
+  "tests": {
+    "passed": true,
+    "correctionAttempts": 0
+  },
+  "telemetry": {
+    "totalCalls": 13,
+    "successfulCalls": 10,
+    "totalTokens": 183884
+  },
+  "activeActiveStatus": "BALANCED",
+  "accounting": "====================================================\nSUBSCRIPTION USAGE CONSERVATION ACCOUNTING\n====================================================\nANTIGRAVITY SUBSCRIPTION\nSubstantive reasoning / code authoring: NO (100% offloaded to external API)\nInterface / launcher usage: YES (Interactive terminal & launch interface)\nEstimated role: Dashboard / Launcher only\nReason: None\n\nCODEX SUBSCRIPTION\nSubstantive reasoning / code authoring: NO (Conserved at 0% usage)\nInvocation status: IDLE / BLOCKED BY DEFAULT\nEstimated role: Idle reserve\nReason: None\nCould API have done this instead?: YES (Preserved for emergency reserve)\n===================================================="
+}

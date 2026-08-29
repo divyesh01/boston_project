@@ -585,6 +585,31 @@ Centralized, high-precision, explainable anomaly detection and forensic triage e
 - **Clerk Scorecard**: Multi-property partitioned audit metrics tracking overrides, adjustment volume, refunds, cash volume, and off-shift transactions without judgmental bias.
 - **Strict Property Isolation**: All rules, queries, ADR references, and scorecards strictly partition by `property_id`.
 
+---
 
+# 9. API-FIRST MULTI-AGENT ORCHESTRATION ARCHITECTURE
 
+The repository features an API-first multi-agent orchestration engine located in `src/orchestrator/`:
 
+### Active-Active Dual-Channel Provider Routing (`src/orchestrator/routing/ActiveActiveRouter.js`)
+- Dispatches requests across **Tabitoken** (`https://tabitoken.com/v1`) and **GoRouter** (`https://gorouter.app/v1`) for primary Claude Opus models (`claude-opus-5`, `claude-opus-4-8`).
+- Enforces candidate model fallbacks within the assigned provider before attempting cross-provider failover.
+
+### 3-Wave Execution Pipeline (`src/orchestrator/core/Orchestrator.js`)
+- **Wave A (Parallel Investigations)**: 4 concurrent Claude Opus workers with balanced 2 Tabitoken + 2 GoRouter dispatch.
+- **Wave B (Specialist Review Swarm)**: Independent external reviewers (Nara free tier, xKiro, NVIDIA NIM, Gemini API).
+- **Wave C (Authoritative Synthesis & Patching)**: Claude Opus authoritative decision maker generating single, surgical code patches.
+
+### Mechanical Patch Applier (`src/orchestrator/patch/PatchApplier.js`)
+- Deterministic, CRLF/LF-normalized exact block search/replace with SHA-256 integrity verification.
+- Zero manual repair by parent launcher agents required.
+
+### Executive Dashboard 3-Box Standard (`src/orchestrator/core/ExecutionLedger.js`)
+- Standardized 3-box presentation emitted for every orchestrator execution:
+  1. Multi-Agent Comparison Table
+  2. Main Contribution Table
+  3. Run Summary Box (followed downstream by telemetry receipts).
+
+### Subscription Quota Conservation (`src/orchestrator/policies/SubscriptionPolicy.js`)
+- 0% Codex subscription usage (idle emergency reserve).
+- 0% Antigravity substantive reasoning (used solely as launcher/interface; 100% reasoning offloaded to external Claude Opus API).

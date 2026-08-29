@@ -22,3 +22,15 @@
 - **Financial and metric figures use `.u-figure`** (mono stack + `tabular-nums`). Fixed-advance digits are load-bearing, not cosmetic: without them every frame of the KPI count-up is a different width and the figure visibly jitters.
 - Motion tokens (`--fx-*`) are owned by the motion system and asserted against `src/lib/motion.js` by `scripts/verify-motion.mjs`. Do not retune them as part of a visual change.
 - Verify charts (Recharts) render accessible legends, accurate tooltips, and appropriate colour coding for revenue vs. expenses.
+
+## 4. LUXURY 3D BUTTON SYSTEM DIRECTIVES
+- **Centralized Definition**: The luxury 3D button system is centralized in `src/components/ui/button.jsx` (CVA variants) and depth tokens in `src/index.css`. Do not apply ad-hoc button styling in individual page files.
+- **Layered Surface Depth**: Restrained linear gradients (`[background-image:linear-gradient(...)]`) layered over semantic tokens (`bg-primary`, `bg-destructive`, `bg-secondary`), preventing `tailwind-merge` class stripping.
+- **Specular Top Highlight**: Controlled 1px top highlight bevels (`--btn-bevel-strong` / `inset 0 1px 0 rgba(255,255,255,0.16)` on primary/destructive; `--btn-bevel-soft` on secondary).
+- **Lower Contact Shadows**: Dual-layer ambient and contact shadows (`--btn-contact`, `0 2px 4px -1px rgba(0,0,0,0.50), 0 1px 2px rgba(0,0,0,0.40)`).
+- **Tactile Interaction**: Subtle resting elevation, smooth hover lift (`hover:-translate-y-px` with intensified shadow), and tactile pressed compression (`active:translate-y-[1px]` with inset shadow).
+- **Performance & Compositor Isolation**: Hardware-accelerated GPU transforms (`transform-gpu`) without `will-change` (preventing compositor layer memory bloat in dense grids).
+- **Scoped Transitions**: Transitions are strictly property-scoped (`transition-[transform,box-shadow,background-color,border-color]`, 150ms ease-out) to prevent layout thrashing or contention with `framer-motion`.
+- **Focus Indicators**: High-contrast Emerald brand ring (`focus-visible:ring-2 focus-visible:ring-[#00E096]`) with 10.64:1 contrast on dark cards.
+- **Accessibility & Reduced Motion**: `disabled:opacity-50 disabled:shadow-none disabled:translate-y-0` and full reduced-motion neutralization (`motion-reduce:transition-none motion-reduce:transform-none`).
+- **Hierarchy**: `ghost` and `link` variants remain flat without 3D transforms.

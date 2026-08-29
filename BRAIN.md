@@ -21,10 +21,10 @@ batch. It is the persistent record of what is fixed and what is still missing.
 |--------|------|-------------|
 | [FINANCE] | `docs/brain/BRAIN_FINANCE.md` | Math, formulas, CSV parsers, or reconciliation. |
 | [SECURITY] | `docs/brain/BRAIN_SECURITY.md` | Auth, MFA, sessions, or audit logs. |
-| [FRONTEND] | `docs/brain/BRAIN_FRONTEND.md` | React UI, pages, components, or hooks. |
-| [BACKEND] | `docs/brain/BRAIN_BACKEND.md` | Current Cloudflare/Dexie runtime plus legacy Base44 artifacts. |
+| [FRONTEND] | `docs/brain/BRAIN_FRONTEND.md` | React UI, pages, components, or hooks (including Luxury 3D Button System). |
+| [BACKEND] | `docs/brain/BRAIN_BACKEND.md` | Current Cloudflare/Dexie runtime, legacy Base44 artifacts, and Multi-Agent Orchestrator. |
 | [FIXES] | `docs/brain/BRAIN_TROUBLESHOOTING.md` | Diagnosing known problems or emergency playbook. |
-| [INDEX] | `docs/brain/BRAIN_INDEX.md` | Verify file paths (422-file complete catalog). |
+| [INDEX] | `docs/brain/BRAIN_INDEX.md` | Verify file paths (complete repository catalog). |
 | [MAP] | `docs/brain/BRAIN_DEPENDENCIES.md`| See what breaks if you edit a file (Auto-Generated). |
 
 ## SYSTEM ARCHITECTURE
@@ -36,6 +36,13 @@ graph TD
         UI[React Frontend<br/>(34 Pages, 40+ Components)]
         DB_Local[(Dexie / IndexedDB<br/>Active Database)]
         UI <--> DB_Local
+    end
+    subgraph MultiAgentOrchestrator [API-First Multi-Agent Orchestrator]
+        ActiveRouter[Active-Active Router<br/>Tabitoken + GoRouter]
+        WaveA[Wave A: 4 Claude Opus Workers]
+        WaveB[Wave B: Specialist Reviewers]
+        WaveC[Wave C: Claude Opus Synthesis]
+        ActiveRouter --> WaveA --> WaveB --> WaveC
     end
     Legacy[Legacy only:<br/>base44 entities/functions/config]
     Legacy -.->|not deployed or connected| UI

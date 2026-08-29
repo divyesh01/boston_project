@@ -1,0 +1,44 @@
+I can't produce this audit the way it's specified, and the reason is rooted in the rules these very documents establish. Let me be direct about what's blocking it.
+
+I don't have access to the real codebase here. I have the text of the brain files you pasted and a block of claimed "ground-truth" facts. I have run nothing — no Vitest, no ESLint, no `tsc -p jsconfig.json`. Under this repo's own top-level rules I cannot convert those claims into documented fact:
+
+- AI_CORE_RULES.md Rule 1: "NEVER GUESS, ONLY PROVE… Always run tests and provide terminal output as proof."
+- CLAUDE.md Rule 2: the words "fixed", "works", "all tests pass" are "FORBIDDEN without terminal output proof. If a test was not executed, explicitly output: 'Not run.'"
+- AI_CORE_RULES.md Rule 5 (CLAUDE PROOF RULE): no action may be attributed to a Claude review/authoring without a verifiable OpenRouter Generation ID; otherwise report `UNPROVEN` and never simulate it.
+
+Writing "59 test files, 505 tests passing, 0 ESLint/TS errors" into the brain docs as current fact — when I verified none of it — is exactly the fabrication those rules forbid.
+
+Three more concrete blockers:
+
+1. Protected files. CLAUDE.md, AGENTS.md, PROTECTED_FILES.md, and `.agents/rules/no-modify-protected.md` are items 11–14 in PROTECTED_FILES.md. I may read them but not emit modification blocks for them without explicit owner (Divyesh) authorization in this conversation. Several of the concepts you want documented (orchestrator, 3-box dashboard) would naturally land in exactly those locked files.
+
+2. The claimed ground-truth contradicts the documented architecture, and I can't reconcile it without the code. The brain files describe a React + Vite SPA on a Cloudflare Worker with Dexie/IndexedDB, Base44 retired. Your ground-truth introduces "Active-Active Tabitoken + GoRouter" — GoRouter is a Flutter routing package, which has no obvious place in a React/Vite app — plus Codex/Antigravity/NVIDIA NIM/Nara channels that appear nowhere in the pasted files. I cannot tell whether these are real new subsystems, renamed concepts, or noise, and guessing would violate Rule 1.
+
+3. The "Luxury 3D button system in src/components/ui/button.jsx and src/index.css" and "14 Protected Files" are checkable claims — PROTECTED_FILES.md does list exactly 14 — but I'd need to actually read button.jsx and index.css to confirm the gradient/highlight/focus-ring description before documenting it. I haven't.
+
+What I would need to actually run this audit: filesystem/read access to the repo so I can read each `docs/brain/BRAIN_*.md` spoke (the hub BRAIN.md only routes; the depth is in the spokes, most of which weren't provided), plus the ability to run `npm run typecheck`, `npm run lint`, `npx vitest run`, and `npm run verify:all` and paste the real output. With that I can compare doc claims to observed state and emit precise SEARCH/REPLACE blocks.
+
+Here is the honest report in the structure you asked for:
+
+Brain files checked:
+- Read as text only (no codebase verification): AGENTS.md, CLAUDE.md, AI_CORE_RULES.md, ARCHITECT.md, BRAIN.md (truncated), BUSINESS.md (truncated), SECURITY.md, INFRASTRUCTURE_SECURITY.md, TESTING.md, UI_UX.md, PROJECT_MAP.md, PROTECTED_FILES.md, README.md, and the `.agents/rules/*` set (several truncated).
+- Not provided, not checked: `docs/brain/BRAIN_FINANCE.md`, `BRAIN_SECURITY.md`, `BRAIN_FRONTEND.md`, `BRAIN_BACKEND.md`, `BRAIN_TROUBLESHOOTING.md`, `BRAIN_INDEX.md`, `BRAIN_DEPENDENCIES.md`, `docs/OWNER_REPAIR_CHECKLIST.md`.
+
+Files updated:
+- None. I have no verified basis for edits and no tool access to apply or prove them.
+
+Files already current:
+- Unproven. I cannot certify any file as current without reading the referenced source and running the suites.
+
+Important information added:
+- None, for the reasons above. The orchestrator/3-box/Tabitoken+GoRouter/button-system content you want added is unverifiable against the pasted material and would mostly target protected files.
+
+Conflicts fixed:
+- None fixed. Conflicts identified (unresolved): (a) "Active-Active Tabitoken + GoRouter" and the Codex/Antigravity/NIM/Nara orchestrator vs. the documented React/Vite + Cloudflare + Dexie architecture; (b) GoRouter being a Flutter package in a React codebase; (c) claimed test counts (59 files/505 tests) vs. the last recorded measured baseline in README/BRAIN.md (111 suites, 108 pass, 3 skip, 42 vitest files/333 tests in one batch note).
+
+Anything still uncertain:
+- Essentially everything in the claimed ground-truth. No terminal output, no code reads, no access to the seven spoke files where most of this would belong.
+
+Final verdict: BRAIN DOCS = UNPROVEN
+
+If you can give me read access to the repo (or paste the spoke files and the actual `button.jsx` / `index.css` / orchestrator sources) and let me run the verify suites, I'll do the real comparison and produce exact patch blocks — routing anything that targets a protected file to you for authorization first.

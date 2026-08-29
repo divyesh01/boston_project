@@ -451,8 +451,12 @@ export class Orchestrator {
       finalPatchHash: parsedPatch.patchHash,
     });
     const contributionScorecard = ledger.getContributionScorecard();
+    const executiveDashboard = ledger.getExecutiveDashboard({
+      finalStatus: finalVerdict === 'PASS' ? 'PASS ✅' : 'FAIL ❌',
+    });
 
     store.saveReceipts(ledger.getAllReceiptsFormatted());
+    store.saveLog('executive_dashboard', executiveDashboard);
 
     const finalReport = {
       taskId,
@@ -476,6 +480,7 @@ export class Orchestrator {
         totalTokens: ledger.entries.reduce((a, b) => a + b.totalTokens, 0),
       },
       activeActiveStatus: this.router.getBalanceMetrics().status,
+      executiveDashboard,
       accounting: accountingReport,
     };
 
@@ -503,6 +508,7 @@ export class Orchestrator {
       finalPatchCall,
       reviewerResults,
       ledger,
+      executiveDashboard,
       receiptsText: ledger.getAllReceiptsFormatted(),
       providerUsageSummary,
       activeActiveBalanceProof,

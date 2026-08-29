@@ -1,0 +1,255 @@
+## Adjudication
+
+| Finding | Source | Ruling |
+|---|---|---|
+| Name `inspect*` overpromises; function can't report degraded | all 4 Wave A, NARA_UI_UX (High), NARA_DEEP_REASONER | **Valid, not actionable here.** The name is fixed by the task spec and the acceptance contract. Renaming would break the deterministic acceptance check. Resolved by documenting the declared-vs-observed distinction in the *first* line of the JSDoc, not buried in prose. Tracked as follow-up. |
+| Clock injection `{ now }` on the new export | INDEPENDENT_ARCHITECT | **Rejected.** REGRESSION_HUNTER is right: spec defines a zero-arity accessor, and giving one of three sibling probes a different call surface is an inconsistency with no current consumer demanding it. Deferred to a follow-on that retrofits all three. |
+| `WORKER_TOPOLOGY` module-level derivation of `workerAllocation` | INDEPENDENT_ARCHITECT | **Rejected for this patch.** It replaces a spec-mandated literal with a computed value, so the emitted string becomes an implementation artifact rather than the contracted token. The drift it guards against is caught more cheaply by a test. |
+| `resolveTimestamp` TypeError validation | INDEPENDENT_ARCHITECT | **Rejected.** Dead branches under a zero-arity signature — unreachable code cannot be covered. STRATEGIST's error-boundary reasoning holds: failure modes live in the consumer. |
+| Do not hoist literals to module-level consts (isolation invariant) | STRATEGIST, INDEPENDENT_STRATEGIST, DEPENDENCY_AUDITOR | **Valid, adopted.** Documented in the module header and locked by a mutation-leak test. |
+| Key-set drift guard | all | **Valid, adopted.** |
+| Consistency assertion between `primaryChannels` and `workerAllocation` | NARA_UI_UX, DEEP_REASONER | **Valid, adopted** as a test rather than a code change — it catches the exact drift scenario without altering the contracted literal. |
+| Cross-export coexistence / no shared mutable state test | REGRESSION_HUNTER | **Valid, adopted.** |
+| `Object.freeze` the return value | DEEP_REASONER | **Rejected.** Breaks the existing module convention (`reviewerSwarm` is deliberately mutable-but-fresh) and would silently break any consumer that annotates results. |
+| `workerAllocation` should be an object | DEEP_REASONER | **Rejected — spec-locked.** Documented as an opaque token that consumers must not parse. |
+| Reconcile with `ActiveActiveRouter.js` | all | **Valid, out of scope.** That file has uncommitted changes and was excluded from this task. Documented as a drift warning; flagged as follow-up. |
+
+Base: STRATEGIST's implementation, with INDEPENDENT_STRATEGIST's tightened doc framing and the two additional tests from REGRESSION_HUNTER and NARA_UI_UX.
+
+### FILE: src/lib/orchestratorVerificationProbe.js
+```javascript
+/**
+ * Orchestrator diagnostic contract helpers.
+ *
+ * Pure, side-effect-free accessors used by verification probes and telemetry
+ * exporters to assert the orchestrator's declared invariants without booting
+ * the orchestrator itself.
+ *
+ * ISOLATION INVARIANT: every accessor returns a freshly constructed object,
+ * and any nested arrays are freshly allocated per call. No mutable state is
+ * held at module scope. Do not hoist the returned literals into module-level
+ * constants — consumers are permitted to mutate what they receive, and a
+ * shared reference would leak one caller's mutation into every other caller.
+ */
+
+/**
+ * Reports the orchestrator's verified invariant snapshot.
+ *
+ * NOTE: `timestamp` is generated at call time and is therefore not stable
+ * across invocations. Callers writing golden/snapshot assertions must exclude
+ * `timestamp` from comparison or inject their own clock.
+ *
+ * @returns {{status: string, engine: string, timestamp: string, version: string}}
+ */
+export function verifyOrchestratorInvariants() {
+  return {
+    status: 'VERIFIED',
+    engine: 'API_FIRST_MULTI_AGENT',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+  };
+}
+
+/**
+ * Declares the telemetry contract for the multi-agent routing topology.
+ *
+ * A fresh object and `reviewerSwarm` array are returned on every call, so
+ * mutation by one consumer cannot leak into another.
+ *
+ * @returns {{primaryBrain: string, reviewerSwarm: string[], subscriptionQuotaSaved: boolean}}
+ */
+export function getOrchestratorTelemetryContract() {
+  return {
+    primaryBrain: 'CLAUDE_OPUS',
+    reviewerSwarm: ['GEMINI', 'NVIDIA', 'NARA', 'XKIRO'],
+    subscriptionQuotaSaved: true,
+  };
+}
+
+/**
+ * Declares the active-active routing topology contract.
+ *
+ * THIS IS A DECLARED CONTRACT, NOT A LIVE HEALTH CHECK. Despite the `inspect`
+ * verb — retained for compatibility with the existing probe contract — this
+ * function reads nothing. `status` is a constant and will report
+ * `ACTIVE_ACTIVE_OPTIMAL` even if both channels are down and the breaker is
+ * open. Do not gate readiness, alerting, or failover on this value; source
+ * runtime health from the routing layer instead.
+ *
+ * Reading nothing is intentional: it preserves this module's guarantee that
+ * the declared topology can be asserted without booting the orchestrator, and
+ * avoids an import cycle with the routing layer.
+ *
+ * DRIFT WARNING: `primaryChannels`, `balancingPolicy`, `workerAllocation`, and
+ * `circuitBreaker` duplicate topology values also configured in
+ * `src/orchestrator/routing/ActiveActiveRouter.js`. They are not derived from
+ * it and must be updated by hand when the router's topology changes.
+ *
+ * `workerAllocation` is an opaque contract token (`'2_TABITOKEN_2_GOROUTER'`),
+ * not a parsable structure. Consumers must not derive worker counts from it by
+ * string splitting; the encoding is not part of the public contract.
+ *
+ * NOTE: `timestamp` is generated at call time and is therefore not stable
+ * across invocations. Callers writing golden/snapshot assertions must exclude
+ * `timestamp` from comparison or inject their own clock.
+ *
+ * A fresh object and `primaryChannels` array are returned on every call, so
+ * mutation by one consumer cannot leak into another.
+ *
+ * @returns {{
+ *   status: string,
+ *   primaryChannels: string[],
+ *   balancingPolicy: string,
+ *   workerAllocation: string,
+ *   circuitBreaker: string,
+ *   timestamp: string
+ * }}
+ */
+export function inspectActiveActiveRoutingHealth() {
+  return {
+    status: 'ACTIVE_ACTIVE_OPTIMAL',
+    primaryChannels: ['TABITOKEN', 'GOROUTER'],
+    balancingPolicy: 'DYNAMIC_LATENCY_AWARE',
+    workerAllocation: '2_TABITOKEN_2_GOROUTER',
+    circuitBreaker: 'ENABLED',
+    timestamp: new Date().toISOString(),
+  };
+}
+```
+
+### FILE: tests/orchestrator/orchestrator_verification_probe.test.js
+```javascript
+import { describe, it, expect } from 'vitest';
+import {
+  verifyOrchestratorInvariants,
+  getOrchestratorTelemetryContract,
+  inspectActiveActiveRoutingHealth,
+} from '../../src/lib/orchestratorVerificationProbe.js';
+
+const ISO_8601_UTC_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+describe('Orchestrator Verification Probe Module Tests', () => {
+  it('exports valid invariants matching contract', () => {
+    const inv = verifyOrchestratorInvariants();
+    expect(inv.status).toBe('VERIFIED');
+    expect(inv.engine).toBe('API_FIRST_MULTI_AGENT');
+    expect(inv.version).toBe('1.0.0');
+  });
+
+  it('exports correct telemetry contract', () => {
+    const tel = getOrchestratorTelemetryContract();
+    expect(tel.primaryBrain).toBe('CLAUDE_OPUS');
+    expect(tel.reviewerSwarm).toContain('GEMINI');
+    expect(tel.reviewerSwarm).toContain('NVIDIA');
+    expect(tel.reviewerSwarm).toContain('NARA');
+    expect(tel.reviewerSwarm).toContain('XKIRO');
+    expect(tel.subscriptionQuotaSaved).toBe(true);
+  });
+});
+
+describe('inspectActiveActiveRoutingHealth', () => {
+  it('declares the full active-active routing contract', () => {
+    const health = inspectActiveActiveRoutingHealth();
+    expect(health.status).toBe('ACTIVE_ACTIVE_OPTIMAL');
+    expect(health.primaryChannels).toEqual(['TABITOKEN', 'GOROUTER']);
+    expect(health.balancingPolicy).toBe('DYNAMIC_LATENCY_AWARE');
+    expect(health.workerAllocation).toBe('2_TABITOKEN_2_GOROUTER');
+    expect(health.circuitBreaker).toBe('ENABLED');
+  });
+
+  it('declares exactly two primary channels', () => {
+    // Length is asserted explicitly so a silently added third channel fails
+    // here rather than downstream in the routing layer.
+    expect(inspectActiveActiveRoutingHealth().primaryChannels).toHaveLength(2);
+  });
+
+  it('exposes exactly the contracted key set, guarding against drift', () => {
+    expect(Object.keys(inspectActiveActiveRoutingHealth()).sort()).toEqual([
+      'balancingPolicy',
+      'circuitBreaker',
+      'primaryChannels',
+      'status',
+      'timestamp',
+      'workerAllocation',
+    ]);
+  });
+
+  it('keeps workerAllocation consistent with primaryChannels', () => {
+    // The allocation token is opaque to consumers, but this test owns the
+    // encoding so that editing one field without the other fails loudly
+    // instead of drifting silently.
+    const { primaryChannels, workerAllocation } = inspectActiveActiveRoutingHealth();
+    expect(workerAllocation.match(/[A-Z]+/g)).toEqual(primaryChannels);
+    expect(workerAllocation.match(/\d+/g)).toHaveLength(primaryChannels.length);
+  });
+
+  it('emits a parseable, canonical ISO-8601 UTC timestamp', () => {
+    const { timestamp } = inspectActiveActiveRoutingHealth();
+    expect(typeof timestamp).toBe('string');
+    expect(timestamp).toMatch(ISO_8601_UTC_MS);
+    expect(Number.isNaN(Date.parse(timestamp))).toBe(false);
+    // Round-trip guards against a well-formed but locale/offset-formatted
+    // string slipping into the telemetry pipeline.
+    expect(new Date(timestamp).toISOString()).toBe(timestamp);
+  });
+
+  it('keeps every field except timestamp stable across calls', () => {
+    const { timestamp: _first, ...firstRest } = inspectActiveActiveRoutingHealth();
+    const { timestamp: _second, ...secondRest } = inspectActiveActiveRoutingHealth();
+    expect(firstRest).toEqual(secondRest);
+  });
+
+  it('isolates state between callers: mutating one result cannot affect another', () => {
+    // This test fails if anyone "optimizes" the literals into module-level
+    // constants, which is the specific regression this module guards against.
+    const first = inspectActiveActiveRoutingHealth();
+    const second = inspectActiveActiveRoutingHealth();
+
+    expect(first).not.toBe(second);
+    expect(first.primaryChannels).not.toBe(second.primaryChannels);
+
+    first.status = 'DEGRADED';
+    first.circuitBreaker = 'DISABLED';
+    first.primaryChannels.push('ROGUE_CHANNEL');
+
+    const third = inspectActiveActiveRoutingHealth();
+    expect(second.status).toBe('ACTIVE_ACTIVE_OPTIMAL');
+    expect(second.primaryChannels).toEqual(['TABITOKEN', 'GOROUTER']);
+    expect(third.status).toBe('ACTIVE_ACTIVE_OPTIMAL');
+    expect(third.circuitBreaker).toBe('ENABLED');
+    expect(third.primaryChannels).toEqual(['TABITOKEN', 'GOROUTER']);
+  });
+
+  it('coexists with the pre-existing probes without cross-contamination', () => {
+    const inv = verifyOrchestratorInvariants();
+    const tel = getOrchestratorTelemetryContract();
+    const health = inspectActiveActiveRoutingHealth();
+
+    health.status = 'MUTATED';
+    health.primaryChannels.length = 0;
+
+    expect(inv.status).toBe('VERIFIED');
+    expect(tel.subscriptionQuotaSaved).toBe(true);
+    expect(verifyOrchestratorInvariants().status).toBe('VERIFIED');
+    expect(getOrchestratorTelemetryContract().reviewerSwarm).toEqual([
+      'GEMINI',
+      'NVIDIA',
+      'NARA',
+      'XKIRO',
+    ]);
+  });
+});
+```
+
+## Verification status
+
+I have not executed this suite. My working directory is `/` with no confirmed repository root, so I worked from the inline file bodies and git status only — I could not invoke vitest, confirm the vitest config globs `tests/orchestrator/`, or grep for other consumers of this module. Run:
+
+```bash
+npx vitest run tests/orchestrator/orchestrator_verification_probe.test.js
+grep -rn "inspectActiveActiveRoutingHealth" .   # expect only the two files above
+```
+
+The two pre-existing test cases are preserved byte-for-byte inside their original `describe` block, so any pass/fail delta isolates cleanly to the new suite. Stage only these two files — the dirty `ActiveActiveRouter.js`, `SESSION_FORENSIC_REPORT.md`, and generated `universal_session_ledger.json` are untouched by this patch and should not be bundled into the commit.
+
+Follow-ups deliberately excluded: rename to `getActiveActiveRoutingContract`, an injectable clock retrofitted across all three exports, and deriving the topology from `ActiveActiveRouter.js` so the probe verifies runtime state rather than restating a copy of it.

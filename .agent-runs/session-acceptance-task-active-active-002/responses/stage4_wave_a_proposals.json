@@ -1,0 +1,955 @@
+--- [CLAUDE_OPUS_REPO_ARCHITECT] (ANTHROPIC via TABITOKEN / claude-opus-5) ---
+## Scope note on verification
+
+My analysis is based solely on the inline evidence supplied. I have not read the repository tree, so I cannot confirm the full caller set for this module, whether a barrel/index file re-exports it, or whether `ActiveActiveRouter.js` already owns the constants this task duplicates. Statements about callers below are bounded by that.
+
+## Root-cause diagnosis
+
+**Primary structural finding: the module is named as an observer but implemented as a declarator.**
+
+`orchestratorVerificationProbe.js` is documented as "pure, side-effect-free accessors" that assert invariants "without booting the orchestrator itself." That is a *contract declaration* module. The task asks for `inspectActiveActiveRoutingHealth()`, which returns `status: 'ACTIVE_ACTIVE_OPTIMAL'` and `circuitBreaker: 'ENABLED'` as hardcoded literals. A function whose name promises inspection but which can never report a non-optimal status is a diagnostic that cannot fail. If any downstream consumer gates on this value — a health endpoint, a CI acceptance gate, or the new `scripts/orchestrator/run_active_active_acceptance.mjs` in your untracked set — it will report green while the router is degraded. This is the highest-severity issue in the request, and it is a naming/semantics defect, not a code defect. I am implementing the literals as specified because the test contract requires them, and documenting the limitation in the JSDoc so the next reader does not mistake declaration for observation.
+
+**Secondary finding: string-encoded structured data invites invariant drift.** `workerAllocation: '2_TABITOKEN_2_GOROUTER'` encodes a per-channel worker count inside an opaque string. The real allocation almost certainly lives in `ActiveActiveRouter.js` (your uncommitted +8 lines there are suspicious in exactly this way). Two independent representations of one fact will diverge, and the string form makes divergence undetectable by any assertion sharper than equality. I am not changing it — spec-locked — but recommend a follow-up that derives this field from the router's configuration rather than restating it.
+
+**Third finding: non-determinism propagation.** The existing `verifyOrchestratorInvariants()` already carries a documented `timestamp` hazard for snapshot tests. Adding a second timestamped export widens that hazard. The clean fix is an injectable clock (`now = () => new Date()`) on both functions, defaulting to current behavior — additive, backward-compatible, and it makes golden tests trivially stable. That is a design change beyond the stated task, so I am flagging rather than applying it. Say the word and I will patch it in.
+
+**Blast radius: minimal.** The change is a pure addition of one named ESM export. No existing signature, return shape, or key set changes, so no current caller can break. The only migration risk is if an aggregator module enumerates this file's exports; I could not verify whether one exists.
+
+## Patch
+
+### FILE: src/lib/orchestratorVerificationProbe.js
+
+```javascript
+/**
+ * Orchestrator diagnostic contract helpers.
+ *
+ * Pure, side-effect-free accessors used by verification probes and telemetry
+ * exporters to assert the orchestrator's declared invariants without booting
+ * the orchestrator itself.
+ */
+
+/**
+ * Reports the orchestrator's verified invariant snapshot.
+ *
+ * NOTE: `timestamp` is generated at call time and is therefore not stable
+ * across invocations. Callers writing golden/snapshot assertions must exclude
+ * `timestamp` from comparison or inject their own clock.
+ *
+ * @returns {{status: string, engine: string, timestamp: string, version: string}}
+ */
+export function verifyOrchestratorInvariants() {
+  return {
+    status: 'VERIFIED',
+    engine: 'API_FIRST_MULTI_AGENT',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+  };
+}
+
+/**
+ * Declares the telemetry contract for the multi-agent routing topology.
+ *
+ * A fresh object and `reviewerSwarm` array are returned on every call, so
+ * mutation by one consumer cannot leak into another.
+ *
+ * @returns {{primaryBrain: string, reviewerSwarm: string[], subscriptionQuotaSaved: boolean}}
+ */
+export function getOrchestratorTelemetryContract() {
+  return {
+    primaryBrain: 'CLAUDE_OPUS',
+    reviewerSwarm: ['GEMINI', 'NVIDIA', 'NARA', 'XKIRO'],
+    subscriptionQuotaSaved: true,
+  };
+}
+
+/**
+ * Declares the active-active routing health contract.
+ *
+ * IMPORTANT — this is a *declared* contract, not an *observed* measurement.
+ * Every field except `timestamp` is a static literal, so this function cannot
+ * detect a degraded router: `status` will read `ACTIVE_ACTIVE_OPTIMAL` and
+ * `circuitBreaker` will read `ENABLED` even if the live routing layer is
+ * failing. Do not use it as a liveness/readiness gate or as the source of
+ * truth for alerting. Its purpose is to let probes and telemetry exporters
+ * assert the *expected* topology shape without booting the orchestrator.
+ *
+ * Callers needing real health must read it from the routing layer
+ * (`src/orchestrator/routing/ActiveActiveRouter.js`) directly.
+ *
+ * `workerAllocation` restates channel worker counts that are configured in the
+ * routing layer. The two representations are not linked and can drift; treat
+ * the routing layer as authoritative.
+ *
+ * NOTE: `timestamp` is generated at call time and is therefore not stable
+ * across invocations. Callers writing golden/snapshot assertions must exclude
+ * `timestamp` from comparison or inject their own clock.
+ *
+ * A fresh object and `primaryChannels` array are returned on every call, so
+ * mutation by one consumer cannot leak into another.
+ *
+ * @returns {{status: string, primaryChannels: string[], balancingPolicy: string, workerAllocation: string, circuitBreaker: string, timestamp: string}}
+ */
+export function inspectActiveActiveRoutingHealth() {
+  return {
+    status: 'ACTIVE_ACTIVE_OPTIMAL',
+    primaryChannels: ['TABITOKEN', 'GOROUTER'],
+    balancingPolicy: 'DYNAMIC_LATENCY_AWARE',
+    workerAllocation: '2_TABITOKEN_2_GOROUTER',
+    circuitBreaker: 'ENABLED',
+    timestamp: new Date().toISOString(),
+  };
+}
+```
+
+### FILE: tests/orchestrator/orchestrator_verification_probe.test.js
+
+```javascript
+import { describe, it, expect } from 'vitest';
+import {
+  verifyOrchestratorInvariants,
+  getOrchestratorTelemetryContract,
+  inspectActiveActiveRoutingHealth,
+} from '../../src/lib/orchestratorVerificationProbe.js';
+
+const ISO_8601_UTC_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+describe('Orchestrator Verification Probe Module Tests', () => {
+  it('exports valid invariants matching contract', () => {
+    const inv = verifyOrchestratorInvariants();
+    expect(inv.status).toBe('VERIFIED');
+    expect(inv.engine).toBe('API_FIRST_MULTI_AGENT');
+    expect(inv.version).toBe('1.0.0');
+  });
+
+  it('exports correct telemetry contract', () => {
+    const tel = getOrchestratorTelemetryContract();
+    expect(tel.primaryBrain).toBe('CLAUDE_OPUS');
+    expect(tel.reviewerSwarm).toContain('GEMINI');
+    expect(tel.reviewerSwarm).toContain('NVIDIA');
+    expect(tel.reviewerSwarm).toContain('NARA');
+    expect(tel.reviewerSwarm).toContain('XKIRO');
+    expect(tel.subscriptionQuotaSaved).toBe(true);
+  });
+});
+
+describe('inspectActiveActiveRoutingHealth', () => {
+  it('reports the declared active-active status', () => {
+    expect(inspectActiveActiveRoutingHealth().status).toBe('ACTIVE_ACTIVE_OPTIMAL');
+  });
+
+  it('declares both primary channels in canonical order', () => {
+    expect(inspectActiveActiveRoutingHealth().primaryChannels).toEqual([
+      'TABITOKEN',
+      'GOROUTER',
+    ]);
+  });
+
+  it('declares the latency-aware balancing policy', () => {
+    expect(inspectActiveActiveRoutingHealth().balancingPolicy).toBe(
+      'DYNAMIC_LATENCY_AWARE',
+    );
+  });
+
+  it('declares the symmetric 2/2 worker allocation', () => {
+    expect(inspectActiveActiveRoutingHealth().workerAllocation).toBe(
+      '2_TABITOKEN_2_GOROUTER',
+    );
+  });
+
+  it('declares the circuit breaker as enabled', () => {
+    expect(inspectActiveActiveRoutingHealth().circuitBreaker).toBe('ENABLED');
+  });
+
+  it('emits a parseable ISO-8601 UTC timestamp', () => {
+    const { timestamp } = inspectActiveActiveRoutingHealth();
+    expect(typeof timestamp).toBe('string');
+    expect(timestamp).toMatch(ISO_8601_UTC_MS);
+    // Round-trip guards against a well-formed but non-canonical string.
+    expect(new Date(timestamp).toISOString()).toBe(timestamp);
+    expect(Number.isNaN(new Date(timestamp).getTime())).toBe(false);
+  });
+
+  it('exposes exactly the contracted key set', () => {
+    // Drift guard: fails on both silent additions and silent removals.
+    expect(Object.keys(inspectActiveActiveRoutingHealth()).sort()).toEqual(
+      [
+        'balancingPolicy',
+        'circuitBreaker',
+        'primaryChannels',
+        'status',
+        'timestamp',
+        'workerAllocation',
+      ].sort(),
+    );
+  });
+
+  it('returns a fresh object and array on every call so consumers cannot cross-contaminate', () => {
+    const first = inspectActiveActiveRoutingHealth();
+    const second = inspectActiveActiveRoutingHealth();
+    expect(first).not.toBe(second);
+    expect(first.primaryChannels).not.toBe(second.primaryChannels);
+
+    first.status = 'MUTATED';
+    first.primaryChannels.push('ROGUE_CHANNEL');
+    const third = inspectActiveActiveRoutingHealth();
+    expect(third.status).toBe('ACTIVE_ACTIVE_OPTIMAL');
+    expect(third.primaryChannels).toEqual(['TABITOKEN', 'GOROUTER']);
+  });
+
+  it('keeps every field except timestamp stable across calls', () => {
+    const { timestamp: _a, ...first } = inspectActiveActiveRoutingHealth();
+    const { timestamp: _b, ...second } = inspectActiveActiveRoutingHealth();
+    expect(first).toEqual(second);
+  });
+});
+```
+
+## Verification status
+
+I have not executed the suite — I only have the two files as inline text and no confirmed repo root, so I cannot invoke vitest or confirm the config picks up `tests/orchestrator/`. Run `npx vitest run tests/orchestrator/orchestrator_verification_probe.test.js` to confirm. The two pre-existing test cases are preserved byte-for-byte inside their original `describe` block, so a pass/fail delta isolates cleanly to the new suite.
+
+## Recommended follow-ups (not in this patch)
+
+1. Either rename `inspectActiveActiveRoutingHealth` to `getActiveActiveRoutingContract`, or give it a real implementation that reads `ActiveActiveRouter.js` state. The current name will mislead someone into gating on it.
+2. Add an injectable clock to all three exports to eliminate the snapshot-test hazard.
+3. Derive `workerAllocation` and `primaryChannels` from the routing layer's configuration so the probe and the router cannot drift. Your uncommitted `ActiveActiveRouter.js` change is the natural place to expose that.
+
+--- [CLAUDE_OPUS_INDEPENDENT_ARCHITECT] (ANTHROPIC via GOROUTER / claude-opus-5) ---
+## Root-cause analysis
+
+Working from the evidence supplied only — I have not read the repo filesystem, so the caller trace below is bounded by what is in the diff and the two file bodies shown.
+
+**1. Non-determinism is the actual defect class, not a missing function.** The module documents itself as "pure, side-effect-free," but `verifyOrchestratorInvariants()` reads the ambient clock. The JSDoc pushes the burden onto callers ("exclude `timestamp` from comparison"). The new `inspectActiveActiveRoutingHealth()` as specified reproduces that same hazard. Root cause: no injectable clock seam. Copying the pattern a third time makes it permanent.
+
+**2. `workerAllocation: '2_TABITOKEN_2_GOROUTER'` is stringly-typed data derived from `primaryChannels`.** Two independent literals encode one fact (which channels exist, how many workers each). Any future channel change requires editing both, and nothing fails if only one is edited. This is a silent-drift defect waiting to happen, and it is the kind that surfaces as a routing imbalance in production rather than a test failure.
+
+**3. Mutable array in the returned payload.** `reviewerSwarm` was explicitly given a fresh-array guarantee. `primaryChannels` needs the same treatment or one consumer's `.sort()`/`.push()` corrupts every later reader. Freezing the scalar envelope and returning a copied array covers both directions.
+
+**4. Duplicate source of truth risk.** `src/orchestrator/routing/ActiveActiveRouter.js` is modified in the working tree (+8 lines) and is presumably the runtime owner of the balancing policy and worker counts. This probe now asserts those same values as literals. I cannot confirm from the provided evidence whether the router exposes them. If it does, the probe should eventually read them rather than restate them; until then this is a knowingly accepted duplication and should be commented as such so the next editor knows both files move together.
+
+## Architectural decisions
+
+- Clock injection applied **only** to the new function (`inspectActiveActiveRoutingHealth({ now })`), with the default preserving the documented behavior exactly. `verifyOrchestratorInvariants()` and `getOrchestratorTelemetryContract()` keep byte-identical observable behavior and signatures per objective 2 — no retrofit, so no acceptance-diff risk. The retrofit is a separate change.
+- `primaryChannels` and `workerAllocation` both derive from one frozen `WORKER_TOPOLOGY` map, so the emitted contract string cannot desync from the channel list.
+- Invalid injected clocks throw a `TypeError` immediately rather than emitting `"Invalid Date"` into telemetry — a bad timestamp silently entering a monitoring pipeline is worse than a loud failure at the boundary.
+- Returned object is not frozen (matches existing convention; callers may annotate), but the array is a fresh copy each call.
+
+## Patch
+
+### FILE: src/lib/orchestratorVerificationProbe.js
+
+```js
+/**
+ * Orchestrator diagnostic contract helpers.
+ *
+ * Pure, side-effect-free accessors used by verification probes and telemetry
+ * exporters to assert the orchestrator's declared invariants without booting
+ * the orchestrator itself.
+ */
+
+/**
+ * Canonical active-active worker topology: channel -> worker count.
+ *
+ * Single source of truth for both `primaryChannels` and the encoded
+ * `workerAllocation` string. Adding or resizing a channel here updates both
+ * derived fields, so they cannot drift apart.
+ *
+ * NOTE: these values mirror the runtime configuration owned by
+ * `src/orchestrator/routing/ActiveActiveRouter.js`. Until the router exports a
+ * canonical accessor, the two must be changed together.
+ *
+ * @type {Readonly<Record<string, number>>}
+ */
+const WORKER_TOPOLOGY = Object.freeze({
+  TABITOKEN: 2,
+  GOROUTER: 2,
+});
+
+/**
+ * Encodes a worker topology map as the flat contract string consumed by
+ * downstream telemetry exporters, e.g. `'2_TABITOKEN_2_GOROUTER'`.
+ *
+ * @param {Readonly<Record<string, number>>} topology
+ * @returns {string}
+ */
+function encodeWorkerAllocation(topology) {
+  return Object.entries(topology)
+    .map(([channel, workers]) => `${workers}_${channel}`)
+    .join('_');
+}
+
+/**
+ * Resolves an injected clock to a valid ISO-8601 timestamp.
+ *
+ * Fails loudly rather than emitting `'Invalid Date'` into a telemetry pipeline,
+ * where a malformed timestamp would be silently ingested and only surface much
+ * later as an unexplained gap in the metrics series.
+ *
+ * @param {() => (Date | number | string)} now
+ * @returns {string}
+ * @throws {TypeError} if `now` is not callable or does not yield a valid date.
+ */
+function resolveTimestamp(now) {
+  if (typeof now !== 'function') {
+    throw new TypeError('inspectActiveActiveRoutingHealth: `now` must be a function returning a Date');
+  }
+
+  const instant = new Date(now());
+  if (Number.isNaN(instant.getTime())) {
+    throw new TypeError('inspectActiveActiveRoutingHealth: `now` must yield a valid Date');
+  }
+
+  return instant.toISOString();
+}
+
+/**
+ * Reports the orchestrator's verified invariant snapshot.
+ *
+ * NOTE: `timestamp` is generated at call time and is therefore not stable
+ * across invocations. Callers writing golden/snapshot assertions must exclude
+ * `timestamp` from comparison or inject their own clock.
+ *
+ * @returns {{status: string, engine: string, timestamp: string, version: string}}
+ */
+export function verifyOrchestratorInvariants() {
+  return {
+    status: 'VERIFIED',
+    engine: 'API_FIRST_MULTI_AGENT',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+  };
+}
+
+/**
+ * Declares the telemetry contract for the multi-agent routing topology.
+ *
+ * A fresh object and `reviewerSwarm` array are returned on every call, so
+ * mutation by one consumer cannot leak into another.
+ *
+ * @returns {{primaryBrain: string, reviewerSwarm: string[], subscriptionQuotaSaved: boolean}}
+ */
+export function getOrchestratorTelemetryContract() {
+  return {
+    primaryBrain: 'CLAUDE_OPUS',
+    reviewerSwarm: ['GEMINI', 'NVIDIA', 'NARA', 'XKIRO'],
+    subscriptionQuotaSaved: true,
+  };
+}
+
+/**
+ * Inspects the health of the active-active routing tier.
+ *
+ * `primaryChannels` and `workerAllocation` are both derived from
+ * `WORKER_TOPOLOGY`, so the channel list and the encoded allocation string are
+ * structurally guaranteed to agree. A fresh `primaryChannels` array is returned
+ * on every call, so mutation by one consumer cannot leak into another.
+ *
+ * The clock is injectable so that golden/snapshot assertions can pin
+ * `timestamp` instead of excluding it. The default preserves call-time
+ * `Date`-based behavior for existing callers.
+ *
+ * @param {{now?: () => (Date | number | string)}} [options]
+ * @returns {{
+ *   status: string,
+ *   primaryChannels: string[],
+ *   balancingPolicy: string,
+ *   workerAllocation: string,
+ *   circuitBreaker: string,
+ *   timestamp: string,
+ * }}
+ * @throws {TypeError} if `options.now` is not callable or yields an invalid date.
+ */
+export function inspectActiveActiveRoutingHealth({ now = () => new Date() } = {}) {
+  return {
+    status: 'ACTIVE_ACTIVE_OPTIMAL',
+    primaryChannels: Object.keys(WORKER_TOPOLOGY),
+    balancingPolicy: 'DYNAMIC_LATENCY_AWARE',
+    workerAllocation: encodeWorkerAllocation(WORKER_TOPOLOGY),
+    circuitBreaker: 'ENABLED',
+    timestamp: resolveTimestamp(now),
+  };
+}
+```
+
+### FILE: tests/orchestrator/orchestrator_verification_probe.test.js
+
+```js
+import { describe, it, expect } from 'vitest';
+import {
+  verifyOrchestratorInvariants,
+  getOrchestratorTelemetryContract,
+  inspectActiveActiveRoutingHealth,
+} from '../../src/lib/orchestratorVerificationProbe.js';
+
+const ISO_8601_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+describe('Orchestrator Verification Probe Module Tests', () => {
+  it('exports valid invariants matching contract', () => {
+    const inv = verifyOrchestratorInvariants();
+    expect(inv.status).toBe('VERIFIED');
+    expect(inv.engine).toBe('API_FIRST_MULTI_AGENT');
+    expect(inv.version).toBe('1.0.0');
+  });
+
+  it('exports correct telemetry contract', () => {
+    const tel = getOrchestratorTelemetryContract();
+    expect(tel.primaryBrain).toBe('CLAUDE_OPUS');
+    expect(tel.reviewerSwarm).toContain('GEMINI');
+    expect(tel.reviewerSwarm).toContain('NVIDIA');
+    expect(tel.reviewerSwarm).toContain('NARA');
+    expect(tel.reviewerSwarm).toContain('XKIRO');
+    expect(tel.subscriptionQuotaSaved).toBe(true);
+  });
+});
+
+describe('inspectActiveActiveRoutingHealth', () => {
+  it('reports the declared active-active routing contract', () => {
+    const health = inspectActiveActiveRoutingHealth();
+
+    expect(health.status).toBe('ACTIVE_ACTIVE_OPTIMAL');
+    expect(health.primaryChannels).toEqual(['TABITOKEN', 'GOROUTER']);
+    expect(health.balancingPolicy).toBe('DYNAMIC_LATENCY_AWARE');
+    expect(health.workerAllocation).toBe('2_TABITOKEN_2_GOROUTER');
+    expect(health.circuitBreaker).toBe('ENABLED');
+  });
+
+  it('exposes exactly the contracted key set', () => {
+    expect(Object.keys(inspectActiveActiveRoutingHealth()).sort()).toEqual([
+      'balancingPolicy',
+      'circuitBreaker',
+      'primaryChannels',
+      'status',
+      'timestamp',
+      'workerAllocation',
+    ]);
+  });
+
+  it('emits an ISO-8601 UTC timestamp', () => {
+    const { timestamp } = inspectActiveActiveRoutingHealth();
+
+    expect(timestamp).toMatch(ISO_8601_UTC);
+    expect(Number.isNaN(Date.parse(timestamp))).toBe(false);
+  });
+
+  it('is deterministic under an injected clock', () => {
+    const frozen = new Date('2026-08-29T20:31:59.536Z');
+    const now = () => frozen;
+
+    expect(inspectActiveActiveRoutingHealth({ now })).toEqual(
+      inspectActiveActiveRoutingHealth({ now }),
+    );
+    expect(inspectActiveActiveRoutingHealth({ now }).timestamp).toBe(
+      '2026-08-29T20:31:59.536Z',
+    );
+  });
+
+  it('accepts epoch-millisecond and string clocks', () => {
+    expect(inspectActiveActiveRoutingHealth({ now: () => 0 }).timestamp).toBe(
+      '1970-01-01T00:00:00.000Z',
+    );
+    expect(
+      inspectActiveActiveRoutingHealth({ now: () => '2026-08-29T20:31:59.536Z' }).timestamp,
+    ).toBe('2026-08-29T20:31:59.536Z');
+  });
+
+  it('rejects an invalid clock instead of emitting a malformed timestamp', () => {
+    expect(() => inspectActiveActiveRoutingHealth({ now: () => 'not-a-date' })).toThrow(TypeError);
+    expect(() => inspectActiveActiveRoutingHealth({ now: () => new Date(NaN) })).toThrow(TypeError);
+    expect(() => inspectActiveActiveRoutingHealth({ now: 'not-callable' })).toThrow(TypeError);
+  });
+
+  it('tolerates an omitted or empty options object', () => {
+    expect(() => inspectActiveActiveRoutingHealth()).not.toThrow();
+    expect(() => inspectActiveActiveRoutingHealth({})).not.toThrow();
+  });
+
+  it('does not leak mutations between consumers', () => {
+    const first = inspectActiveActiveRoutingHealth();
+    first.primaryChannels.push('ROGUE_CHANNEL');
+    first.primaryChannels.sort();
+
+    const second = inspectActiveActiveRoutingHealth();
+    expect(second.primaryChannels).toEqual(['TABITOKEN', 'GOROUTER']);
+    expect(second.primaryChannels).not.toBe(first.primaryChannels);
+  });
+
+  it('keeps workerAllocation consistent with primaryChannels', () => {
+    const { primaryChannels, workerAllocation } = inspectActiveActiveRoutingHealth();
+    const declared = workerAllocation.match(/[A-Z]+/g);
+
+    expect(declared).toEqual(primaryChannels);
+    expect(workerAllocation.match(/\d+/g).map(Number)).toEqual(
+      primaryChannels.map(() => 2),
+    );
+  });
+
+  it('does not disturb the pre-existing probe contracts', () => {
+    inspectActiveActiveRoutingHealth();
+
+    expect(verifyOrchestratorInvariants().status).toBe('VERIFIED');
+    expect(getOrchestratorTelemetryContract().reviewerSwarm).toEqual([
+      'GEMINI',
+      'NVIDIA',
+      'NARA',
+      'XKIRO',
+    ]);
+  });
+});
+```
+
+## Verification status and open items
+
+I have not executed the suite — I am reasoning from the file contents you provided, not a checked-out tree. Run `npx vitest run tests/orchestrator/orchestrator_verification_probe.test.js` to confirm; the only assertion I would expect to need adjustment is the key-set test if your acceptance harness expects additional fields.
+
+Two items outside this patch's scope that I would not leave unresolved:
+
+- **Clock retrofit for `verifyOrchestratorInvariants()`.** Same `{ now }` seam, backward compatible, lets the JSDoc drop its "callers must exclude timestamp" caveat. Held back deliberately so this change cannot fail an acceptance diff on the pre-existing functions.
+- **Reconcile with `ActiveActiveRouter.js`.** The +8 uncommitted lines there may already define the policy and worker counts. If so, `WORKER_TOPOLOGY` and `balancingPolicy` should import from the router so the probe verifies runtime state rather than asserting a hardcoded copy of it. As written, this probe will report `ACTIVE_ACTIVE_OPTIMAL` even if the router is misconfigured — worth naming explicitly, since a health probe that cannot report unhealthy has limited diagnostic value.
+
+--- [CLAUDE_OPUS_STRATEGIST] (ANTHROPIC via TABITOKEN / claude-opus-5) ---
+## Analysis
+
+First, a scoping note: I have not read your working tree. Everything below is derived from the two file bodies and the git status included in your message. The +8 lines in `src/orchestrator/routing/ActiveActiveRouter.js` were not included, and that gap matters — see the drift risk below.
+
+**There is no defect here.** This is a purely additive contract extension, not a bug fix. I want to say that plainly rather than manufacture a root cause, because the framing changes what the patch should look like: no existing behavior needs to be repaired, so the entire risk surface is (a) whether the new export weakens the module's isolation guarantees, and (b) whether the new export's name overstates what it actually does.
+
+**State isolation.** The module's existing convention is correct and should be preserved verbatim: every call constructs a fresh object literal, including the `reviewerSwarm` array. That is why the docstring can honestly claim mutation by one consumer cannot leak into another. `inspectActiveActiveRoutingHealth` introduces a second mutable array (`primaryChannels`), so it must follow the same pattern. The tempting alternative — hoisting a module-level `const PRIMARY_CHANNELS = [...]` to avoid reallocation — would silently break the isolation invariant, because every consumer would receive the same array reference and a single `.push()` or `.sort()` anywhere would corrupt all other callers. Per-call allocation of a two-element array is not a cost worth optimizing against that.
+
+**Error boundaries.** The honest architectural answer for this workstream is that these functions have no failure modes to guard. They allocate object literals and call `new Date()`. There is no I/O, no parsing, no external state. Wrapping them in `try/catch` would add unreachable branches that can never be covered by a test, which is defensive noise, not resilience. The error boundary for this subsystem belongs at the consumer — the verification probe runner and the telemetry exporter — where the actual failure modes live (import resolution, serialization, transport). I am deliberately not adding one inside this module.
+
+**The one substantive concern: the name promises more than the contract delivers.** `inspectActiveActiveRoutingHealth()` returns a hardcoded `status: 'ACTIVE_ACTIVE_OPTIMAL'`. It cannot ever report degraded, because it reads nothing. A consumer who sees "inspect... Health" in an autocomplete list will reasonably assume it reflects live router state and may gate alerting or failover on it — producing a health check that is green by construction. That is a real operational hazard.
+
+Keeping it static is nonetheless the right call, and I want to be explicit about why: the module header states these helpers exist to assert declared invariants *without booting the orchestrator*. Importing `ActiveActiveRouter.js` to measure real state would destroy that property and couple the probe to orchestrator startup. So the fix is not to make it dynamic — it is to make the docstring state unambiguously that this is a *declared topology contract*, not a live measurement, and to name the caveat where a consumer will actually read it.
+
+**Drift risk I cannot close.** `primaryChannels`, `workerAllocation`, and `circuitBreaker` duplicate values that almost certainly also exist in `ActiveActiveRouter.js` — which you have uncommitted changes to. Two independent sources of truth for the same topology will diverge. I am not resolving this in this patch because it would mean modifying an unrelated file, which you excluded. Flagging it as follow-up work: either the router should export these constants and the probe should re-export them, or there should be a cross-check test. Until then, treat the probe's values as documentation that requires manual synchronization.
+
+**Deliberate deferral.** The existing `timestamp` non-determinism note points at an obvious improvement — an optional injected clock, `({ now = () => new Date() } = {})` — which would let snapshot tests pin the value. I have implemented the no-arg signature exactly as specified instead, since the task defines the function shape and an optional parameter is scope I was not asked to add. It is a cheap, fully backward-compatible change if you want it later.
+
+## Patch
+
+Two files, both targets. Nothing else touched — the modified `SESSION_FORENSIC_REPORT.md`, `ActiveActiveRouter.js`, and `universal_session_ledger.json` are left exactly as they are.
+
+### FILE: src/lib/orchestratorVerificationProbe.js
+
+```javascript
+/**
+ * Orchestrator diagnostic contract helpers.
+ *
+ * Pure, side-effect-free accessors used by verification probes and telemetry
+ * exporters to assert the orchestrator's declared invariants without booting
+ * the orchestrator itself.
+ *
+ * ISOLATION INVARIANT: every accessor in this module returns a freshly
+ * constructed object, and any nested arrays are freshly allocated per call.
+ * No mutable state is shared at module scope. Do not hoist the returned
+ * literals into module-level constants — doing so would hand every consumer
+ * the same reference and allow one caller's mutation to corrupt all others.
+ */
+
+/**
+ * Reports the orchestrator's verified invariant snapshot.
+ *
+ * NOTE: `timestamp` is generated at call time and is therefore not stable
+ * across invocations. Callers writing golden/snapshot assertions must exclude
+ * `timestamp` from comparison or inject their own clock.
+ *
+ * @returns {{status: string, engine: string, timestamp: string, version: string}}
+ */
+export function verifyOrchestratorInvariants() {
+  return {
+    status: 'VERIFIED',
+    engine: 'API_FIRST_MULTI_AGENT',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+  };
+}
+
+/**
+ * Declares the telemetry contract for the multi-agent routing topology.
+ *
+ * A fresh object and `reviewerSwarm` array are returned on every call, so
+ * mutation by one consumer cannot leak into another.
+ *
+ * @returns {{primaryBrain: string, reviewerSwarm: string[], subscriptionQuotaSaved: boolean}}
+ */
+export function getOrchestratorTelemetryContract() {
+  return {
+    primaryBrain: 'CLAUDE_OPUS',
+    reviewerSwarm: ['GEMINI', 'NVIDIA', 'NARA', 'XKIRO'],
+    subscriptionQuotaSaved: true,
+  };
+}
+
+/**
+ * Declares the active-active routing topology contract.
+ *
+ * IMPORTANT — this is a DECLARED CONTRACT, NOT A LIVE HEALTH CHECK. The
+ * returned `status` is a constant and does not reflect the runtime state of
+ * the router, the reachability of either channel, or the current position of
+ * the circuit breaker. It will report `ACTIVE_ACTIVE_OPTIMAL` even if every
+ * channel is down. Do not gate alerting, failover, or readiness on this value.
+ *
+ * The function reads nothing and imports nothing from the orchestrator, which
+ * is intentional: it preserves this module's guarantee that the declared
+ * topology can be asserted without booting the orchestrator.
+ *
+ * DRIFT WARNING: `primaryChannels`, `workerAllocation`, and `circuitBreaker`
+ * duplicate topology values that are also configured in
+ * `src/orchestrator/routing/ActiveActiveRouter.js`. They are not derived from
+ * it and must be updated by hand when the router's topology changes.
+ *
+ * A fresh object and `primaryChannels` array are returned on every call, so
+ * mutation by one consumer cannot leak into another.
+ *
+ * NOTE: `timestamp` is generated at call time and is therefore not stable
+ * across invocations. Callers writing golden/snapshot assertions must exclude
+ * `timestamp` from comparison or inject their own clock.
+ *
+ * @returns {{
+ *   status: string,
+ *   primaryChannels: string[],
+ *   balancingPolicy: string,
+ *   workerAllocation: string,
+ *   circuitBreaker: string,
+ *   timestamp: string
+ * }}
+ */
+export function inspectActiveActiveRoutingHealth() {
+  return {
+    status: 'ACTIVE_ACTIVE_OPTIMAL',
+    primaryChannels: ['TABITOKEN', 'GOROUTER'],
+    balancingPolicy: 'DYNAMIC_LATENCY_AWARE',
+    workerAllocation: '2_TABITOKEN_2_GOROUTER',
+    circuitBreaker: 'ENABLED',
+    timestamp: new Date().toISOString(),
+  };
+}
+```
+
+### FILE: tests/orchestrator/orchestrator_verification_probe.test.js
+
+```javascript
+import { describe, it, expect } from 'vitest';
+import {
+  verifyOrchestratorInvariants,
+  getOrchestratorTelemetryContract,
+  inspectActiveActiveRoutingHealth,
+} from '../../src/lib/orchestratorVerificationProbe.js';
+
+describe('Orchestrator Verification Probe Module Tests', () => {
+  it('exports valid invariants matching contract', () => {
+    const inv = verifyOrchestratorInvariants();
+    expect(inv.status).toBe('VERIFIED');
+    expect(inv.engine).toBe('API_FIRST_MULTI_AGENT');
+    expect(inv.version).toBe('1.0.0');
+  });
+
+  it('exports correct telemetry contract', () => {
+    const tel = getOrchestratorTelemetryContract();
+    expect(tel.primaryBrain).toBe('CLAUDE_OPUS');
+    expect(tel.reviewerSwarm).toContain('GEMINI');
+    expect(tel.reviewerSwarm).toContain('NVIDIA');
+    expect(tel.reviewerSwarm).toContain('NARA');
+    expect(tel.reviewerSwarm).toContain('XKIRO');
+    expect(tel.subscriptionQuotaSaved).toBe(true);
+  });
+});
+
+describe('inspectActiveActiveRoutingHealth', () => {
+  it('declares the active-active routing contract', () => {
+    const health = inspectActiveActiveRoutingHealth();
+    expect(health.status).toBe('ACTIVE_ACTIVE_OPTIMAL');
+    expect(health.primaryChannels).toEqual(['TABITOKEN', 'GOROUTER']);
+    expect(health.balancingPolicy).toBe('DYNAMIC_LATENCY_AWARE');
+    expect(health.workerAllocation).toBe('2_TABITOKEN_2_GOROUTER');
+    expect(health.circuitBreaker).toBe('ENABLED');
+  });
+
+  it('emits a parseable ISO-8601 timestamp', () => {
+    const { timestamp } = inspectActiveActiveRoutingHealth();
+    expect(typeof timestamp).toBe('string');
+    expect(timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(new Date(timestamp).toISOString()).toBe(timestamp);
+  });
+
+  it('exposes exactly the contracted key set, guarding against drift', () => {
+    const health = inspectActiveActiveRoutingHealth();
+    expect(Object.keys(health).sort()).toEqual([
+      'balancingPolicy',
+      'circuitBreaker',
+      'primaryChannels',
+      'status',
+      'timestamp',
+      'workerAllocation',
+    ]);
+  });
+
+  it('isolates state between callers: mutating one result cannot affect another', () => {
+    const first = inspectActiveActiveRoutingHealth();
+    const second = inspectActiveActiveRoutingHealth();
+
+    expect(first).not.toBe(second);
+    expect(first.primaryChannels).not.toBe(second.primaryChannels);
+
+    first.status = 'DEGRADED';
+    first.primaryChannels.push('ROGUE_CHANNEL');
+
+    const third = inspectActiveActiveRoutingHealth();
+    expect(second.status).toBe('ACTIVE_ACTIVE_OPTIMAL');
+    expect(second.primaryChannels).toEqual(['TABITOKEN', 'GOROUTER']);
+    expect(third.primaryChannels).toEqual(['TABITOKEN', 'GOROUTER']);
+  });
+});
+```
+
+## Verification
+
+I have not run these tests — I do not have confirmed access to your working tree from the current directory. Run `npx vitest run tests/orchestrator/orchestrator_verification_probe.test.js` to confirm. The `toEqual` on `Object.keys(...).sort()` is the assertion most likely to fail if the implementation drifts from spec; that is intentional, since it is the test that catches an accidentally added or renamed field.
+
+The isolation test is the one worth keeping long-term. It fails loudly if anyone later "optimizes" the array into a module-level constant, which is the specific regression this module's design is guarding against.
+
+--- [CLAUDE_OPUS_INDEPENDENT_STRATEGIST] (ANTHROPIC via GOROUTER / claude-opus-5) ---
+## Assessment
+
+This is not a defect; it is an additive surface extension to a pure contract module. The risk is therefore not "will it break" but "what does the new export commit us to." Working from the supplied excerpts — I have not been able to grep the tree from this working directory, so caller enumeration below is a recommendation, not a verified result.
+
+### Root cause of the actual risk
+
+The module's docblock promises a **declared** contract asserted "without booting the orchestrator," but the new function is named `inspectActiveActiveRoutingHealth`, which reads as an **observed** runtime probe. Those are different guarantees. `workerAllocation: '2_TABITOKEN_2_GOROUTER'` and `circuitBreaker: 'ENABLED'` are hardcoded strings that will keep reporting `ACTIVE_ACTIVE_OPTIMAL` even if `ActiveActiveRouter.js` (currently dirty, +8 lines uncommitted) is configured with different worker counts or a disabled breaker. That is a silent-drift hazard: a green probe with a red system.
+
+Resolution for this change: keep the function pure and hardcoded as specified, but document unambiguously that it returns *declared* invariants. Do **not** import `ActiveActiveRouter` here — that would violate the "no boot" promise, introduce a potential import cycle with the routing layer, and couple test isolation to router construction. Wiring the probe to real router state is a separate, larger task with its own blast radius.
+
+### Blast radius
+
+- Additive named ESM export; no signature or return-shape change to the two existing functions. Existing importers cannot break.
+- Two files touched, one of them a test. Nothing in the routing layer is modified.
+- The dirty `ActiveActiveRouter.js` and generated `universal_session_ledger.json` should not be bundled into this commit; stage only the two files below.
+
+### Two regression traps to avoid
+
+1. **Do not hoist the literals to module-level constants.** `getOrchestratorTelemetryContract` deliberately returns a fresh `reviewerSwarm` array per call so one consumer's mutation cannot leak into another. A shared `const PRIMARY_CHANNELS = [...]` would look like a harmless optimization and would reintroduce exactly that bug. I added a test that locks this in.
+2. **`timestamp` is non-deterministic**, same as `verifyOrchestratorInvariants`. Any golden/snapshot assertion downstream must exclude it. Tests below assert ISO-8601 shape and parseability, never a value.
+
+I kept the signature zero-arity per spec. If you later want deterministic snapshots, the compatible move is an optional injected clock (`inspectActiveActiveRoutingHealth({ now = () => new Date() } = {})`), which preserves `Function.length === 0` and the return shape. Say the word and I'll apply it; I left it out to avoid unrequested configurability.
+
+---
+
+### FILE: src/lib/orchestratorVerificationProbe.js
+
+```javascript
+/**
+ * Orchestrator diagnostic contract helpers.
+ *
+ * Pure, side-effect-free accessors used by verification probes and telemetry
+ * exporters to assert the orchestrator's declared invariants without booting
+ * the orchestrator itself.
+ *
+ * IMPORTANT: every accessor here returns a freshly constructed object (and
+ * freshly constructed nested arrays) on each call. Do not hoist these literals
+ * into shared module-level constants: consumers are permitted to mutate what
+ * they receive, and shared state would leak mutations across callers.
+ */
+
+/**
+ * Reports the orchestrator's verified invariant snapshot.
+ *
+ * NOTE: `timestamp` is generated at call time and is therefore not stable
+ * across invocations. Callers writing golden/snapshot assertions must exclude
+ * `timestamp` from comparison or inject their own clock.
+ *
+ * @returns {{status: string, engine: string, timestamp: string, version: string}}
+ */
+export function verifyOrchestratorInvariants() {
+  return {
+    status: 'VERIFIED',
+    engine: 'API_FIRST_MULTI_AGENT',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+  };
+}
+
+/**
+ * Declares the telemetry contract for the multi-agent routing topology.
+ *
+ * A fresh object and `reviewerSwarm` array are returned on every call, so
+ * mutation by one consumer cannot leak into another.
+ *
+ * @returns {{primaryBrain: string, reviewerSwarm: string[], subscriptionQuotaSaved: boolean}}
+ */
+export function getOrchestratorTelemetryContract() {
+  return {
+    primaryBrain: 'CLAUDE_OPUS',
+    reviewerSwarm: ['GEMINI', 'NVIDIA', 'NARA', 'XKIRO'],
+    subscriptionQuotaSaved: true,
+  };
+}
+
+/**
+ * Declares the health contract for the active-active routing topology.
+ *
+ * SCOPE: these are *declared* invariants, not *observed* runtime state. This
+ * function intentionally does not import or instantiate the routing layer, so
+ * it cannot detect drift between this contract and the live router
+ * configuration. Treat a passing result as "the declared topology is intact",
+ * not as "the running router is healthy". Runtime health must be sourced from
+ * the router itself.
+ *
+ * `workerAllocation` encodes the per-channel worker split as an opaque token
+ * (`2_TABITOKEN_2_GOROUTER`). It is a contract identifier, not a parsable
+ * structure; consumers must not derive counts from it by string splitting.
+ *
+ * NOTE: as with `verifyOrchestratorInvariants`, `timestamp` is generated at
+ * call time and is not stable across invocations. Exclude it from snapshot
+ * comparisons.
+ *
+ * A fresh object and `primaryChannels` array are returned on every call.
+ *
+ * @returns {{
+ *   status: string,
+ *   primaryChannels: string[],
+ *   balancingPolicy: string,
+ *   workerAllocation: string,
+ *   circuitBreaker: string,
+ *   timestamp: string
+ * }}
+ */
+export function inspectActiveActiveRoutingHealth() {
+  return {
+    status: 'ACTIVE_ACTIVE_OPTIMAL',
+    primaryChannels: ['TABITOKEN', 'GOROUTER'],
+    balancingPolicy: 'DYNAMIC_LATENCY_AWARE',
+    workerAllocation: '2_TABITOKEN_2_GOROUTER',
+    circuitBreaker: 'ENABLED',
+    timestamp: new Date().toISOString(),
+  };
+}
+```
+
+### FILE: tests/orchestrator/orchestrator_verification_probe.test.js
+
+```javascript
+import { describe, it, expect } from 'vitest';
+import {
+  verifyOrchestratorInvariants,
+  getOrchestratorTelemetryContract,
+  inspectActiveActiveRoutingHealth,
+} from '../../src/lib/orchestratorVerificationProbe.js';
+
+const ISO_8601_UTC_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+describe('Orchestrator Verification Probe Module Tests', () => {
+  it('exports valid invariants matching contract', () => {
+    const inv = verifyOrchestratorInvariants();
+    expect(inv.status).toBe('VERIFIED');
+    expect(inv.engine).toBe('API_FIRST_MULTI_AGENT');
+    expect(inv.version).toBe('1.0.0');
+  });
+
+  it('exports correct telemetry contract', () => {
+    const tel = getOrchestratorTelemetryContract();
+    expect(tel.primaryBrain).toBe('CLAUDE_OPUS');
+    expect(tel.reviewerSwarm).toContain('GEMINI');
+    expect(tel.reviewerSwarm).toContain('NVIDIA');
+    expect(tel.reviewerSwarm).toContain('NARA');
+    expect(tel.reviewerSwarm).toContain('XKIRO');
+    expect(tel.subscriptionQuotaSaved).toBe(true);
+  });
+});
+
+describe('inspectActiveActiveRoutingHealth', () => {
+  it('reports the declared active-active status', () => {
+    expect(inspectActiveActiveRoutingHealth().status).toBe('ACTIVE_ACTIVE_OPTIMAL');
+  });
+
+  it('declares exactly the two primary channels in order', () => {
+    const health = inspectActiveActiveRoutingHealth();
+    expect(health.primaryChannels).toEqual(['TABITOKEN', 'GOROUTER']);
+    // Length is asserted explicitly so a silently added third channel fails
+    // here rather than downstream in the routing layer.
+    expect(health.primaryChannels).toHaveLength(2);
+  });
+
+  it('declares the latency-aware balancing policy', () => {
+    expect(inspectActiveActiveRoutingHealth().balancingPolicy).toBe('DYNAMIC_LATENCY_AWARE');
+  });
+
+  it('declares the symmetric 2/2 worker allocation token', () => {
+    expect(inspectActiveActiveRoutingHealth().workerAllocation).toBe('2_TABITOKEN_2_GOROUTER');
+  });
+
+  it('declares the circuit breaker as enabled', () => {
+    expect(inspectActiveActiveRoutingHealth().circuitBreaker).toBe('ENABLED');
+  });
+
+  it('emits a parsable ISO-8601 UTC timestamp', () => {
+    const { timestamp } = inspectActiveActiveRoutingHealth();
+    expect(typeof timestamp).toBe('string');
+    expect(timestamp).toMatch(ISO_8601_UTC_MS);
+    expect(Number.isNaN(Date.parse(timestamp))).toBe(false);
+    // Round-trip guards against a locale/offset-formatted string slipping in.
+    expect(new Date(timestamp).toISOString()).toBe(timestamp);
+  });
+
+  it('exposes exactly the contracted key surface', () => {
+    expect(Object.keys(inspectActiveActiveRoutingHealth()).sort()).toEqual(
+      [
+        'balancingPolicy',
+        'circuitBreaker',
+        'primaryChannels',
+        'status',
+        'timestamp',
+        'workerAllocation',
+      ].sort(),
+    );
+  });
+
+  it('returns a fresh object and fresh channel array on every call', () => {
+    const first = inspectActiveActiveRoutingHealth();
+    const second = inspectActiveActiveRoutingHealth();
+    expect(first).not.toBe(second);
+    expect(first.primaryChannels).not.toBe(second.primaryChannels);
+  });
+
+  it('does not leak consumer mutation into subsequent calls', () => {
+    const mutated = inspectActiveActiveRoutingHealth();
+    mutated.primaryChannels.push('ROGUE_CHANNEL');
+    mutated.circuitBreaker = 'DISABLED';
+
+    const clean = inspectActiveActiveRoutingHealth();
+    expect(clean.primaryChannels).toEqual(['TABITOKEN', 'GOROUTER']);
+    expect(clean.circuitBreaker).toBe('ENABLED');
+  });
+
+  it('is side-effect free with respect to the pre-existing contracts', () => {
+    inspectActiveActiveRoutingHealth();
+    expect(verifyOrchestratorInvariants().status).toBe('VERIFIED');
+    expect(getOrchestratorTelemetryContract().reviewerSwarm).toEqual([
+      'GEMINI',
+      'NVIDIA',
+      'NARA',
+      'XKIRO',
+    ]);
+  });
+});
+```
+
+---
+
+### Verification I could not perform, and what you should run
+
+I could not execute the suite or grep the tree from this working directory, so the following are unverified:
+
+```bash
+# 1. Confirm no caller enumerates exports or snapshots the module wholesale.
+grep -rn "orchestratorVerificationProbe" --include=*.js --include=*.mjs --include=*.ts .
+grep -rn "inspectActiveActiveRoutingHealth" .   # expect only the two files above
+
+# 2. Run the targeted suite, then the full suite for cross-file snapshot fallout.
+npx vitest run tests/orchestrator/orchestrator_verification_probe.test.js
+npx vitest run
+
+# 3. Stage only this change; leave the dirty router + generated ledger out.
+git add src/lib/orchestratorVerificationProbe.js tests/orchestrator/orchestrator_verification_probe.test.js
+```
+
+If step 1 turns up a consumer doing `Object.keys(module)` or `expect(module).toMatchSnapshot()`, the new export will fail it — that is the only realistic regression path here, and it is fixed by updating that consumer's expectation, not by changing this module.

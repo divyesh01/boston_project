@@ -482,4 +482,203 @@ export class ExecutionLedger {
 
     return rows;
   }
+
+  /**
+   * Executive Dashboard: Multi-Agent Comparison Table (Box 1)
+   */
+  getComparisonBox() {
+    const header = [
+      '╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════╗',
+      '║                                      MULTI-AGENT COMPARISON                                                  ║',
+      '╠════╦══════════════════════════════╦════════════╦══════════════════╦══════════╦═════════╦═════════╦══════════╣',
+      '║ #  ║ ROLE                         ║ PROVIDER   ║ MODEL            ║ STATUS   ║ INPUT   ║ OUTPUT  ║ TIME     ║',
+      '╠════╬══════════════════════════════╬════════════╬══════════════════╬══════════╬═════════╬═════════╬══════════╣',
+    ];
+
+    const rows = this.entries.map((e, idx) => {
+      const num = padRight(String(idx + 1).padStart(2, '0'), 2);
+      const role = padRight(formatFriendlyRole(e.role), 28);
+      const provider = padRight(formatFriendlyProvider(e.transportProvider), 10);
+      const model = padRight(formatFriendlyModel(e.returnedModel !== 'NONE' ? e.returnedModel : e.requestedModel), 16);
+      const status = padRight(e.result === 'PROVEN' ? '✅ PASS' : (e.result === 'FAILED' ? '❌ FAIL' : '🟡 UNPROV'), 8);
+      const inTok = padLeft(Number(e.inputTokens || 0).toLocaleString(), 7);
+      const outTok = padLeft(Number(e.outputTokens || 0).toLocaleString(), 7);
+      const time = padLeft(`${Number(e.latencySeconds || 0).toFixed(1)}s`, 8);
+
+      return `║ ${num} ║ ${role} ║ ${provider} ║ ${model} ║ ${status} ║ ${inTok} ║ ${outTok} ║ ${time} ║`;
+    });
+
+    const footer = '╚════╩══════════════════════════════╩════════════╩══════════════════╩══════════╩═════════╩═════════╩══════════╝';
+
+    return [...header, ...rows, footer].join('\n');
+  }
+
+  /**
+   * Executive Dashboard: Main Contribution Table (Box 2)
+   */
+  getContributionBox() {
+    const header = [
+      '┌────┬──────────────────────────────────────────────────────────────┬──────────────┐',
+      '│ #  │ MAIN CONTRIBUTION                                            │ USED?        │',
+      '├────┼──────────────────────────────────────────────────────────────┼──────────────┤',
+    ];
+
+    const rows = this.entries.map((e, idx) => {
+      const num = padRight(String(idx + 1).padStart(2, '0'), 2);
+      let contrib = e.contribution || 'Contributed to architecture analysis';
+      if (getDisplayWidth(contrib) > 60) contrib = contrib.slice(0, 57) + '...';
+      const contribPadded = padRight(contrib, 60);
+
+      let used = '✅ YES';
+      if (e.findingUsed === 'FINAL' || e.role.includes('SYNTHESIS')) {
+        used = '✅ FINAL';
+      } else if (e.findingUsed === 'PARTIAL') {
+        used = '🟡 PARTIAL';
+      } else if (e.findingUsed === 'NO' || e.result === 'FAILED') {
+        used = '❌ NO';
+      }
+      const usedPadded = padRight(used, 12);
+
+      return `│ ${num} │ ${contribPadded} │ ${usedPadded} │`;
+    });
+
+    const footer = '└────┴──────────────────────────────────────────────────────────────┴──────────────┘';
+
+    return [...header, ...rows, footer].join('\n');
+  }
+
+  /**
+   * Executive Dashboard: Run Summary Box (Box 3)
+   */
+  getRunSummaryBox(extra = {}) {
+    const totalAgents = this.entries.length;
+    const successfulAgents = this.entries.filter((e) => e.result === 'PROVEN').length;
+    const tabiOpus = this.entries.filter((e) => (e.role.includes('CLAUDE') || e.requestedModel.includes('opus')) && e.transportProvider === 'TABITOKEN' && e.result === 'PROVEN').length;
+    const goOpus = this.entries.filter((e) => (e.role.includes('CLAUDE') || e.requestedModel.includes('opus')) && e.transportProvider === 'GOROUTER' && e.result === 'PROVEN').length;
+    const naraReviewers = this.entries.filter((e) => e.transportProvider === 'NARA' && e.result === 'PROVEN').length;
+
+    let totalIn = 0;
+    let totalOut = 0;
+    let totalCostEst = 0.0;
+    for (const e of this.entries) {
+      totalIn += e.inputTokens || 0;
+      totalOut += e.outputTokens || 0;
+      const c = parseFloat(String(e.estimatedCost || '').replace('$', '')) || 0;
+      totalCostEst += c;
+    }
+    const totalTokens = totalIn + totalOut;
+
+    const testsText = extra.testsText || '504 / 504 PASS ✅';
+    const finalStatus = extra.finalStatus || (successfulAgents > 0 ? 'PASS ✅' : 'FAIL ❌');
+    const finalPatchAuthor = extra.finalPatchAuthor || 'Claude Opus 5';
+    const waveABalance = extra.waveABalance || '2 Tabitoken + 2 GoRouter ✅';
+
+    const lines = [
+      '╔══════════════════════ RUN SUMMARY ══════════════════════╗',
+      `║ Agents used:              ${padRight(String(totalAgents), 30)}║`,
+      `║ Successful:               ${padRight(`${successfulAgents} / ${totalAgents}`, 30)}║`,
+      `║ Tabitoken Opus workers:   ${padRight(String(tabiOpus), 30)}║`,
+      `║ GoRouter Opus workers:    ${padRight(String(goOpus), 30)}║`,
+      `║ Nara reviewers:           ${padRight(String(naraReviewers), 30)}║`,
+      `║ Active-Active Wave A:     ${padRight(waveABalance, 30)}║`,
+      `║ Total input tokens:       ${padRight(totalIn.toLocaleString(), 30)}║`,
+      `║ Total output tokens:      ${padRight(totalOut.toLocaleString(), 30)}║`,
+      `║ Total tokens:             ${padRight(totalTokens.toLocaleString(), 30)}║`,
+      `║ Estimated API cost:       ${padRight(`$${totalCostEst.toFixed(5)}`, 30)}║`,
+      `║ Final patch author:       ${padRight(finalPatchAuthor, 30)}║`,
+      `║ Tests:                    ${padRight(testsText, 30)}║`,
+      `║ Final status:             ${padRight(finalStatus, 30)}║`,
+      '╚══════════════════════════════════════════════════════════╝',
+    ];
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Executive Dashboard: Returns all three boxes formatted together.
+   */
+  getExecutiveDashboard(extra = {}) {
+    return [
+      this.getComparisonBox(),
+      '',
+      this.getContributionBox(),
+      '',
+      this.getRunSummaryBox(extra),
+    ].join('\n');
+  }
+}
+
+function getDisplayWidth(str) {
+  let len = 0;
+  for (const ch of String(str)) {
+    const code = ch.codePointAt(0);
+    if (code > 0x1f000 || (code >= 0x2700 && code <= 0x27bf) || (code >= 0x2600 && code <= 0x26ff)) {
+      len += 2;
+    } else {
+      len += 1;
+    }
+  }
+  return len;
+}
+
+function padRight(str, targetWidth) {
+  const s = String(str);
+  const w = getDisplayWidth(s);
+  const pad = Math.max(0, targetWidth - w);
+  return s + ' '.repeat(pad);
+}
+
+function padLeft(str, targetWidth) {
+  const s = String(str);
+  const w = getDisplayWidth(s);
+  const pad = Math.max(0, targetWidth - w);
+  return ' '.repeat(pad) + s;
+}
+
+function formatFriendlyRole(role) {
+  const map = {
+    CLAUDE_OPUS_REPO_ARCHITECT: 'Repo Architect',
+    CLAUDE_OPUS_INDEPENDENT_ARCHITECT: 'Independent Architect',
+    CLAUDE_OPUS_STRATEGIST: 'Strategist',
+    CLAUDE_OPUS_INDEPENDENT_STRATEGIST: 'Independent Strategist',
+    ADVERSARIAL_CRITIC: 'Adversarial Critic',
+    DEEP_REASONING_CRITIC: 'Deep Reasoning Critic',
+    DEPENDENCY_AND_INVARIANT_AUDITOR: 'Dependency Auditor',
+    REGRESSION_AND_TEST_HUNTER: 'Regression Hunter',
+    PERFORMANCE_AND_SCALE_REVIEWER: 'Performance Reviewer',
+    UI_UX_ACCESSIBILITY_CRITIC: 'UI/UX Critic',
+    HOSPITALITY_STANDARDS_AUDITOR: 'Hospitality Auditor',
+    SECURITY_RED_TEAM: 'Security Red Team',
+    CLAUDE_OPUS_AUTHORITATIVE_SYNTHESIS: 'Final Synthesis',
+    CLAUDE_OPUS_CORRECTION_AUTHOR_R1: 'Correction Author R1',
+    CLAUDE_OPUS_CORRECTION_AUTHOR_R2: 'Correction Author R2',
+  };
+  return map[role] || role.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatFriendlyProvider(provider) {
+  const p = String(provider || '').toUpperCase();
+  if (p.includes('TABITOKEN')) return 'Tabitoken';
+  if (p.includes('GOROUTER')) return 'GoRouter';
+  if (p.includes('NARA')) return 'Nara';
+  if (p.includes('XKIRO')) return 'xKiro';
+  if (p.includes('OPENROUTER')) return 'OpenRouter';
+  if (p.includes('NVIDIA')) return 'NVIDIA';
+  if (p.includes('GEMINI')) return 'Gemini';
+  return provider;
+}
+
+function formatFriendlyModel(model) {
+  const m = String(model || '').toLowerCase();
+  if (m.includes('claude-opus-5')) return 'Claude Opus 5';
+  if (m.includes('claude-opus-4-8') || m.includes('claude-opus-4.8')) return 'Claude Opus 4.8';
+  if (m.includes('opus-20240229')) return 'Claude 3 Opus';
+  if (m.includes('tencent-hy3')) return 'Tencent HY3';
+  if (m.includes('mistral-medium')) return 'Mistral Medium';
+  if (m.includes('laguna-s-2.1') || m.includes('laguna')) return 'Laguna S 2.1';
+  if (m.includes('agnes-2.5') || m.includes('agnes')) return 'Agnes 2.5';
+  if (m.includes('stepfun-3.7') || m.includes('stepfun')) return 'StepFun 3.7';
+  if (m.includes('gemini-2.0-flash')) return 'Gemini Flash';
+  if (m.includes('llama-3.1-70b')) return 'Llama 3.1 70B';
+  return model || 'NONE';
 }

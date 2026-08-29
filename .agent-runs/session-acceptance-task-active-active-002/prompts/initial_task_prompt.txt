@@ -1,0 +1,19 @@
+TASK: Extend Active-Active Routing Telemetry Invariants & Probe Contract
+
+OBJECTIVE:
+1. Update src/lib/orchestratorVerificationProbe.js to export an enhanced diagnostic inspector:
+   - export function inspectActiveActiveRoutingHealth() returning:
+     {
+       status: 'ACTIVE_ACTIVE_OPTIMAL',
+       primaryChannels: ['TABITOKEN', 'GOROUTER'],
+       balancingPolicy: 'DYNAMIC_LATENCY_AWARE',
+       workerAllocation: '2_TABITOKEN_2_GOROUTER',
+       circuitBreaker: 'ENABLED',
+       timestamp: <ISO string>,
+     }
+2. Ensure verifyOrchestratorInvariants() and getOrchestratorTelemetryContract() remain intact and compliant.
+3. Update tests/orchestrator/orchestrator_verification_probe.test.js to include full unit test coverage for inspectActiveActiveRoutingHealth().
+
+SURGICAL CHANGE INSTRUCTIONS:
+- Format your patch strictly with standard file blocks (### FILE: <path> with full replacement code or SEARCH/REPLACE blocks).
+- Do not modify unrelated files.

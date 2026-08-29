@@ -683,3 +683,18 @@ pages. `scripts/probe-premium-page-heroes.mjs` holds the three-page scope, acces
 action, and reduced-motion contract.
 
 ---
+
+## 20. Luxury 3D Button System Architecture
+
+The repository uses a centralized luxury 3D button system defined in `src/components/ui/button.jsx` and tokenized in `src/index.css`:
+
+- **Layered Gradients**: Uses restrained linear gradients (`[background-image:linear-gradient(180deg,rgba(255,255,255,0.12)_0%,rgba(0,0,0,0.15)_100%)]`) layered over semantic background color tokens (`bg-primary`, `bg-destructive`, `bg-secondary`), ensuring Tailwind CSS and `tailwind-merge` class deduplication works seamlessly without color stripping.
+- **Specular Bevel Highlights**: 1px inset top highlight bevels (`--btn-bevel-strong` / `inset 0 1px 0 rgba(255,255,255,0.16)` on primary/destructive; `--btn-bevel-soft` on secondary).
+- **Lower Contact Shadows**: Dual-layer ambient and contact shadows (`--btn-contact`, `0 2px 4px -1px rgba(0,0,0,0.50), 0 1px 2px rgba(0,0,0,0.40)`).
+- **Tactile Physics**: Rest elevation, hover lift (`hover:-translate-y-px` with intensified shadow), and tactile active compression (`active:translate-y-[1px]` with inset shadow `inset 0 2px 4px rgba(0,0,0,0.45)`).
+- **GPU Compositor Isolation**: Uses `transform-gpu` without `will-change` to eliminate compositor memory bloat across dense grids.
+- **Scoped Transitions**: Strictly property-scoped transitions (`transition-[transform,box-shadow,background-color,border-color]`, 150ms ease-out) avoiding layout thrashing.
+- **High-Contrast Focus**: Emerald brand focus ring (`focus-visible:ring-2 focus-visible:ring-[#00E096]`) with 10.64:1 contrast ratio on dark card surfaces.
+- **WCAG & Reduced Motion**: `disabled:opacity-50 disabled:shadow-none disabled:translate-y-0` and full `motion-reduce:transition-none motion-reduce:transform-none` neutralization.
+- **Hierarchy**: `ghost` and `link` variants remain flat without 3D transforms.
+

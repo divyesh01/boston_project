@@ -14,6 +14,7 @@ import { parseManualEntryCsv, parseManualEntryPaste } from "@/lib/manualEntryImp
 import { saveManualRows } from "@/lib/manualEntrySave";
 import { draftKeyFor, readDraft, writeDraft, clearDraft } from "@/lib/manualDraft";
 import { MAX_IMPORT_BYTES } from "@/lib/csvParser";
+import { inspectUploadFile } from "@/lib/uploadGuard";
 
 // An uploaded file is hostile input. MAX_IMPORT_BYTES is imported from csvParser —
 // the single source of truth the report-import path (fetchCsvRows, uploadGuard,
@@ -336,16 +337,18 @@ export default function ManualEntry() {
 
   const handleImportFile = async (e) => {
     const file = e.target.files?.[0];
-    // Clearing the input means picking the same file twice still fires onChange,
-    // so a retry after a failed import is not silently ignored.
+    // Clear input so selecting the same file again (e.g. after fixing it) fires onChange
     e.target.value = "";
     if (!file) return;
-    if (file.size > MAX_IMPORT_BYTES) {
-      setSaveMsg(`Not imported — that file is ${(file.size / 1024 / 1024).toFixed(1)}MB, over the ${MAX_IMPORT_BYTES / 1024 / 1024}MB limit.`);
+
+    const verdict = await inspectUploadFile(file);
+    if (!verdict.ok) {
+      setSaveMsg(`Not imported — ${verdict.reason}`);
       setMsgTone("error");
       setImportWarnings([]);
       return;
     }
+
     let text;
     try {
       text = await file.text();
@@ -355,15 +358,7 @@ export default function ManualEntry() {
       setImportWarnings([]);
       return;
     }
-    // accept=".csv" is a filename filter the user can defeat in the file dialog.
-    // A NUL byte means binary (xlsx, pdf), which would otherwise land in the grid
-    // as mojibake rows and then be offered for saving.
-    if (text.includes("\0")) {
-      setSaveMsg("Not imported — that looks like a binary file, not CSV. Export as CSV first.");
-      setMsgTone("error");
-      setImportWarnings([]);
-      return;
-    }
+
     applyParsed(parseManualEntryCsv(text, config.fields), "Nothing imported");
   };
 

@@ -1,0 +1,25 @@
+{
+  "sessionId": "session-1787993997951",
+  "timestamp": "2026-08-29T08:59:57.952Z",
+  "userPrompt": "Test Settling Tests",
+  "status": "UNPROVEN",
+  "dualPillarResults": {
+    "synthesis": {
+      "settlingTestsRecommended": [
+        "scripts/probe-property-isolation.mjs"
+      ],
+      "settlingTestsExecuted": []
+    }
+  },
+  "participatingAgents": [],
+  "debateResults": null,
+  "productionAudit": null,
+  "routerLedger": [],
+  "testSuiteResults": null,
+  "unprovenList": [
+    "Gemini live analysis (UNAVAILABLE / UNPROVEN in this session)",
+    "Claude live analysis (UNAVAILABLE / UNPROVEN in this session)",
+    "Independent Dual-Pillar AI execution (UNPROVEN)",
+    "AI-derived evidence synthesis (UNPROVEN)"
+  ]
+}

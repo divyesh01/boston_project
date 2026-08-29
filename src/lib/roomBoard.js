@@ -32,6 +32,22 @@ export function normalizeRoomNumber(v) {
   return String(v ?? "").trim();
 }
 
+// Strictly validates and canonicalizes primary key IDs (numbers > 0 or non-empty strings)
+export function normalizeRoomId(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }
+  if (typeof value === "string") {
+    const t = value.trim();
+    if (!t || t === "null" || t === "undefined" || t === "NaN" || t === "0") return null;
+    const num = Number(t);
+    if (Number.isFinite(num) && num > 0) return num;
+    return /^[A-Za-z0-9_-]+$/.test(t) ? t : null;
+  }
+  return null;
+}
+
 // Deterministic integer-cents rounding for a dollar rate (avoid float drift).
 export function toRateCents(dollars) {
   return Math.round((Number(dollars) || 0) * 100);
@@ -44,31 +60,49 @@ export function sumRateCents(stays) {
 
 // ─── Selections ───
 
-// Only stays that fall on the given business date (YYYY-MM-DD).
+// Stays that fall on the given business date (YYYY-MM-DD), including multi-night stays.
 export function staysForDate(stays, date) {
   if (!date) return [];
-  return (stays || []).filter((s) => String(s.date).slice(0, 10) === String(date).slice(0, 10));
+  const targetDate = String(date).slice(0, 10);
+  return (stays || []).filter((s) => {
+    const sDate = String(s.date || "").slice(0, 10);
+    if (sDate === targetDate) return true;
+    const checkIn = String(s.check_in || s.date || "").slice(0, 10);
+    const checkOut = String(s.check_out || s.date || "").slice(0, 10);
+    if (checkIn && checkOut && targetDate >= checkIn && targetDate < checkOut) return true;
+    return false;
+  });
 }
 
-// Map room_number -> stay for a single date.
+// Map room_number / [property_id:room_number] -> stay for a single date.
 export function staysByRoom(stays, date) {
   const map = {};
   for (const s of staysForDate(stays, date)) {
-    const key = normalizeRoomNumber(s.room_number);
-    if (key && !map[key]) map[key] = s;
+    const roomKey = normalizeRoomNumber(s.room_number);
+    if (!roomKey) continue;
+    const propKey = s.property_id ? String(s.property_id) : "";
+    const compositeKey = propKey ? `${propKey}:${roomKey}` : roomKey;
+    if (!map[compositeKey]) map[compositeKey] = s;
+    if (!map[roomKey]) map[roomKey] = s;
   }
   return map;
 }
 
-// Most recent housekeeping state per room (across all tasks).
+// Most recent housekeeping state per room (across all tasks), supporting composite keys.
 export function housekeepingByRoom(tasks) {
   const map = {};
   for (const t of tasks || []) {
-    const key = normalizeRoomNumber(t.room_number);
-    if (!key) continue;
-    const existing = map[key];
+    const roomKey = normalizeRoomNumber(t.room_number);
+    if (!roomKey) continue;
+    const propKey = t.property_id ? String(t.property_id) : "";
+    const compositeKey = propKey ? `${propKey}:${roomKey}` : roomKey;
+    const existingComp = map[compositeKey];
+    if (!existingComp || String(t.task_date || "") >= String(existingComp.task_date || "")) {
+      map[compositeKey] = t;
+    }
+    const existing = map[roomKey];
     if (!existing || String(t.task_date || "") >= String(existing.task_date || "")) {
-      map[key] = t;
+      map[roomKey] = t;
     }
   }
   return map;
@@ -88,11 +122,15 @@ export function roomBoardStats(rooms, stays, date) {
   const occupiedStays = [];
 
   for (const room of roomList) {
-    if (String(room.status) === "out_of_service") {
+    if (String(room.status) === "out_of_service" || String(room.maintenance) === "out_of_service") {
       oos += 1;
       continue;
     }
-    const stay = byRoom[normalizeRoomNumber(room.room_number)];
+    const roomNum = normalizeRoomNumber(room.room_number);
+    const propId = room.property_id ? String(room.property_id) : "";
+    const stay = propId
+      ? byRoom[`${propId}:${roomNum}`] || (byRoom[roomNum] && !byRoom[roomNum].property_id ? byRoom[roomNum] : undefined)
+      : byRoom[roomNum];
     if (stay) {
       occupied += 1;
       occupiedStays.push(stay);
@@ -106,7 +144,10 @@ export function roomBoardStats(rooms, stays, date) {
   for (const stay of dayStays) {
     const key = normalizeRoomNumber(stay.room_number);
     const inRegister = roomList.some((r) => normalizeRoomNumber(r.room_number) === key);
-    if (!inRegister) occupied += 1;
+    if (!inRegister) {
+      occupied += 1;
+      occupiedStays.push(stay);
+    }
   }
 
   const revenueCents = sumRateCents(occupiedStays);
@@ -129,13 +170,30 @@ export function roomBoardStats(rooms, stays, date) {
 
 // ─── Tile composition ───
 
+// Map task statuses to standard display states
+function mapHousekeepingStatus(status) {
+  if (!status) return null;
+  const s = String(status).toLowerCase();
+  if (s === "inspected") return "inspected";
+  if (["pending", "assigned", "in_progress", "completed", "dirty"].includes(s)) return "dirty";
+  if (s === "available" || s === "clean") return "available";
+  if (s === "out_of_service") return "out_of_service";
+  return null;
+}
+
 // Derive the single display status for one room tile given its stay + housekeeping.
 export function roomTile(room, stay, housekeeping) {
+  if (!room) return null;
+  const rawId = room.id ?? room.roomId;
+  const validId = normalizeRoomId(rawId);
   const base = {
+    id: validId ?? rawId ?? undefined,
+    roomId: validId ?? rawId ?? undefined,
+    property_id: room.property_id || "",
     room_number: normalizeRoomNumber(room.room_number),
     room_type: room.room_type || "Standard",
     floor: room.floor || "",
-    maintenance: room.maintenance || room.status === "out_of_service" ? room.status : "available",
+    maintenance: room.maintenance || (room.status === "out_of_service" ? "out_of_service" : "available"),
   };
 
   if (stay) {
@@ -155,7 +213,8 @@ export function roomTile(room, stay, housekeeping) {
   if (String(room.status) === "out_of_service" || String(room.maintenance) === "out_of_service") {
     return { ...base, kind: "out_of_service", housekeeping: "out_of_service", guest_name: "", rate_cents: 0 };
   }
-  const hk = housekeeping?.status || room.status || "available";
+  const hkStatus = mapHousekeepingStatus(housekeeping?.status);
+  const hk = hkStatus || room.status || "available";
   return { ...base, kind: hk, guest_name: "", rate_cents: 0, housekeeping: hk };
 }
 
@@ -163,9 +222,19 @@ export function roomTile(room, stay, housekeeping) {
 export function buildRoomBoard(rooms, stays, tasks, date) {
   const byRoom = staysByRoom(stays, date);
   const hkByRoom = housekeepingByRoom(tasks);
-  return (rooms || []).map((room) =>
-    roomTile(room, byRoom[normalizeRoomNumber(room.room_number)], hkByRoom[normalizeRoomNumber(room.room_number)])
-  );
+  return (rooms || [])
+    .map((room) => {
+      const roomNum = normalizeRoomNumber(room.room_number);
+      const propId = room.property_id ? String(room.property_id) : "";
+      const stay = propId
+        ? byRoom[`${propId}:${roomNum}`] || (byRoom[roomNum] && !byRoom[roomNum].property_id ? byRoom[roomNum] : undefined)
+        : byRoom[roomNum];
+      const hk = propId
+        ? hkByRoom[`${propId}:${roomNum}`] || (hkByRoom[roomNum] && !hkByRoom[roomNum].property_id ? hkByRoom[roomNum] : undefined)
+        : hkByRoom[roomNum];
+      return roomTile(room, stay, hk);
+    })
+    .filter(Boolean);
 }
 
 // ─── Room register bootstrap ───

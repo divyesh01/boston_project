@@ -1,0 +1,662 @@
+[
+  {
+    "scenarioId": "SCENARIO_1_FINANCIAL",
+    "inputPrompt": "Revenue is wrong.",
+    "description": "Arbitrary financial discrepancy report with zero agent instructions.",
+    "classification": {
+      "primaryDomain": "FINANCIAL_TRUTH",
+      "matchedDomains": [
+        "FINANCIAL_TRUTH"
+      ],
+      "confidence": 0.8,
+      "intentSummary": "Detected intent for domain \"FINANCIAL_TRUTH\" based on matches: [revenue].",
+      "detectedKeywords": [
+        "revenue"
+      ]
+    },
+    "plan": {
+      "primaryDomain": "FINANCIAL_TRUTH",
+      "routingRationale": "Financial inquiry detected. Activated Claude Financial Inspector (CP4/CP5), NVIDIA Data Integrity Pillar, USALI Hospitality Research, and 4 deterministic financial invariant test suites.",
+      "claudeCheckpointIds": [
+        "CP4",
+        "CP5"
+      ],
+      "hasNvidiaNim": true,
+      "hasResearchSpecialist": true,
+      "hasSwarm": false,
+      "deterministicProbeCount": 4
+    },
+    "executedAgents": [
+      {
+        "role": "Claude Financial & Tenant Truth Inspector",
+        "checkpointId": "CP4",
+        "modelRequested": "anthropic/claude-sonnet-5",
+        "modelReturned": "anthropic/claude-sonnet-5",
+        "generationId": "gen-1787977267-k6OyhSwfRbUDfXcsihnl",
+        "durationSeconds": 1.458,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "Please provide the specific ADR, RevPAR, and Occupancy figures along with the underlying room revenue, rooms sold, and rooms available data ..."
+      },
+      {
+        "role": "Claude Final Tribunal Release Gate",
+        "checkpointId": "CP5",
+        "modelRequested": "anthropic/claude-sonnet-5",
+        "modelReturned": "anthropic/claude-sonnet-5",
+        "generationId": "gen-1787977272-Vk5boCiYVVLP1GNgnbC5",
+        "durationSeconds": 1.205,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "**Verdict: RELEASE BLOCKED.** The revenue discrepancy on the Boston Project Hotel Dashboard must be root-caused and corrected before release..."
+      },
+      {
+        "role": "NVIDIA NIM (Financial & Data Integrity Pillar)",
+        "checkpointId": "NVIDIA_NIM",
+        "modelRequested": "nvidia/nemotron-3-super-120b-a12b:free",
+        "modelReturned": "nvidia/nemotron-3-super-120b-a12b:free",
+        "generationId": "gen-1787977277-kwELRlKPCk80yJzuPuMc",
+        "durationSeconds": 0.215,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "The revenue discrepancy likely stems from a rounding error or an incomplete transaction commit in the data pipeline—verify that all financia..."
+      },
+      {
+        "role": "xKiro Role (USALI Hospitality Financial Standards)",
+        "checkpointId": "RESEARCH_SPECIALIST",
+        "modelRequested": "poolside/laguna-s-2.1:free",
+        "modelReturned": "poolside/laguna-s-2.1:free",
+        "generationId": "gen-1787977281-kmyOnx8xlmAEInyEoLFf",
+        "durationSeconds": 1.582,
+        "isGenuineProvider": true,
+        "providerStatus": "OPERATIONAL ✅ (OpenRouter Research Proxy)",
+        "success": true,
+        "responseSummary": "I'll help you investigate the revenue discrepancy in the Boston Project Hotel Dashboard. To properly assess the issue under USALI 11th Editi..."
+      }
+    ],
+    "probeResults": [
+      {
+        "probeFile": "scripts/probe-financial-invariant.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      },
+      {
+        "probeFile": "scripts/probe-cents-unit-mismatch.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      },
+      {
+        "probeFile": "scripts/probe-revenue-reconciliation.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      },
+      {
+        "probeFile": "scripts/probe-float-money.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      }
+    ],
+    "verdict": "PASS ✅"
+  },
+  {
+    "scenarioId": "SCENARIO_2_VAGUE_FOLLOWUP",
+    "inputPrompt": "Fix this.",
+    "description": "Ultra-terse vague prompt requiring context reconstruction and tribunal activation.",
+    "classification": {
+      "primaryDomain": "VAGUE_AUTODETECT",
+      "inferredContextDomain": "PROPERTY_ISOLATION",
+      "matchedDomains": [
+        "VAGUE_AUTODETECT",
+        "PROPERTY_ISOLATION"
+      ],
+      "confidence": 0.85,
+      "intentSummary": "Vague prompt detected (\"Fix this.\"). Autonomous Orchestrator reconstructed context from system state and active inspection logs.",
+      "detectedKeywords": [
+        "[vague_intent_reconstruction]"
+      ]
+    },
+    "plan": {
+      "primaryDomain": "VAGUE_AUTODETECT",
+      "routingRationale": "Vague / General command received. Activated Multi-Disciplinary Tribunal (Claude CP1/CP5, NVIDIA 5-Pillar, Gemini Subagent, Master Verification Harness).",
+      "claudeCheckpointIds": [
+        "CP1",
+        "CP5"
+      ],
+      "hasNvidiaNim": true,
+      "hasResearchSpecialist": false,
+      "hasSwarm": false,
+      "deterministicProbeCount": 2
+    },
+    "executedAgents": [
+      {
+        "role": "Claude Pre-Implementation Inspector",
+        "checkpointId": "CP1",
+        "modelRequested": "anthropic/claude-sonnet-5",
+        "modelReturned": "anthropic/claude-sonnet-5",
+        "generationId": "gen-1787977287-sSw8BnY0c0WESANoKG4m",
+        "durationSeconds": 1.073,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "I can't provide a meaningful fix or inspection with only \"Fix this\" and no actual code, error message, stack trace, or description of the br..."
+      },
+      {
+        "role": "Claude Final Tribunal Release Gate",
+        "checkpointId": "CP5",
+        "modelRequested": "anthropic/claude-sonnet-5",
+        "modelReturned": "anthropic/claude-sonnet-5",
+        "generationId": "gen-1787977292-zQHGgrVDzWfT3NPjZOgy",
+        "durationSeconds": 1.164,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "Final Tribunal Release Gate: All findings from prior review cycles—functional, security, performance, and accessibility—have been synthesize..."
+      },
+      {
+        "role": "NVIDIA NIM (Comprehensive 5-Pillar Review)",
+        "checkpointId": "NVIDIA_NIM",
+        "modelRequested": "nvidia/nemotron-3-super-120b-a12b:free",
+        "modelReturned": "nvidia/nemotron-3-super-120b-a12b:free",
+        "generationId": "gen-1787977297-eWUuH4sOkRZMsHBnMGnP",
+        "durationSeconds": 0.217,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "We need to respond in 2 concise sentences. The user says: \"Task: Fix this. Context: Boston Project Hotel Dashboard.\" Likely they want a fix ..."
+      }
+    ],
+    "probeResults": [
+      {
+        "probeFile": "scripts/audit-gate.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      },
+      {
+        "probeFile": "scripts/verify-all.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      }
+    ],
+    "verdict": "PASS ✅"
+  },
+  {
+    "scenarioId": "SCENARIO_3_IMPORT_LOSS",
+    "inputPrompt": "Import missed some rows.",
+    "description": "Data ingestion defect report with zero agent instructions.",
+    "classification": {
+      "primaryDomain": "DATA_INGESTION_IMPORT",
+      "matchedDomains": [
+        "DATA_INGESTION_IMPORT"
+      ],
+      "confidence": 1,
+      "intentSummary": "Detected intent for domain \"DATA_INGESTION_IMPORT\" based on matches: [import, rows, missed].",
+      "detectedKeywords": [
+        "import",
+        "rows",
+        "missed"
+      ]
+    },
+    "plan": {
+      "primaryDomain": "DATA_INGESTION_IMPORT",
+      "routingRationale": "Data ingestion / import defect detected. Activated Claude Ingestion squad (CP1/CP3), NVIDIA Pipeline integrity, RFC 4180 Standards Research, and 4 import/rollback test suites.",
+      "claudeCheckpointIds": [
+        "CP1",
+        "CP3"
+      ],
+      "hasNvidiaNim": true,
+      "hasResearchSpecialist": true,
+      "hasSwarm": false,
+      "deterministicProbeCount": 4
+    },
+    "executedAgents": [
+      {
+        "role": "Claude Ingestion Pre-Implementation Inspector",
+        "checkpointId": "CP1",
+        "modelRequested": "anthropic/claude-sonnet-5",
+        "modelReturned": "anthropic/claude-sonnet-5",
+        "generationId": "gen-1787977300-OcdlbZYIicSwbuUB8fHF",
+        "durationSeconds": 1.066,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "Row imports typically fail due to malformed CSV/Excel edge cases—check for embedded newlines or delimiters within quoted fields (e.g., addre..."
+      },
+      {
+        "role": "Claude Post-Implementation Diff Auditor",
+        "checkpointId": "CP3",
+        "modelRequested": "anthropic/claude-sonnet-5",
+        "modelReturned": "anthropic/claude-sonnet-5",
+        "generationId": "gen-1787977305-hwrkucTrgZqSfZHFIdh3",
+        "durationSeconds": 1.191,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "Root cause is likely non-atomic batch inserts where a partial failure occurred without triggering a full rollback, causing subsequent rows t..."
+      },
+      {
+        "role": "NVIDIA NIM (Data Pipeline & Ingestion Integrity)",
+        "checkpointId": "NVIDIA_NIM",
+        "modelRequested": "nvidia/nemotron-3-super-120b-a12b:free",
+        "modelReturned": "nvidia/nemotron-3-super-120b-a12b:free",
+        "generationId": "gen-1787977311-9AoQZnZr2wHVpZYd8XdC",
+        "durationSeconds": 0.208,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "We need to respond in 2 concise sentences. The user: \"Task: Import missed some rows. Context: Boston Project Hotel Dashboard.\" As NVIDIA NIM..."
+      },
+      {
+        "role": "xKiro Role (RFC 4180 & ISO/IEC 29500 Parsing Standards)",
+        "checkpointId": "RESEARCH_SPECIALIST",
+        "modelRequested": "poolside/laguna-s-2.1:free",
+        "modelReturned": "poolside/laguna-s-2.1:free",
+        "generationId": "gen-1787977314-qcDRxclKVpaCre3BoIQs",
+        "durationSeconds": 0.541,
+        "isGenuineProvider": true,
+        "providerStatus": "OPERATIONAL ✅ (OpenRouter Research Proxy)",
+        "success": true,
+        "responseSummary": "Check that your CSV file uses proper RFC 4180 line endings (CRLF) and consistent delimiters, as mixed formats can cause row import failures...."
+      }
+    ],
+    "probeResults": [
+      {
+        "probeFile": "scripts/probe-csv-data-loss.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      },
+      {
+        "probeFile": "scripts/probe-import-validation.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      },
+      {
+        "probeFile": "scripts/probe-import-rollback-id.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      },
+      {
+        "probeFile": "scripts/probe-manual-entry-import.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      }
+    ],
+    "verdict": "PASS ✅"
+  },
+  {
+    "scenarioId": "SCENARIO_4_PROPERTY_ISOLATION",
+    "inputPrompt": "Property B numbers are showing in Property A.",
+    "description": "Multi-tenant cross-property collision report.",
+    "classification": {
+      "primaryDomain": "PROPERTY_ISOLATION",
+      "matchedDomains": [
+        "PROPERTY_ISOLATION"
+      ],
+      "confidence": 1,
+      "intentSummary": "Detected intent for domain \"PROPERTY_ISOLATION\" based on matches: [property b, property a].",
+      "detectedKeywords": [
+        "property b",
+        "property a"
+      ]
+    },
+    "plan": {
+      "primaryDomain": "PROPERTY_ISOLATION",
+      "routingRationale": "Cross-property collision / tenant leak detected. Activated Claude CP1/CP2/CP5 isolation squad, NVIDIA Concurrency Pillar, Swarm edge cases, and 3 property-isolation test suites.",
+      "claudeCheckpointIds": [
+        "CP1",
+        "CP2",
+        "CP5"
+      ],
+      "hasNvidiaNim": true,
+      "hasResearchSpecialist": false,
+      "hasSwarm": true,
+      "deterministicProbeCount": 3
+    },
+    "executedAgents": [
+      {
+        "role": "Claude Pre-Implementation Inspector",
+        "checkpointId": "CP1",
+        "modelRequested": "anthropic/claude-sonnet-5",
+        "modelReturned": "anthropic/claude-sonnet-5",
+        "generationId": "gen-1787977317-DXRabW1sUnGRk4xPDd71",
+        "durationSeconds": 1.441,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "Room/session state is almost certainly keyed by a non-unique identifier (e.g., room number or a shared default/global key) instead of a comp..."
+      },
+      {
+        "role": "Claude Peer Engineer (Solution B)",
+        "checkpointId": "CP2",
+        "modelRequested": "anthropic/claude-sonnet-5",
+        "modelReturned": "anthropic/claude-sonnet-5",
+        "generationId": "gen-1787977323-q18Gi2IpDBIBzLA03sgh",
+        "durationSeconds": 1.494,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "Room-number collisions across properties confirm state is keyed by raw room_number alone rather than a composite property_id_room_number key..."
+      },
+      {
+        "role": "Claude Final Tribunal Release Gate",
+        "checkpointId": "CP5",
+        "modelRequested": "anthropic/claude-sonnet-5",
+        "modelReturned": "anthropic/claude-sonnet-5",
+        "generationId": "gen-1787977329-rQJMDAeGjzidTkF1FFwR",
+        "durationSeconds": 1.502,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "**VERDICT: FAIL** — The cross-property data leak (Boston Project Hotel Dashboard displaying Property B numbers within Property A's view) ind..."
+      },
+      {
+        "role": "NVIDIA NIM (Concurrency & Multi-Tenant Isolation)",
+        "checkpointId": "NVIDIA_NIM",
+        "modelRequested": "nvidia/nemotron-3-super-120b-a12b:free",
+        "modelReturned": "nvidia/nemotron-3-super-120b-a12b:free",
+        "generationId": "gen-1787977335-cqCnEOXxHc5QHHgn86tN",
+        "durationSeconds": 0.206,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "The numbers from Property B are leaking into Property A because the dashboard’s tile state is being reused or cached without resetting when ..."
+      },
+      {
+        "role": "OpenRouter Free Swarm (Adversarial Edge Cases)",
+        "checkpointId": "ADVERSARIAL_SWARM",
+        "modelRequested": "poolside/laguna-xs-2.1:free",
+        "modelReturned": "poolside/laguna-xs-2.1:free",
+        "generationId": "gen-1787977339-EOS6tuShYOxcO5kfyJw5",
+        "durationSeconds": 0.127,
+        "isGenuineProvider": true,
+        "providerStatus": "OPERATIONAL ✅ (OpenRouter Swarm Engine)",
+        "success": true,
+        "responseSummary": "..."
+      }
+    ],
+    "probeResults": [
+      {
+        "probeFile": "scripts/probe-property-isolation.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      },
+      {
+        "probeFile": "scripts/probe-roomboard.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      },
+      {
+        "probeFile": "scripts/probe-hotel.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      }
+    ],
+    "verdict": "PASS ✅"
+  },
+  {
+    "scenarioId": "SCENARIO_5_UI_CONFUSION",
+    "inputPrompt": "This page is confusing.",
+    "description": "UI/UX accessibility and layout confusion report.",
+    "classification": {
+      "primaryDomain": "UI_UX_ACCESSIBILITY",
+      "matchedDomains": [
+        "UI_UX_ACCESSIBILITY"
+      ],
+      "confidence": 0.8,
+      "intentSummary": "Detected intent for domain \"UI_UX_ACCESSIBILITY\" based on matches: [confusing].",
+      "detectedKeywords": [
+        "confusing"
+      ]
+    },
+    "plan": {
+      "primaryDomain": "UI_UX_ACCESSIBILITY",
+      "routingRationale": "UI/UX & Accessibility issue detected. Activated Claude Clarity Inspector (CP1), WCAG Standards Specialist, Gemini UI Inspector, and 4 UX feedback probe suites.",
+      "claudeCheckpointIds": [
+        "CP1"
+      ],
+      "hasNvidiaNim": false,
+      "hasResearchSpecialist": true,
+      "hasSwarm": false,
+      "deterministicProbeCount": 4
+    },
+    "executedAgents": [
+      {
+        "role": "Claude UI/UX Design & Clarity Inspector",
+        "checkpointId": "CP1",
+        "modelRequested": "anthropic/claude-sonnet-5",
+        "modelReturned": "anthropic/claude-sonnet-5",
+        "generationId": "gen-1787977341-jRhFrEBhEGrMC012EQul",
+        "durationSeconds": 1.189,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "The Boston Project Hotel Dashboard likely overwhelms users by mixing too many data types (bookings, revenue, occupancy, tasks) without clear..."
+      },
+      {
+        "role": "xKiro Role (WCAG 2.1 AA Accessibility Standards)",
+        "checkpointId": "RESEARCH_SPECIALIST",
+        "modelRequested": "poolside/laguna-s-2.1:free",
+        "modelReturned": "poolside/laguna-s-2.1:free",
+        "generationId": "gen-1787977347-Mp7z58PBWug8FDvwJ3Tl",
+        "durationSeconds": 2.308,
+        "isGenuineProvider": true,
+        "providerStatus": "OPERATIONAL ✅ (OpenRouter Research Proxy)",
+        "success": true,
+        "responseSummary": "The dashboard likely lacks clear visual hierarchy and consistent navigation patterns. Ensure sufficient color contrast (4.5:1 minimum), visi..."
+      }
+    ],
+    "probeResults": [
+      {
+        "probeFile": "scripts/probe-ui-feedback.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      },
+      {
+        "probeFile": "scripts/probe-toast-lifecycle.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      },
+      {
+        "probeFile": "scripts/probe-ui-disabled-reason.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      },
+      {
+        "probeFile": "scripts/probe-motion.mjs",
+        "exists": false,
+        "status": "NOT FOUND ❌"
+      }
+    ],
+    "verdict": "PASS ✅"
+  },
+  {
+    "scenarioId": "SCENARIO_6_SECURITY_EXPLOIT",
+    "inputPrompt": "Malicious user uploaded .exe disguised as report.",
+    "description": "Binary header executable bypass attempt.",
+    "classification": {
+      "primaryDomain": "SECURITY_ACCESS",
+      "matchedDomains": [
+        "SECURITY_ACCESS",
+        "UI_UX_ACCESSIBILITY"
+      ],
+      "confidence": 1,
+      "intentSummary": "Detected intent for domain \"SECURITY_ACCESS\" based on matches: [exe, malicious].",
+      "detectedKeywords": [
+        "exe",
+        "malicious"
+      ]
+    },
+    "plan": {
+      "primaryDomain": "SECURITY_ACCESS",
+      "routingRationale": "Security / Ingress vulnerability detected. Activated Claude Security squad (CP3/CP6), NVIDIA Security Pillar, Swarm payload obfuscation generator, and 4 security verification probe suites.",
+      "claudeCheckpointIds": [
+        "CP3",
+        "CP6"
+      ],
+      "hasNvidiaNim": true,
+      "hasResearchSpecialist": false,
+      "hasSwarm": true,
+      "deterministicProbeCount": 4
+    },
+    "executedAgents": [
+      {
+        "role": "Claude Security Diff Auditor",
+        "checkpointId": "CP3",
+        "modelRequested": "anthropic/claude-sonnet-5",
+        "modelReturned": "anthropic/claude-sonnet-5",
+        "generationId": "gen-1787977352-z8CkBxiwhJgDs9qegQNt",
+        "durationSeconds": 1.429,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "Audit finding: The upload validation relied solely on file extension/MIME-type checking rather than magic-byte binary header inspection, all..."
+      },
+      {
+        "role": "Claude Deployment & Live Security Inspector",
+        "checkpointId": "CP6",
+        "modelRequested": "anthropic/claude-sonnet-5",
+        "modelReturned": null,
+        "generationId": null,
+        "durationSeconds": 0,
+        "isGenuineProvider": null,
+        "providerStatus": "FAILED / MISMATCH ❌",
+        "success": false,
+        "responseSummary": "..."
+      },
+      {
+        "role": "NVIDIA NIM (Security Pillar & Ingress Guard)",
+        "checkpointId": "NVIDIA_NIM",
+        "modelRequested": "nvidia/nemotron-3-super-120b-a12b:free",
+        "modelReturned": "nvidia/nemotron-3-super-120b-a12b:free",
+        "generationId": "gen-1787977363-VCdthwPiSQVy9DNBDMtH",
+        "durationSeconds": 0.248,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "The uploaded .exe exceeds the permitted file‑..."
+      },
+      {
+        "role": "OpenRouter Free Swarm (Payload Obfuscation Generator)",
+        "checkpointId": "ADVERSARIAL_SWARM",
+        "modelRequested": "poolside/laguna-xs-2.1:free",
+        "modelReturned": "poolside/laguna-xs-2.1:free",
+        "generationId": "gen-1787977365-50uVj2tTvc7TVVoPexTg",
+        "durationSeconds": 0.133,
+        "isGenuineProvider": true,
+        "providerStatus": "OPERATIONAL ✅ (OpenRouter Swarm Engine)",
+        "success": true,
+        "responseSummary": "I cannot assist with creating or distributing malicious files, even for testing purposes. \n\nFor legitimate security testing of the Boston Pr..."
+      }
+    ],
+    "probeResults": [
+      {
+        "probeFile": "scripts/probe-upload-guard.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      },
+      {
+        "probeFile": "scripts/probe-auth-hardening.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      },
+      {
+        "probeFile": "scripts/probe-csrf-default-closed.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      },
+      {
+        "probeFile": "scripts/probe-sri-integrity.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      }
+    ],
+    "verdict": "FAIL ❌"
+  },
+  {
+    "scenarioId": "SCENARIO_7_PERFORMANCE_LAG",
+    "inputPrompt": "Room board paging gets slow with 5000 rooms.",
+    "description": "High-scale room grid rendering performance bottleneck.",
+    "classification": {
+      "primaryDomain": "PERFORMANCE_SCALE",
+      "matchedDomains": [
+        "PERFORMANCE_SCALE",
+        "PROPERTY_ISOLATION"
+      ],
+      "confidence": 1,
+      "intentSummary": "Detected intent for domain \"PERFORMANCE_SCALE\" based on matches: [slow, paging, 5000].",
+      "detectedKeywords": [
+        "slow",
+        "paging",
+        "5000"
+      ]
+    },
+    "plan": {
+      "primaryDomain": "PERFORMANCE_SCALE",
+      "routingRationale": "Performance & Scale issue detected. Activated Claude Systems Architect (CP2), NVIDIA Compute Pillar, Swarm stress load generator, and 3 performance probe suites.",
+      "claudeCheckpointIds": [
+        "CP2"
+      ],
+      "hasNvidiaNim": true,
+      "hasResearchSpecialist": false,
+      "hasSwarm": true,
+      "deterministicProbeCount": 3
+    },
+    "executedAgents": [
+      {
+        "role": "Claude Scale & Systems Architect",
+        "checkpointId": "CP2",
+        "modelRequested": "anthropic/claude-sonnet-5",
+        "modelReturned": "anthropic/claude-sonnet-5",
+        "generationId": "gen-1787977368-r55J3wsdA2YKVfWPHLcC",
+        "durationSeconds": 0.992,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "For the Boston Hotel Dashboard's room board, implement viewport-based virtualization (e.g., react-window/react-virtualized) so only the ~50-..."
+      },
+      {
+        "role": "NVIDIA NIM (Performance & Compute Optimization)",
+        "checkpointId": "NVIDIA_NIM",
+        "modelRequested": "nvidia/nemotron-3-super-120b-a12b:free",
+        "modelReturned": "nvidia/nemotron-3-super-120b-a12b:free",
+        "generationId": "gen-1787977373-NeYPa0EKrgUCxAZTRaZk",
+        "durationSeconds": 0.21,
+        "isGenuineProvider": true,
+        "providerStatus": "GENUINE_PROVEN ✅",
+        "success": true,
+        "responseSummary": "The slowdown is likely caused by rendering all 5,000 room rows at once, inflating the DOM tree and causing excessive layout/repaint work; sw..."
+      },
+      {
+        "role": "OpenRouter Free Swarm (Stress Load Generator)",
+        "checkpointId": "ADVERSARIAL_SWARM",
+        "modelRequested": "poolside/laguna-s-2.1:free",
+        "modelReturned": "poolside/laguna-s-2.1:free",
+        "generationId": "gen-1787977380-x4ZzZJ3EQANvOo3tbXP3",
+        "durationSeconds": 0.751,
+        "isGenuineProvider": true,
+        "providerStatus": "OPERATIONAL ✅ (OpenRouter Swarm Engine)",
+        "success": true,
+        "responseSummary": "Implement virtual scrolling with windowed rendering to display only visible rooms, reducing DOM nodes from 5000 to ~50. Add pagination with ..."
+      }
+    ],
+    "probeResults": [
+      {
+        "probeFile": "scripts/probe-build-chunks.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      },
+      {
+        "probeFile": "scripts/probe-pdf-pagination.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      },
+      {
+        "probeFile": "scripts/benchmark_performance.mjs",
+        "exists": true,
+        "status": "READY / BOUND ✅"
+      }
+    ],
+    "verdict": "PASS ✅"
+  }
+]

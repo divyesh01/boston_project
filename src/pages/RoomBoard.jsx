@@ -6,7 +6,7 @@ import { C, num, pct, money2, avg, inventoryInScope, occupancyStats } from "@/li
 import { fromCents } from "@/lib/decimal";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { db } from "@/api/base44Client";
-import { buildRoomBoard, roomBoardStats, generateRoomRegister, toRateCents } from "@/lib/roomBoard";
+import { buildRoomBoard, roomBoardStats, generateRoomRegister, toRateCents, normalizeRoomId, ROOM_STATUS } from "@/lib/roomBoard";
 import { suggestedRateForDate, forecastOccupancy } from "@/lib/pricingEngine";
 import { isPricingEnabled, getPricingConfig, ROOM_TYPES } from "@/lib/pricingSettings";
 import { useRealtimeInvalidation } from "@/lib/realtime";
@@ -48,6 +48,14 @@ export default function RoomBoard() {
   const [newOut, setNewOut] = useState("");
   const [newFolio, setNewFolio] = useState("");
   const [notice, setNotice] = useState(null);
+
+  useEffect(() => {
+    setNewIn(boardDate);
+  }, [boardDate]);
+
+  useEffect(() => {
+    setNewRoom("");
+  }, [property]);
 
   // Owner-facing pricing: compute the engine's suggested rate for the room
   // type being checked in on the selected board date. Feeds the check-in form
@@ -161,7 +169,9 @@ export default function RoomBoard() {
       return;
     }
     const prop = properties.find((p) => p.id === singlePropertyId);
-    const room = rooms.find((r) => String(r.room_number) === String(newRoom));
+    const room = rooms.find(
+      (r) => String(r.room_number) === String(newRoom) && (!r.property_id || String(r.property_id) === String(singlePropertyId))
+    );
 
     // A check-in is two writes with two independent failure modes, and the
     // operator has to be told which one happened. Before, the stay write could
@@ -199,12 +209,17 @@ export default function RoomBoard() {
     // already written.
     let statusWarning = null;
     if (!room?.id) {
-      statusWarning = `room ${newRoom} has no entry in the room list, so its status could not be set to occupied`;
+      statusWarning = `room ${newRoom} has no entry in the room list for this property, so its status could not be set to occupied`;
     } else {
-      try {
-        await db.entities.Room.update(room.id, { status: "occupied" });
-      } catch (err) {
-        statusWarning = `room ${newRoom} could not be marked occupied (${err?.message || err})`;
+      const validRoomId = normalizeRoomId(room.id);
+      if (!validRoomId) {
+        statusWarning = `room ${newRoom} has an invalid id, so its status could not be set to occupied`;
+      } else {
+        try {
+          await db.entities.Room.update(validRoomId, { status: "occupied" });
+        } catch (err) {
+          statusWarning = `room ${newRoom} could not be marked occupied (${err?.message || err})`;
+        }
       }
     }
 
@@ -221,11 +236,49 @@ export default function RoomBoard() {
   };
 
   const handleRoomState = async (roomId, status) => {
-    // Housekeeping and maintenance taps write straight to the Room row. An
-    // unreported rejection here left the row unchanged with no message at all,
-    // which a user reads as "already saved".
+    const validId = normalizeRoomId(roomId);
+    if (!validId) {
+      setNotice({
+        type: "error",
+        text: `Could not set that room to "${status}": Invalid or missing room ID (${roomId ?? "undefined"}). The room status is unchanged.`,
+      });
+      return;
+    }
+
+    if (!ROOM_STATUS.includes(status)) {
+      setNotice({
+        type: "error",
+        text: `Could not set room status: Invalid status "${status}". Allowed values: ${ROOM_STATUS.join(", ")}.`,
+      });
+      return;
+    }
+
+    const targetRoom = rooms.find((r) => String(r.id) === String(validId));
+    if (!targetRoom) {
+      setNotice({
+        type: "error",
+        text: `Could not set that room to "${status}": Room not found or does not belong to the active property.`,
+      });
+      return;
+    }
+
+    if (singlePropertyId && targetRoom.property_id && String(targetRoom.property_id) !== String(singlePropertyId)) {
+      setNotice({
+        type: "error",
+        text: `Could not set that room to "${status}": Room belongs to a different property.`,
+      });
+      return;
+    }
+
+    const updates = { status };
+    if (status === "out_of_service") {
+      updates.maintenance = "out_of_service";
+    } else if (targetRoom.maintenance === "out_of_service") {
+      updates.maintenance = "available";
+    }
+
     try {
-      await db.entities.Room.update(roomId, { status });
+      await db.entities.Room.update(validId, updates);
       setNotice(null);
     } catch (err) {
       setNotice({
@@ -343,9 +396,12 @@ export default function RoomBoard() {
           <div className="grid gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
             {tiles.map((t, index) => {
               const s = KIND_STYLE[t.kind] || KIND_STYLE.available;
+              const tileKey = t.property_id
+                ? `${t.property_id}_${t.room_number}_${t.roomId || index}`
+                : `${t.room_number}_${t.roomId || index}`;
               return (
                 <motion.div
-                  key={t.room_number}
+                  key={tileKey}
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
                   transition={{ delay: index * 0.015, duration: 0.2 }}
@@ -380,7 +436,7 @@ export default function RoomBoard() {
                       {["available", "dirty", "out_of_service"].map((st) => (
                         <button
                           key={st}
-                          onClick={() => handleRoomState(t.roomId || t.id, st)}
+                          onClick={() => handleRoomState(t.roomId ?? t.id, st)}
                           className="flex-1 rounded bg-white/10 px-1 py-0.5 text-[9px] text-slate-300 hover:bg-white/20"
                         >
                           {st === "out_of_service" ? "OOS" : st[0].toUpperCase()}

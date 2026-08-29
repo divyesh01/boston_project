@@ -454,6 +454,76 @@ npm run test:watch
 > `verify-harness.mjs` SKIP. That is an environment limit, **not** a passing result — run
 > them on Windows or in CI, and record them as *Not Run* anywhere else.
 >
+
+Measured, not estimated. The heading here previously read "106 Files", which matched
+nothing countable. Re-counted 2026-08-22; the 2026-08-20 set (117 / 95 / 73 / 71 / 34)
+had gone stale as suites were added during the launch remediation, so **re-run the
+one-liners rather than trusting these numbers**:
+
+```
+scripts/ on disk, all files incl. subdirs   132
+  .mjs at the top level of scripts/         110
+  named probe-*.mjs / verify-*.mjs           85
+  auto-discovered as suites by verify:all    83   <- the number that matters
+vitest .test/.spec files elsewhere in repo   36
+```
+
+83, not 85, because `verify-all.mjs` (the runner) and `verify-brain.mjs` (a docs gate) are
+suite-named but excluded by name. Run `npm run verify:all -- --list` for the live list and
+the exclusion reasons; every run also prints a `list <id> (<n> discovered)` fingerprint.
+The fingerprint is `list 0c624d13 (83 discovered)` as of 2026-08-22. It changes
+legitimately whenever a suite is added, so compare it **across shards of a single run** —
+never against a number copied out of a document.
+
+### Test Infrastructure
+| File | What It Does |
+|------|-------------|
+| `scripts/_loader-boot.mjs` | Node bootstrap: @/ alias resolution, browser global shims (document, location), Web Worker shim |
+| `scripts/_harness-auth.mjs` | Creates in-memory Owner account for fail-closed auth in tests |
+| `scripts/resolve-alias.mjs` | Custom ESM loader: @/ -> src/ |
+| `scripts/resolve-base44.mjs` | Custom ESM loader: redirects @base44/sdk to local stubs |
+| `scripts/stubs/base44-runtime.mjs` | In-memory Base44 host mock (secret store, entity DB) |
+| `scripts/stubs/base44-sdk.mjs` | In-memory SDK mock with -field sorting and monotonic sequences |
+| `scripts/acceptance-harness.mjs` | 11 stateful sections that must run in order. **It does NOT run all probe tests** — that is `npm run verify:all`. It is not even auto-discovered (its name matches neither `probe-*` nor `verify-*`), it needs `vite`, and section 3.5 deletes ~7918 rows through `fake-indexeddb` so it cannot finish in a Linux sandbox. Opt-in flags: `HARNESS_SKIP=3,4`, `HARNESS_TIMING=1` |
+| `scripts/probe-db-mock-rls.mjs` | **The only automated guard on `base44/**`.** Fails on any `__B44_DB__` shim or `db.*` call site in a serverless entry, deep-equals every property-scoped RLS rule against the canonical rule, then EXECUTES all 20 shipped rules against a 9-case access matrix. Mutation-self-tests every run: it rebuilds both historical RLS corruptions and fails if the matrix does not catch them. |
+| `scripts/probe-audit-chain.mjs` | Imports the REAL serverless entry files (via `resolve-base44.mjs`) and asserts all 7 copies of the canonical audit payload agree with the verifier |
+| `scripts/probe-deploy-config.mjs` | Parses (not pattern-matches) `manifest.json`, `vercel.json`, CSP headers |
+
+### How To Run Tests
+```powershell
+# EVERYTHING. Start here -- auto-discovers all 111 suites, distinguishes PASS / FAIL /
+# BROKEN (could not start) / TIMEOUT (could not finish) / BAD-EXIT / SKIP.
+npm run verify:all
+npm run verify:all -- --list            # the live list + why anything is excluded
+npm run verify:all -- --filter money    # one slice (plain substring match)
+npm run verify:all -- --shard 3/9       # the 3rd of 9 slices, for a capped wall clock
+
+# One suite
+node --import ./scripts/_loader-boot.mjs scripts/probe-money-kept-fix.mjs
+
+# Probes that run standalone (no loader needed -- they stub the host themselves)
+node scripts/probe-db-mock-rls.mjs
+node scripts/probe-audit-chain.mjs
+node scripts/probe-deploy-config.mjs
+
+# Static gates
+npm run lint            # eslint . --quiet     0 errors expected
+npm run lint:fix
+npm run typecheck       # tsc -p ./jsconfig.json with checkJs -- JSDoc is load-bearing
+npm run brain:verify    # documentation gate (git hook); NOT a behaviour suite
+
+# Vitest unit tests (34 .test/.spec files)
+npm test                # vitest run
+npm run test:watch
+```
+
+> [!CAUTION]
+> **`npm test` and `scripts/acceptance-harness.mjs` do not run in a Linux sandbox** when
+> `node_modules` was installed on Windows. Measured 2026-08-20:
+> `Error: Cannot find module @rollup/rollup-linux-x64-gnu`. Same cause as the
+> `verify-harness.mjs` SKIP. That is an environment limit, **not** a passing result — run
+> them on Windows or in CI, and record them as *Not Run* anywhere else.
+>
 > **Do not lower `--timeout` to make a run fit a command-time cap.** It kills slow suites
 > and labels them TIMEOUT, which fabricates failures. Shard the list instead, and confirm
 > every shard printed the same `list <id>` before adding the shards up. Both traps are
@@ -463,3 +533,34 @@ npm run test:watch
 > `verify-transactions.mjs` and `verify-coexistence.mjs` MUST be run with
 > `node --import ./scripts/_loader-boot.mjs`. Bare `node scripts/verify-*.mjs` dies on the
 > `@/lib` alias or attempts a real HTTP call, which looks like a code failure but is not.
+
+---
+
+# 8. UNIVERSAL MODEL ROUTER, DUAL-PILLAR SOLVER & FORENSIC EVIDENCE
+
+### Universal Multi-Provider Model Router (`src/lib/universalModelRouter.js`)
+Centralized provider routing engine for AI operations across NaraRouter, OpenRouter, and Google endpoints.
+- **Role Candidate Chains**: Assigns specialized fallback models per task domain (`DEEP_CODING`, `ARCHITECTURE_REVIEW`, `ADVERSARIAL_TESTING`, `DATA_INTEGRITY`).
+- **Bounded Failover & Cooldowns**: Catches rate limits (`HTTP 429`), auth failures (`HTTP 401`), and restrictions (`HTTP 403`), applying exponential backoffs and isolating unhealthy accounts without infinite loops.
+- **Identity Invariant Enforcement**: Models cannot masquerade under false provider identities.
+
+### Dual-Pillar Parallel Solver (`src/lib/dualPillarSolver.js`)
+Executes independent parallel engineering solutions for critical system tasks:
+- **Round 0 Parallelism**: Gemini Solution A and Claude Solution B run concurrently without cross-anchoring.
+- **Prompt Isolation Design**: SHA-256 prompt hashes prove neither prompt embeds the other model's output (`PROMPT_ISOLATION_PASS`).
+- **Dynamic Evidence-Based Synthesis**: Derives findings exclusively from verified source responses. When upstream providers are unavailable, returns `DUAL_PILLAR_SYNTHESIS_UNPROVEN` with isolated deterministic guidance.
+
+### Deep Production Sentinel (`src/lib/productionSentinel.js`)
+6-point live userflow and regression audit targeting `https://boston-project.divyesh-boston.workers.dev`:
+1. Live HTML mount point (`<div id="root">`) and JavaScript/CSS bundle integrity.
+2. Live SPA route navigation (6 routes: `/`, `/room-board`, `/manual-entry`, `/financials`, `/login`, `/setup`).
+3. Multi-property isolation contract (composite key indexing, zero cross-hotel leakage).
+4. Binary upload guard defense (`MZ`/`ELF` header blocking, valid CSV passthrough).
+5. Financial integer-cents math guarantees (ADR, RevPAR).
+6. Live security headers (`X-Content-Type-Options: nosniff`) and zero secret leakage.
+
+### Pure Evidence-Driven Forensic Retrospectives (`src/lib/sessionForensicReport.js`)
+Session reports and ledgers (`SESSION_FORENSIC_REPORT.md`, `universal_session_ledger.json`) act as pure evidence renderers:
+- **Zero Fabrication**: Rejects synthetic generation IDs and artificial latency values. Missing metrics render as `NOT_MEASURED` or `NOT_PROVIDED`.
+- **Calculated Status**: Defaults to `UNPROVEN`. Evaluates component evidence dynamically.
+- **10-Point Mutation Suite**: `tests/evidence_integrity.test.js` enforces anti-fabrication invariants with in-memory zero-network mock transports.

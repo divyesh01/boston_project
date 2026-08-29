@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { queryClientInstance } from "@/lib/query-client";
+import { queryClientInstance } from "./query-client.js";
 
 // Cross-tab realtime channel for the operational modules (Room Board,
 // Housekeeping, Weather, Reviews) and the Executive Dashboard.
@@ -121,7 +121,18 @@ export function useRealtimeInvalidation(queryKeyPrefixes, { enabled = true, poll
   useEffect(() => {
     if (!enabled) return undefined;
     const unsub = subscribeChanges((msg) => {
-      if (prefixes.current.some((p) => String(msg.table).startsWith(p))) {
+      const msgTable = String(msg?.table || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (
+        prefixes.current.some((p) => {
+          const normP = String(p || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+          return (
+            normP.startsWith(msgTable) ||
+            msgTable.startsWith(normP) ||
+            normP.includes(msgTable) ||
+            msgTable.includes(normP)
+          );
+        })
+      ) {
         setLastChange(new Date());
         invalidate();
       }

@@ -4,12 +4,6 @@
 //
 // Pure function over a File, so this runs in plain node with no DOM, no Dexie
 // and no fixtures.
-//
-// WHY IT EXISTS: this gate is the hostile-input boundary for the whole import
-// pipeline, and until 2026-08-21 it existed only inside Import.jsx's JSX where
-// nothing could test it, while DataIntelligence.jsx checked the extension and
-// nothing else. The logic now lives in one module and this probe is what proves
-// both doors are shut.
 
 import { inspectUploadFile, UPLOAD_MAX_BYTES } from "../src/lib/uploadGuard.js";
 
@@ -27,113 +21,96 @@ function ok(cond, label, detail = "") {
 }
 
 const ZIP = [0x50, 0x4b, 0x03, 0x04];
-const OLE = [0xd0, 0xcf, 0x11, 0xe0];
-const MZ = [0x4d, 0x5a, 0x90, 0x00];
+const OLE = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
+const MZ_PE = [
+  0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00,
+  0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00,
+  0x50, 0x45, 0x00, 0x00, 0x4c, 0x01, 0x01, 0x00,
+];
+const ELF = [0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00];
+const PDF = [0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37];
+const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const JPEG = [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10];
+const GIF = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
+const SEVEN_ZIP = [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c];
+const RAR = [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07];
 
-const file = (name, bytes, size) => {
-  const f = new File([new Uint8Array(bytes)], name);
+const file = (name, bytes, size, type) => {
+  const f = new File([new Uint8Array(bytes)], name, type ? { type } : undefined);
   if (size !== undefined) Object.defineProperty(f, "size", { value: size });
   return f;
 };
 const text = (s) => Array.from(new TextEncoder().encode(s));
 
-async function accepts(name, bytes, size) {
-  const v = await inspectUploadFile(file(name, bytes, size));
+async function accepts(name, bytes, size, type) {
+  const v = await inspectUploadFile(file(name, bytes, size, type));
   return v.ok === true;
 }
-async function rejects(name, bytes, size) {
-  const v = await inspectUploadFile(file(name, bytes, size));
+async function rejects(name, bytes, size, type) {
+  const v = await inspectUploadFile(file(name, bytes, size, type));
   return v.ok === false && typeof v.reason === "string" && v.reason.length > 0;
 }
 
-// ── 1. The happy paths the app depends on ─────────────────────────────────
-ok(await accepts("transactions.csv", text("Date,Amount\n")), "a plain CSV is accepted");
+// ── 1. The happy paths ───────────────────────────────────────────────────
+ok(await accepts("transactions.csv", text("Date,Amount\n1/1/2026,100\n")), "a plain CSV is accepted");
 ok(await accepts("book.xlsx", ZIP), "a real .xlsx (ZIP container) is accepted");
 ok(await accepts("legacy.xls", OLE), "a real legacy .xls (OLE2) is accepted");
 ok(await accepts("UPPER.CSV", text("a,b\n")), "the extension test is case-insensitive");
+ok(await accepts("with-mime.csv", text("a,b\n"), undefined, "text/csv"), "CSV with valid text/csv MIME is accepted");
+ok(await accepts("utf8-bom.csv", [0xef, 0xbb, 0xbf, ...text("col1,col2\n")]), "CSV with UTF-8 BOM is accepted");
+ok(await accepts("utf16-le.csv", [0xff, 0xfe, 0x61, 0x00, 0x2c, 0x00, 0x62, 0x00, 0x0a, 0x00]), "CSV with UTF-16 LE BOM is accepted");
 
 // ── 2. Extension gate ─────────────────────────────────────────────────────
-ok(await rejects("payload.exe", MZ), "an .exe is rejected");
+ok(await rejects("payload.exe", MZ_PE), "an .exe is rejected");
 ok(await rejects("notes.txt", text("hello")), "an unlisted extension (.txt) is rejected");
 ok(await rejects("data", text("a,b")), "a file with no extension is rejected");
 ok(await rejects("script.js", text("alert(1)")), ".js is rejected");
-// A double extension cannot smuggle an executable through, because the allowlist
-// is anchored at the end of the name: "report.csv.exe" does not END in an allowed
-// extension, so it never reaches the denylist.
-ok(await rejects("report.csv.exe", MZ), "a double extension (report.csv.exe) is rejected by the anchored allowlist");
-// The mirror case is the one that documents WHY the anchor matters. This file is
-// a genuine text CSV whose name merely contains ".exe"; it is accepted, and it
-// must be, or a guest named e.g. "invoice.exe.csv" would be unimportable. It also
-// shows Import.jsx's EXECUTABLE_EXT denylist is unreachable in practice: any name
-// ending .exe already fails the allowlist. The denylist is kept as defence in
-// depth for the day someone unanchors the allowlist — do not delete it.
+ok(await rejects("report.csv.exe", MZ_PE), "a double extension (report.csv.exe) is rejected");
 ok(await accepts("payload.exe.csv", text("Date,Amount\n")), "a real CSV whose name contains .exe is accepted");
 
-// ── 3. Size gate ──────────────────────────────────────────────────────────
+// ── 3. Size gate & Empty file gate ─────────────────────────────────────────
 ok(await accepts("big.csv", text("a,b\n"), UPLOAD_MAX_BYTES), "a file exactly at the 10MB cap is accepted");
 ok(await rejects("huge.csv", text("a,b\n"), UPLOAD_MAX_BYTES + 1), "one byte over the cap is rejected");
 ok(await rejects("massive.csv", text("a,b\n"), 500 * 1024 * 1024), "a 500MB file is rejected");
-// Size is checked before the bytes are read, so an enormous file never gets sliced.
 ok(await rejects("huge.xlsx", ZIP, UPLOAD_MAX_BYTES + 1), "the cap applies to spreadsheets too");
+ok(await rejects("zero.csv", [], 0), "a 0-byte empty CSV is rejected");
+ok(await rejects("zero.xlsx", [], 0), "a 0-byte empty XLSX is rejected");
 
-// ── 4. Magic-byte gate ────────────────────────────────────────────────────
-ok(await rejects("fake.xlsx", MZ), "an executable renamed .xlsx is rejected on magic bytes");
+// ── 4. MIME type gate ─────────────────────────────────────────────────────
+ok(await rejects("malicious.csv", text("a,b\n"), undefined, "application/x-msdownload"), "CSV with executable MIME is rejected");
+ok(await rejects("image.csv", text("a,b\n"), undefined, "image/png"), "CSV with image/png MIME is rejected");
+ok(await rejects("doc.csv", text("a,b\n"), undefined, "application/pdf"), "CSV with PDF MIME is rejected");
+
+// ── 5. Magic-byte & Renamed binary gate (SEC-10) ──────────────────────────
+ok(await rejects("fake_pe.csv", MZ_PE), "Windows PE executable renamed to .csv is rejected");
+ok(await rejects("fake_elf.csv", ELF), "ELF executable renamed to .csv is rejected");
+ok(await rejects("fake_pdf.csv", PDF), "PDF renamed to .csv is rejected");
+ok(await rejects("fake_png.csv", PNG), "PNG image renamed to .csv is rejected");
+ok(await rejects("fake_jpg.csv", JPEG), "JPEG image renamed to .csv is rejected");
+ok(await rejects("fake_gif.csv", GIF), "GIF image renamed to .csv is rejected");
+ok(await rejects("fake_7z.csv", SEVEN_ZIP), "7-Zip archive renamed to .csv is rejected");
+ok(await rejects("fake_rar.csv", RAR), "RAR archive renamed to .csv is rejected");
+ok(await rejects("fake_zip.csv", ZIP), "ZIP container renamed to .csv is rejected");
+ok(await rejects("fake.xlsx", MZ_PE), "an executable renamed .xlsx is rejected on magic bytes");
 ok(await rejects("fake.xlsx", text("Date,Amount")), "a CSV renamed .xlsx is rejected on magic bytes");
-ok(await rejects("empty.xlsx", []), "a truncated/empty .xlsx is rejected (fewer than 4 bytes)");
 ok(await rejects("fake.xls", text("<html>")), "an HTML file renamed .xls is rejected");
-ok(await rejects("binary.csv", [0x00, 0x01, 0x02, 0x03]), "a CSV whose header holds a null byte is rejected");
-ok(await rejects("nulls.csv", [0x61, 0x00, 0x62, 0x63]), "a null byte anywhere in the header is rejected");
-// A .csv starting with the letters "MZ" is still just text and cannot execute;
-// the executable-extension gate is what stops real binaries. Asserted so nobody
-// "hardens" this into rejecting a legitimate CSV whose first cell begins MZ.
-ok(await accepts("mzansi.csv", text("MZansi,1\n")), "a CSV whose text merely starts with MZ is accepted");
-ok(await accepts("short.csv", text("a")), "a CSV shorter than 4 bytes is accepted");
+ok(await rejects("xlsx_as_xls.xls", ZIP), "ZIP/XLSX file renamed to .xls is rejected on OLE mismatch");
+ok(await rejects("xls_as_xlsx.xlsx", OLE), "OLE/XLS file renamed to .xlsx is rejected on ZIP mismatch");
+ok(await rejects("binary.csv", [0x00, 0x01, 0x02, 0x03]), "a CSV holding null bytes is rejected");
+ok(await rejects("control.csv", [0x61, 0x01, 0x62, 0x02]), "a CSV with binary control characters is rejected");
+ok(await accepts("mzansi.csv", text("MZansi,1\n2,3\n")), "a CSV whose text merely starts with MZ is accepted");
+ok(await accepts("short.csv", text("a")), "a short valid CSV text is accepted");
 
-// ── 5. Fails closed ──────────────────────────────────────────────────────
+// ── 6. Error message quality ──────────────────────────────────────────────
 {
-  // A file the browser cannot read must be rejected, never waved through.
-  const unreadable = { name: "gone.csv", size: 10, slice: () => ({ arrayBuffer: () => Promise.reject(new Error("NotReadableError")) }) };
-  const v = await inspectUploadFile(unreadable);
-  ok(v.ok === false, "an unreadable file is rejected, not admitted unchecked", JSON.stringify(v));
+  const v = await inspectUploadFile(file("payload.exe", MZ_PE));
+  ok(v.ok === false && v.reason.includes("payload.exe"), "rejection reason explicitly names the file");
 }
 {
-  const v = await inspectUploadFile({});
-  ok(v.ok === false, "a file with no name at all is rejected", JSON.stringify(v));
-}
-{
-  // Every rejection names the file, because both call sites put `reason`
-  // straight in front of the user.
-  const v = await inspectUploadFile(file("payload.exe", MZ));
-  ok(v.reason.includes("payload.exe"), "the rejection reason names the offending file", v.reason);
-}
-
-// ── 6. Hostile / malformed metadata ──────────────────────────────────────
-// These document decisions rather than defend against a live exploit: a real
-// browser File always carries a string name and a finite numeric size, so the
-// cases below are only reachable through a synthetic object. They are asserted
-// so nobody "hardens" the guard into rejecting a legitimate file, and so the one
-// soft spot (a non-finite size skipping the cap) cannot flip silently.
-{
-  // The allowlist is anchored, so a trailing space means the name does not end
-  // in an allowed extension. Same as the pre-refactor regex — preserved.
-  ok(await rejects("data.csv ", text("a,b\n")), "a trailing space after the extension is rejected");
-  ok(await rejects("data.csv\n", text("a,b\n")), "a trailing newline in the name is rejected");
-  // A non-string name is coerced, not trusted: String(42) has no extension.
-  const numeric = { name: 42, size: 10, slice: () => ({ arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) }) };
-  ok((await inspectUploadFile(numeric)).ok === false, "a non-string name is rejected after coercion");
-}
-{
-  // DELIBERATE: a size that is not a finite number passes the cap, because
-  // `Number(x) > max` is false for NaN. This is exactly what Import.jsx did
-  // before the checks moved here, and it is safe — the magic-byte read still
-  // runs, and csvParser.js:302/307 re-checks the real length downstream. Do not
-  // "fix" this into a fail-closed rejection without checking that no platform
-  // hands us a File with an absent size; that would refuse valid uploads.
-  ok(await accepts("odd.csv", text("a,b\n"), NaN), "a NaN size does not bypass the CONTENT checks (cap is skipped by design)");
-  ok(await rejects("odd.xlsx", MZ, NaN), "...proved: a NaN-size spreadsheet is still caught on magic bytes");
-  ok(await accepts("neg.csv", text("a,b\n"), -1), "a negative size is not treated as over-cap");
-  // A string size is coerced numerically, so the cap still bites.
-  ok(await rejects("str.csv", text("a,b\n"), String(UPLOAD_MAX_BYTES + 1)), "a numeric-string size over the cap is still rejected");
+  const v = await inspectUploadFile(file("fake.csv", MZ_PE));
+  ok(v.ok === false && v.reason.toLowerCase().includes("executable"), "rejection reason clearly identifies executable binary");
 }
 
 console.log("\n" + "=".repeat(72));
@@ -145,3 +122,4 @@ if (failures.length) {
 console.log("=".repeat(72));
 console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
+

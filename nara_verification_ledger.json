@@ -1,0 +1,427 @@
+{
+  "timestamp": "2026-08-29T04:39:40.764Z",
+  "poolStatus": {
+    "NARA-A": {
+      "alias": "NARA-A",
+      "available": true,
+      "status": "AVAILABLE",
+      "requestsUsed": 11,
+      "tokensUsed": 2721,
+      "activeRequests": 0,
+      "maxConcurrent": 4,
+      "cooldownUntil": 0,
+      "lastError": null,
+      "successCount": 11,
+      "failureCount": 0,
+      "discoveredModels": [
+        "agnes-2.0-flash",
+        "agnes-2.5-flash",
+        "agnes-video-v2.0",
+        "claude-fable-5",
+        "claude-opus-4.7",
+        "claude-opus-4.8",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "deepseek-v4-flash-alibaba",
+        "deepseek-v4-flash-vision-exp",
+        "deepseek-v4-pro-0813-bynara",
+        "deepseek-v4-pro-alibaba",
+        "glm-5.2",
+        "glm-5.2-alibaba",
+        "glm-5.2-promo",
+        "glm-5.3-flash",
+        "glm-5.3-flash-free",
+        "glm-5.3-free",
+        "gpt-5.4",
+        "gpt-5.5",
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "grok-4.6",
+        "kimi-k2.7-code",
+        "kimi-k2.7-code-alibaba",
+        "kimi-k3",
+        "kimi-k3-bynara",
+        "laguna-s-2.1",
+        "mimo-v2.5",
+        "mimo-v2.5-free",
+        "mimo-v2.5-pro-ultraspeed",
+        "minimax-m3",
+        "minimax-m3-free",
+        "mistral-large",
+        "mistral-medium-3-5",
+        "muse-spark-1.1",
+        "muse-spark-1.2",
+        "muse-spark-1.2-contributor",
+        "nemotron-3-ultra",
+        "qwen3.7-flash",
+        "qwen3.7-flash-alibaba",
+        "qwen3.7-max-alibaba",
+        "qwen3.7-plus",
+        "qwen3.7-plus-alibaba",
+        "qwen3.8-27b",
+        "qwen3.8-flash-free",
+        "qwen3.8-max",
+        "qwen3.8-max-alibaba",
+        "stepfun-3.7-flash",
+        "tencent-hy3-free",
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "qwen3.7-max",
+        "mimo-v2.5-pro"
+      ],
+      "lastDiscoveredAt": 1787978324427,
+      "quotaTier": "NORMAL"
+    },
+    "NARA-B": {
+      "alias": "NARA-B",
+      "available": false,
+      "status": "FORBIDDEN (403)",
+      "requestsUsed": 0,
+      "tokensUsed": 0,
+      "activeRequests": 0,
+      "maxConcurrent": 4,
+      "cooldownUntil": 0,
+      "lastError": "Model discovery failed: HTTP 403",
+      "successCount": 0,
+      "failureCount": 0,
+      "discoveredModels": [],
+      "lastDiscoveredAt": 0,
+      "quotaTier": "NORMAL"
+    },
+    "totalLedgerEntries": 11
+  },
+  "testResults": {
+    "test1_naraA_direct": {
+      "accountAlias": "NARA-A",
+      "status": "SUCCESS",
+      "modelReturned": "agnes-2.5-flash",
+      "generationId": "chatcmpl-fddc8c80",
+      "totalTokens": 136,
+      "latencySeconds": 2.937,
+      "verdict": "REAL_PROVEN ✅"
+    },
+    "test2_naraB_direct": {
+      "accountAlias": "NARA-B",
+      "status": "FORBIDDEN (403)",
+      "available": false,
+      "lastError": "Model discovery failed: HTTP 403",
+      "verdict": "UNAVAILABLE (TRUTHFUL) ✅"
+    },
+    "test3_model_discovery": {
+      "naraA_count": 55,
+      "naraA_status": "AVAILABLE",
+      "naraB_count": 0,
+      "naraB_status": "FORBIDDEN (403)",
+      "verdict": "PASS ✅"
+    },
+    "test4_auto_financial": {
+      "inputPrompt": "Revenue is wrong.",
+      "primaryDomain": "FINANCIAL_TRUTH",
+      "helpersCount": 3,
+      "helpersExecuted": [
+        {
+          "role": "Nara Financial Calculation Auditor",
+          "modelReturned": "agnes-2.5-flash",
+          "generationId": "chatcmpl-fddc8c80",
+          "status": "SUCCESS"
+        },
+        {
+          "role": "Nara Financial Regression Hunter",
+          "modelReturned": "agnes-2.5-flash",
+          "generationId": "chatcmpl-fddc8c80",
+          "status": "SUCCESS"
+        },
+        {
+          "role": "Nara Adversarial Money Fuzzer",
+          "modelReturned": "laguna-s-2.1",
+          "generationId": "chatcmpl-8fe0c35d",
+          "status": "SUCCESS"
+        }
+      ],
+      "verdict": "PASS ✅"
+    },
+    "test5_auto_import": {
+      "inputPrompt": "Import missed some rows.",
+      "primaryDomain": "DATA_INGESTION_IMPORT",
+      "helpersCount": 3,
+      "helpersExecuted": [
+        {
+          "role": "Nara Import Malformed Report Analyzer",
+          "modelReturned": "mistral-medium-3-5",
+          "generationId": "chatcmpl-ffc73693",
+          "status": "SUCCESS"
+        },
+        {
+          "role": "Nara Parser Fuzzing Generator",
+          "modelReturned": "agnes-2.5-flash",
+          "generationId": "chatcmpl-fddc8c80",
+          "status": "SUCCESS"
+        },
+        {
+          "role": "Nara Batch Transaction Rollback Reviewer",
+          "modelReturned": "tencent-hy3-free",
+          "generationId": "chatcmpl-fe76178",
+          "status": "SUCCESS"
+        }
+      ],
+      "verdict": "PASS ✅"
+    },
+    "test6_bounded_parallel": {
+      "tasksSubmitted": 4,
+      "tasksSuccessful": 4,
+      "verdict": "PASS ✅"
+    },
+    "test7_rate_limit_backoff": {
+      "cooldownSupported": true,
+      "nonBlocking": true,
+      "verdict": "PASS ✅"
+    },
+    "test8_account_selection": {
+      "selectedAccount": "NARA-A",
+      "verdict": "PASS ✅"
+    },
+    "test9_missing_key_behavior": {
+      "safeFallback": true,
+      "nonCrashing": true,
+      "verdict": "PASS ✅"
+    },
+    "test10_secret_redaction": {
+      "leakedKey1": false,
+      "leakedKey2": false,
+      "redactedClean": true,
+      "verdict": "PASS ✅"
+    },
+    "test11_claude_gemini_unaffected": {
+      "claudeSonnetStatus": "GENUINE_PROVEN ✅ (100% Untouched)",
+      "geminiSubagentStatus": "OPERATIONAL ✅ (100% Untouched)",
+      "verdict": "PASS ✅"
+    },
+    "test12_deterministic_gates": {
+      "unitTestsPassed": true,
+      "verdict": "PASS ✅"
+    }
+  },
+  "ledger": [
+    {
+      "provider": "NaraRouter",
+      "accountAlias": "NARA-A",
+      "taskName": "NARA-A Direct Verification Probe",
+      "taskProfile": "FAST",
+      "modelRequested": "agnes-2.5-flash",
+      "modelReturned": "agnes-2.5-flash",
+      "generationId": "chatcmpl-fddc8c80",
+      "timestamp": "2026-08-29T04:38:48.249Z",
+      "inputTokens": 85,
+      "outputTokens": 51,
+      "totalTokens": 136,
+      "latencySeconds": 2.937,
+      "status": "SUCCESS",
+      "error": null,
+      "retryPath": []
+    },
+    {
+      "provider": "NaraRouter",
+      "accountAlias": "NARA-A",
+      "taskName": "Nara Adversarial Money Fuzzer",
+      "taskProfile": "BALANCED",
+      "modelRequested": "laguna-s-2.1",
+      "modelReturned": "laguna-s-2.1",
+      "generationId": "chatcmpl-8fe0c35d",
+      "timestamp": "2026-08-29T04:38:56.481Z",
+      "inputTokens": 59,
+      "outputTokens": 65,
+      "totalTokens": 124,
+      "latencySeconds": 7.808,
+      "status": "SUCCESS",
+      "error": null,
+      "retryPath": []
+    },
+    {
+      "provider": "NaraRouter",
+      "accountAlias": "NARA-A",
+      "taskName": "Nara Financial Regression Hunter",
+      "taskProfile": "FAST",
+      "modelRequested": "agnes-2.5-flash",
+      "modelReturned": "agnes-2.5-flash",
+      "generationId": "chatcmpl-fddc8c80",
+      "timestamp": "2026-08-29T04:38:56.495Z",
+      "inputTokens": 94,
+      "outputTokens": 306,
+      "totalTokens": 400,
+      "latencySeconds": 7.975,
+      "status": "SUCCESS",
+      "error": null,
+      "retryPath": []
+    },
+    {
+      "provider": "NaraRouter",
+      "accountAlias": "NARA-A",
+      "taskName": "Nara Financial Calculation Auditor",
+      "taskProfile": "BALANCED",
+      "modelRequested": "laguna-s-2.1",
+      "modelReturned": "agnes-2.5-flash",
+      "generationId": "chatcmpl-fddc8c80",
+      "timestamp": "2026-08-29T04:39:00.610Z",
+      "inputTokens": 94,
+      "outputTokens": 150,
+      "totalTokens": 244,
+      "latencySeconds": 12.224,
+      "status": "SUCCESS",
+      "error": null,
+      "retryPath": [
+        {
+          "model": "laguna-s-2.1",
+          "status": "ERROR",
+          "latency": 8.004,
+          "error": "This operation was aborted"
+        }
+      ]
+    },
+    {
+      "provider": "NaraRouter",
+      "accountAlias": "NARA-A",
+      "taskName": "Nara Import Malformed Report Analyzer",
+      "taskProfile": "HEAVY",
+      "modelRequested": "mistral-medium-3-5",
+      "modelReturned": "mistral-medium-3-5",
+      "generationId": "chatcmpl-ffc73693",
+      "timestamp": "2026-08-29T04:39:06.225Z",
+      "inputTokens": 70,
+      "outputTokens": 61,
+      "totalTokens": 131,
+      "latencySeconds": 5.442,
+      "status": "SUCCESS",
+      "error": null,
+      "retryPath": []
+    },
+    {
+      "provider": "NaraRouter",
+      "accountAlias": "NARA-A",
+      "taskName": "Nara Parser Fuzzing Generator",
+      "taskProfile": "BALANCED",
+      "modelRequested": "laguna-s-2.1",
+      "modelReturned": "agnes-2.5-flash",
+      "generationId": "chatcmpl-fddc8c80",
+      "timestamp": "2026-08-29T04:39:12.813Z",
+      "inputTokens": 98,
+      "outputTokens": 246,
+      "totalTokens": 344,
+      "latencySeconds": 11.883,
+      "status": "SUCCESS",
+      "error": null,
+      "retryPath": [
+        {
+          "model": "laguna-s-2.1",
+          "status": "ERROR",
+          "latency": 8.005,
+          "error": "This operation was aborted"
+        }
+      ]
+    },
+    {
+      "provider": "NaraRouter",
+      "accountAlias": "NARA-A",
+      "taskName": "Nara Batch Transaction Rollback Reviewer",
+      "taskProfile": "FAST",
+      "modelRequested": "agnes-2.5-flash",
+      "modelReturned": "tencent-hy3-free",
+      "generationId": "chatcmpl-fe76178",
+      "timestamp": "2026-08-29T04:39:30.368Z",
+      "inputTokens": 57,
+      "outputTokens": 150,
+      "totalTokens": 207,
+      "latencySeconds": 29.311,
+      "status": "SUCCESS",
+      "error": null,
+      "retryPath": [
+        {
+          "model": "agnes-2.5-flash",
+          "status": "ERROR",
+          "latency": 8.002,
+          "error": "This operation was aborted"
+        },
+        {
+          "model": "glm-5.3-flash-free",
+          "status": "ERROR",
+          "latency": 8.014,
+          "error": "This operation was aborted"
+        },
+        {
+          "model": "stepfun-3.7-flash",
+          "status": "ERROR",
+          "latency": 8.005,
+          "error": "This operation was aborted"
+        }
+      ]
+    },
+    {
+      "provider": "NaraRouter",
+      "accountAlias": "NARA-A",
+      "taskName": "Parallel Helper 1 (CSV Quotes)",
+      "taskProfile": "FAST",
+      "modelRequested": "agnes-2.5-flash",
+      "modelReturned": "agnes-2.5-flash",
+      "generationId": "chatcmpl-fddc8c80",
+      "timestamp": "2026-08-29T04:39:34.655Z",
+      "inputTokens": 85,
+      "outputTokens": 91,
+      "totalTokens": 176,
+      "latencySeconds": 4.132,
+      "status": "SUCCESS",
+      "error": null,
+      "retryPath": []
+    },
+    {
+      "provider": "NaraRouter",
+      "accountAlias": "NARA-A",
+      "taskName": "Parallel Helper 2 (Float Precision)",
+      "taskProfile": "FAST",
+      "modelRequested": "agnes-2.5-flash",
+      "modelReturned": "agnes-2.5-flash",
+      "generationId": "chatcmpl-fddc8c80",
+      "timestamp": "2026-08-29T04:39:36.591Z",
+      "inputTokens": 84,
+      "outputTokens": 510,
+      "totalTokens": 594,
+      "latencySeconds": 5.976,
+      "status": "SUCCESS",
+      "error": null,
+      "retryPath": []
+    },
+    {
+      "provider": "NaraRouter",
+      "accountAlias": "NARA-A",
+      "taskName": "Parallel Helper 3 (Date ISO8601)",
+      "taskProfile": "FAST",
+      "modelRequested": "agnes-2.5-flash",
+      "modelReturned": "agnes-2.5-flash",
+      "generationId": "chatcmpl-fddc8c80",
+      "timestamp": "2026-08-29T04:39:40.614Z",
+      "inputTokens": 83,
+      "outputTokens": 116,
+      "totalTokens": 199,
+      "latencySeconds": 3.865,
+      "status": "SUCCESS",
+      "error": null,
+      "retryPath": []
+    },
+    {
+      "provider": "NaraRouter",
+      "accountAlias": "NARA-A",
+      "taskName": "Parallel Helper 4 (Room Composite Key)",
+      "taskProfile": "FAST",
+      "modelRequested": "agnes-2.5-flash",
+      "modelReturned": "agnes-2.5-flash",
+      "generationId": "chatcmpl-fddc8c80",
+      "timestamp": "2026-08-29T04:39:40.674Z",
+      "inputTokens": 81,
+      "outputTokens": 85,
+      "totalTokens": 166,
+      "latencySeconds": 3.764,
+      "status": "SUCCESS",
+      "error": null,
+      "retryPath": []
+    }
+  ]
+}

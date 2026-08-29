@@ -1,0 +1,16 @@
+{
+  "sessionId": "session-acceptance-task-claude-opus-001",
+  "taskId": "acceptance-task-claude-opus-001",
+  "verdict": "PASS",
+  "completedAt": "2026-08-29T18:21:21.728Z",
+  "artifacts": [
+    "manifest.json",
+    "final-report.json",
+    "receipts/agent_receipts.txt",
+    "prompts/",
+    "responses/",
+    "patches/",
+    "tests/",
+    "logs/"
+  ]
+}

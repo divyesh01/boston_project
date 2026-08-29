@@ -1,20 +1,23 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState, useEffect, useCallback } from "react";
 import { CostCoverageNotice } from "@/components/OwnerTrustNotices";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
   ArrowRight, Wrench, AlertTriangle, TrendingUp, BadgeCheck,
-  DollarSign, Percent, Gauge, Target, Sparkles,
+  DollarSign, Percent, Gauge, Target, Sparkles, ShieldAlert,
 } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import { db } from "@/api/base44Client";
-import { useOccupancy, useSources, usePaymentData } from "@/lib/useHotelData";
+import { useOccupancy, useSources, usePaymentData, useTransactions } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { getOccThreshold, money2, pct, formatDayLabel, localTodayIso } from "@/lib/hotel";
 import { buildActionCenter } from "@/lib/actionCenter";
 import { distanceColor, getEventsInRange, getUpcomingEventDays } from "@/lib/eventSchedule";
 import { ErrorState } from "@/components/ui/status";
+import { evaluateForensicAuditBatch } from "@/lib/ownerForensicEngine";
+import { loadOwnerForensicState } from "@/lib/ownerForensicPersistence";
+import ForensicTriageInbox from "@/components/actionCenter/ForensicTriageInbox";
 
 // Pick up productivity ticks describing each bucket's tone
 const TONE = {
@@ -98,12 +101,25 @@ export default function ActionCenter() {
   const occQ = useOccupancy(dateRange, property, months);
   const sourcesQ = useSources(dateRange, property, months);
   const payQ = usePaymentData(dateRange, property, months);
+  const txnsQ = useTransactions(dateRange, property, months);
   const { data: occ = [] } = occQ;
   const { data: sources = [] } = sourcesQ;
   const { data: payRows = [] } = payQ;
+  const { data: rawTxns = [] } = txnsQ;
 
   const propertyKey = Array.isArray(property) ? property.join(",") : property;
   const propFilter = useMemo(() => buildPropertyFilter(property), [property]);
+
+  const [forensicReloadTick, setForensicReloadTick] = useState(0);
+  const [forensicState, setForensicState] = useState({ reviewStates: {}, whitelistRules: [] });
+
+  useEffect(() => {
+    let active = true;
+    loadOwnerForensicState({ propertyId: propertyKey }).then((res) => {
+      if (active) setForensicState(res);
+    });
+    return () => { active = false; };
+  }, [propertyKey, forensicReloadTick]);
 
   const expensesQ = useQuery({
     queryKey: ["expenses", propertyKey],
@@ -116,10 +132,6 @@ export default function ActionCenter() {
   const { data: expenses = [] } = expensesQ;
   const { data: payroll = [] } = payrollQ;
 
-  // Every lane on this page is a judgement about whether something needs attention, and
-  // an empty lane renders as "Nothing here — good." If any of the five reads failed,
-  // that sentence is a false all-clear — the most dangerous thing this page can say. So
-  // one failed read blocks the whole page rather than a lane.
   const reads = [occQ, sourcesQ, payQ, expensesQ, payrollQ];
   const failed = reads.find((q) => q.isError);
   const retryAll = () => reads.forEach((q) => q.refetch());
@@ -136,16 +148,7 @@ export default function ActionCenter() {
   const prevEnabled = !!(prevRange.from && prevRange.to);
   const { data: prevOcc = [] } = useOccupancy(prevRange, property, [], prevEnabled);
 
-  // Events for the current date range, one-time and recurring. The expansion
-  // lives in eventSchedule.js -- this page used to carry its own copy of both
-  // datasets and both loops, which is how the same date defect shipped in three
-  // places at once. See BRAIN_TROUBLESHOOTING.md 29.
   const eventsInRange = useMemo(() => getEventsInRange(dateRange), [dateRange]);
-
-  // Always-visible horizon: the next 5 upcoming event days from today,
-  // independent of the selected date range, so the owner always has a
-  // forward-looking plan of at least 5 event dates. `from` is a date-only key in
-  // the operator's own calendar, so today's events count as upcoming.
   const upcomingDays = useMemo(() => getUpcomingEventDays({ from: localTodayIso(), limit: 5 }), []);
 
   const roomCounts = useMemo(() => {
@@ -188,6 +191,21 @@ export default function ActionCenter() {
       ? `${property.length} Properties`
       : (properties.find((p) => p.id === property)?.name || "Property");
 
+  const forensicBatch = useMemo(() => {
+    const propertyAdrMap = {};
+    if (premise?.adr > 0) {
+      propertyAdrMap[propertyKey] = premise.adr;
+      propertyAdrMap['default'] = premise.adr;
+    }
+    return evaluateForensicAuditBatch({
+      transactions: rawTxns,
+      clerkShifts: [],
+      whitelistRules: forensicState.whitelistRules,
+      reviewStates: forensicState.reviewStates,
+      propertyAdrMap,
+    });
+  }, [rawTxns, premise?.adr, propertyKey, forensicState]);
+
   return (
     <div className="space-y-6">
       <header>
@@ -209,43 +227,51 @@ export default function ActionCenter() {
         <p role="status" className="rounded-xl border border-white/10 p-4 text-sm text-slate-300">Loading the records behind your action list…</p>
       ) : (
         <>
-      <CostCoverageNotice expenses={expenses} payroll={payroll} dateRange={dateRange} />
-      {/* ── Premise: snapshot of the money ── */}
-      <Card title="Where you stand" subtitle="Computed from imported data for this period">
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <KpiCard label="Revenue" value={money2(premise.revenue)} accent="#6C63FF" icon={DollarSign} sub={`${meta.comparedToPrev ? 'vs ' + money2(meta.prevStats?.revenue) : 'no previous window'}`} />
-          <KpiCard label="Occupancy" value={pct(premise.occupancy)} accent="#00D4FF" icon={Percent} sub={`target ${pct(getOccThreshold())}`} />
-          <KpiCard label="ADR" value={money2(premise.adr)} accent="#00E096" icon={Gauge} sub={`RevPAR ${money2(premise.revpar)}`} />
-          <KpiCard label="Est. money kept" value={money2(premise.keepRate ? premise.revenue * premise.keepRate : 0)} accent="#FFB547" icon={Target} sub="pre-tax · after fees, payroll & expenses" />
-        </div>
-      </Card>
+          <CostCoverageNotice expenses={expenses} payroll={payroll} dateRange={dateRange} />
+          
+          {/* ── Premise: snapshot of the money ── */}
+          <Card title="Where you stand" subtitle="Computed from imported data for this period">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <KpiCard label="Revenue" value={money2(premise.revenue)} accent="#6C63FF" icon={DollarSign} sub={`${meta.comparedToPrev ? 'vs ' + money2(meta.prevStats?.revenue) : 'no previous window'}`} />
+              <KpiCard label="Occupancy" value={pct(premise.occupancy)} accent="#00D4FF" icon={Percent} sub={`target ${pct(getOccThreshold())}`} />
+              <KpiCard label="ADR" value={money2(premise.adr)} accent="#00E096" icon={Gauge} sub={premise.roomsSold ? `${premise.roomsSold.toLocaleString()} rooms sold` : 'no rooms sold'} />
+              <KpiCard label="RevPAR" value={money2(premise.revpar)} accent="#FFB547" icon={Target} sub={`capacity ${premise.capacity.toLocaleString()} room-nights`} />
+            </div>
+          </Card>
 
-      {/* ── Upcoming Events (Demand Intelligence) ── */}
-      <Card
-        title="Upcoming Events"
-        subtitle="Next 5 event dates ahead — use for dynamic pricing"
-        right={<Target className="h-4 w-4 text-[#FFB547]" />}
-      >
-        {upcomingDays.length > 0 ? (
-          <div className="space-y-3">
-            {upcomingDays.map(([date, dayEvents]) => {
+          {/* ── Owner Forensic Triage Inbox ── */}
+          <ForensicTriageInbox
+            anomalies={forensicBatch.anomalies}
+            propertyId={propertyKey}
+            onStateChange={() => setForensicReloadTick((t) => t + 1)}
+          />
+
+          {/* ── Upcoming Events (Demand Intelligence) ── */}
+          <Card
+            title="Upcoming Events"
+            subtitle="Next 5 event dates ahead — use for dynamic pricing"
+            right={<Target className="h-4 w-4 text-[#FFB547]" />}
+          >
+            {upcomingDays.length > 0 ? (
+              <div className="space-y-3">
+                {upcomingDays.map(([date, dayEvents]) => {
                   const demandColors = {
                     'Maximum': 'bg-red-500/20 text-red-400 border-red-500/30',
                     'Very High': 'bg-orange-500/20 text-orange-400 border-orange-500/30',
                     'High': 'bg-amber-500/20 text-amber-400 border-amber-500/30',
-                    'Moderate to High': 'bg-lime-500/20 text-lime-400 border-lime-500/30',
+                    'Moderate to High': 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
                     'Moderate': 'bg-blue-500/20 text-blue-400 border-blue-500/30',
                   };
                   const peakEvent = dayEvents.reduce((p, e) => {
                     const order = { 'Maximum': 4, 'Very High': 3, 'High': 2, 'Moderate to High': 1.5, 'Moderate': 1 };
                     return (order[e.demand] || 0) > (order[p.demand] || 0) ? e : p;
-                  });
-                  // Same defect as the calendar dialog: new Date("2026-08-01")
-                  // parses as UTC midnight and rendered as "Fri, Jul 31" here —
-                  // directly above the correct raw date on the next line.
+                  }, dayEvents[0]);
                   const dayOfWeek = formatDayLabel(date, { weekday: 'short', month: 'short', day: 'numeric' });
                   return (
-                    <div key={date} className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">
+                    <div
+                      key={date}
+                      className="group rounded-xl border border-white/5 bg-[#0F1F35]/60 p-4 transition-all duration-200 hover:border-white/15 hover:bg-[#0F1F35]"
+                    >
                       <div className="flex items-start gap-4">
                         <div className="flex-shrink-0 w-24 text-center">
                           <p className="font-heading text-xl font-semibold text-white">{dayOfWeek}</p>
@@ -290,52 +316,52 @@ export default function ActionCenter() {
                     </div>
                   );
                 })}
-          </div>
-        ) : (
-          <p className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-3 text-sm text-slate-500">No upcoming events found.</p>
-        )}
-      </Card>
-
-      {/* ── Top 3 highest-value actions ── */}
-      <Card
-        title="Today's highest-value actions"
-        subtitle="Ranked by estimated dollar impact"
-        right={<Sparkles className="h-4 w-4 text-[#00D4FF]" />}
-      >
-        <div className="grid gap-4 lg:grid-cols-3">
-          {top3.map((a, i) => (
-            <ActionCard key={a.key || i} action={a} />
-          ))}
-          {top3.length === 0 && (
-            <p className="text-sm text-slate-500">No actionable items yet — import more data, or everything is healthy.</p>
-          )}
-        </div>
-      </Card>
-
-      {/* ── Bucket lanes ── */}
-      {BUCKETS.map(([key, label, desc]) => {
-        const items = buckets[key] || [];
-        return (
-          <div key={key}>
-            <div className="mb-3 flex items-center gap-2">
-              <h3 className="font-heading text-base font-semibold text-white">{label}</h3>
-              <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-slate-400">{items.length}</span>
-              <span className="hidden text-xs text-slate-500 sm:inline">· {desc}</span>
-            </div>
-            {items.length ? (
-              <div className="grid gap-4 lg:grid-cols-2">
-                {items.map((a, i) => <ActionCard key={a.key || i} action={a} />)}
               </div>
             ) : (
-              <p className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-3 text-sm text-slate-500">Nothing here — good.</p>
+              <p className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-3 text-sm text-slate-500">No upcoming events found.</p>
             )}
-          </div>
-        );
-      })}
+          </Card>
 
-      <p className="text-xs text-slate-600">
-        Estimates are computed locally from imported occupancy, source, payment, expense and payroll data — they are not financial advice and may not reflect every billing nuance.
-      </p>
+          {/* ── Top 3 highest-value actions ── */}
+          <Card
+            title="Today's highest-value actions"
+            subtitle="Ranked by estimated dollar impact"
+            right={<Sparkles className="h-4 w-4 text-[#00D4FF]" />}
+          >
+            <div className="grid gap-4 lg:grid-cols-3">
+              {top3.map((a, i) => (
+                <ActionCard key={a.key || i} action={a} />
+              ))}
+              {top3.length === 0 && (
+                <p className="text-sm text-slate-500">No actionable items yet — import more data, or everything is healthy.</p>
+              )}
+            </div>
+          </Card>
+
+          {/* ── Bucket lanes ── */}
+          {BUCKETS.map(([key, label, desc]) => {
+            const items = buckets[key] || [];
+            return (
+              <div key={key}>
+                <div className="mb-3 flex items-center gap-2">
+                  <h3 className="font-heading text-base font-semibold text-white">{label}</h3>
+                  <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-slate-400">{items.length}</span>
+                  <span className="hidden text-xs text-slate-500 sm:inline">· {desc}</span>
+                </div>
+                {items.length ? (
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    {items.map((a, i) => <ActionCard key={a.key || i} action={a} />)}
+                  </div>
+                ) : (
+                  <p className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-3 text-sm text-slate-500">Nothing here — good.</p>
+                )}
+              </div>
+            );
+          })}
+
+          <p className="text-xs text-slate-600">
+            Estimates are computed locally from imported occupancy, source, payment, expense and payroll data — they are not financial advice and may not reflect every billing nuance.
+          </p>
         </>
       )}
     </div>

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Dual-Pillar Parallel Solver (Gemini Solution A + Claude Solution B)
  * -------------------------------------------------------------------
  * Executes Gemini and Claude in strict parallel isolation (Round 0).
@@ -11,6 +11,7 @@
 import crypto from 'node:crypto';
 import { redactSecrets } from './universalModelRouter.js';
 import { execSync } from 'node:child_process';
+import { phoenixTracer } from './phoenixTracer.js';
 
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 
@@ -213,6 +214,26 @@ export class DualPillarSolver {
 
     const success = Boolean(callResult.success && callResult.content !== null);
 
+    phoenixTracer.recordLlmCall({
+      name: 'Gemini Solution A (AST & Component Scoping)',
+      provider: 'Google / OpenRouter',
+      modelRequested: this.geminiConfig.model,
+      modelReturned: callResult.modelReturned,
+      input: taskPrompt,
+      output: callResult.content || callResult.error || '',
+      tokens: callResult.tokens,
+      latencySeconds: callResult.latencySeconds,
+      status: success ? 'OK' : 'ERROR',
+      error: callResult.error,
+      traceId: context?.traceId,
+      parentSpanId: context?.parentSpanId,
+      customAttributes: {
+        'pillar.name': 'GEMINI_SOLUTION_A',
+        'pillar.role': this.geminiConfig.role,
+        'pillar.prompt_hash': promptHash,
+      },
+    }).catch(() => {});
+
     return {
       pillar: 'GEMINI_SOLUTION_A',
       role: this.geminiConfig.role,
@@ -253,6 +274,27 @@ export class DualPillarSolver {
 
     const isGenuineClaude = callResult.success && callResult.modelReturned.includes('claude');
     const success = Boolean(callResult.success && isGenuineClaude && callResult.content !== null);
+
+    phoenixTracer.recordLlmCall({
+      name: 'Claude Solution B (High-Trust Invariants & Security)',
+      provider: 'Anthropic / OpenRouter',
+      modelRequested: this.claudeConfig.model,
+      modelReturned: callResult.modelReturned,
+      input: taskPrompt,
+      output: callResult.content || callResult.error || '',
+      tokens: callResult.tokens,
+      latencySeconds: callResult.latencySeconds,
+      status: success ? 'OK' : 'ERROR',
+      error: callResult.error,
+      traceId: context?.traceId,
+      parentSpanId: context?.parentSpanId,
+      customAttributes: {
+        'pillar.name': 'CLAUDE_SOLUTION_B',
+        'pillar.role': this.claudeConfig.role,
+        'pillar.prompt_hash': promptHash,
+        'pillar.is_authoritative': isGenuineClaude,
+      },
+    }).catch(() => {});
 
     return {
       pillar: 'CLAUDE_SOLUTION_B',

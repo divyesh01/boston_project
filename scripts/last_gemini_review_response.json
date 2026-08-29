@@ -1,0 +1,17 @@
+{
+  "receipt": {
+    "agent": "Gemini",
+    "modelRequested": "google/gemini-2.5-flash",
+    "modelReturned": "google/gemini-2.5-flash",
+    "actualProvider": "Google AI Studio",
+    "generationId": "NONE",
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "totalTokens": 0,
+    "cost": "N/A",
+    "httpStatus": 402,
+    "latency": "0.307s",
+    "timestamp": "2026-08-29T10:59:44.078Z"
+  },
+  "content": ""
+}

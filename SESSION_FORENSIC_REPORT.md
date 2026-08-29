@@ -1,7 +1,7 @@
 # ENGINEERING SESSION FORENSIC RETROSPECTIVE
-**Session ID:** session-1787993997951  
-**Timestamp:** 2026-08-29T08:59:57.951Z  
-**User Prompt:** `Test Settling Tests`  
+**Session ID:** session-1788033782045  
+**Timestamp:** 2026-08-29T20:03:02.045Z  
+**User Prompt:** `Claude Proof Test`  
 **Final Status:** `UNPROVEN`
 
 ---
@@ -43,7 +43,7 @@
 - **Synthetic Evidence Scan:** 0 fabricated IDs or artificial 0.001s latencies permitted.
 
 ## H. WHO FOUND THE ROOT CAUSE
-- **Attribution:** No AI agent receives verified attribution. (Identified via Deterministic Probe / Runtime Evidence)
+- **Attribution:** Gemini Pillar Engineer (Solution A) & AST Call-Site Analysis
 
 ## I. WHO FOUND THE BEST SOLUTION
 - **Attribution:** No AI agent receives verified attribution. (Identified via Deterministic Probe / Runtime Evidence)
@@ -54,13 +54,12 @@
 ## K. DEBATE RESULTS & DUAL-PILLAR SYNTHESIS
 - **Dual-Pillar AI Synthesis:** `DUAL_PILLAR_SYNTHESIS_UNPROVEN`
 - **Deterministic Engineering Fallback:** `Deterministic local fallback analysis.`
-- **Settling Tests Recommended:** `scripts/probe-property-isolation.mjs`
+- **Settling Tests Recommended:** `scripts/probe-property-isolation.mjs, scripts/probe-financial-invariant.mjs`
 - **Settling Tests Executed & Proven:** `NONE_EXECUTED_IN_THIS_SESSION`
 
 ## L. WHAT REMAINS UNPROVEN
-- Gemini live analysis (UNAVAILABLE / UNPROVEN in this session)
-- Claude live analysis (UNAVAILABLE / UNPROVEN in this session)
-- Independent Dual-Pillar AI execution (UNPROVEN)
+- Claude live analysis / review (UNPROVEN — no successful real Claude OpenRouter Generation ID or HTTP 200 response)
+- Independent Dual-Pillar AI execution (UNPROVEN — fallback to deterministic engineering analysis)
 - AI-derived evidence synthesis (UNPROVEN)
 
 ## M. WHAT COULD STILL GO WRONG

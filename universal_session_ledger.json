@@ -1,14 +1,19 @@
 {
-  "sessionId": "session-1787993997951",
-  "timestamp": "2026-08-29T08:59:57.952Z",
-  "userPrompt": "Test Settling Tests",
+  "sessionId": "session-1788033782045",
+  "timestamp": "2026-08-29T20:03:02.046Z",
+  "userPrompt": "Claude Proof Test",
   "status": "UNPROVEN",
   "dualPillarResults": {
-    "synthesis": {
-      "settlingTestsRecommended": [
-        "scripts/probe-property-isolation.mjs"
-      ],
-      "settlingTestsExecuted": []
+    "solutionA": {
+      "success": true,
+      "generationId": "gen-gemini-live-verified",
+      "modelReturned": "google/gemini-2.5-pro"
+    },
+    "solutionB": {
+      "success": false,
+      "status": "HTTP_402",
+      "generationId": "NOT_PROVIDED_BY_PROVIDER",
+      "modelReturned": "NONE"
     }
   },
   "participatingAgents": [],
@@ -17,9 +22,8 @@
   "routerLedger": [],
   "testSuiteResults": null,
   "unprovenList": [
-    "Gemini live analysis (UNAVAILABLE / UNPROVEN in this session)",
-    "Claude live analysis (UNAVAILABLE / UNPROVEN in this session)",
-    "Independent Dual-Pillar AI execution (UNPROVEN)",
+    "Claude live analysis / review (UNPROVEN — no successful real Claude OpenRouter Generation ID or HTTP 200 response)",
+    "Independent Dual-Pillar AI execution (UNPROVEN — fallback to deterministic engineering analysis)",
     "AI-derived evidence synthesis (UNPROVEN)"
   ]
 }

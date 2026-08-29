@@ -1,0 +1,44 @@
+The file at `src/lib/orchestratorVerificationProbe.js` already exists and is functionally identical to the requested contract — the only delta is trailing commas in the returned object literals. No callers change, no behavior changes.
+
+### FILE: src/lib/orchestratorVerificationProbe.js
+```javascript
+/**
+ * Orchestrator diagnostic contract helpers.
+ *
+ * Pure, side-effect-free accessors used by verification probes and telemetry
+ * exporters to assert the orchestrator's declared invariants without booting
+ * the orchestrator itself.
+ */
+
+/**
+ * Reports the orchestrator's verified invariant snapshot.
+ *
+ * @returns {{status: string, engine: string, timestamp: string, version: string}}
+ */
+export function verifyOrchestratorInvariants() {
+  return {
+    status: 'VERIFIED',
+    engine: 'API_FIRST_MULTI_AGENT',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+  };
+}
+
+/**
+ * Declares the telemetry contract for the multi-agent routing topology.
+ *
+ * @returns {{primaryBrain: string, reviewerSwarm: string[], subscriptionQuotaSaved: boolean}}
+ */
+export function getOrchestratorTelemetryContract() {
+  return {
+    primaryBrain: 'CLAUDE_OPUS',
+    reviewerSwarm: ['GEMINI', 'NVIDIA', 'NARA', 'XKIRO'],
+    subscriptionQuotaSaved: true,
+  };
+}
+```
+
+Two notes on blast radius, since I could not run verification from the repository root shown (`/`) and had no view of consumers:
+
+- `verifyOrchestratorInvariants()` returns a fresh `timestamp` on every call, so it is not a stable value. Any snapshot test asserting deep equality on the whole object will be flaky; assertions should exclude `timestamp` or the caller should inject a clock. Worth checking `tests/orchestrator/` and `src/lib/orchestratorVerificationProbe` importers before relying on it in golden tests.
+- `getOrchestratorTelemetryContract()` returns a fresh array each call, so mutation by one caller cannot leak to another. If you would rather the contract be tamper-proof, freezing the literals is a one-line change — but that is a behavior change, so I left it out.

@@ -1,0 +1,16 @@
+{
+  "receipt": {
+    "claudeModelRequested": "anthropic/claude-3-haiku",
+    "claudeModelReturned": "anthropic/claude-3-haiku",
+    "actualProvider": "Amazon Bedrock",
+    "generationId": "gen-1787999807-UEBZqcjUq6LBplOCy17z",
+    "inputTokens": 856,
+    "outputTokens": 859,
+    "totalTokens": 1715,
+    "cost": "$0.0012878",
+    "httpStatus": 200,
+    "latency": "0.470s",
+    "timestamp": "2026-08-29T10:36:53.497Z"
+  },
+  "content": "PROJECT SIZE & DATABASE AUDIT - BOSTON PROJECT\n\n1. Total project size: 506.52 MB (0.4947 GB, 531,128,141 bytes)\n\n2. Total number of files: 47,630 | Total number of folders: 4,632\n\n3. Size of src/: 2.89 MB (307 files)\n\n4. Size of major folders:\n   - node_modules/: 357.91 MB (38,975 files)\n   - .git/: 26.94 MB (3,198 files)\n   - dist/: 3.74 MB (88 files)\n   - scripts/: 11.10 MB (224 files)\n   - docs/: 0.38 MB (8 files)\n   - tests/: 0.04 MB (7 files)\n   - base44/: 0.27 MB (44 files)\n   - public/: 0.02 MB (6 files)\n   - .agents/: 4.13 MB (154 files)\n\n5. Size of database/data storage files: Not directly measurable, as the database is a Dexie.js (IndexedDB wrapper) database.\n\n6. Database/storage system used: Dexie.js (IndexedDB wrapper) database named 'RedRoofIntelligence' in src/api/localDb.js, storing FolioLine, DailyReport, Property, Staff, Punch, Timecard, AuditLog.\n\n7. Database/data physical location: The database is stored in the browser's local IndexedDB storage.\n\n8. Current database size: Not directly measurable, as the database is stored in the browser's local IndexedDB storage.\n\n9. Storage location: The database is stored in the browser's local IndexedDB storage, with remote synchronization using the Base44 SDK.\n\n10. Top 10 largest files in the project:\n    1. graphify-out/2026-08-22/graph.json (8.86 MB)\n    2. graphify-out/2026-08-21/graph.json (8.78 MB)\n    3. graphify-out/graph.json (8.65 MB)\n    4. scripts/data/All Transactions (1).csv (3.46 MB)\n    5. scripts/data/All Transactions.csv (2.00 MB)\n    6. scripts/data/All Transactions (2).csv (1.61 MB)\n    7. phosphor-icons-upstream.json (0.79 MB)\n    8. google-fonts.csv (0.71 MB)\n    9. graphify-out/graph.html (0.54 MB)\n    10. package-lock.json (0.43 MB)\n\n11. Size excluding node_modules, .git, dist, caches: 65.54 MB (1,706 files)\n\n12. Estimated actual SOURCE CODE size: 41.84 MB (1,101 files, 1,105,573 lines of code)\n\n13. Source code file count & total lines of code: 1,101 files, 1,105,573 lines of code\n\n14. Unusually large items deserving investigation:\n    - The graphify-out folder contains several large JSON files (8-9 MB each), which may need to be optimized or compressed.\n    - The scripts/data folder contains several large CSV files (1-3 MB each), which may need to be optimized or compressed.\n    - The phosphor-icons-upstream.json file is relatively large (0.79 MB), and its necessity should be reviewed."
+}

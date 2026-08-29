@@ -1,4 +1,4 @@
-﻿/* global process */
+/* global process */
 /**
  * End-of-Session Forensic Retrospective Generator
  * ------------------------------------------------
@@ -104,20 +104,29 @@ export function generateForensicReport(sessionData = {}) {
     }
   }
 
-  // 3. Dynamic Identification of Unproven Items
+  // 3. Dynamic Identification of Unproven Items (CLAUDE PROOF RULE & GEMINI PROOF RULE)
   const unprovenList = [];
-  const geminiProven = Boolean(solA && solA.success);
-  const claudeProven = Boolean(solB && solB.success && solB.isAuthoritative !== false);
+  const geminiProven = Boolean(
+    solA && solA.success &&
+    solA.generationId && solA.generationId !== 'NOT_PROVIDED_BY_PROVIDER' &&
+    !solA.generationId.includes('unproven') && !solA.generationId.includes('synthetic')
+  );
+  const claudeProven = Boolean(
+    solB && solB.success &&
+    solB.generationId && solB.generationId !== 'NOT_PROVIDED_BY_PROVIDER' &&
+    !solB.generationId.includes('unproven') && !solB.generationId.includes('synthetic') &&
+    solB.isAuthoritative !== false
+  );
   const dualPillarProven = Boolean(geminiProven && claudeProven);
 
   if (!geminiProven) {
-    unprovenList.push('Gemini live analysis (UNAVAILABLE / UNPROVEN in this session)');
+    unprovenList.push('Gemini live analysis (UNAVAILABLE / UNPROVEN in this session — no verified OpenRouter Generation ID)');
   }
   if (!claudeProven) {
-    unprovenList.push('Claude live analysis (UNAVAILABLE / UNPROVEN in this session)');
+    unprovenList.push('Claude live analysis / review (UNPROVEN — no successful real Claude OpenRouter Generation ID or HTTP 200 response)');
   }
   if (!dualPillarProven) {
-    unprovenList.push('Independent Dual-Pillar AI execution (UNPROVEN)');
+    unprovenList.push('Independent Dual-Pillar AI execution (UNPROVEN — fallback to deterministic engineering analysis)');
     unprovenList.push('AI-derived evidence synthesis (UNPROVEN)');
   }
 

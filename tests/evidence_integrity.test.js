@@ -1,4 +1,4 @@
-﻿import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { DualPillarSolver } from '../src/lib/dualPillarSolver.js';
 import { generateForensicReport } from '../src/lib/sessionForensicReport.js';
 
@@ -176,4 +176,28 @@ describe('Forensic Hardening & Evidence-Truth Invariant Suite', () => {
     expect(report.reportMarkdown).toContain('Settling Tests Recommended:** `scripts/probe-property-isolation.mjs`');
     expect(report.reportMarkdown).toContain('Settling Tests Executed & Proven:** `NONE_EXECUTED_IN_THIS_SESSION`');
   });
+
+  // Mutation Test 11: Claude without verified OpenRouter Generation ID is marked UNPROVEN
+  it('Mutation 11: Enforces CLAUDE PROOF RULE — missing/synthetic gen ID marks Claude UNPROVEN', () => {
+    const report = generateForensicReport({
+      userPrompt: 'Claude Proof Test',
+      dualPillarResults: {
+        solutionA: {
+          success: true,
+          generationId: 'gen-gemini-live-verified',
+          modelReturned: 'google/gemini-2.5-pro',
+        },
+        solutionB: {
+          success: false,
+          status: 'HTTP_402',
+          generationId: 'NOT_PROVIDED_BY_PROVIDER',
+          modelReturned: 'NONE',
+        },
+      },
+    });
+
+    expect(report.reportMarkdown).toContain('Claude live analysis / review (UNPROVEN — no successful real Claude OpenRouter Generation ID or HTTP 200 response)');
+    expect(report.reportMarkdown).toContain('Independent Dual-Pillar AI execution (UNPROVEN — fallback to deterministic engineering analysis)');
+  });
 });
+

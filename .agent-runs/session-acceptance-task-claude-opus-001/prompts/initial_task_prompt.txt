@@ -1,0 +1,23 @@
+Create the complete diagnostic contract helper module at src/lib/orchestratorVerificationProbe.js.
+Export exactly:
+1. export function verifyOrchestratorInvariants() {
+  return {
+    status: 'VERIFIED',
+    engine: 'API_FIRST_MULTI_AGENT',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+  };
+}
+2. export function getOrchestratorTelemetryContract() {
+  return {
+    primaryBrain: 'CLAUDE_OPUS',
+    reviewerSwarm: ['GEMINI', 'NVIDIA', 'NARA', 'XKIRO'],
+    subscriptionQuotaSaved: true,
+  };
+}
+
+Format output as:
+### FILE: src/lib/orchestratorVerificationProbe.js
+```javascript
+<complete implementation>
+```

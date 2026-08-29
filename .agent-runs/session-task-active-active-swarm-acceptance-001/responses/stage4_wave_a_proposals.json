@@ -1,0 +1,705 @@
+--- [CLAUDE_OPUS_REPO_ARCHITECT] (ANTHROPIC via TABITOKEN / claude-opus-5) ---
+### FILE: src/lib/swarmOrchestratorContract.js
+
+```javascript
+/**
+ * swarmOrchestratorContract.js
+ *
+ * Single source of truth for the swarm orchestrator's public contract:
+ * version identity, active-active provider topology, operational invariants,
+ * and live worker capabilities.
+ *
+ * Design constraints:
+ * - Pure, side-effect-free, dependency-free. Safe to import from any layer
+ *   (orchestrator core, verification probes, ledger writers, UI diagnostics)
+ *   without creating import cycles.
+ * - Every accessor returns a freshly constructed object so that callers
+ *   mutating a result cannot corrupt shared orchestrator state.
+ * - This module declares the contract; it does not perform I/O. Runtime
+ *   enforcement (SHA-256 checks, quota reads, file-lock probes) belongs in
+ *   the probe/enforcement layer, which should read its expectations from here.
+ *
+ * @module lib/swarmOrchestratorContract
+ */
+
+/**
+ * Returns the orchestrator version identity envelope.
+ *
+ * The `timestamp` is evaluated per call and represents the moment of
+ * interrogation, not the build time — callers that need a stable identity
+ * for hashing or ledger keys must use `version` + `architecture` and exclude
+ * `timestamp` from the digest input.
+ *
+ * @returns {{version: string, architecture: string, status: string, timestamp: string}}
+ */
+export function getSwarmOrchestratorVersion() {
+  return {
+    version: '2.0.0',
+    architecture: 'ACTIVE_ACTIVE_HIGH_PARALLELISM_SWARM',
+    status: 'PRODUCTION_READY',
+    timestamp: new Date().toISOString(),
+  };
+}
+
+/**
+ * Returns the active-active provider topology.
+ *
+ * `primaryBrain` is the authoritative synthesis brain. The providers listed in
+ * `activeActiveProviders` are concurrent peers — neither is a failover standby;
+ * both are expected to carry live traffic under the stated balancing policy.
+ *
+ * @returns {{primaryBrain: string, activeActiveProviders: string[], mode: string, balancingPolicy: string}}
+ */
+export function getActiveActiveProviderTopology() {
+  return {
+    primaryBrain: 'CLAUDE_OPUS',
+    activeActiveProviders: ['TABITOKEN', 'GOROUTER'],
+    mode: 'ACTIVE_ACTIVE_CONCURRENT',
+    balancingPolicy: 'DYNAMIC_HEALTH_AND_WORKLOAD_BALANCED',
+  };
+}
+
+/**
+ * Returns the declared swarm invariants.
+ *
+ * These are the contractual expectations the swarm must uphold: Codex quota is
+ * conserved, Antigravity is external-API-only and must never author files,
+ * artifacts require SHA-256 verification, protected files stay locked, and
+ * quality is preferred over cost.
+ *
+ * NOTE: this accessor is declarative. It reports what must hold, not what was
+ * measured. Enforcement code should compare observed runtime state against
+ * these values and fail closed on divergence.
+ *
+ * @returns {{codexQuotaUsage: string, antigravityAuthoring: string, sha256VerificationRequired: boolean, protectedFilesLocked: boolean, qualityOverCost: boolean}}
+ */
+export function verifySwarmInvariants() {
+  return {
+    codexQuotaUsage: '0% (CONSERVED)',
+    antigravityAuthoring: 'BLOCKED (EXTERNAL API ONLY)',
+    sha256VerificationRequired: true,
+    protectedFilesLocked: true,
+    qualityOverCost: true,
+  };
+}
+
+/**
+ * Returns the live worker capability envelope.
+ *
+ * `waves` are ordered execution phases: parallel authoring (A), specialist
+ * review (B), then authoritative synthesis (C). Fan-out within a wave is
+ * bounded-concurrency `Promise.all`; waves themselves are sequential because
+ * each consumes the prior wave's output.
+ *
+ * `LOCAL_DETERMINISTIC` is the terminal fallback and must remain last so that
+ * degraded runs still produce a reproducible artifact.
+ *
+ * @returns {{waves: string[], activeProviders: string[], concurrencyModel: string}}
+ */
+export function getLiveWorkerCapabilities() {
+  return {
+    waves: [
+      'WAVE_A_PARALLEL_CLAUDE_OPUS',
+      'WAVE_B_SPECIALIST_REVIEWER_SWARM',
+      'WAVE_C_AUTHORITATIVE_SYNTHESIS',
+    ],
+    activeProviders: ['TABITOKEN', 'GOROUTER', 'NARA', 'LOCAL_DETERMINISTIC'],
+    concurrencyModel: 'ASYNC_PROMISE_ALL_BOUNDED',
+  };
+}
+```
+
+### Structural diagnosis
+
+I have not read the repository — no target file contents were supplied in the evidence block and I had no filesystem access in this turn — so the following is inference from the git status and the specified contract, not verified against source.
+
+Root cause the module addresses: version identity, provider topology, and invariant expectations appear to be asserted independently across at least four consumers (`src/lib/autonomousOrchestrator.js`, `src/lib/universalModelRouter.js`, `src/lib/orchestratorVerificationProbe.js`, and the ledger JSONs under version control). Duplicated constants across a caller hierarchy drift silently: the ledger records one topology while the router executes another, and nothing fails. Centralizing them into one dependency-free leaf module makes divergence a code change rather than a data accident.
+
+Two caveats worth raising rather than silently accepting:
+
+`verifySwarmInvariants` is named as a verb but implemented as a constant. It cannot fail. If any caller — particularly `orchestratorVerificationProbe.js` or `tests/evidence_integrity.test.js` — treats its return value as evidence that invariants hold, that is a false-positive gate: it will report `codexQuotaUsage: '0% (CONSERVED)'` even if quota was fully consumed. I implemented it exactly as specified, but the enforcement layer should read these as *expected* values and compare them against measured state. I'd suggest a companion `assertSwarmInvariants(observed)` in the probe module rather than changing this signature.
+
+`getSwarmOrchestratorVersion().timestamp` is non-deterministic. Any ledger key, snapshot digest, or golden test that hashes the whole object will be unstable across runs. Given `tests/golden_owner_forensic.test.js` and `tests/evidence_integrity.test.js` are in flight, they should destructure `version`/`architecture`/`status` and exclude `timestamp` from comparisons.
+
+Suggested next step, once I can read the tree: grep for the literal strings `'2.0.0'`, `ACTIVE_ACTIVE`, `CLAUDE_OPUS`, `TABITOKEN`, and `GOROUTER` across `src/lib`, `src/orchestrator`, and `scripts/orchestrator` to enumerate the actual callers, then replace each inline literal with an import from this module.
+
+--- [CLAUDE_OPUS_INDEPENDENT_ARCHITECT] (ANTHROPIC via GOROUTER / claude-opus-5) ---
+## Independent Root-Cause Analysis
+
+**Verification limits up front:** the `=== TARGET FILE IMPLEMENTATIONS ===` section of the evidence arrived empty and I have no filesystem access to this repository from the current working directory (`/`). Everything below is derived from the supplied contract and the git status, not from reading the consuming call sites. Treat the caller list as a hypothesis to confirm, not a finding.
+
+**Root cause.** `src/lib/swarmOrchestratorContract.js` does not exist (it is absent from both the staged set and the untracked set), yet the staged work-in-progress spans exactly the subsystems that would consume a swarm contract: `src/lib/autonomousOrchestrator.js`, `src/lib/universalModelRouter.js`, `src/lib/naraHelperPool.js`, `src/lib/dualPillarSolver.js`, plus the new untracked `src/orchestrator/`, `scripts/orchestrator/`, and `tests/orchestrator/` trees. The failure mode is therefore not a logic bug but a missing module boundary: version, provider topology, safety invariants, and worker capability metadata are the kind of facts that get duplicated inline across an orchestrator, a router, and a test suite, and then drift. A single frozen source-of-truth module collapses that drift into one file.
+
+**Architectural position.** This module must be a leaf: zero imports, no I/O, no environment reads, no side effects at import time. Anything that reads `process.env` or a ledger file here would make the invariant report situational, and an invariant that varies by environment is not an invariant. Consumers (orchestrator, router, evidence/integrity tests) depend inward on it; it depends on nothing.
+
+**Alternative edge-case safeguards I chose over the naive literal-return form:**
+
+1. *Aliasing.* Returning literal arrays fresh per call is correct, but a caller doing `topology.activeActiveProviders.sort()` or `.push()` on a shared array would silently corrupt a later reader. I hold the canonical values in module-private `Object.freeze`d tables and hand out fresh shallow clones per call. Callers get mutable results; the source of truth is immutable.
+2. *Clock fragility.* `new Date().toISOString()` throws `RangeError` on an invalid date, which happens under aggressive fake-timer mocks in test suites. `getSwarmOrchestratorVersion()` is the one non-deterministic function in the contract and is likely called from evidence-integrity paths, so a thrown clock error there would fail the audit for an unrelated reason. I wrap it and fall back to a valid ISO string derived from epoch 0 rather than propagating.
+3. *Key order stability.* Snapshot and SHA-256 evidence tests are sensitive to serialization order. Construction order is fixed and matches the contract as specified, so `JSON.stringify` output is stable across calls except for the timestamp field.
+4. *Export surface.* Exactly the four named exports, no default export, no extra symbols. Helpers stay module-private so the contract cannot be widened by accident.
+
+The `codexQuotaUsage: '0% (CONSERVED)'` and `antigravityAuthoring: 'BLOCKED (EXTERNAL API ONLY)'` values are declarative assertions, not measurements. This module states the policy; enforcement belongs in the router and the pre-commit/evidence layer. If you want these to be *measured*, that is a separate module that imports this one for its expected values — do not push measurement down into the contract.
+
+### FILE: src/lib/swarmOrchestratorContract.js
+```javascript
+/**
+ * Swarm Orchestrator Contract & Invariant Diagnostics
+ * ---------------------------------------------------
+ * Single source of truth for the swarm's version identity, active-active
+ * provider topology, safety invariants, and live worker capabilities.
+ *
+ * ARCHITECTURAL CONSTRAINTS (do not relax):
+ *   - Leaf module: zero imports, zero I/O, zero side effects at import time.
+ *   - No environment reads. An invariant that varies by environment is not an
+ *     invariant; enforcement/measurement belongs in the router and evidence layer.
+ *   - Declarative only. This module states policy; it does not observe runtime.
+ *   - Public surface is exactly the four named exports below. No default export.
+ *
+ * Consumers: autonomousOrchestrator, universalModelRouter, naraHelperPool,
+ * scripts/orchestrator/*, tests/orchestrator/*, evidence integrity tests.
+ *
+ * @module lib/swarmOrchestratorContract
+ */
+
+/* -------------------------------------------------------------------------- */
+/* Module-private canonical values (frozen source of truth)                   */
+/* -------------------------------------------------------------------------- */
+
+/** Semantic version of the swarm orchestration contract itself. */
+const SWARM_VERSION = '2.0.0';
+
+/** Architecture identifier reported alongside the version. */
+const SWARM_ARCHITECTURE = 'ACTIVE_ACTIVE_HIGH_PARALLELISM_SWARM';
+
+/** Release status of the contract. */
+const SWARM_STATUS = 'PRODUCTION_READY';
+
+/** Authoritative synthesis brain. Never load-balanced away. */
+const PRIMARY_BRAIN = 'CLAUDE_OPUS';
+
+/**
+ * Providers driven concurrently (not failover). Frozen so no consumer can
+ * mutate the canonical topology; callers receive fresh clones.
+ */
+const ACTIVE_ACTIVE_PROVIDERS = Object.freeze(['TABITOKEN', 'GOROUTER']);
+
+/** Concurrency mode for the active-active pair. */
+const TOPOLOGY_MODE = 'ACTIVE_ACTIVE_CONCURRENT';
+
+/** Policy governing distribution across the active-active pair. */
+const BALANCING_POLICY = 'DYNAMIC_HEALTH_AND_WORKLOAD_BALANCED';
+
+/** Ordered execution waves. Order is significant: A -> B -> C. */
+const EXECUTION_WAVES = Object.freeze([
+  'WAVE_A_PARALLEL_CLAUDE_OPUS',
+  'WAVE_B_SPECIALIST_REVIEWER_SWARM',
+  'WAVE_C_AUTHORITATIVE_SYNTHESIS',
+]);
+
+/**
+ * Full set of providers reachable by live workers, including the terminal
+ * deterministic fallback that guarantees the swarm always yields a result.
+ */
+const WORKER_ACTIVE_PROVIDERS = Object.freeze([
+  'TABITOKEN',
+  'GOROUTER',
+  'NARA',
+  'LOCAL_DETERMINISTIC',
+]);
+
+/** Concurrency primitive used by the worker pool. */
+const CONCURRENCY_MODEL = 'ASYNC_PROMISE_ALL_BOUNDED';
+
+/* --- Invariant declarations ------------------------------------------------ */
+
+/** Codex quota must remain untouched by swarm execution. */
+const CODEX_QUOTA_USAGE = '0% (CONSERVED)';
+
+/** Antigravity may be consulted as an external API but must never author code. */
+const ANTIGRAVITY_AUTHORING = 'BLOCKED (EXTERNAL API ONLY)';
+
+/** Every produced artifact requires SHA-256 verification before acceptance. */
+const SHA256_VERIFICATION_REQUIRED = true;
+
+/** Protected files are locked against autonomous modification. */
+const PROTECTED_FILES_LOCKED = true;
+
+/** Routing optimizes for output quality, never for lowest token cost. */
+const QUALITY_OVER_COST = true;
+
+/**
+ * Deterministic fallback timestamp used only when the host clock is unusable
+ * (e.g. aggressive fake timers in a test harness). Valid ISO-8601 by design.
+ */
+const FALLBACK_ISO_TIMESTAMP = '1970-01-01T00:00:00.000Z';
+
+/* -------------------------------------------------------------------------- */
+/* Module-private helpers                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Clone a frozen canonical list so callers may freely sort, filter, or mutate
+ * the value they receive without corrupting the module's source of truth.
+ *
+ * @param {ReadonlyArray<string>} source Frozen canonical list.
+ * @returns {string[]} Fresh, mutable copy.
+ */
+function cloneList(source) {
+  return Array.isArray(source) ? source.slice() : [];
+}
+
+/**
+ * Produce an ISO-8601 timestamp without ever throwing.
+ *
+ * `new Date().toISOString()` raises RangeError when the underlying date is
+ * invalid, which occurs under some fake-timer/mocked-clock configurations.
+ * The version probe is called from evidence-integrity paths, so a clock fault
+ * must not be able to fail an unrelated audit. Degrade to a valid constant.
+ *
+ * @returns {string} A syntactically valid ISO-8601 timestamp.
+ */
+function safeIsoTimestamp() {
+  try {
+    const now = new Date();
+    const millis = now.getTime();
+    if (typeof millis !== 'number' || !Number.isFinite(millis)) {
+      return FALLBACK_ISO_TIMESTAMP;
+    }
+    const iso = now.toISOString();
+    return typeof iso === 'string' && iso.length > 0 ? iso : FALLBACK_ISO_TIMESTAMP;
+  } catch {
+    return FALLBACK_ISO_TIMESTAMP;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Public contract surface                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Report the swarm orchestrator's version identity.
+ *
+ * The only non-deterministic field is `timestamp`; all other fields are stable
+ * across calls, and key order is fixed so serialized output is snapshot- and
+ * hash-stable apart from that field.
+ *
+ * @returns {{version: string, architecture: string, status: string, timestamp: string}}
+ */
+export function getSwarmOrchestratorVersion() {
+  return {
+    version: SWARM_VERSION,
+    architecture: SWARM_ARCHITECTURE,
+    status: SWARM_STATUS,
+    timestamp: safeIsoTimestamp(),
+  };
+}
+
+/**
+ * Report the active-active provider topology.
+ *
+ * `activeActiveProviders` are driven concurrently rather than as a failover
+ * chain; `primaryBrain` is the authoritative synthesizer and is never balanced
+ * away. The returned array is a fresh copy and is safe to mutate.
+ *
+ * @returns {{primaryBrain: string, activeActiveProviders: string[], mode: string, balancingPolicy: string}}
+ */
+export function getActiveActiveProviderTopology() {
+  return {
+    primaryBrain: PRIMARY_BRAIN,
+    activeActiveProviders: cloneList(ACTIVE_ACTIVE_PROVIDERS),
+    mode: TOPOLOGY_MODE,
+    balancingPolicy: BALANCING_POLICY,
+  };
+}
+
+/**
+ * Report the swarm's declared safety invariants.
+ *
+ * These are declarative policy assertions, not runtime measurements. Actual
+ * enforcement lives in the router (quota/provider gating) and the evidence
+ * layer (SHA-256 verification, protected-file locks). Consumers that need to
+ * *prove* conformance should compare observed state against these values.
+ *
+ * @returns {{codexQuotaUsage: string, antigravityAuthoring: string, sha256VerificationRequired: boolean, protectedFilesLocked: boolean, qualityOverCost: boolean}}
+ */
+export function verifySwarmInvariants() {
+  return {
+    codexQuotaUsage: CODEX_QUOTA_USAGE,
+    antigravityAuthoring: ANTIGRAVITY_AUTHORING,
+    sha256VerificationRequired: SHA256_VERIFICATION_REQUIRED,
+    protectedFilesLocked: PROTECTED_FILES_LOCKED,
+    qualityOverCost: QUALITY_OVER_COST,
+  };
+}
+
+/**
+ * Report live worker capabilities: ordered execution waves, the full reachable
+ * provider set, and the concurrency primitive in use.
+ *
+ * `waves` order is significant (A -> B -> C). `activeProviders` includes the
+ * terminal `LOCAL_DETERMINISTIC` fallback that guarantees the swarm always
+ * produces a result even when every external provider is unavailable. Both
+ * arrays are fresh copies and safe to mutate.
+ *
+ * @returns {{waves: string[], activeProviders: string[], concurrencyModel: string}}
+ */
+export function getLiveWorkerCapabilities() {
+  return {
+    waves: cloneList(EXECUTION_WAVES),
+    activeProviders: cloneList(WORKER_ACTIVE_PROVIDERS),
+    concurrencyModel: CONCURRENCY_MODEL,
+  };
+}
+```
+
+## Follow-up verification I could not perform
+
+Because I could not read the repository, these steps remain open on your side:
+
+- Confirm the import path and extension convention actually used by `src/lib/*` (ESM `.js` with `export` is assumed here, consistent with the sibling filenames in git status; if the project mixes CJS, this file needs a matching wrapper).
+- Trace real callers before assuming the four-symbol surface is sufficient: `rg -n "swarmOrchestratorContract|getSwarmOrchestratorVersion|getActiveActiveProviderTopology|verifySwarmInvariants|getLiveWorkerCapabilities" src scripts tests`.
+- Delete any inline duplicates of these constants found in `autonomousOrchestrator.js`, `universalModelRouter.js`, or `naraHelperPool.js` and re-point them here — leaving duplicates in place reintroduces the drift this module exists to prevent.
+- Run the project's build and the `tests/orchestrator/` plus `tests/evidence_integrity.test.js` suites. If evidence integrity hashes any output containing `getSwarmOrchestratorVersion()`, the `timestamp` field must be excluded from the hashed payload or the hash will never be reproducible.
+
+--- [CLAUDE_OPUS_STRATEGIST] (ANTHROPIC via TABITOKEN / claude-opus-5) ---
+I don't have repository read access in this turn, so the analysis below is scoped to what the task specifies plus the git status evidence; I have not verified existing imports of this module path.
+
+### Analysis
+
+The four exports are pure value-returning functions with no imports, no module-level mutable state, and no I/O. That is the correct shape for a contract module: it can be imported from a React render path, an error boundary, a Node test, or a CLI probe script (`scripts/probe_*.mjs`) without initialization order hazards or cross-consumer state bleed. Each call allocates a fresh object literal, so a consumer mutating a returned value cannot corrupt another consumer's view — the isolation is structural rather than enforced by `Object.freeze`.
+
+The single non-deterministic element is `new Date().toISOString()` in `getSwarmOrchestratorVersion()`. Snapshot or golden-file tests (`tests/golden_owner_forensic.test.js`, `tests/evidence_integrity.test.js`) must exclude or normalize the `timestamp` field, since including it in a SHA-256 evidence hash would make that hash unreproducible. The other three functions are fully deterministic and safe to hash directly.
+
+Behavioral contract for callers: these functions never throw and never return `null`, so consumers do not need `try/catch` or error-boundary coverage around them. They are diagnostic reporters, not enforcers — `verifySwarmInvariants()` returns declared invariant state, it does not probe or assert it. Any caller treating its return as proof of runtime enforcement is misreading the contract; enforcement belongs in the orchestrator layer (`src/lib/autonomousOrchestrator.js`, `src/orchestrator/`).
+
+### FILE: src/lib/swarmOrchestratorContract.js
+```javascript
+/**
+ * swarmOrchestratorContract.js
+ *
+ * Production contract and invariant diagnostic surface for the active-active
+ * high-parallelism swarm orchestrator.
+ *
+ * ISOLATION CONTRACT
+ * ------------------
+ * This module is intentionally dependency-free and side-effect-free:
+ *   - No imports, so it introduces no module initialization ordering hazards.
+ *   - No module-level mutable state, so concurrent callers cannot observe or
+ *     corrupt each other's results.
+ *   - Every export returns a freshly allocated object literal, so a consumer
+ *     that mutates a returned value cannot affect any other consumer.
+ *
+ * ERROR CONTRACT
+ * --------------
+ * None of these functions throw, perform I/O, or return null/undefined.
+ * Callers do not need try/catch or error-boundary coverage to invoke them
+ * safely from a React render path, a Node test, or a CLI probe script.
+ *
+ * DETERMINISM CONTRACT
+ * --------------------
+ * getActiveActiveProviderTopology(), verifySwarmInvariants(), and
+ * getLiveWorkerCapabilities() are fully deterministic and safe to include in
+ * SHA-256 evidence hashes. getSwarmOrchestratorVersion() embeds a wall-clock
+ * `timestamp`; snapshot and golden-file assertions must normalize or omit that
+ * field to remain reproducible.
+ *
+ * SEMANTIC CONTRACT
+ * -----------------
+ * These are declarative reporters, not enforcers. verifySwarmInvariants()
+ * reports the invariants the swarm is configured to uphold; it does not probe
+ * runtime state or assert compliance. Actual enforcement lives in the
+ * orchestrator layer.
+ */
+
+/**
+ * Reports the orchestrator contract version and architecture identity.
+ *
+ * @returns {{
+ *   version: string,
+ *   architecture: string,
+ *   status: string,
+ *   timestamp: string
+ * }} Version descriptor. `timestamp` is generated per call (ISO 8601, UTC) and
+ *    is therefore NOT stable across invocations.
+ */
+export function getSwarmOrchestratorVersion() {
+  return {
+    version: '2.0.0',
+    architecture: 'ACTIVE_ACTIVE_HIGH_PARALLELISM_SWARM',
+    status: 'PRODUCTION_READY',
+    timestamp: new Date().toISOString(),
+  };
+}
+
+/**
+ * Reports the active-active provider topology: which brain is authoritative,
+ * which providers run concurrently, and how load is distributed between them.
+ *
+ * Deterministic. Safe to hash.
+ *
+ * @returns {{
+ *   primaryBrain: string,
+ *   activeActiveProviders: string[],
+ *   mode: string,
+ *   balancingPolicy: string
+ * }} Topology descriptor. `activeActiveProviders` is a fresh array per call.
+ */
+export function getActiveActiveProviderTopology() {
+  return {
+    primaryBrain: 'CLAUDE_OPUS',
+    activeActiveProviders: ['TABITOKEN', 'GOROUTER'],
+    mode: 'ACTIVE_ACTIVE_CONCURRENT',
+    balancingPolicy: 'DYNAMIC_HEALTH_AND_WORKLOAD_BALANCED',
+  };
+}
+
+/**
+ * Reports the declared swarm invariants.
+ *
+ * This is a declaration of intended guarantees, not a runtime probe. It does
+ * not read quotas, inspect file permissions, or validate hashes. Treat the
+ * result as the contract to enforce elsewhere, never as evidence that
+ * enforcement has occurred.
+ *
+ * Deterministic. Safe to hash.
+ *
+ * @returns {{
+ *   codexQuotaUsage: string,
+ *   antigravityAuthoring: string,
+ *   sha256VerificationRequired: boolean,
+ *   protectedFilesLocked: boolean,
+ *   qualityOverCost: boolean
+ * }} Declared invariant set.
+ */
+export function verifySwarmInvariants() {
+  return {
+    codexQuotaUsage: '0% (CONSERVED)',
+    antigravityAuthoring: 'BLOCKED (EXTERNAL API ONLY)',
+    sha256VerificationRequired: true,
+    protectedFilesLocked: true,
+    qualityOverCost: true,
+  };
+}
+
+/**
+ * Reports live worker capabilities: the ordered execution waves, the full set
+ * of providers available to workers, and the concurrency model used to fan out
+ * work within a wave.
+ *
+ * `waves` is ordered and significant: Wave A executes in parallel, Wave B
+ * reviews Wave A output, Wave C synthesizes authoritatively. Callers must not
+ * reorder it.
+ *
+ * Deterministic. Safe to hash.
+ *
+ * @returns {{
+ *   waves: string[],
+ *   activeProviders: string[],
+ *   concurrencyModel: string
+ * }} Capability descriptor. Both arrays are fresh per call.
+ */
+export function getLiveWorkerCapabilities() {
+  return {
+    waves: [
+      'WAVE_A_PARALLEL_CLAUDE_OPUS',
+      'WAVE_B_SPECIALIST_REVIEWER_SWARM',
+      'WAVE_C_AUTHORITATIVE_SYNTHESIS',
+    ],
+    activeProviders: ['TABITOKEN', 'GOROUTER', 'NARA', 'LOCAL_DETERMINISTIC'],
+    concurrencyModel: 'ASYNC_PROMISE_ALL_BOUNDED',
+  };
+}
+```
+
+### Recommended follow-ups
+
+Two things I could not verify and would want to confirm before treating this as integrated:
+
+The repo mixes ESM `.mjs` scripts with `src/lib/*.js` modules. If `package.json` lacks `"type": "module"`, the `scripts/*.mjs` probes can import this file, but any CommonJS consumer cannot. Worth checking before wiring it into `scripts/probe_baseline_anomalies.mjs` or similar.
+
+`tests/evidence_integrity.test.js` and `tests/golden_owner_forensic.test.js` are both modified or new in the working tree. If either hashes orchestrator metadata, the `timestamp` field needs explicit exclusion — otherwise the test will pass once and fail on every subsequent run.
+
+--- [CLAUDE_OPUS_INDEPENDENT_STRATEGIST] (ANTHROPIC via GOROUTER / claude-opus-5) ---
+## Independent Strategy Assessment
+
+**Blast radius: zero.** `src/lib/swarmOrchestratorContract.js` is a new, unreferenced module. Nothing in the working tree imports it, so there is no regression path into `autonomousOrchestrator.js`, `universalModelRouter.js`, `naraHelperPool.js`, or the `scripts/orchestrator/` tree. It is purely additive surface. I have not read those files in this session, so I am describing the coupling that the import graph would create, not asserting current contents.
+
+**Root-cause read on why this module is needed.** The uncommitted diff shows orchestration state being carried in mutable JSON ledgers (`autonomous_routing_ledger.json`, `nara_role_diversity_ledger.json`, `universal_session_ledger.json` — 730+ lines churned) alongside a growing set of ad-hoc probe scripts. Topology facts (which providers are active-active, which waves exist, what the concurrency model is) are currently implicit in that churn rather than declared anywhere. This module gives those facts a single addressable source so probes and tests assert against one declaration instead of re-deriving it.
+
+**Contract surface decisions:**
+
+- Exactly four named exports, no default export. A default export would let consumers alias the namespace and make future export additions ambiguous in tree-shaken builds.
+- Each function returns a **freshly constructed object** per call rather than a frozen module-level singleton. Frozen singletons leak identity across callers and make snapshot tests that mutate their input silently coupled. Fresh objects cost nothing at this call frequency.
+- Three functions are pure and deterministic. `getSwarmOrchestratorVersion()` is the sole impure one because of `new Date().toISOString()`.
+
+**Two risks I want on record:**
+
+1. `getSwarmOrchestratorVersion()` is non-deterministic. Any golden/snapshot test (`tests/golden_owner_forensic.test.js`, `tests/evidence_integrity.test.js`) that hashes this output will produce a different SHA-256 on every run. Assert on `version`, `architecture`, and `status` and exclude `timestamp` from any digest.
+2. `verifySwarmInvariants()` returns declared values, not measured ones. The name implies runtime verification; the implementation is a manifest. Callers must not treat a truthy `protectedFilesLocked` as evidence that files are locked. If enforcement is wanted later, add a separate `assertSwarmInvariants()` that performs real checks and compares against this manifest — do not change these return values, since that would break every consumer at once.
+
+### FILE: src/lib/swarmOrchestratorContract.js
+```javascript
+/**
+ * Swarm Orchestrator Contract & Invariant Diagnostics
+ * ---------------------------------------------------
+ * Single authoritative declaration of the swarm orchestration contract:
+ * version identity, active-active provider topology, operating invariants,
+ * and live worker capabilities.
+ *
+ * DESIGN CONTRACT
+ * ---------------
+ * - This module is a *declaration surface*, not an enforcement surface.
+ *   It reports the contract the orchestrator is built against. It does not
+ *   probe the runtime, touch the filesystem, or perform network calls.
+ * - Every accessor returns a NEWLY CONSTRUCTED object on each invocation.
+ *   Callers may freely mutate returned values without cross-contaminating
+ *   other callers. Do not convert these to module-level frozen singletons;
+ *   doing so introduces shared identity across consumers.
+ * - No side effects, no I/O, no module-level mutable state. Safe to import
+ *   from tests, probes, CLI scripts, and browser bundles alike.
+ * - Exactly four named exports. No default export, so that additional
+ *   exports can be introduced later without ambiguity for consumers or
+ *   tree-shaking bundlers.
+ *
+ * DETERMINISM NOTE
+ * ----------------
+ * `getSwarmOrchestratorVersion()` embeds a wall-clock timestamp and is
+ * therefore NOT deterministic. Consumers computing SHA-256 digests or
+ * snapshot assertions must exclude the `timestamp` field and assert on
+ * `version` / `architecture` / `status` instead. The other three accessors
+ * are pure and safe to hash directly.
+ *
+ * INVARIANT SEMANTICS
+ * -------------------
+ * `verifySwarmInvariants()` reports the invariants the swarm is *contracted*
+ * to uphold. It is a manifest, not a live audit. A truthy `protectedFilesLocked`
+ * is not evidence that files are currently locked on disk. Runtime enforcement
+ * belongs in a separate assertion layer that measures actual state and compares
+ * it against this manifest; the shape and values returned here must remain
+ * stable so that comparison has a fixed reference point.
+ *
+ * @module lib/swarmOrchestratorContract
+ */
+
+/**
+ * Version and architecture identity of the swarm orchestrator.
+ *
+ * The `timestamp` field records the moment of *inspection*, not the moment of
+ * release. It exists so diagnostic reports can record when the contract was
+ * read. Exclude it from any content-addressed hash.
+ *
+ * @returns {{
+ *   version: string,
+ *   architecture: string,
+ *   status: string,
+ *   timestamp: string
+ * }} Freshly constructed version descriptor. ISO-8601 UTC timestamp.
+ */
+export function getSwarmOrchestratorVersion() {
+  return {
+    version: '2.0.0',
+    architecture: 'ACTIVE_ACTIVE_HIGH_PARALLELISM_SWARM',
+    status: 'PRODUCTION_READY',
+    timestamp: new Date().toISOString(),
+  };
+}
+
+/**
+ * Active-active provider topology.
+ *
+ * `primaryBrain` designates the authoritative synthesis authority. The
+ * `activeActiveProviders` entries run CONCURRENTLY rather than in
+ * primary/standby failover: both are live and both receive traffic,
+ * apportioned by `balancingPolicy`. Consumers must not assume ordering
+ * within `activeActiveProviders` implies priority or preference.
+ *
+ * @returns {{
+ *   primaryBrain: string,
+ *   activeActiveProviders: string[],
+ *   mode: string,
+ *   balancingPolicy: string
+ * }} Freshly constructed topology descriptor. Pure and deterministic.
+ */
+export function getActiveActiveProviderTopology() {
+  return {
+    primaryBrain: 'CLAUDE_OPUS',
+    activeActiveProviders: ['TABITOKEN', 'GOROUTER'],
+    mode: 'ACTIVE_ACTIVE_CONCURRENT',
+    balancingPolicy: 'DYNAMIC_HEALTH_AND_WORKLOAD_BALANCED',
+  };
+}
+
+/**
+ * Declared operating invariants of the swarm.
+ *
+ * Reports the guarantees the orchestration contract is built around:
+ *  - `codexQuotaUsage`         Codex quota is conserved, not consumed.
+ *  - `antigravityAuthoring`    Antigravity is external-API-only; it does not author.
+ *  - `sha256VerificationRequired`  Artifacts require content-hash verification.
+ *  - `protectedFilesLocked`    Protected paths are contracted as immutable.
+ *  - `qualityOverCost`         Routing optimizes for output quality over spend.
+ *
+ * This is a declaration, NOT a live audit — see module-level
+ * "INVARIANT SEMANTICS". Do not use the boolean fields as proof of runtime state.
+ *
+ * @returns {{
+ *   codexQuotaUsage: string,
+ *   antigravityAuthoring: string,
+ *   sha256VerificationRequired: boolean,
+ *   protectedFilesLocked: boolean,
+ *   qualityOverCost: boolean
+ * }} Freshly constructed invariant manifest. Pure and deterministic.
+ */
+export function verifySwarmInvariants() {
+  return {
+    codexQuotaUsage: '0% (CONSERVED)',
+    antigravityAuthoring: 'BLOCKED (EXTERNAL API ONLY)',
+    sha256VerificationRequired: true,
+    protectedFilesLocked: true,
+    qualityOverCost: true,
+  };
+}
+
+/**
+ * Live worker capabilities: execution waves, participating providers, and
+ * the concurrency model.
+ *
+ * `waves` IS ordered and that order is semantically load-bearing: parallel
+ * authoring (A) precedes specialist review (B), which precedes authoritative
+ * synthesis (C). Consumers that schedule work must preserve this sequence.
+ *
+ * `activeProviders` is a superset of
+ * `getActiveActiveProviderTopology().activeActiveProviders` — it additionally
+ * includes review/fallback participants (`NARA`, `LOCAL_DETERMINISTIC`) that
+ * are not part of the active-active balanced pair. Do not treat the two
+ * lists as interchangeable.
+ *
+ * `concurrencyModel` of `ASYNC_PROMISE_ALL_BOUNDED` means fan-out is
+ * `Promise.all`-shaped but capped by a bound; callers must not assume
+ * unbounded parallelism.
+ *
+ * @returns {{
+ *   waves: string[],
+ *   activeProviders: string[],
+ *   concurrencyModel: string
+ * }} Freshly constructed capability descriptor. Pure and deterministic.
+ */
+export function getLiveWorkerCapabilities() {
+  return {
+    waves: [
+      'WAVE_A_PARALLEL_CLAUDE_OPUS',
+      'WAVE_B_SPECIALIST_REVIEWER_SWARM',
+      'WAVE_C_AUTHORITATIVE_SYNTHESIS',
+    ],
+    activeProviders: ['TABITOKEN', 'GOROUTER', 'NARA', 'LOCAL_DETERMINISTIC'],
+    concurrencyModel: 'ASYNC_PROMISE_ALL_BOUNDED',
+  };
+}
+```
+
+### Integration guidance
+
+Two consistency relationships are worth asserting in a test rather than leaving as prose. `getLiveWorkerCapabilities().activeProviders` must remain a superset of `getActiveActiveProviderTopology().activeActiveProviders`; if someone adds a provider to the topology and forgets the capabilities list, the two declarations silently disagree. And `waves` should be asserted to have exactly three ordered entries so wave insertion is a deliberate, visible change.
+
+I have not run the project's test suite or build — I authored a single new file with no imports and no consumers, so there is nothing yet to compile against. Once you wire an import into the orchestrator or a probe script, that is the point at which the build and `tests/evidence_integrity.test.js` should be run.

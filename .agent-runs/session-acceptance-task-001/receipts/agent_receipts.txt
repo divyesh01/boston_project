@@ -1,0 +1,436 @@
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: XKIRO
+Requested Model: anthropic/claude-opus-5
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0.284s
+HTTP/API Status: 403
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: HTTP_403: {"error":{"message":"This premium model requires an active paid plan or real deposited balance. Subscribe to a plan or top up your wallet to use it — promotional/bonus credits do not apply.","type":"permission_error","code":"permission_denied"}}
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: XKIRO
+Requested Model: anthropic/claude-opus-5
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0.285s
+HTTP/API Status: 403
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: HTTP_403: {"error":{"message":"This premium model requires an active paid plan or real deposited balance. Subscribe to a plan or top up your wallet to use it — promotional/bonus credits do not apply.","type":"permission_error","code":"permission_denied"}}
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: XKIRO
+Requested Model: anthropic/claude-opus-4.8
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0.294s
+HTTP/API Status: 403
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: HTTP_403: {"error":{"message":"This premium model requires an active paid plan or real deposited balance. Subscribe to a plan or top up your wallet to use it — promotional/bonus credits do not apply.","type":"permission_error","code":"permission_denied"}}
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: XKIRO
+Requested Model: anthropic/claude-opus-4.8
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0.332s
+HTTP/API Status: 403
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: HTTP_403: {"error":{"message":"This premium model requires an active paid plan or real deposited balance. Subscribe to a plan or top up your wallet to use it — promotional/bonus credits do not apply.","type":"permission_error","code":"permission_denied"}}
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: XKIRO
+Requested Model: anthropic/claude-opus-4.7
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0.299s
+HTTP/API Status: 403
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: HTTP_403: {"error":{"message":"This premium model requires an active paid plan or real deposited balance. Subscribe to a plan or top up your wallet to use it — promotional/bonus credits do not apply.","type":"permission_error","code":"permission_denied"}}
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: XKIRO
+Requested Model: anthropic/claude-opus-4.7
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0.289s
+HTTP/API Status: 403
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: HTTP_403: {"error":{"message":"This premium model requires an active paid plan or real deposited balance. Subscribe to a plan or top up your wallet to use it — promotional/bonus credits do not apply.","type":"permission_error","code":"permission_denied"}}
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: XKIRO
+Requested Model: anthropic/claude-opus-4.6
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0.296s
+HTTP/API Status: 403
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: HTTP_403: {"error":{"message":"This premium model requires an active paid plan or real deposited balance. Subscribe to a plan or top up your wallet to use it — promotional/bonus credits do not apply.","type":"permission_error","code":"permission_denied"}}
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: XKIRO
+Requested Model: anthropic/claude-opus-4.6
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0.284s
+HTTP/API Status: 403
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: HTTP_403: {"error":{"message":"This premium model requires an active paid plan or real deposited balance. Subscribe to a plan or top up your wallet to use it — promotional/bonus credits do not apply.","type":"permission_error","code":"permission_denied"}}
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: TABITOKEN
+Requested Model: claude-3-opus-20240229
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0s
+HTTP/API Status: MISSING_KEY
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: NO_API_KEY_CONFIGURED: Missing credentials for TABITOKEN (default)
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: TABITOKEN
+Requested Model: anthropic/claude-opus-4.8
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0s
+HTTP/API Status: MISSING_KEY
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: NO_API_KEY_CONFIGURED: Missing credentials for TABITOKEN (default)
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: GOROUTER
+Requested Model: anthropic/claude-opus-5
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0s
+HTTP/API Status: MISSING_KEY
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: NO_API_KEY_CONFIGURED: Missing credentials for GOROUTER (default)
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: GOROUTER
+Requested Model: anthropic/claude-opus-4.8
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0s
+HTTP/API Status: MISSING_KEY
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: NO_API_KEY_CONFIGURED: Missing credentials for GOROUTER (default)
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: OPENROUTER
+Requested Model: anthropic/claude-opus-4.8
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0.121s
+HTTP/API Status: 402
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: HTTP_402: {"error":{"message":"Insufficient credits. This account never purchased credits. Make sure your key is on the correct account or org, and if so, purchase more at https://openrouter.ai/settings/credits","code":402,"metadata":{"limit_source":"openrouter_credits","remedy_hint":"Add credits at https://o
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: OPENROUTER
+Requested Model: anthropic/claude-opus-4.8
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0.048s
+HTTP/API Status: 402
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: HTTP_402: {"error":{"message":"Insufficient credits. This account never purchased credits. Make sure your key is on the correct account or org, and if so, purchase more at https://openrouter.ai/settings/credits","code":402,"metadata":{"limit_source":"openrouter_credits","remedy_hint":"Add credits at https://o
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: OPENROUTER
+Requested Model: anthropic/claude-opus-5
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0.041s
+HTTP/API Status: 402
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: HTTP_402: {"error":{"message":"Insufficient credits. This account never purchased credits. Make sure your key is on the correct account or org, and if so, purchase more at https://openrouter.ai/settings/credits","code":402,"metadata":{"limit_source":"openrouter_credits","remedy_hint":"Add credits at https://o
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: OPENROUTER
+Requested Model: anthropic/claude-opus-5
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0.034s
+HTTP/API Status: 402
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: HTTP_402: {"error":{"message":"Insufficient credits. This account never purchased credits. Make sure your key is on the correct account or org, and if so, purchase more at https://openrouter.ai/settings/credits","code":402,"metadata":{"limit_source":"openrouter_credits","remedy_hint":"Add credits at https://o
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: OPENROUTER
+Requested Model: anthropic/claude-sonnet-5
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0.037s
+HTTP/API Status: 402
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: HTTP_402: {"error":{"message":"Insufficient credits. This account never purchased credits. Make sure your key is on the correct account or org, and if so, purchase more at https://openrouter.ai/settings/credits","code":402,"metadata":{"limit_source":"openrouter_credits","remedy_hint":"Add credits at https://o
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: NONE
+Transport Provider: OPENROUTER
+Requested Model: anthropic/claude-sonnet-5
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0.044s
+HTTP/API Status: 402
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: HTTP_402: {"error":{"message":"Insufficient credits. This account never purchased credits. Make sure your key is on the correct account or org, and if so, purchase more at https://openrouter.ai/settings/credits","code":402,"metadata":{"limit_source":"openrouter_credits","remedy_hint":"Add credits at https://o
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: ANTHROPIC
+Transport Provider: ANTHROPIC_DIRECT
+Requested Model: claude-3-opus-20240229
+Returned Model: NONE
+Upstream Provider: Anthropic Direct
+Task: acceptance-task-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0s
+HTTP/API Status: MISSING_KEY
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Attempt failed
+Error: NO_API_KEY_CONFIGURED: Missing Anthropic API key (default)
+====================================================

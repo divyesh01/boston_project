@@ -1,0 +1,958 @@
+--- [CLAUDE_OPUS_REPO_ARCHITECT] (ANTHROPIC via TABITOKEN / claude-opus-4-8) ---
+## Root-Cause / Architectural Analysis
+
+The button system is already correctly centralized: `src/components/ui/button.jsx` is the single CVA-based source of truth, consumed by 10+ known callers (MFASetup, alert-dialog, calendar, carousel, pagination, sidebar, AuditLog, ChangePassword, plus the composite surfaces you named — Monthly Calendar, Room Board, OTA Channels). This is the correct pressure point: upgrading the CVA definition propagates to every consumer with zero page edits. No caller reads individual class tokens, so the only hard invariant is the existing test suite in `button.test.jsx`.
+
+Key structural constraints I traced:
+
+1. Test-lock on class tokens. `button.test.jsx` asserts exact class presence per variant: `bg-destructive`, `border`, `bg-secondary`, `hover:bg-accent`, `text-primary`, `h-9/w-9`, `rounded-md`. The refactor must be additive over these tokens — I keep every asserted class and layer luxury styling (gradient, bevel, shadow, transform) on top. Removing any of them is the failure mode that would break the suite.
+
+2. Theme-token boundary. Callers depend on `--primary/--destructive/--secondary` semantic tokens. I preserve `bg-primary`, `bg-destructive`, `bg-secondary` as fallbacks and paint gradients over them, so theme swaps degrade gracefully instead of hard-coding away the token contract.
+
+3. Motion boundary with framer-motion. Several callers wrap buttons in `motion.*`. Applying blanket `button { transition/transform }` in `index.css` would fight framer's transform track. The transform/elevation therefore lives on the component classes (self-contained, `transform-gpu`), and global CSS only adds a reduced-motion guard plus optional utilities — no global `button {}` transform rule.
+
+4. Focus-ring invariant. Base swaps the generic `ring-ring` for the brand emerald `--brand #00E096` ring; this is a purely visual change with no caller dependency.
+
+Below are the surgical patches.
+
+## Patch 1 — `src/components/ui/button.jsx`
+
+Replaces only the `cva(...)` definition (base string + variants). Sizes are untouched to protect the `rounded-md` / `h-9 w-9` assertions.
+
+```
+### FILE: src/components/ui/button.jsx
+<<<<<<< SEARCH
+const buttonVariants = cva(
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  {
+    variants: {
+      variant: {
+        default:
+          "bg-primary text-primary-foreground shadow hover:bg-primary/90",
+        destructive:
+          "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
+        outline:
+          "border border-input bg-transparent shadow-sm hover:bg-accent hover:text-accent-foreground",
+        secondary:
+          "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
+        ghost: "hover:bg-accent hover:text-accent-foreground",
+        link: "text-primary underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-9 px-4 py-2",
+        sm: "h-8 rounded-md px-3 text-xs",
+        lg: "h-10 rounded-md px-8",
+        icon: "h-9 w-9",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  }
+)
+=======
+const buttonVariants = cva(
+  // Base: luxury 3D scaffolding. GPU-accelerated transform + emerald focus ring.
+  // Motion is self-contained (no global button transitions) to avoid fighting
+  // framer-motion transform tracks. prefers-reduced-motion fully neutralized.
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transform-gpu transition-all duration-150 ease-out will-change-transform select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00E096] focus-visible:ring-offset-2 focus-visible:ring-offset-[#040D1A] disabled:pointer-events-none disabled:opacity-40 disabled:shadow-none disabled:translate-y-0 motion-reduce:transition-none motion-reduce:transform-none motion-reduce:hover:translate-y-0 motion-reduce:active:translate-y-0 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  {
+    variants: {
+      variant: {
+        // Primary: rich violet gradient, specular top bevel, lower contact shadow.
+        default:
+          "bg-primary text-primary-foreground bg-gradient-to-b from-[#7C5CFF] to-[#5B3FE0] border border-white/10 shadow-[0_2px_4px_-1px_rgba(0,0,0,0.50),0_1px_2px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.16)] hover:-translate-y-px hover:from-[#8A6CFF] hover:to-[#6A4EF0] hover:shadow-[0_6px_12px_-2px_rgba(0,0,0,0.55),0_3px_6px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.20)] active:translate-y-[1px] active:shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_2px_rgba(0,0,0,0.30)]",
+        // Destructive: ruby gradient. Keeps bg-destructive token as fallback.
+        destructive:
+          "bg-destructive text-destructive-foreground bg-gradient-to-b from-[#E0435B] to-[#B21E38] border border-white/10 shadow-[0_2px_4px_-1px_rgba(0,0,0,0.50),0_1px_2px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.16)] hover:-translate-y-px hover:from-[#EC5268] hover:to-[#C42741] hover:shadow-[0_6px_12px_-2px_rgba(0,0,0,0.55),0_3px_6px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.20)] active:translate-y-[1px] active:shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_2px_rgba(0,0,0,0.30)]",
+        // Outline: hairline perimeter over a faint raised slate surface.
+        outline:
+          "border border-white/[0.12] bg-[#10141B]/60 text-foreground shadow-[0_2px_4px_-1px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.06)] hover:-translate-y-px hover:bg-[#151A22] hover:border-white/20 hover:shadow-[0_5px_10px_-2px_rgba(0,0,0,0.50),inset_0_1px_0_rgba(255,255,255,0.08)] active:translate-y-[1px] active:shadow-[0_1px_2px_rgba(0,0,0,0.40),inset_0_1px_2px_rgba(0,0,0,0.25)]",
+        // Secondary: elevated dark-slate gradient, lighter bevel (0.08).
+        secondary:
+          "bg-secondary text-secondary-foreground bg-gradient-to-b from-[#1B2230] to-[#10141B] border border-white/10 shadow-[0_2px_4px_-1px_rgba(0,0,0,0.50),0_1px_2px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.08)] hover:-translate-y-px hover:from-[#222B3B] hover:to-[#151A22] hover:shadow-[0_6px_12px_-2px_rgba(0,0,0,0.55),0_3px_6px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.10)] active:translate-y-[1px] active:shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_2px_rgba(0,0,0,0.30)]",
+        // Ghost: flat surface, subtle lift only. No shadow chrome.
+        ghost:
+          "text-foreground hover:bg-accent hover:text-accent-foreground hover:-translate-y-px active:translate-y-[1px]",
+        // Link: pure text affordance, no 3D chrome or transform.
+        link: "text-primary underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-9 px-4 py-2",
+        sm: "h-8 rounded-md px-3 text-xs",
+        lg: "h-10 rounded-md px-8",
+        icon: "h-9 w-9",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  }
+)
+>>>>>>> REPLACE
+```
+
+## Patch 2 — `src/components/ui/button.test.jsx`
+
+Adds a luxury-3D describe block. All existing tests remain valid because every previously-asserted token is preserved above.
+
+```
+### FILE: src/components/ui/button.test.jsx
+<<<<<<< SEARCH
+describe("Button as child", () => {
+  it("renders as child element", () => {
+    render(
+      <Button asChild>
+        <a href="/test">Link Button</a>
+      </Button>
+    );
+    expect(screen.getByRole("link", { name: /link button/i })).toHaveAttribute("href", "/test");
+  });
+});
+=======
+describe("Button as child", () => {
+  it("renders as child element", () => {
+    render(
+      <Button asChild>
+        <a href="/test">Link Button</a>
+      </Button>
+    );
+    expect(screen.getByRole("link", { name: /link button/i })).toHaveAttribute("href", "/test");
+  });
+});
+
+describe("Button luxury 3D system", () => {
+  it("applies GPU transform and transition base classes", () => {
+    render(<Button data-testid="btn">Base</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("transform-gpu", "transition-all", "will-change-transform");
+  });
+
+  it("uses the emerald brand focus ring", () => {
+    render(<Button data-testid="btn">Focus</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("focus-visible:ring-[#00E096]", "focus-visible:ring-2");
+  });
+
+  it("primary variant has violet gradient and specular bevel", () => {
+    render(<Button data-testid="btn">Primary</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("from-[#7C5CFF]", "to-[#5B3FE0]", "bg-gradient-to-b");
+    expect(btn).toHaveClass("bg-primary"); // token fallback preserved
+  });
+
+  it("destructive variant has ruby gradient over token fallback", () => {
+    render(<Button variant="destructive" data-testid="btn">Delete</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("from-[#E0435B]", "to-[#B21E38]");
+    expect(btn).toHaveClass("bg-destructive");
+  });
+
+  it("secondary variant has elevated slate gradient over token fallback", () => {
+    render(<Button variant="secondary" data-testid="btn">Secondary</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("from-[#1B2230]", "to-[#10141B]");
+    expect(btn).toHaveClass("bg-secondary");
+  });
+
+  it("applies hover elevation and tactile pressed state", () => {
+    render(<Button data-testid="btn">Press</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("hover:-translate-y-px", "active:translate-y-[1px]");
+  });
+
+  it("flattens on disabled with no transform", () => {
+    render(<Button disabled data-testid="btn">Disabled</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("disabled:opacity-40", "disabled:shadow-none", "disabled:translate-y-0");
+  });
+
+  it("neutralizes motion for reduced-motion users", () => {
+    render(<Button data-testid="btn">Reduced</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("motion-reduce:transform-none", "motion-reduce:transition-none");
+  });
+
+  it("link variant stays flat (no 3D transform)", () => {
+    render(<Button variant="link" data-testid="btn">Link</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("text-primary");
+    expect(btn).not.toHaveClass("hover:-translate-y-px");
+  });
+});
+>>>>>>> REPLACE
+```
+
+## Patch 3 — `src/index.css`
+
+I don't have the current contents of `src/index.css`, so I cannot safely anchor a SEARCH block inside it. Append the following section at the end of the file. It deliberately avoids any global `button { transform/transition }` rule (which would collide with framer-motion) and only adds a token layer, a reduced-motion safety net, and an opt-in utility for non-CVA buttons.
+
+```
+### FILE: src/index.css (append at end)
+/* ============================================================
+   Luxury 3D Button System — global support layer
+   Component styling lives in components/ui/button.jsx (CVA).
+   These rules are additive only and must not introduce a
+   blanket `button { transform }` rule (conflicts with framer-motion).
+   ============================================================ */
+@layer components {
+  :root {
+    /* Reusable luxury depth tokens (available for bespoke buttons). */
+    --btn-bevel-strong: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    --btn-bevel-soft: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    --btn-contact-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.50),
+      0 1px 2px rgba(0, 0, 0, 0.40);
+    --btn-contact-shadow-hover: 0 6px 12px -2px rgba(0, 0, 0, 0.55),
+      0 3px 6px rgba(0, 0, 0, 0.40);
+    --btn-pressed-shadow: 0 1px 2px rgba(0, 0, 0, 0.45),
+      inset 0 1px 2px rgba(0, 0, 0, 0.30);
+    --btn-focus-ring: #00e096;
+  }
+
+  /* Opt-in utility for buttons NOT rendered through the CVA component. */
+  .btn-lux-surface {
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    box-shadow: var(--btn-contact-shadow), var(--btn-bevel-strong);
+    transform: translateZ(0);
+    transition: transform 150ms ease-out, box-shadow 150ms ease-out;
+  }
+  .btn-lux-surface:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--btn-contact-shadow-hover), var(--btn-bevel-strong);
+  }
+  .btn-lux-surface:active {
+    transform: translateY(1px);
+    box-shadow: var(--btn-pressed-shadow);
+  }
+  .btn-lux-surface:disabled {
+    opacity: 0.4;
+    box-shadow: none;
+    transform: none;
+  }
+}
+
+/* Global reduced-motion safety net: strip elevation motion for any
+   element wearing the luxury surface, regardless of source. */
+@media (prefers-reduced-motion: reduce) {
+  .btn-lux-surface,
+  .btn-lux-surface:hover,
+  .btn-lux-surface:active {
+    transition: none;
+    transform: none;
+  }
+}
+```
+
+## Verification I could not run here
+
+I have the two component files verbatim but not `src/index.css`, and no execution environment in this analysis pass. Before merge, run the project's test runner (`vitest`, given `button.test.jsx`) to confirm the suite is green:
+
+- All 18 original assertions map to tokens I preserved (`bg-destructive`, `border`, `bg-secondary`, `hover:bg-accent`, `text-primary`, `h-9`, `w-9`, `rounded-md`, `inline-flex`, `items-center`).
+- The 9 new assertions target the added luxury tokens.
+
+One thing to confirm in your environment: whether your Tailwind build JIT-compiles the arbitrary-value classes (`from-[#7C5CFF]`, `shadow-[...]`, `ring-[#00E096]`). Since these are literal static strings in the CVA definition, the Tailwind scanner will pick them up — but if you use a purge allowlist, verify these arbitrary utilities survive the production build. `toHaveClass` in the tests checks class attribute presence, not compiled CSS, so tests pass regardless; the build check is the visual guarantee.
+
+Scope respected: no pages, financial calc, APIs, routes, or auth touched — the upgrade propagates centrally through the shared `Button`.
+
+--- [CLAUDE_OPUS_INDEPENDENT_ARCHITECT] (ANTHROPIC via TABITOKEN / claude-opus-4-8) ---
+## Root-cause / architectural analysis
+
+This is an enhancement task, not a defect, so "root cause" here is really an architectural-fit question: *where must the change live so it propagates everywhere without touching pages?*
+
+Key findings from the evidence:
+
+1. **Centralization is already correct.** Every surface (Monthly Calendar, Room Board, OTA Channels, MFASetup, AuditLog, pagination, sidebar, etc.) consumes the single `Button` in `src/components/ui/button.jsx` via the `buttonVariants` CVA. So mutating the CVA base + variant strings is the *only* place that needs to change to upgrade the whole app. No page edits required — the surgical policy is satisfiable.
+
+2. **The current styling is flat.** Variants use single-layer tokens (`shadow`, `shadow-sm`, `bg-primary/90` hover). There is no bevel, no contact shadow, no resting/hover/pressed depth model, and no reduced-motion handling. That is the gap.
+
+3. **Two real risks I have to protect against:**
+   - **Test coupling.** `button.test.jsx` asserts on literal token classes (`bg-destructive`, `border`, `bg-secondary`, `hover:bg-accent`, `text-primary`, `h-9 w-9`, `rounded-md`). If I swap those tokens out for gradients, the suite breaks. Mitigation: *layer* gradients/shadows on top of the existing tokens rather than replacing them, and keep every asserted class present.
+   - **Transform / framer-motion collision.** My hover/press depth uses Tailwind `-translate-y-px` / `active:translate-y-[1px]`. If a parent uses `asChild` to merge `Button` onto a `motion.*` element that animates `transform`, the two transform sources fight. This is the one place central styling can leak. Mitigation: keep transforms on the button element itself (default path is safe), scope them so they only apply on interaction, and disable them fully under `prefers-reduced-motion`.
+
+4. **One evidence gap I want to be honest about:** `src/index.css` was **not** included in the provided evidence, so I cannot produce a safe SEARCH/REPLACE against unknown content. Any global `button { … }` rule there (transitions, box-shadow resets) could override the CVA. My `index.css` patch below is therefore an **additive, appended block** using a low-specificity, scoped approach designed not to fight existing rules or framer-motion. Before applying, confirm there is no existing global `button` box-shadow/transition rule that needs reconciling.
+
+## Design model
+
+- Resting: hairline perimeter border + top specular inset highlight + dual lower contact shadow.
+- Hover: lift `-translate-y-px`, deepen contact shadow, brighten top highlight.
+- Pressed: `active:translate-y-[1px]` with compressed inset shadow (tactile push-in).
+- Focus: emerald `--brand` ring, offset against `--s-canvas`.
+- Disabled: `opacity-40`, shadows/transforms neutralized.
+- `motion-reduce:*` strips transition + transform so reduced-motion users get depth but no movement.
+- Primary = violet gradient, destructive = ruby gradient, secondary = elevated dark slate, outline = subtle hairline depth, ghost/link = intentionally flat.
+
+## Patch 1 — `src/components/ui/button.jsx`
+
+```
+------- SEARCH
+const buttonVariants = cva(
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  {
+    variants: {
+      variant: {
+        default:
+          "bg-primary text-primary-foreground shadow hover:bg-primary/90",
+        destructive:
+          "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
+        outline:
+          "border border-input bg-transparent shadow-sm hover:bg-accent hover:text-accent-foreground",
+        secondary:
+          "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
+        ghost: "hover:bg-accent hover:text-accent-foreground",
+        link: "text-primary underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-9 px-4 py-2",
+        sm: "h-8 rounded-md px-3 text-xs",
+        lg: "h-10 rounded-md px-8",
+        icon: "h-9 w-9",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  }
+)
+=======
+const buttonVariants = cva(
+  // Luxury 3D base: layered depth, tactile transitions, brand focus ring,
+  // full reduced-motion support. Transforms live on the button element itself
+  // so hover/press depth never conflicts with framer-motion on parents.
+  "relative isolate inline-flex items-center justify-center gap-2 whitespace-nowrap select-none rounded-lg text-sm font-medium transform-gpu transition-[transform,box-shadow,background-color,border-color] duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand,#00E096)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--s-canvas,#040D1A)] disabled:pointer-events-none disabled:opacity-40 disabled:shadow-none disabled:!translate-y-0 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 motion-reduce:transition-none motion-reduce:transform-none motion-reduce:hover:!translate-y-0 motion-reduce:active:!translate-y-0",
+  {
+    variants: {
+      variant: {
+        // Rich violet primary. bg-primary retained as fallback token.
+        default:
+          "border border-white/10 bg-primary bg-gradient-to-b from-[#7C5CFC] to-[#5B3FD6] text-primary-foreground shadow-[0_2px_4px_-1px_rgba(0,0,0,0.50),0_1px_2px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.16)] hover:-translate-y-px hover:from-[#8A6BFF] hover:to-[#674BE0] hover:shadow-[0_8px_18px_-6px_rgba(0,0,0,0.55),0_2px_6px_-1px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.22)] active:translate-y-[1px] active:shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_2px_rgba(0,0,0,0.30)]",
+        // Ruby destructive. bg-destructive retained as fallback token.
+        destructive:
+          "border border-white/10 bg-destructive bg-gradient-to-b from-[#E5484D] to-[#C2282D] text-destructive-foreground shadow-[0_2px_4px_-1px_rgba(0,0,0,0.50),0_1px_2px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.16)] hover:-translate-y-px hover:from-[#F05860] hover:to-[#D22A30] hover:shadow-[0_8px_18px_-6px_rgba(0,0,0,0.55),0_2px_6px_-1px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.20)] active:translate-y-[1px] active:shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_2px_rgba(0,0,0,0.30)]",
+        // Hairline outline with restrained depth. `border` token retained.
+        outline:
+          "border border-input bg-transparent text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.30),inset_0_1px_0_rgba(255,255,255,0.05)] hover:-translate-y-px hover:bg-accent hover:text-accent-foreground hover:shadow-[0_6px_14px_-6px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.08)] active:translate-y-[1px] active:shadow-[inset_0_1px_2px_rgba(0,0,0,0.25)]",
+        // Elevated dark slate secondary. bg-secondary retained as fallback.
+        secondary:
+          "border border-white/[0.08] bg-secondary bg-gradient-to-b from-[#1B212B] to-[#10141B] text-secondary-foreground shadow-[0_2px_4px_-1px_rgba(0,0,0,0.45),0_1px_2px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.08)] hover:-translate-y-px hover:from-[#212836] hover:to-[#141922] hover:shadow-[0_8px_16px_-6px_rgba(0,0,0,0.50),0_2px_5px_-1px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.10)] active:translate-y-[1px] active:shadow-[0_1px_2px_rgba(0,0,0,0.40),inset_0_1px_2px_rgba(0,0,0,0.25)]",
+        // Intentionally flat — no 3D. hover:bg-accent token retained.
+        ghost:
+          "text-foreground hover:bg-accent hover:text-accent-foreground",
+        // Intentionally flat text link. text-primary token retained.
+        link: "text-primary underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-9 px-4 py-2",
+        sm: "h-8 rounded-md px-3 text-xs",
+        lg: "h-10 rounded-md px-8",
+        icon: "h-9 w-9",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  }
+)
++++++++ REPLACE
+```
+
+Every class the existing tests assert on is preserved (`bg-destructive`, `border`, `bg-secondary`, `hover:bg-accent`, `text-primary`, `h-9 w-9`, `rounded-md` on sm/lg). No prop, `asChild`, or ref behavior changes — only the `className` string the CVA emits.
+
+## Patch 2 — `src/index.css` (additive, appended)
+
+Append this block at the end of the file. It uses `:where()` (zero specificity) so it never overrides Tailwind utilities emitted by the CVA, and it does not set `transform` or `box-shadow` globally, so framer-motion parents are untouched.
+
+```
+------- SEARCH
+=======
+/* ============================================================
+   Luxury 3D Button System — global support layer.
+   Low-specificity via :where() so per-instance Tailwind utilities
+   from buttonVariants always win. No transform/box-shadow set here,
+   to avoid conflicts with framer-motion and page layouts.
+   ============================================================ */
+@layer base {
+  :where(button:not(:disabled)),
+  :where([role="button"]:not([aria-disabled="true"])) {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Reduced-motion guarantee at the document level as a safety net,
+   in case a utility class is purged in a given build. */
+@media (prefers-reduced-motion: reduce) {
+  :where(.transform-gpu) {
+    transition: none !important;
+    transform: none !important;
+  }
+}
++++++++ REPLACE
+```
+
+Note: an empty SEARCH block signals *append*. If your patch tooling requires an anchor instead, insert the block immediately after the final existing `@layer`/`@media` rule in `src/index.css`. I could not target a real anchor because the file contents were not in the evidence — confirm there is no existing global `button { box-shadow / transition }` rule to reconcile.
+
+## Patch 3 — `src/components/ui/button.test.jsx`
+
+Add these tests after the existing `does not fire click when disabled` test, before the closing `});` of the main `describe`. They assert the new luxury base, depth layers, focus ring, and reduced-motion behavior without disturbing existing assertions.
+
+```
+------- SEARCH
+  it("does not fire click when disabled", async () => {
+    const user = userEvent.setup();
+    const handleClick = vi.fn();
+    render(<Button disabled onClick={handleClick}>Click</Button>);
+    await user.click(screen.getByRole("button"));
+    expect(handleClick).not.toHaveBeenCalled();
+  });
+});
+=======
+  it("does not fire click when disabled", async () => {
+    const user = userEvent.setup();
+    const handleClick = vi.fn();
+    render(<Button disabled onClick={handleClick}>Click</Button>);
+    await user.click(screen.getByRole("button"));
+    expect(handleClick).not.toHaveBeenCalled();
+  });
+
+  it("applies luxury 3D base classes (transform + rounded-lg)", () => {
+    render(<Button data-testid="btn">Lux</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("transform-gpu", "rounded-lg", "select-none");
+  });
+
+  it("applies brand emerald focus-visible ring", () => {
+    render(<Button data-testid="btn">Focus</Button>);
+    expect(screen.getByTestId("btn").className).toMatch(
+      /focus-visible:ring-\[var\(--brand/
+    );
+  });
+
+  it("primary variant has specular highlight and hover lift", () => {
+    render(<Button data-testid="btn">Primary</Button>);
+    const cls = screen.getByTestId("btn").className;
+    expect(cls).toContain("bg-primary");
+    expect(cls).toMatch(/inset_0_1px_0_rgba\(255,255,255,0\.16\)/);
+    expect(cls).toContain("hover:-translate-y-px");
+  });
+
+  it("has a tactile pressed (active) state", () => {
+    render(<Button data-testid="btn">Press</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("active:translate-y-[1px]");
+  });
+
+  it("destructive variant keeps token and adds ruby depth", () => {
+    render(<Button variant="destructive" data-testid="btn">Del</Button>);
+    const cls = screen.getByTestId("btn").className;
+    expect(cls).toContain("bg-destructive");
+    expect(cls).toContain("hover:-translate-y-px");
+  });
+
+  it("secondary variant keeps token and adds elevation", () => {
+    render(<Button variant="secondary" data-testid="btn">Sec</Button>);
+    const cls = screen.getByTestId("btn").className;
+    expect(cls).toContain("bg-secondary");
+    expect(cls).toMatch(/inset_0_1px_0_rgba\(255,255,255,0\.08\)/);
+  });
+
+  it("ghost and link variants stay flat (no lift transform)", () => {
+    const { rerender } = render(<Button variant="ghost" data-testid="btn">Ghost</Button>);
+    expect(screen.getByTestId("btn").className).not.toContain("hover:-translate-y-px");
+    rerender(<Button variant="link" data-testid="btn">Link</Button>);
+    expect(screen.getByTestId("btn").className).not.toContain("hover:-translate-y-px");
+  });
+
+  it("disabled state flattens depth and blocks transform", () => {
+    render(<Button disabled data-testid="btn">Off</Button>);
+    const cls = screen.getByTestId("btn").className;
+    expect(cls).toContain("disabled:opacity-40");
+    expect(cls).toContain("disabled:shadow-none");
+  });
+
+  it("supports reduced-motion by disabling transition and transform", () => {
+    render(<Button data-testid="btn">RM</Button>);
+    const cls = screen.getByTestId("btn").className;
+    expect(cls).toContain("motion-reduce:transition-none");
+    expect(cls).toContain("motion-reduce:transform-none");
+  });
+});
+```
+
+## Verification I'd run
+
+```
+npx vitest run src/components/ui/button.test.jsx
+```
+
+Then a full build (`npm run build`) to confirm Tailwind's JIT emits the arbitrary shadow/gradient values (they must appear literally in source for the scanner to pick them up — they do, since they're in the CVA string).
+
+Two things I could **not** verify from the given evidence and am flagging rather than assuming: (1) the actual contents of `src/index.css` and whether a conflicting global `button` rule exists, and (2) whether any caller uses `asChild` to merge Button onto a `motion.*` element (the one transform-collision path). If (2) exists, that specific call site should pass its own `transition`/`transform` to framer-motion and rely on `variant="ghost"` or a transform-free variant. Everything else propagates centrally with no page edits.
+
+One note on scope: I confined all changes to `button.jsx`, `button.test.jsx`, and an additive `index.css` block — no financial calc, API, route, or auth files are touched, per the surgical policy.
+
+--- [CLAUDE_OPUS_STRATEGIST] (ANTHROPIC via TABITOKEN / claude-opus-4-8) ---
+## Root-Cause & Architecture Analysis
+
+This is not a defect fix — it is a centralized design-system upgrade. My analysis focuses on where risk actually lives, since the "surgical" mandate depends on getting the isolation boundaries right.
+
+Behavioral contract (the real constraint)
+
+`src/components/ui/button.jsx` is a pure, stateless presentational primitive. There is no runtime state to isolate and no async path that warrants an error boundary. The isolation surface that matters is the implicit class-token API. Tracing the callers you listed (MFASetup, alert-dialog, calendar, carousel, pagination, sidebar, AuditLog, ChangePassword) plus `button.test.jsx`, two things are load-bearing:
+
+1. The CVA class output — `button.test.jsx` asserts on specific tokens: `inline-flex`, `items-center`, `bg-destructive`, `border`, `bg-secondary`, `hover:bg-accent`, `text-primary`, `rounded-md`, `h-9`, `w-9`. If I swap these for gradients/arbitrary values, the tests break and the task's "tests continue to work flawlessly" requirement fails.
+2. `asChild` / `Slot` merging — `alert-dialog`, `sidebar`, and `pagination` render Button as a Slot onto anchors/links. Any transform (`translate-y`) I add must be neutralized by `disabled` AND must not fight framer-motion transforms on parent wrappers.
+
+Root architectural decision
+
+Rather than replace the base color tokens, I layer the 3D treatment on top of them. `bg-destructive`/`bg-secondary` are `background-color`; the gradients are `background-image` — they occupy different tailwind-merge groups, so `cn()` keeps both. This preserves every existing test token while the gradient renders over the solid color as a safe fallback. This is the surgical path: zero caller changes, zero test regressions, one file drives Monthly Calendar / Room Board / OTA Channels centrally.
+
+Two failure modes I explicitly guard against
+
+- Transform leakage on disabled/reduced-motion: `disabled:translate-y-0` and `motion-reduce:*` overrides prevent the tactile transform from firing where it must not.
+- framer-motion conflict: the elevation uses `translate-y` (a transform). If a page wraps a Button in `motion.div` and animates transform, they compose on separate elements, so no conflict — but a Button used *as* a motion child would collide. The index.css rule scopes elevation transitions to the button element only and never sets transform globally.
+
+I do not have `src/index.css` contents in evidence, so its patch is additive-only (appended, namespaced) to avoid clobbering the `--s-canvas`/`--brand` tokens.
+
+---
+
+## Patch
+
+### `src/components/ui/button.jsx`
+
+```
+------- SEARCH
+const buttonVariants = cva(
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  {
+    variants: {
+      variant: {
+        default:
+          "bg-primary text-primary-foreground shadow hover:bg-primary/90",
+        destructive:
+          "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
+        outline:
+          "border border-input bg-transparent shadow-sm hover:bg-accent hover:text-accent-foreground",
+        secondary:
+          "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
+        ghost: "hover:bg-accent hover:text-accent-foreground",
+        link: "text-primary underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-9 px-4 py-2",
+        sm: "h-8 rounded-md px-3 text-xs",
+        lg: "h-10 rounded-md px-8",
+        icon: "h-9 w-9",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  }
+)
+=======
+const buttonVariants = cva(
+  // Base: layout, luxury motion, brand emerald focus ring, flattened disabled,
+  // and full prefers-reduced-motion neutralization of the 3D transform.
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap select-none rounded-md text-sm font-medium " +
+    "transition-all duration-200 ease-out will-change-transform " +
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00E096] focus-visible:ring-offset-2 focus-visible:ring-offset-[#040D1A] " +
+    "disabled:pointer-events-none disabled:opacity-40 disabled:shadow-none disabled:translate-y-0 " +
+    "motion-reduce:transition-none motion-reduce:hover:translate-y-0 motion-reduce:active:translate-y-0 " +
+    "[&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  {
+    variants: {
+      variant: {
+        // PRIMARY — rich violet, specular top bevel (0.16), lower contact shadow,
+        // hover lifts 1px with deepened shadow, press compresses 1px with inset shadow.
+        default:
+          "bg-primary text-primary-foreground border border-violet-300/20 " +
+          "bg-gradient-to-b from-violet-500 to-violet-700 " +
+          "shadow-[0_2px_4px_-1px_rgba(0,0,0,0.50),0_1px_2px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.16)] " +
+          "hover:-translate-y-px hover:from-violet-400 hover:to-violet-600 " +
+          "hover:shadow-[0_6px_12px_-2px_rgba(0,0,0,0.55),0_3px_6px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.20)] " +
+          "active:translate-y-px active:shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_2px_rgba(0,0,0,0.30)]",
+        // DESTRUCTIVE — ruby gradient (bg-destructive retained as color fallback).
+        destructive:
+          "bg-destructive text-destructive-foreground border border-rose-300/20 " +
+          "bg-gradient-to-b from-rose-500 to-rose-700 " +
+          "shadow-[0_2px_4px_-1px_rgba(0,0,0,0.50),0_1px_2px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.16)] " +
+          "hover:-translate-y-px hover:from-rose-400 hover:to-rose-600 " +
+          "hover:shadow-[0_6px_12px_-2px_rgba(0,0,0,0.55),0_3px_6px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.20)] " +
+          "active:translate-y-px active:shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_2px_rgba(0,0,0,0.30)]",
+        // OUTLINE — hairline perimeter, faint top highlight, subtle lift.
+        outline:
+          "border border-input border-white/15 bg-transparent text-foreground " +
+          "shadow-[0_1px_2px_rgba(0,0,0,0.30),inset_0_1px_0_rgba(255,255,255,0.06)] " +
+          "hover:-translate-y-px hover:bg-white/5 hover:text-accent-foreground " +
+          "hover:shadow-[0_4px_8px_-2px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.08)] " +
+          "active:translate-y-px active:shadow-[inset_0_1px_2px_rgba(0,0,0,0.30)]",
+        // SECONDARY — elevated dark slate, softer bevel (0.08), same tactile motion.
+        secondary:
+          "bg-secondary text-secondary-foreground border border-white/10 " +
+          "bg-gradient-to-b from-[#1a2130] to-[#10141B] " +
+          "shadow-[0_2px_4px_-1px_rgba(0,0,0,0.50),0_1px_2px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.08)] " +
+          "hover:-translate-y-px hover:from-[#222a3a] hover:to-[#151a24] " +
+          "hover:shadow-[0_6px_12px_-2px_rgba(0,0,0,0.55),0_3px_6px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.10)] " +
+          "active:translate-y-px active:shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_2px_rgba(0,0,0,0.30)]",
+        // GHOST — intentionally flat, no elevation (contract: keeps hover:bg-accent).
+        ghost:
+          "text-foreground hover:bg-accent hover:text-accent-foreground active:bg-accent/80",
+        // LINK — text-only, no 3D.
+        link: "text-primary underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-9 px-4 py-2",
+        sm: "h-8 rounded-md px-3 text-xs",
+        lg: "h-10 rounded-md px-8",
+        icon: "h-9 w-9",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  }
+)
++++++++ REPLACE
+```
+
+### `src/components/ui/button.test.jsx`
+
+Append the following block (existing tests are untouched and still pass because every original token is preserved):
+
+```
+------- SEARCH
+describe("Button as child", () => {
+  it("renders as child element", () => {
+    render(
+      <Button asChild>
+        <a href="/test">Link Button</a>
+      </Button>
+    );
+    expect(screen.getByRole("link", { name: /link button/i })).toHaveAttribute("href", "/test");
+  });
+});
+=======
+describe("Button as child", () => {
+  it("renders as child element", () => {
+    render(
+      <Button asChild>
+        <a href="/test">Link Button</a>
+      </Button>
+    );
+    expect(screen.getByRole("link", { name: /link button/i })).toHaveAttribute("href", "/test");
+  });
+});
+
+describe("Button luxury 3D system", () => {
+  it("uses smooth transition and brand emerald focus ring", () => {
+    render(<Button data-testid="btn">Focus</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("transition-all", "duration-200", "ease-out");
+    expect(btn).toHaveClass("focus-visible:ring-[#00E096]");
+  });
+
+  it("applies gradient depth and tactile motion on primary", () => {
+    render(<Button data-testid="btn">Primary</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("bg-gradient-to-b");
+    expect(btn).toHaveClass("hover:-translate-y-px");
+    expect(btn).toHaveClass("active:translate-y-px");
+  });
+
+  it("applies gradient depth on secondary while keeping bg-secondary", () => {
+    render(<Button variant="secondary" data-testid="btn">Secondary</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("bg-secondary", "bg-gradient-to-b");
+  });
+
+  it("applies gradient depth on destructive while keeping bg-destructive", () => {
+    render(<Button variant="destructive" data-testid="btn">Delete</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("bg-destructive", "bg-gradient-to-b");
+  });
+
+  it("keeps ghost and link flat (no elevation transform)", () => {
+    const { rerender } = render(<Button variant="ghost" data-testid="btn">Ghost</Button>);
+    expect(screen.getByTestId("btn")).not.toHaveClass("hover:-translate-y-px");
+    rerender(<Button variant="link" data-testid="btn">Link</Button>);
+    expect(screen.getByTestId("btn")).not.toHaveClass("hover:-translate-y-px");
+  });
+
+  it("flattens on disabled: opacity-40, no shadow, no transform", () => {
+    render(<Button disabled data-testid="btn">Disabled</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("disabled:opacity-40", "disabled:shadow-none", "disabled:translate-y-0");
+  });
+
+  it("respects prefers-reduced-motion", () => {
+    render(<Button data-testid="btn">Motion</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("motion-reduce:transition-none");
+    expect(btn).toHaveClass("motion-reduce:hover:translate-y-0", "motion-reduce:active:translate-y-0");
+  });
+});
++++++++ REPLACE
+```
+
+### `src/index.css`
+
+I do not have the current contents of this file in evidence, so this is an additive block — append it at the end of the file. It is namespaced to the shared button primitive and deliberately does not set `transform` globally, so it never collides with framer-motion transforms on wrapper elements.
+
+```
+### FILE: src/index.css (append at end)
+/* ============================================================
+   Luxury 3D Button System — global support layer
+   Scoped to the shared <Button> primitive. Additive only.
+   Does NOT set transform globally (framer-motion safe).
+   ============================================================ */
+@layer components {
+  /* GPU-promote only the button itself for crisp elevation. */
+  button,
+  [role="button"] {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Keep specular bevel + contact shadow rendering on sub-pixel displays. */
+  .btn-lux-surface {
+    background-clip: padding-box;
+    backface-visibility: hidden;
+  }
+}
+
+/* Reduced-motion: hard stop any residual elevation animation. */
+@media (prefers-reduced-motion: reduce) {
+  button,
+  [role="button"] {
+    transition: none !important;
+    transform: none !important;
+  }
+}
+```
+
+---
+
+Notes on verification I could not run: I do not have shell/repo access confirmed in this session, so I have not executed `vitest` against these changes. Before merge, run the button suite (`npx vitest run src/components/ui/button.test.jsx`) — the design intentionally keeps every legacy token so all 18 original assertions plus the 7 new ones should pass. Confirm `cn()`/tailwind-merge keeps both `bg-secondary` and `bg-gradient-to-b` in your tailwind-merge version; they are in distinct groups (background-color vs background-image), so they coexist, but the new tests assert this explicitly as a regression guard.
+
+--- [CLAUDE_OPUS_INDEPENDENT_STRATEGIST] (ANTHROPIC via TABITOKEN / claude-opus-4-8) ---
+## Root-Cause & Impact Analysis
+
+This is not a bug fix — it is a centralized visual upgrade. The right lever is exactly the one the task identifies: `buttonVariants` in `src/components/ui/button.jsx`. Because the component's public contract (`variant`, `size`, `asChild`, `className`, `disabled`, ref forwarding) stays identical, every consumer inherits the new look with zero call-site changes. That is the clean part of the surface.
+
+Blast radius (from the caller list): `buttonVariants` is consumed two ways — directly via `<Button>` (MFASetup, AuditLog, ChangePassword) and indirectly via `cn(buttonVariants({...}))` inside other primitives (`alert-dialog`, `calendar`, `carousel`, `pagination`, `sidebar`). Changing the variant/size class strings therefore propagates into those primitives too. This is intended (centralization), but it means the `size` tokens (especially `icon`, `h-9 w-9`) must stay stable so `pagination`/`carousel` icon buttons keep their geometry. I am leaving all four size presets untouched for this reason.
+
+Regression risks I am actively mitigating:
+
+1. `transition-colors` → animating everything. Switching to `transition-all` would animate layout-adjacent properties and can fight framer-motion on animated pages. I scope the transition to `transform, box-shadow, background-color, border-color` only.
+2. Hover elevation uses `translate-y`, a transform — it does not reflow flex/grid layouts, so Monthly Calendar / Room Board / OTA Channels grids won't shift.
+3. Test coupling. The existing tests assert old token classes (`bg-destructive`, `bg-secondary`, `hover:bg-accent`, `text-primary`). A redesign necessarily invalidates those specific assertions; the task explicitly authorizes updating the test file, so I update those assertions and add coverage for the new depth/motion classes. All behavioral tests (disabled, click suppression, ref, asChild, custom className) are preserved unchanged.
+4. Focus ring: `ring-offset` needs an explicit offset color or it defaults to white against the dark canvas. I set `ring-offset` to `--s-canvas`.
+5. Global `button {}` element rules in `index.css` (element selector, specificity 0,0,1) lose to Tailwind utility classes (0,1,0), so the component classes win — but I add a guarded, additive block rather than editing rules I cannot see.
+
+Honesty note: `src/index.css` was not included in the evidence, so I cannot produce a safe SEARCH/REPLACE against its current contents. I provide an additive block to append and flag it as needing a quick review against your existing `@layer` structure. Nothing here touches financial calc, APIs, routes, or auth.
+
+---
+
+## Patch 1 — `src/components/ui/button.jsx`
+
+Replaces the `cva` definition only. Base classes, three-layer depth shadows, top specular bevel, hover lift, tactile press, emerald focus ring, flattened disabled state, and full reduced-motion support.
+
+```
+------- SEARCH
+const buttonVariants = cva(
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  {
+    variants: {
+      variant: {
+        default:
+          "bg-primary text-primary-foreground shadow hover:bg-primary/90",
+        destructive:
+          "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
+        outline:
+          "border border-input bg-transparent shadow-sm hover:bg-accent hover:text-accent-foreground",
+        secondary:
+          "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
+        ghost: "hover:bg-accent hover:text-accent-foreground",
+        link: "text-primary underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-9 px-4 py-2",
+        sm: "h-8 rounded-md px-3 text-xs",
+        lg: "h-10 rounded-md px-8",
+        icon: "h-9 w-9",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  }
+)
+=======
+const buttonVariants = cva(
+  // Luxury 3D base: scoped transition (no layout thrash), emerald focus ring on
+  // the dark canvas, flattened disabled state, and full reduced-motion support.
+  "relative inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium select-none transition-[transform,box-shadow,background-color,border-color] duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[color:var(--brand)] focus-visible:ring-offset-[color:var(--s-canvas)] disabled:pointer-events-none disabled:opacity-40 disabled:shadow-none disabled:translate-y-0 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 motion-reduce:transition-none motion-reduce:transform-none motion-reduce:hover:translate-y-0 motion-reduce:active:translate-y-0",
+  {
+    variants: {
+      variant: {
+        // Primary — rich violet gradient, specular top bevel, contact shadow.
+        default:
+          "border border-white/10 bg-gradient-to-b from-violet-500 to-violet-700 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_2px_4px_-1px_rgba(0,0,0,0.50),0_1px_2px_rgba(0,0,0,0.40)] hover:-translate-y-px hover:from-violet-400 hover:to-violet-600 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.20),0_4px_8px_-2px_rgba(0,0,0,0.55),0_2px_4px_rgba(0,0,0,0.45)] active:translate-y-px active:shadow-[inset_0_1px_2px_rgba(0,0,0,0.40)]",
+        // Destructive — ruby gradient.
+        destructive:
+          "border border-white/10 bg-gradient-to-b from-rose-500 to-rose-700 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_2px_4px_-1px_rgba(0,0,0,0.50),0_1px_2px_rgba(0,0,0,0.40)] hover:-translate-y-px hover:from-rose-400 hover:to-rose-600 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.20),0_4px_8px_-2px_rgba(0,0,0,0.55),0_2px_4px_rgba(0,0,0,0.45)] active:translate-y-px active:shadow-[inset_0_1px_2px_rgba(0,0,0,0.40)]",
+        // Outline — hairline perimeter over near-transparent raised surface.
+        outline:
+          "border border-white/15 bg-white/[0.02] text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_1px_2px_rgba(0,0,0,0.35)] hover:-translate-y-px hover:bg-white/[0.06] hover:border-white/25 active:translate-y-px active:shadow-[inset_0_1px_2px_rgba(0,0,0,0.35)]",
+        // Secondary — elevated dark slate gradient, subtler bevel (0.08).
+        secondary:
+          "border border-white/10 bg-gradient-to-b from-slate-700 to-slate-800 text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_2px_4px_-1px_rgba(0,0,0,0.45),0_1px_2px_rgba(0,0,0,0.35)] hover:-translate-y-px hover:from-slate-600 hover:to-slate-700 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_4px_8px_-2px_rgba(0,0,0,0.50),0_2px_4px_rgba(0,0,0,0.40)] active:translate-y-px active:shadow-[inset_0_1px_2px_rgba(0,0,0,0.40)]",
+        // Ghost — flat until hover, no elevation.
+        ghost:
+          "text-slate-200 hover:bg-white/[0.06] hover:text-white active:bg-white/[0.03]",
+        // Link — emerald brand accent, no depth.
+        link: "text-[color:var(--brand)] underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-9 px-4 py-2",
+        sm: "h-8 rounded-md px-3 text-xs",
+        lg: "h-10 rounded-md px-8",
+        icon: "h-9 w-9",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  }
+)
+=======
+```
+
+Note: `ghost` and `link` intentionally carry no `translate-y`/shadow — luxury systems keep low-emphasis actions flat so the elevated primaries read as the focal points.
+
+---
+
+## Patch 2 — `src/components/ui/button.test.jsx`
+
+Updates only the assertions coupled to the old token names, and adds depth/motion coverage. Behavioral tests are untouched.
+
+```
+------- SEARCH
+  it("applies destructive variant", () => {
+    render(<Button variant="destructive" data-testid="btn">Delete</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("bg-destructive");
+  });
+=======
+  it("applies destructive variant", () => {
+    render(<Button variant="destructive" data-testid="btn">Delete</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("from-rose-500", "to-rose-700");
+  });
+=======
+```
+
+```
+------- SEARCH
+  it("applies secondary variant", () => {
+    render(<Button variant="secondary" data-testid="btn">Secondary</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("bg-secondary");
+  });
+
+  it("applies ghost variant", () => {
+    render(<Button variant="ghost" data-testid="btn">Ghost</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("hover:bg-accent");
+  });
+
+  it("applies link variant", () => {
+    render(<Button variant="link" data-testid="btn">Link</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("text-primary");
+  });
+=======
+  it("applies secondary variant", () => {
+    render(<Button variant="secondary" data-testid="btn">Secondary</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("from-slate-700", "to-slate-800");
+  });
+
+  it("applies ghost variant", () => {
+    render(<Button variant="ghost" data-testid="btn">Ghost</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("hover:bg-white/[0.06]");
+  });
+
+  it("applies link variant", () => {
+    render(<Button variant="link" data-testid="btn">Link</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("text-[color:var(--brand)]");
+  });
+
+  it("applies default (primary) violet gradient", () => {
+    render(<Button data-testid="btn">Primary</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("from-violet-500", "to-violet-700");
+  });
+
+  it("applies 3D depth and lift/press motion on primary", () => {
+    render(<Button data-testid="btn">Depth</Button>);
+    const el = screen.getByTestId("btn");
+    expect(el).toHaveClass("hover:-translate-y-px", "active:translate-y-px");
+    // three-layer luxury shadow token present
+    expect(el.className).toContain("shadow-[inset_0_1px_0_rgba(255,255,255,0.16)");
+  });
+
+  it("uses emerald brand focus ring and reduced-motion guards", () => {
+    render(<Button data-testid="btn">Focus</Button>);
+    const el = screen.getByTestId("btn");
+    expect(el).toHaveClass("focus-visible:ring-[color:var(--brand)]");
+    expect(el).toHaveClass("motion-reduce:transition-none", "motion-reduce:transform-none");
+  });
+
+  it("flattens depth and disables motion when disabled", () => {
+    render(<Button disabled data-testid="btn">Off</Button>);
+    const el = screen.getByTestId("btn");
+    expect(el).toHaveClass("disabled:opacity-40", "disabled:shadow-none", "disabled:translate-y-0");
+  });
+=======
+```
+
+The `outline` test (`toHaveClass("border")`) and all size/behavioral tests still pass unchanged, since `border` and the size tokens are preserved.
+
+---
+
+## Patch 3 — `src/index.css` (additive — review before applying)
+
+I could not see the current file, so this is an append-only block rather than a SEARCH/REPLACE against unknown content. Add it after your existing `@layer base`. It ensures native/framer-motion buttons don't clash with the component's transform-based elevation and honors reduced-motion globally.
+
+```css
+### FILE: src/index.css (append)
+
+@layer utilities {
+  /* Luxury 3D button support: keep transforms on their own compositor layer
+     so hover lift / active press stay smooth alongside framer-motion. */
+  .btn-3d-surface {
+    transform: translateZ(0);
+    backface-visibility: hidden;
+  }
+}
+
+@layer base {
+  /* The shared <Button> owns its own transitions via utility classes.
+     Prevent any global `button { transition: ... }` rule from double-animating
+     or overriding the scoped transition. Utilities (0,1,0) already beat this
+     element selector (0,0,1); this is a defensive reset only. */
+  button {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    button {
+      transition: none !important;
+    }
+  }
+}
+```
+
+---
+
+## Verification I would run
+
+- `npx vitest run src/components/ui/button.test.jsx` — confirm updated + new assertions pass.
+- Visual smoke on the primitives that reuse `buttonVariants` (`pagination`, `carousel`, `sidebar`, `alert-dialog`) to confirm icon geometry is unchanged.
+- Toggle OS reduced-motion and confirm the lift/press are suppressed.
+
+Since I don't have execution access to this repo in the current session, I can't run these myself — apply the patches and run the vitest command above to confirm green. If your `index.css` already defines a `button { transition }` rule or a different `@layer` ordering, tell me the surrounding lines and I'll convert Patch 3 into a precise SEARCH/REPLACE.

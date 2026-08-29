@@ -564,3 +564,27 @@ Session reports and ledgers (`SESSION_FORENSIC_REPORT.md`, `universal_session_le
 - **Zero Fabrication**: Rejects synthetic generation IDs and artificial latency values. Missing metrics render as `NOT_MEASURED` or `NOT_PROVIDED`.
 - **Calculated Status**: Defaults to `UNPROVEN`. Evaluates component evidence dynamically.
 - **10-Point Mutation Suite**: `tests/evidence_integrity.test.js` enforces anti-fabrication invariants with in-memory zero-network mock transports.
+
+### Arize Phoenix Tracing & Observability (`src/lib/phoenixTracer.js`, `scripts/export_multiagent_phoenix.py`)
+Visual observability and multi-agent workflow tracing integrated with Arize Phoenix (`http://localhost:6006`):
+- **Hierarchical Spans**: Traces Autonomous Multi-Agent Orchestration parent $\rightarrow$ Dual-Pillar Parallel Solver (Gemini A + Claude B) $\rightarrow$ Nara Helper Pool (3 workers) $\rightarrow$ Deterministic Probes Gate $\rightarrow$ Production Sentinel.
+- **OpenInference Conventions**: Captures `AGENT`, `LLM`, `CHAIN`, `TOOL` span kinds, tokens, provider models, prompts, completions, latencies, and error codes.
+- **OTLP Ingestion**: Exports standard OTLP trace payloads to `http://localhost:6006/v1/traces`.
+
+### Timecard Punch Parsing Resilience (`src/lib/timecardCalc.js`)
+- **Extended Punch Timestamp Parsing**: `parseTime` supports standard 24h, 12h AM/PM, seconds (`:SS`), millisecond ISO suffixes (`.mmmZ`), and ISO datetime formats while enforcing strict boundary checks (`0..59` seconds, `0..23` hours). Prevents PMS export punches with seconds from being silently dropped as unpayable shifts.
+
+### Master Owner Forensic Audit & Smart Anomaly Filter Engine (`src/lib/ownerForensicEngine.js`)
+Centralized, high-precision, explainable anomaly detection and forensic triage engine for hotel owners:
+- **Alert Fatigue Reduction**: Reduces raw candidate noise (2,208 raw flags down to 68 prioritized owner review items — 96.9% reduction) while preserving 100% of underlying financial data and critical/high anomalies.
+- **Explainable Multi-Factor Scoring**: Evaluates cash involvement (+35/55), off-shift manual credits (+30), whitelist deviations (+40), deep discounts (+25), high adjustments (+30), and voids (+25) with human-readable "WHY THIS WAS FLAGGED" explanations.
+- **Declarative Whitelist Engine with State-Change Re-Alerting**: Stored whitelist rules (`authorizedRate`, `folioNumber`, `roomNumber`, `approvedClerk`, `validFrom`, `validTo`) categorize known approved stays as `WHITELISTED`, but immediately **RE-ALERT** if rate drifts ($1 $\rightarrow$ $35), unexpected cash tender is accepted, or expiration passes.
+- **Financial Truth & Immutable Separation**: Source transactions are NEVER mutated upon review. Owner actions (`APPROVE`, `FLAG`, `WHITELIST`, `RESOLVE`) record immutable audit provenance records in `AuditLog`/`AuditTrail`.
+- **Shift & System Context**: Normalizes scheduled night auditor activity vs day clerk off-shift activity; recognizes automated system accounts without generating false alarms.
+- **Quick Owner Presets**: High-Risk Cash & Voids, Deep Discounts & Free Stays, Off-Shift Manual Activity, House/Staff Audit, Morning Owner Review.
+- **Clerk Scorecard**: Multi-property partitioned audit metrics tracking overrides, adjustment volume, refunds, cash volume, and off-shift transactions without judgmental bias.
+- **Strict Property Isolation**: All rules, queries, ADR references, and scorecards strictly partition by `property_id`.
+
+
+
+

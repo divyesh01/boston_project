@@ -1,0 +1,3 @@
+Create a new helper module at src/lib/orchestratorVerificationProbe.js that exports:
+1. `verifyOrchestratorInvariants()`: returns { status: 'VERIFIED', engine: 'API_FIRST_MULTI_AGENT', timestamp: new Date().toISOString(), version: '1.0.0' }
+2. `getOrchestratorTelemetryContract()`: returns { primaryBrain: 'CLAUDE_OPUS', reviewerSwarm: ['GEMINI', 'NVIDIA', 'NARA', 'XKIRO'], subscriptionQuotaSaved: true }

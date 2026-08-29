@@ -27,6 +27,17 @@ describe("parseTime", () => {
   it("parses ISO datetimes by taking the time part", () => {
     expect(parseTime("2026-03-07 03:21 PM")).toBe(921);
     expect(parseTime("2026-03-07T03:21 PM")).toBe(921);
+    expect(parseTime("2026-03-07 09:30:00")).toBe(570);
+    expect(parseTime("2026-03-07T09:30:00Z")).toBe(570);
+    expect(parseTime("2026-03-07T09:30:00.000Z")).toBe(570);
+  });
+
+  it("parses times with seconds and meridiem", () => {
+    expect(parseTime("09:30:00")).toBe(570);
+    expect(parseTime("14:30:45")).toBe(870);
+    expect(parseTime("08:00:00 AM")).toBe(480);
+    expect(parseTime("08:00:00 PM")).toBe(1200);
+    expect(parseTime("14:30:60")).toBeNull(); // invalid second (> 59)
   });
 
   it("returns null for junk", () => {

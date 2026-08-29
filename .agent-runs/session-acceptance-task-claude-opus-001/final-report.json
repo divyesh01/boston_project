@@ -1,0 +1,27 @@
+{
+  "taskId": "acceptance-task-claude-opus-001",
+  "sessionId": "session-acceptance-task-claude-opus-001",
+  "verdict": "PASS",
+  "durationSeconds": 52.014,
+  "patch": {
+    "patchHash": "bdb178e7c0378552fc18ff7f7a50632f6b84a345b960a72bb9b826a069016d82",
+    "filesAffected": [
+      "src/lib/orchestratorVerificationProbe.js"
+    ],
+    "linesAdded": 41,
+    "linesDeleted": 16
+  },
+  "tests": {
+    "passed": true,
+    "correctionAttempts": 0
+  },
+  "telemetry": {
+    "totalCalls": 6,
+    "successfulCalls": 3,
+    "inputTokens": 23240,
+    "outputTokens": 2221,
+    "totalTokens": 25461,
+    "totalLatencySeconds": 47.604
+  },
+  "accounting": "====================================================\nSUBSCRIPTION USAGE CONSERVATION ACCOUNTING\n====================================================\nANTIGRAVITY SUBSCRIPTION\nUsed: NO\nReason: None\nEstimated role: Dashboard / Launcher only\nCould API have done this instead?: NO (Used solely as launch/entry interface)\n\nCODEX SUBSCRIPTION\nUsed: NO\nReason: None\nEstimated role: Idle reserve\nCould API have done this instead?: YES (Conserved at 0% usage)\n===================================================="
+}

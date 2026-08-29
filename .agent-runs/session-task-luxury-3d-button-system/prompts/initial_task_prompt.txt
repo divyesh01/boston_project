@@ -1,0 +1,34 @@
+TASK: Premium 3D Luxury Button System + Centralized Design System Implementation
+
+OBJECTIVE:
+Transform the shared button system in src/components/ui/button.jsx and supporting CSS utility tokens in src/index.css into a modern LUXURY 3D BUTTON SYSTEM.
+
+VISUAL & DESIGN DIRECTION:
+- Premium, expensive, elegant, modern, sophisticated, subtle 3D depth.
+- Executive SaaS / luxury hotel-management software feel.
+- Visually consistent with existing dark slate/navy interface (--s-canvas: #040D1A, --s-raised: #10141B, --brand: #00E096).
+- NOT cartoonish, NOT gaming glow, NOT neon, NOT heavy retro skeuomorphism.
+- Subtle combinations of:
+  * Layered surface depth
+  * Controlled top highlight / specular bevel (e.g. inset 0 1px 0 rgba(255, 255, 255, 0.16) for primary, rgba(255, 255, 255, 0.08) for secondary)
+  * Subtle lower contact shadow (e.g. 0 2px 4px -1px rgba(0, 0, 0, 0.50), 0 1px 2px rgba(0, 0, 0, 0.40))
+  * Slight perimeter hairline border
+  * Restrained gradient where appropriate (rich purple/violet primary, elevated dark slate secondary, ruby destructive)
+  * Realistic resting position
+  * Smooth hover elevation (moves upward ~1px with enhanced depth)
+  * Tactile pressed state (moves downward ~1px and visually compresses: active:translate-y-[1px] with compressed shadow)
+  * Crisp readable typography & icon alignment
+  * High-contrast focus-visible ring (--brand emerald focus indicator)
+  * Disabled state: flattened, opacity-40, no hover/active transform
+  * Full prefers-reduced-motion support (no motion for reduced-motion users)
+
+CENTRALIZED IMPLEMENTATION:
+- Modify src/components/ui/button.jsx to update the cva variants ('default', 'destructive', 'outline', 'secondary', 'ghost', 'link') and base classes with the luxury 3D styling.
+- Ensure all existing props (asChild, variant, size, disabled, className) and tests continue to work flawlessly.
+- In src/index.css, ensure global button rules and utilities support the luxury 3D elevation cleanly without conflicting with framer-motion or page layouts.
+- In src/components/ui/button.test.jsx, add or update tests to verify the new luxury 3D classes, variants, and behaviors.
+
+SURGICAL CHANGE POLICY:
+- Do NOT rewrite pages. The shared Button component in src/components/ui/button.jsx must upgrade buttons across Monthly Calendar, Room Board, OTA Channels, etc. centrally!
+- Do NOT modify financial calculations, APIs, routes, or auth.
+- Format your patch strictly with SEARCH/REPLACE or ### FILE: blocks.

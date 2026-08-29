@@ -152,6 +152,13 @@
               0 18px 44px -16px rgba(0, 0, 0, 0.75),
               inset 0 1px 0 rgba(255, 255, 255, 0.06);
 
+    /* Luxury 3D button depth tokens */
+    --btn-bevel-strong: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    --btn-bevel-soft:   inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    --btn-contact:      0 2px 4px -1px rgba(0, 0, 0, 0.50), 0 1px 2px rgba(0, 0, 0, 0.40);
+    --btn-contact-hover: 0 6px 12px -2px rgba(0, 0, 0, 0.55), 0 3px 6px rgba(0, 0, 0, 0.40);
+    --btn-pressed:      0 1px 2px rgba(0, 0, 0, 0.45), inset 0 1px 2px rgba(0, 0, 0, 0.30);
+
     /* Glassmorphism, used sparingly. backdrop-filter forces a compositing
        pass per element, and pages here hold 30+ cards, so this is OPT-IN
        (Card's `glass` prop) rather than the default surface. */

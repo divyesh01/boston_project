@@ -1,0 +1,16 @@
+{
+  "receipt": {
+    "claudeModelRequested": "anthropic/claude-3-haiku",
+    "claudeModelReturned": "NONE",
+    "actualProvider": "Amazon Bedrock",
+    "generationId": "NONE",
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "totalTokens": 0,
+    "cost": "N/A",
+    "httpStatus": 402,
+    "latency": "0.239s",
+    "timestamp": "2026-08-29T10:48:52.589Z"
+  },
+  "content": ""
+}

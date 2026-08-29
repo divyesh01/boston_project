@@ -1,0 +1,33 @@
+{
+  "taskId": "ta[REDACTED_API_KEY]",
+  "sessionId": "session-ta[REDACTED_API_KEY]",
+  "verdict": "PASS",
+  "durationSeconds": 207.75,
+  "classification": {
+    "scale": "LARGE",
+    "rationale": "Substantial architecture, multi-agent swarm, or multi-file system upgrade detected.",
+    "claudeWorkersCount": 4,
+    "reviewerCount": 6,
+    "includeAdversarialReview": true
+  },
+  "patch": {
+    "patchHash": "26475e17c05e1145edf117f1e3bfd95ea277734796d6241742fa5876ef97ddd5",
+    "filesAffected": [
+      "src/lib/swarmOrchestratorContract.js",
+      "tests/orchestrator/swarmOrchestratorContract.test.js"
+    ],
+    "linesAdded": 395,
+    "linesDeleted": 0
+  },
+  "tests": {
+    "passed": true,
+    "correctionAttempts": 0
+  },
+  "telemetry": {
+    "totalCalls": 13,
+    "successfulCalls": 9,
+    "totalTokens": 151210
+  },
+  "activeActiveStatus": "BALANCED",
+  "accounting": "====================================================\nSUBSCRIPTION USAGE CONSERVATION ACCOUNTING\n====================================================\nANTIGRAVITY SUBSCRIPTION\nSubstantive reasoning / code authoring: NO (100% offloaded to external API)\nInterface / launcher usage: YES (Interactive terminal & launch interface)\nEstimated role: Dashboard / Launcher only\nReason: None\n\nCODEX SUBSCRIPTION\nSubstantive reasoning / code authoring: NO (Conserved at 0% usage)\nInvocation status: IDLE / BLOCKED BY DEFAULT\nEstimated role: Idle reserve\nReason: None\nCould API have done this instead?: YES (Preserved for emergency reserve)\n===================================================="
+}

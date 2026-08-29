@@ -55,19 +55,34 @@ import { cn } from "@/lib/utils"
  * @type {Function}
  */
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  // Luxury 3D base. Transition is SCOPED (no transition-all layout thrash and no
+  // framer-motion contention). No will-change (avoids per-instance compositor
+  // promotion in dense grids). Emerald brand focus ring WITHOUT a hardcoded
+  // ring-offset color (prevents a mismatched halo inside raised cards).
+  // disabled:opacity-50 retained for WCAG perceivability. Reduced-motion fully
+  // neutralizes both the base transform hint and the hover/press transforms.
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium select-none transform-gpu transition-[transform,box-shadow,background-color,border-color] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00E096] disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none disabled:translate-y-0 motion-reduce:transition-none motion-reduce:transform-none motion-reduce:hover:translate-y-0 motion-reduce:active:translate-y-0 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
+        // Primary — rich violet gradient over bg-primary token, specular top
+        // bevel, dual contact shadow. bg-primary retained as graceful fallback.
         default:
-          "bg-primary text-primary-foreground shadow hover:bg-primary/90",
+          "bg-primary text-primary-foreground [background-image:linear-gradient(to_bottom,#7C5CFF,#5B3FE0)] border border-white/10 shadow-[0_2px_4px_-1px_rgba(0,0,0,0.50),0_1px_2px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.16)] hover:-translate-y-px hover:[background-image:linear-gradient(to_bottom,#8A6CFF,#6A4EF0)] hover:shadow-[0_6px_12px_-2px_rgba(0,0,0,0.55),0_3px_6px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.20)] active:translate-y-[1px] active:shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_2px_rgba(0,0,0,0.30)]",
+        // Destructive — ruby gradient. bg-destructive retained as fallback token.
         destructive:
-          "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
+          "bg-destructive text-destructive-foreground [background-image:linear-gradient(to_bottom,#E0435B,#B21E38)] border border-white/10 shadow-[0_2px_4px_-1px_rgba(0,0,0,0.50),0_1px_2px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.16)] hover:-translate-y-px hover:[background-image:linear-gradient(to_bottom,#EC5268,#C42741)] hover:shadow-[0_6px_12px_-2px_rgba(0,0,0,0.55),0_3px_6px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.20)] active:translate-y-[1px] active:shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_2px_rgba(0,0,0,0.30)]",
+        // Outline — hairline perimeter over faint raised surface. border and
+        // hover:bg-accent tokens both retained.
         outline:
-          "border border-input bg-transparent shadow-sm hover:bg-accent hover:text-accent-foreground",
+          "border border-input bg-transparent text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.30),inset_0_1px_0_rgba(255,255,255,0.06)] hover:-translate-y-px hover:bg-accent hover:text-accent-foreground hover:shadow-[0_5px_10px_-2px_rgba(0,0,0,0.50),inset_0_1px_0_rgba(255,255,255,0.08)] active:translate-y-[1px] active:shadow-[inset_0_1px_2px_rgba(0,0,0,0.25)]",
+        // Secondary — elevated dark-slate gradient, lighter bevel (0.08).
+        // bg-secondary retained as fallback token.
         secondary:
-          "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
-        ghost: "hover:bg-accent hover:text-accent-foreground",
+          "bg-secondary text-secondary-foreground [background-image:linear-gradient(to_bottom,#1B2230,#10141B)] border border-white/10 shadow-[0_2px_4px_-1px_rgba(0,0,0,0.50),0_1px_2px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.08)] hover:-translate-y-px hover:[background-image:linear-gradient(to_bottom,#222B3B,#151A22)] hover:shadow-[0_6px_12px_-2px_rgba(0,0,0,0.55),0_3px_6px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.10)] active:translate-y-[1px] active:shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_2px_rgba(0,0,0,0.30)]",
+        // Ghost — intentionally flat, no elevation. hover:bg-accent retained.
+        ghost: "text-foreground hover:bg-accent hover:text-accent-foreground",
+        // Link — pure text affordance, no 3D chrome. text-primary retained.
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {

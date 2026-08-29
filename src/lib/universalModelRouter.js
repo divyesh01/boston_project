@@ -19,6 +19,7 @@
  */
 
 import { execSync } from 'node:child_process';
+import { phoenixTracer } from './phoenixTracer.js';
 
 // Provider Base Endpoints
 export const PROVIDER_ENDPOINTS = {
@@ -671,6 +672,28 @@ export class UniversalModelRouter {
     };
 
     this.failoverLedger.push(ledgerEntry);
+
+    // Live Arize Phoenix OpenInference Tracing
+    phoenixTracer.recordLlmCall({
+      name: `Universal Router: ${policy.role} (${finalModel || 'None'})`,
+      provider: finalProvider || 'NONE',
+      modelRequested: policy.candidateChain[0]?.model,
+      modelReturned: finalModel || 'NONE',
+      input: prompt,
+      output: finalResult || (fallbackPath.length > 0 ? JSON.stringify(fallbackPath) : ''),
+      tokens: finalUsage,
+      latencySeconds: finalLatency,
+      status: success ? 'OK' : 'ERROR',
+      error: success ? null : fallbackPath[fallbackPath.length - 1]?.error || 'EXECUTION_FAILED',
+      traceId: options.traceId,
+      parentSpanId: options.parentSpanId,
+      customAttributes: {
+        'router.role_type': roleType,
+        'router.account_alias': finalAccount || 'NONE',
+        'router.attempts': fallbackPath.length,
+        'router.is_authoritative': isAuthoritative,
+      },
+    }).catch(() => {});
 
     return {
       success,

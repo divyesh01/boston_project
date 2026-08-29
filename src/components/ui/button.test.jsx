@@ -96,3 +96,62 @@ describe("Button as child", () => {
     expect(screen.getByRole("link", { name: /link button/i })).toHaveAttribute("href", "/test");
   });
 });
+
+describe("Button luxury 3D system", () => {
+  it("applies GPU transform and scoped transition base classes", () => {
+    render(<Button data-testid="btn">Base</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("transform-gpu", "select-none", "rounded-md");
+    expect(btn.className).toContain("transition-[transform,box-shadow,background-color,border-color]");
+  });
+
+  it("uses the emerald brand focus ring with no hardcoded offset color", () => {
+    render(<Button data-testid="btn">Focus</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("focus-visible:ring-2", "focus-visible:ring-[#00E096]");
+    expect(btn.className).not.toContain("ring-offset-[#040D1A]");
+  });
+
+  it("primary variant layers a violet gradient over the bg-primary token", () => {
+    render(<Button data-testid="btn">Primary</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("bg-primary");
+    expect(btn.className).toContain("[background-image:linear-gradient(to_bottom,#7C5CFF,#5B3FE0)]");
+  });
+
+  it("destructive variant layers a ruby gradient over the bg-destructive token", () => {
+    render(<Button variant="destructive" data-testid="btn">Delete</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("bg-destructive");
+    expect(btn.className).toContain("[background-image:linear-gradient(to_bottom,#E0435B,#B21E38)]");
+  });
+
+  it("secondary variant layers a slate gradient over the bg-secondary token", () => {
+    render(<Button variant="secondary" data-testid="btn">Secondary</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("bg-secondary");
+    expect(btn.className).toContain("[background-image:linear-gradient(to_bottom,#1B2230,#10141B)]");
+  });
+
+  it("applies hover elevation and tactile pressed state on primary", () => {
+    render(<Button data-testid="btn">Press</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("hover:-translate-y-px", "active:translate-y-[1px]");
+  });
+
+  it("flattens on disabled with no transform and preserves opacity-50", () => {
+    render(<Button disabled data-testid="btn">Disabled</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("disabled:opacity-50", "disabled:shadow-none", "disabled:translate-y-0");
+  });
+
+  it("neutralizes motion for reduced-motion users", () => {
+    render(<Button data-testid="btn">Reduced</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("motion-reduce:transition-none", "motion-reduce:transform-none");
+  });
+
+  it("keeps ghost and link variants flat (no lift transform)", () => {
+    const { rerender } = render(<Button variant="ghost" data-testid="btn">Ghost</Button>);
+    expect(screen.getByTestId("btn")).not.toHaveClass("hover:-translate-y-px");
+    rerender(<Button variant="link" data-testid="btn">Link</Button>);
+    expect(screen.getByTestId("btn")).not.toHaveClass("hover:-translate-y-px");
+  });
+});

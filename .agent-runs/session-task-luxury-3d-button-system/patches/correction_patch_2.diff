@@ -1,0 +1,259 @@
+## Root Cause
+
+The failure is not a logic or API defect — it is a patch-transport defect.
+
+`src/components/ui/button.jsx` opens with a JSDoc block whose `@example` section embeds a **nested triple-backtick fence** (` ```jsx `). The deterministic applier delimits file payloads with triple-backtick fences, so the first inner fence terminated the payload early. What landed on disk was a truncated file whose leading `/**` comment was never closed — exactly what esbuild reports:
+
+```
+button.jsx:10:2: ERROR: Expected "*/" to terminate multi-line comment
+  9  |   * @example
+  10 |   *
+```
+
+Line 10 is the residue of the stripped ` ```jsx ` marker. The `Login.test.jsx` and `Setup.test.jsx` suite failures are collateral: both transitively import `Button`, so the same transform error fails their suites. The `[Base44 SDK Error] Network Error` lines on stderr are pre-existing noise from unrelated suites (`aiEngine.test.js`, `dataScanner.test.js`) and are not part of this regression.
+
+### Adjudication of the review criticisms
+
+- **Valid:** any JSDoc content in a mechanically-applied patch must be fence-free. Nested fences are structurally unsafe in this pipeline regardless of how correct the surrounding code is.
+- **Valid:** the fix must be confined to comments. The runtime surface (`buttonVariants`, `Button`, `displayName`, exports) is already correct and is asserted by 16 existing tests; changing it would be unrequested scope.
+- **Noise:** proposals to restructure the component, split `buttonVariants` into a separate module, or convert to TypeScript. None address the transform error and all widen the blast radius.
+
+The corrected file preserves every documented detail using indented, unfenced examples.
+
+### FILE: src/components/ui/button.jsx
+```javascript
+/**
+ * @fileoverview Button component with variant-based styling.
+ *
+ * Built with class-variance-authority (CVA) for type-safe variant styling.
+ * Supports asChild pattern for rendering as any element (e.g., Link).
+ * Includes focus-visible ring, disabled state, and icon sizing.
+ *
+ * NOTE: Examples in this file are intentionally written WITHOUT fenced code
+ * blocks. Nested triple-backtick fences collide with the patch-transport
+ * delimiters used to apply changes to this repository and truncate the file,
+ * producing an unterminated block comment.
+ *
+ * @module ui/button
+ *
+ * @example Default button
+ *   <Button>Click me</Button>
+ *
+ * @example Variant and size
+ *   <Button variant="outline" size="sm">Small Outline</Button>
+ *
+ * @example As link
+ *   <Button asChild>
+ *     <a href="/dashboard">Go to Dashboard</a>
+ *   </Button>
+ *
+ * @example With icon
+ *   <Button>
+ *     <PlusIcon className="h-4 w-4" />
+ *     Add Item
+ *   </Button>
+ */
+
+import * as React from "react"
+import { Slot } from "@radix-ui/react-slot"
+import { cva } from "class-variance-authority";
+
+import { cn } from "@/lib/utils"
+
+/**
+ * @typedef {Object} ButtonProps
+ * Props for Button component.
+ * @property {'default' | 'destructive' | 'outline' | 'secondary' | 'ghost' | 'link'} [variant='default'] - Visual style variant
+ * @property {'default' | 'sm' | 'lg' | 'icon'} [size='default'] - Size preset
+ * @property {boolean} [asChild=false] - Render as child element instead of button
+ * @property {string} [className] - Additional CSS classes
+ * @property {boolean} [disabled] - Whether button is disabled
+ * @property {React.ReactNode} children - Button content
+ */
+
+/**
+ * CVA variant definitions for buttons.
+ *
+ * Defines all visual variants and size presets. Used internally
+ * by the Button component to generate class names.
+ *
+ * @type {Function}
+ */
+const buttonVariants = cva(
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  {
+    variants: {
+      variant: {
+        default:
+          "bg-primary text-primary-foreground shadow hover:bg-primary/90",
+        destructive:
+          "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
+        outline:
+          "border border-input bg-transparent shadow-sm hover:bg-accent hover:text-accent-foreground",
+        secondary:
+          "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
+        ghost: "hover:bg-accent hover:text-accent-foreground",
+        link: "text-primary underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-9 px-4 py-2",
+        sm: "h-8 rounded-md px-3 text-xs",
+        lg: "h-10 rounded-md px-8",
+        icon: "h-9 w-9",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  }
+)
+
+/**
+ * Button component with variant styling and asChild support.
+ *
+ * Renders as a button by default, or merges onto its child when
+ * `asChild` is true (useful for React Router Link integration).
+ * Includes focus-visible ring, disabled state, and automatic icon sizing.
+ *
+ * @type {React.ForwardRefExoticComponent<any>}
+ * @property {'default' | 'destructive' | 'outline' | 'secondary' | 'ghost' | 'link'} [variant='default'] - Visual style
+ * @property {'default' | 'sm' | 'lg' | 'icon'} [size='default'] - Size preset
+ * @property {boolean} [asChild=false] - Render as child element
+ * @property {string} [className] - Additional CSS classes
+ * @property {boolean} [disabled] - Disabled state
+ * @property {React.ReactNode} children - Button content
+ *
+ * @example
+ *   <Button variant="destructive" size="lg">Delete</Button>
+ *
+ * @example
+ *   <Button asChild>
+ *     <Link to="/settings">Settings</Link>
+ *   </Button>
+ */
+const Button = React.forwardRef(
+  ({ className, variant, size, asChild = false, ...props }, ref) => {
+  const Comp = asChild ? Slot : "button"
+  return (
+    (<Comp
+      className={cn(buttonVariants({ variant, size, className }))}
+      ref={ref}
+      {...props} />)
+  );
+})
+Button.displayName = "Button"
+
+export { Button, buttonVariants }
+```
+
+### FILE: src/components/ui/button.test.jsx
+```javascript
+import { describe, it, expect, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { Button } from "./button";
+
+describe("Button", () => {
+  it("renders with text content", () => {
+    render(<Button>Click me</Button>);
+    expect(screen.getByRole("button", { name: /click me/i })).toBeInTheDocument();
+  });
+
+  it("applies base classes", () => {
+    render(<Button data-testid="btn">Test</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("inline-flex", "items-center");
+  });
+
+  it("applies destructive variant", () => {
+    render(<Button variant="destructive" data-testid="btn">Delete</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("bg-destructive");
+  });
+
+  it("applies outline variant", () => {
+    render(<Button variant="outline" data-testid="btn">Outline</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("border");
+  });
+
+  it("applies secondary variant", () => {
+    render(<Button variant="secondary" data-testid="btn">Secondary</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("bg-secondary");
+  });
+
+  it("applies ghost variant", () => {
+    render(<Button variant="ghost" data-testid="btn">Ghost</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("hover:bg-accent");
+  });
+
+  it("applies link variant", () => {
+    render(<Button variant="link" data-testid="btn">Link</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("text-primary");
+  });
+
+  it("applies sm size", () => {
+    render(<Button size="sm" data-testid="btn">Small</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("rounded-md");
+  });
+
+  it("applies lg size", () => {
+    render(<Button size="lg" data-testid="btn">Large</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("rounded-md");
+  });
+
+  it("applies icon size", () => {
+    render(<Button size="icon" data-testid="btn">Icon</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("h-9", "w-9");
+  });
+
+  it("is disabled when disabled prop is set", () => {
+    render(<Button disabled data-testid="btn">Disabled</Button>);
+    expect(screen.getByTestId("btn")).toBeDisabled();
+  });
+
+  it("applies custom className", () => {
+    render(<Button className="custom-btn" data-testid="btn">Custom</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("custom-btn");
+  });
+
+  it("forwards ref", () => {
+    const ref = { current: null };
+    render(<Button ref={ref}>Ref test</Button>);
+    expect(ref.current).toBeInstanceOf(HTMLButtonElement);
+  });
+
+  it("handles click events", async () => {
+    const user = userEvent.setup();
+    const handleClick = vi.fn();
+    render(<Button onClick={handleClick}>Click</Button>);
+    await user.click(screen.getByRole("button"));
+    expect(handleClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire click when disabled", async () => {
+    const user = userEvent.setup();
+    const handleClick = vi.fn();
+    render(<Button disabled onClick={handleClick}>Click</Button>);
+    await user.click(screen.getByRole("button"));
+    expect(handleClick).not.toHaveBeenCalled();
+  });
+});
+
+describe("Button as child", () => {
+  it("renders as child element", () => {
+    render(
+      <Button asChild>
+        <a href="/test">Link Button</a>
+      </Button>
+    );
+    expect(screen.getByRole("link", { name: /link button/i })).toHaveAttribute("href", "/test");
+  });
+});
+```
+
+## Changes in this patch
+
+**`button.jsx`** — comments only. The three fenced `@example` regions became indented, unfenced examples; all documented usages are retained and a note records why. No executable line changed, so all 16 existing assertions hold.
+
+**`button.test.jsx`** — two small hardening fixes: `vi` is now explicitly imported rather than relying on `globals: true` in the Vitest config, and the previously assertion-free `forwards ref` test now actually asserts `ref.current` is an `HTMLButtonElement`. That test would have passed even if ref forwarding were broken.
+
+I could not execute the suite from this environment, so the resolution is verified by static reasoning: the truncation trigger is removed, which is a necessary and sufficient fix for the esbuild transform error and the two cascading suite failures. The Base44 network errors in `aiEngine.test.js` and `dataScanner.test.js` are untouched and remain outstanding.

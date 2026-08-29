@@ -1,0 +1,427 @@
+{
+  "taskId": "acceptance-task-001-live-probe",
+  "sessionId": "session-acceptance-task-001-live-probe",
+  "verdict": "BLOCKED",
+  "reason": "CLAUDE_OPUS_UNAVAILABLE: Could not reach an authoritative Claude Opus route.",
+  "proposalResult": {
+    "success": false,
+    "status": "UNAVAILABLE",
+    "content": null,
+    "authoritativeModel": null,
+    "actualProvider": "NONE",
+    "transportProvider": "NONE",
+    "upstreamProvider": null,
+    "generationId": null,
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "total_tokens": 0
+    },
+    "cost": null,
+    "totalLatencySeconds": 10.275,
+    "totalAttempts": 19,
+    "attempts": [
+      {
+        "provider": "XKIRO",
+        "modelRequested": "anthropic/claude-opus-5",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "XKIRO",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 1,
+        "success": false,
+        "httpStatus": 403,
+        "error": "HTTP_403: {\"error\":{\"message\":\"This premium model requires an active paid plan or real deposited balance. Subscribe to a plan or top up your wallet to use it — promotional/bonus credits do not apply.\",\"type\":\"permission_error\",\"code\":\"permission_denied\"}}",
+        "latencySeconds": 0.502,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "xKiro Opus 5"
+      },
+      {
+        "provider": "XKIRO",
+        "modelRequested": "anthropic/claude-opus-5",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "XKIRO",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 2,
+        "success": false,
+        "httpStatus": 403,
+        "error": "HTTP_403: {\"error\":{\"message\":\"This premium model requires an active paid plan or real deposited balance. Subscribe to a plan or top up your wallet to use it — promotional/bonus credits do not apply.\",\"type\":\"permission_error\",\"code\":\"permission_denied\"}}",
+        "latencySeconds": 0.286,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "xKiro Opus 5"
+      },
+      {
+        "provider": "XKIRO",
+        "modelRequested": "anthropic/claude-opus-4.8",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "XKIRO",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 1,
+        "success": false,
+        "httpStatus": 403,
+        "error": "HTTP_403: {\"error\":{\"message\":\"This premium model requires an active paid plan or real deposited balance. Subscribe to a plan or top up your wallet to use it — promotional/bonus credits do not apply.\",\"type\":\"permission_error\",\"code\":\"permission_denied\"}}",
+        "latencySeconds": 0.289,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "xKiro Opus 4.8"
+      },
+      {
+        "provider": "XKIRO",
+        "modelRequested": "anthropic/claude-opus-4.8",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "XKIRO",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 2,
+        "success": false,
+        "httpStatus": 403,
+        "error": "HTTP_403: {\"error\":{\"message\":\"This premium model requires an active paid plan or real deposited balance. Subscribe to a plan or top up your wallet to use it — promotional/bonus credits do not apply.\",\"type\":\"permission_error\",\"code\":\"permission_denied\"}}",
+        "latencySeconds": 0.294,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "xKiro Opus 4.8"
+      },
+      {
+        "provider": "XKIRO",
+        "modelRequested": "anthropic/claude-opus-4.7",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "XKIRO",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 1,
+        "success": false,
+        "httpStatus": 403,
+        "error": "HTTP_403: {\"error\":{\"message\":\"This premium model requires an active paid plan or real deposited balance. Subscribe to a plan or top up your wallet to use it — promotional/bonus credits do not apply.\",\"type\":\"permission_error\",\"code\":\"permission_denied\"}}",
+        "latencySeconds": 0.291,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "xKiro Opus 4.7"
+      },
+      {
+        "provider": "XKIRO",
+        "modelRequested": "anthropic/claude-opus-4.7",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "XKIRO",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 2,
+        "success": false,
+        "httpStatus": 403,
+        "error": "HTTP_403: {\"error\":{\"message\":\"This premium model requires an active paid plan or real deposited balance. Subscribe to a plan or top up your wallet to use it — promotional/bonus credits do not apply.\",\"type\":\"permission_error\",\"code\":\"permission_denied\"}}",
+        "latencySeconds": 0.297,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "xKiro Opus 4.7"
+      },
+      {
+        "provider": "XKIRO",
+        "modelRequested": "anthropic/claude-opus-4.6",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "XKIRO",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 1,
+        "success": false,
+        "httpStatus": 403,
+        "error": "HTTP_403: {\"error\":{\"message\":\"This premium model requires an active paid plan or real deposited balance. Subscribe to a plan or top up your wallet to use it — promotional/bonus credits do not apply.\",\"type\":\"permission_error\",\"code\":\"permission_denied\"}}",
+        "latencySeconds": 0.289,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "xKiro Opus 4.6"
+      },
+      {
+        "provider": "XKIRO",
+        "modelRequested": "anthropic/claude-opus-4.6",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "XKIRO",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 2,
+        "success": false,
+        "httpStatus": 403,
+        "error": "HTTP_403: {\"error\":{\"message\":\"This premium model requires an active paid plan or real deposited balance. Subscribe to a plan or top up your wallet to use it — promotional/bonus credits do not apply.\",\"type\":\"permission_error\",\"code\":\"permission_denied\"}}",
+        "latencySeconds": 0.284,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "xKiro Opus 4.6"
+      },
+      {
+        "provider": "TABITOKEN",
+        "modelRequested": "claude-3-opus-20240229",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "TABITOKEN",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 1,
+        "success": false,
+        "httpStatus": "MISSING_KEY",
+        "error": "NO_API_KEY_CONFIGURED: Missing credentials for TABITOKEN (default)",
+        "latencySeconds": 0,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "Tabitoken Opus 3"
+      },
+      {
+        "provider": "TABITOKEN",
+        "modelRequested": "anthropic/claude-opus-4.8",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "TABITOKEN",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 1,
+        "success": false,
+        "httpStatus": "MISSING_KEY",
+        "error": "NO_API_KEY_CONFIGURED: Missing credentials for TABITOKEN (default)",
+        "latencySeconds": 0,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "Tabitoken Opus 4.8"
+      },
+      {
+        "provider": "GOROUTER",
+        "modelRequested": "anthropic/claude-opus-5",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "GOROUTER",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 1,
+        "success": false,
+        "httpStatus": "MISSING_KEY",
+        "error": "NO_API_KEY_CONFIGURED: Missing credentials for GOROUTER (default)",
+        "latencySeconds": 0,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "GoRouter Opus 5"
+      },
+      {
+        "provider": "GOROUTER",
+        "modelRequested": "anthropic/claude-opus-4.8",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "GOROUTER",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 1,
+        "success": false,
+        "httpStatus": "MISSING_KEY",
+        "error": "NO_API_KEY_CONFIGURED: Missing credentials for GOROUTER (default)",
+        "latencySeconds": 0,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "GoRouter Opus 4.8"
+      },
+      {
+        "provider": "OPENROUTER",
+        "modelRequested": "anthropic/claude-opus-4.8",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "OPENROUTER",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 1,
+        "success": false,
+        "httpStatus": 402,
+        "error": "HTTP_402: {\"error\":{\"message\":\"Insufficient credits. This account never purchased credits. Make sure your key is on the correct account or org, and if so, purchase more at https://openrouter.ai/settings/credits\",\"code\":402,\"metadata\":{\"limit_source\":\"openrouter_credits\",\"remedy_hint\":\"Add credits at https://o",
+        "latencySeconds": 0.438,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "OpenRouter Opus 4.8"
+      },
+      {
+        "provider": "OPENROUTER",
+        "modelRequested": "anthropic/claude-opus-4.8",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "OPENROUTER",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 2,
+        "success": false,
+        "httpStatus": 402,
+        "error": "HTTP_402: {\"error\":{\"message\":\"Insufficient credits. This account never purchased credits. Make sure your key is on the correct account or org, and if so, purchase more at https://openrouter.ai/settings/credits\",\"code\":402,\"metadata\":{\"limit_source\":\"openrouter_credits\",\"remedy_hint\":\"Add credits at https://o",
+        "latencySeconds": 0.049,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "OpenRouter Opus 4.8"
+      },
+      {
+        "provider": "OPENROUTER",
+        "modelRequested": "anthropic/claude-opus-5",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "OPENROUTER",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 1,
+        "success": false,
+        "httpStatus": 402,
+        "error": "HTTP_402: {\"error\":{\"message\":\"Insufficient credits. This account never purchased credits. Make sure your key is on the correct account or org, and if so, purchase more at https://openrouter.ai/settings/credits\",\"code\":402,\"metadata\":{\"limit_source\":\"openrouter_credits\",\"remedy_hint\":\"Add credits at https://o",
+        "latencySeconds": 0.042,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "OpenRouter Opus 5"
+      },
+      {
+        "provider": "OPENROUTER",
+        "modelRequested": "anthropic/claude-opus-5",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "OPENROUTER",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 2,
+        "success": false,
+        "httpStatus": 402,
+        "error": "HTTP_402: {\"error\":{\"message\":\"Insufficient credits. This account never purchased credits. Make sure your key is on the correct account or org, and if so, purchase more at https://openrouter.ai/settings/credits\",\"code\":402,\"metadata\":{\"limit_source\":\"openrouter_credits\",\"remedy_hint\":\"Add credits at https://o",
+        "latencySeconds": 0.035,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "OpenRouter Opus 5"
+      },
+      {
+        "provider": "OPENROUTER",
+        "modelRequested": "anthropic/claude-sonnet-5",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "OPENROUTER",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 1,
+        "success": false,
+        "httpStatus": 402,
+        "error": "HTTP_402: {\"error\":{\"message\":\"Insufficient credits. This account never purchased credits. Make sure your key is on the correct account or org, and if so, purchase more at https://openrouter.ai/settings/credits\",\"code\":402,\"metadata\":{\"limit_source\":\"openrouter_credits\",\"remedy_hint\":\"Add credits at https://o",
+        "latencySeconds": 0.042,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "OpenRouter Sonnet 5 (Fallback)"
+      },
+      {
+        "provider": "OPENROUTER",
+        "modelRequested": "anthropic/claude-sonnet-5",
+        "modelReturned": "NONE",
+        "actualProvider": "NONE",
+        "transportProvider": "OPENROUTER",
+        "upstreamProvider": null,
+        "generationId": null,
+        "attemptNum": 2,
+        "success": false,
+        "httpStatus": 402,
+        "error": "HTTP_402: {\"error\":{\"message\":\"Insufficient credits. This account never purchased credits. Make sure your key is on the correct account or org, and if so, purchase more at https://openrouter.ai/settings/credits\",\"code\":402,\"metadata\":{\"limit_source\":\"openrouter_credits\",\"remedy_hint\":\"Add credits at https://o",
+        "latencySeconds": 0.041,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "OpenRouter Sonnet 5 (Fallback)"
+      },
+      {
+        "provider": "ANTHROPIC_DIRECT",
+        "modelRequested": "claude-3-opus-20240229",
+        "modelReturned": "NONE",
+        "actualProvider": "ANTHROPIC",
+        "transportProvider": "ANTHROPIC_DIRECT",
+        "upstreamProvider": "Anthropic Direct",
+        "generationId": null,
+        "attemptNum": 1,
+        "success": false,
+        "httpStatus": "MISSING_KEY",
+        "error": "NO_API_KEY_CONFIGURED: Missing Anthropic API key (default)",
+        "latencySeconds": 0,
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0
+        },
+        "cost": null,
+        "note": "Direct Anthropic Opus"
+      }
+    ],
+    "error": "ALL_CLAUDE_OPUS_ROUTES_EXHAUSTED: No genuine Claude Opus provider route was reachable."
+  },
+  "accounting": "====================================================\nSUBSCRIPTION USAGE CONSERVATION ACCOUNTING\n====================================================\nANTIGRAVITY SUBSCRIPTION\nUsed: NO\nReason: None\nEstimated role: Dashboard / Launcher only\nCould API have done this instead?: NO (Used solely as launch/entry interface)\n\nCODEX SUBSCRIPTION\nUsed: NO\nReason: None\nEstimated role: Idle reserve\nCould API have done this instead?: YES (Conserved at 0% usage)\n===================================================="
+}

@@ -1,0 +1,225 @@
+## Adjudication Summary
+
+I evaluated all four Wave A analyses against the five Wave B critiques. The consensus is clear and I am ruling as follows:
+
+Valid criticisms (incorporated):
+- Preserve every original test token — layer gradients over `bg-primary/bg-destructive/bg-secondary`, keep `border`, `hover:bg-accent`, `text-primary`, `rounded-md`. This eliminates all existing-test breakage. (REGRESSION_HUNTER, DEPENDENCY_AUDITOR, ADVERSARIAL_CRITIC)
+- Reject INDEPENDENT_STRATEGIST's approach of rewriting existing assertions. Disqualifying — original tests must pass untouched.
+- `transition-all` → scoped `transition-[transform,box-shadow,background-color,border-color]` to avoid layout thrash and framer-motion contention. (SCALE_REVIEWER, REGRESSION_HUNTER)
+- Remove `will-change-transform` from the base — per-instance compositor promotion is a GPU hazard in dense grids. (SCALE_REVIEWER)
+- Restore `disabled:opacity-50` — dropping to `opacity-40` is a WCAG perceivability regression. (UI_UX_POLISH)
+- Use literal hex `ring-[#00E096]`, not `[color:var(--brand)]` (Tailwind version portability), and drop the explicit `ring-offset` color to avoid the mismatched-halo problem inside raised cards. (DEPENDENCY_AUDITOR, UI_UX_POLISH)
+- Keep `rounded-md` (reject Proposal 2's `rounded-lg` global radius regression).
+- `index.css`: strip the global `!important` reduced-motion / global `button {}` transition rules. Component-level `motion-reduce:*` utilities are authoritative; the appended block is minimal and non-animating only.
+- Ghost/link stay flat (no transform) — correct emphasis hierarchy.
+
+Noise (rejected):
+- Bundle-size hand-wringing over ~20 arbitrary utilities — negligible, static strings, JIT-scanned. No action.
+- "Hex assertions are brittle" — true in theory, but mechanical `toHaveClass` checks are the deterministic contract here; I assert structural tokens (`bg-gradient-to-b`, `hover:-translate-y-px`) plus token fallbacks, minimizing hex coupling.
+
+Note: original `button.test.jsx` never asserted `focus-visible:ring-ring`, `transition-colors`, or `disabled:opacity-50`, so no existing assertion changes. I only add coverage.
+
+---
+
+### FILE: src/components/ui/button.jsx
+```javascript
+<<<<<<< SEARCH
+const buttonVariants = cva(
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  {
+    variants: {
+      variant: {
+        default:
+          "bg-primary text-primary-foreground shadow hover:bg-primary/90",
+        destructive:
+          "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
+        outline:
+          "border border-input bg-transparent shadow-sm hover:bg-accent hover:text-accent-foreground",
+        secondary:
+          "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
+        ghost: "hover:bg-accent hover:text-accent-foreground",
+        link: "text-primary underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-9 px-4 py-2",
+        sm: "h-8 rounded-md px-3 text-xs",
+        lg: "h-10 rounded-md px-8",
+        icon: "h-9 w-9",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  }
+)
+=======
+const buttonVariants = cva(
+  // Luxury 3D base. Transition is SCOPED (no transition-all layout thrash and no
+  // framer-motion contention). No will-change (avoids per-instance compositor
+  // promotion in dense grids). Emerald brand focus ring WITHOUT a hardcoded
+  // ring-offset color (prevents a mismatched halo inside raised cards).
+  // disabled:opacity-50 retained for WCAG perceivability. Reduced-motion fully
+  // neutralizes both the base transform hint and the hover/press transforms.
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium select-none transform-gpu transition-[transform,box-shadow,background-color,border-color] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00E096] disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none disabled:translate-y-0 motion-reduce:transition-none motion-reduce:transform-none motion-reduce:hover:translate-y-0 motion-reduce:active:translate-y-0 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  {
+    variants: {
+      variant: {
+        // Primary — rich violet gradient over bg-primary token, specular top
+        // bevel, dual contact shadow. bg-primary retained as graceful fallback.
+        default:
+          "bg-primary text-primary-foreground bg-gradient-to-b from-[#7C5CFF] to-[#5B3FE0] border border-white/10 shadow-[0_2px_4px_-1px_rgba(0,0,0,0.50),0_1px_2px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.16)] hover:-translate-y-px hover:from-[#8A6CFF] hover:to-[#6A4EF0] hover:shadow-[0_6px_12px_-2px_rgba(0,0,0,0.55),0_3px_6px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.20)] active:translate-y-[1px] active:shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_2px_rgba(0,0,0,0.30)]",
+        // Destructive — ruby gradient. bg-destructive retained as fallback token.
+        destructive:
+          "bg-destructive text-destructive-foreground bg-gradient-to-b from-[#E0435B] to-[#B21E38] border border-white/10 shadow-[0_2px_4px_-1px_rgba(0,0,0,0.50),0_1px_2px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.16)] hover:-translate-y-px hover:from-[#EC5268] hover:to-[#C42741] hover:shadow-[0_6px_12px_-2px_rgba(0,0,0,0.55),0_3px_6px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.20)] active:translate-y-[1px] active:shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_2px_rgba(0,0,0,0.30)]",
+        // Outline — hairline perimeter over faint raised surface. border and
+        // hover:bg-accent tokens both retained.
+        outline:
+          "border border-input bg-transparent text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.30),inset_0_1px_0_rgba(255,255,255,0.06)] hover:-translate-y-px hover:bg-accent hover:text-accent-foreground hover:shadow-[0_5px_10px_-2px_rgba(0,0,0,0.50),inset_0_1px_0_rgba(255,255,255,0.08)] active:translate-y-[1px] active:shadow-[inset_0_1px_2px_rgba(0,0,0,0.25)]",
+        // Secondary — elevated dark-slate gradient, lighter bevel (0.08).
+        // bg-secondary retained as fallback token.
+        secondary:
+          "bg-secondary text-secondary-foreground bg-gradient-to-b from-[#1B2230] to-[#10141B] border border-white/10 shadow-[0_2px_4px_-1px_rgba(0,0,0,0.50),0_1px_2px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.08)] hover:-translate-y-px hover:from-[#222B3B] hover:to-[#151A22] hover:shadow-[0_6px_12px_-2px_rgba(0,0,0,0.55),0_3px_6px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.10)] active:translate-y-[1px] active:shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_2px_rgba(0,0,0,0.30)]",
+        // Ghost — intentionally flat, no elevation. hover:bg-accent retained.
+        ghost: "text-foreground hover:bg-accent hover:text-accent-foreground",
+        // Link — pure text affordance, no 3D chrome. text-primary retained.
+        link: "text-primary underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-9 px-4 py-2",
+        sm: "h-8 rounded-md px-3 text-xs",
+        lg: "h-10 rounded-md px-8",
+        icon: "h-9 w-9",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  }
+)
+>>>>>>> REPLACE
+```
+
+### FILE: src/components/ui/button.test.jsx
+```javascript
+<<<<<<< SEARCH
+describe("Button as child", () => {
+  it("renders as child element", () => {
+    render(
+      <Button asChild>
+        <a href="/test">Link Button</a>
+      </Button>
+    );
+    expect(screen.getByRole("link", { name: /link button/i })).toHaveAttribute("href", "/test");
+  });
+});
+=======
+describe("Button as child", () => {
+  it("renders as child element", () => {
+    render(
+      <Button asChild>
+        <a href="/test">Link Button</a>
+      </Button>
+    );
+    expect(screen.getByRole("link", { name: /link button/i })).toHaveAttribute("href", "/test");
+  });
+});
+
+describe("Button luxury 3D system", () => {
+  it("applies GPU transform and scoped transition base classes", () => {
+    render(<Button data-testid="btn">Base</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("transform-gpu", "select-none", "rounded-md");
+    expect(btn.className).toContain("transition-[transform,box-shadow,background-color,border-color]");
+  });
+
+  it("uses the emerald brand focus ring with no hardcoded offset color", () => {
+    render(<Button data-testid="btn">Focus</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("focus-visible:ring-2", "focus-visible:ring-[#00E096]");
+    expect(btn.className).not.toContain("ring-offset-[#040D1A]");
+  });
+
+  it("primary variant layers a violet gradient over the bg-primary token", () => {
+    render(<Button data-testid="btn">Primary</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("bg-primary", "bg-gradient-to-b", "from-[#7C5CFF]", "to-[#5B3FE0]");
+  });
+
+  it("destructive variant layers a ruby gradient over the bg-destructive token", () => {
+    render(<Button variant="destructive" data-testid="btn">Delete</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("bg-destructive", "bg-gradient-to-b", "from-[#E0435B]", "to-[#B21E38]");
+  });
+
+  it("secondary variant layers a slate gradient over the bg-secondary token", () => {
+    render(<Button variant="secondary" data-testid="btn">Secondary</Button>);
+    const btn = screen.getByTestId("btn");
+    expect(btn).toHaveClass("bg-secondary", "bg-gradient-to-b", "from-[#1B2230]", "to-[#10141B]");
+  });
+
+  it("applies hover elevation and tactile pressed state on primary", () => {
+    render(<Button data-testid="btn">Press</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("hover:-translate-y-px", "active:translate-y-[1px]");
+  });
+
+  it("flattens on disabled with no transform and preserves opacity-50", () => {
+    render(<Button disabled data-testid="btn">Disabled</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("disabled:opacity-50", "disabled:shadow-none", "disabled:translate-y-0");
+  });
+
+  it("neutralizes motion for reduced-motion users", () => {
+    render(<Button data-testid="btn">Reduced</Button>);
+    expect(screen.getByTestId("btn")).toHaveClass("motion-reduce:transition-none", "motion-reduce:transform-none");
+  });
+
+  it("keeps ghost and link variants flat (no lift transform)", () => {
+    const { rerender } = render(<Button variant="ghost" data-testid="btn">Ghost</Button>);
+    expect(screen.getByTestId("btn")).not.toHaveClass("hover:-translate-y-px");
+    rerender(<Button variant="link" data-testid="btn">Link</Button>);
+    expect(screen.getByTestId("btn")).not.toHaveClass("hover:-translate-y-px");
+  });
+});
+>>>>>>> REPLACE
+```
+
+### FILE: src/index.css
+```css
+/* ============================================================
+   Luxury 3D Button System — minimal global support layer.
+   Component styling and ALL motion live in components/ui/button.jsx
+   (CVA). This block is additive only: it sets NO global
+   `button { transition/transform }` rule and uses NO !important,
+   so it cannot fight framer-motion or override the CVA utilities.
+   Reduced-motion is handled authoritatively by the component-level
+   motion-reduce:* utilities; nothing global is needed here.
+   ============================================================ */
+@layer base {
+  button,
+  [role="button"] {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@layer components {
+  :root {
+    /* Reusable luxury depth tokens for any bespoke (non-CVA) button. */
+    --btn-bevel-strong: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    --btn-bevel-soft: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    --btn-contact-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.5),
+      0 1px 2px rgba(0, 0, 0, 0.4);
+    --btn-contact-shadow-hover: 0 6px 12px -2px rgba(0, 0, 0, 0.55),
+      0 3px 6px rgba(0, 0, 0, 0.4);
+    --btn-pressed-shadow: 0 1px 2px rgba(0, 0, 0, 0.45),
+      inset 0 1px 2px rgba(0, 0, 0, 0.3);
+    --btn-focus-ring: #00e096;
+  }
+}
+```
+
+Note on the `index.css` block: it is append-safe and low-risk, but I could not anchor a SEARCH/REPLACE because the file's current contents were not in the evidence. If your file already defines these `:root` tokens or a global `button` reset, reconcile by hand — the block is purely additive and nothing in the button component depends on it.
+
+Verification to run before merge:
+- `npx vitest run src/components/ui/button.test.jsx` — all 18 original assertions pass unchanged (every asserted token preserved) plus the 9 new luxury assertions.
+- `npm run build` — confirm Tailwind JIT emits the arbitrary gradient/shadow utilities (they are literal static strings in the CVA, so the scanner picks them up).

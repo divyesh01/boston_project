@@ -24,6 +24,13 @@ These rules apply to ALL AI agents working on this project (Gemini, Claude, Curs
    - You have full permission to **edit, delete, create, or refactor** whatever you want, provided it follows the rules above.
    - *Exception: Do not modify files explicitly listed in PROTECTED_FILES.md without owner authorization.*
 
+5. **CLAUDE PROOF RULE (NO FAKE ATTRIBUTION OR SIMULATED ACTIONS).**
+   - No action may be labeled "Claude reviewed", "Claude proposed", or "Claude edited" unless a successful real Claude API generation exists.
+   - Must record its exact OpenRouter Generation ID (`gen-...`), actual model, upstream provider, token usage, cost, latency, and HTTP 200 success.
+   - The Generation ID must be verifiable in OpenRouter Logs.
+   - If any of these are missing (e.g. HTTP 402, HTTP 429, or offline fallback), report **`CLAUDE = UNPROVEN`** and NEVER simulate Claude's contribution using Gemini or persona text.
+   - Deterministic engineering fixes without a live Claude API response must be transparently labeled as **`DETERMINISTIC_ENGINEERING_FIX (NON_AI)`**.
+
 ## THE WORKFLOW
 
 1. **Scan Everything:** Before starting a task, search the codebase, read relevant files, and understand the full context.
@@ -31,3 +38,4 @@ These rules apply to ALL AI agents working on this project (Gemini, Claude, Curs
 3. **Fix the Core:** Apply the fix to the root cause.
 4. **Prove the Fix:** Run the test again to show it passes.
 5. **Document Simply:** Update documentation (like BRAIN.md) in simple, 10-year-old friendly language.
+

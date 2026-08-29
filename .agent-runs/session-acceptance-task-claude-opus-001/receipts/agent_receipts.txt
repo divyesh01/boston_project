@@ -1,0 +1,134 @@
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Role: CLAUDE_OPUS_PROPOSAL_ENGINEER
+Actual Provider: ANTHROPIC
+Transport Provider: GOROUTER
+Requested Model: claude-opus-5
+Returned Model: claude-opus-5
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-claude-opus-001
+Input Tokens: 9955
+Output Tokens: 685
+Total Tokens: 10640
+Cost: N/A
+Latency: 16.326s
+HTTP/API Status: 200
+Generation ID: msg_5804ae19c7ad48a38ad7ef91b0704806
+Result: PROVEN
+Contribution: Authored architectural root-cause diagnosis and initial patch
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: ADVERSARIAL_CRITIC
+Role: ADVERSARIAL_CRITIC
+Actual Provider: NONE
+Transport Provider: OPENROUTER
+Requested Model: google/gemini-2.5-flash
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-claude-opus-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0.645s
+HTTP/API Status: 402
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Peer review unavailable
+Error: HTTP_402: {"error":{"message":"Insufficient credits. This account never purchased credits. Make sure your key is on the correct account or org, and if so, purchase more at https://openrouter.ai/settings/credits","code":402,"metadata":{"limit_source":"openrouter_credits","remedy_hint":"Add credits at https://o
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: SECURITY_AND_PERFORMANCE
+Role: SECURITY_AND_PERFORMANCE
+Actual Provider: NONE
+Transport Provider: NVIDIA
+Requested Model: meta/llama-3.1-70b-instruct
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-claude-opus-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0.152s
+HTTP/API Status: MISSING_KEY
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Peer review unavailable
+Error: NO_API_KEY_CONFIGURED: Missing credentials for NVIDIA (default)
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: TEST_AND_EDGE_CASE_HUNTER
+Role: TEST_AND_EDGE_CASE_HUNTER
+Actual Provider: NARA
+Transport Provider: NARA
+Requested Model: tencent-hy3-free
+Returned Model: tencent-hy3-free
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-claude-opus-001
+Input Tokens: 1470
+Output Tokens: 500
+Total Tokens: 1970
+Cost: N/A
+Latency: 8.099s
+HTTP/API Status: 200
+Generation ID: chatcmpl-fe76178
+Result: PROVEN
+Contribution: Delivered independent peer critique on NARA_TEST_HUNTER
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: STANDARDS_AND_CONSISTENCY
+Role: STANDARDS_AND_CONSISTENCY
+Actual Provider: NONE
+Transport Provider: XKIRO
+Requested Model: poolside/laguna-s-2.1:free
+Returned Model: NONE
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-claude-opus-001
+Input Tokens: 0
+Output Tokens: 0
+Total Tokens: 0
+Cost: N/A
+Latency: 0.384s
+HTTP/API Status: 404
+Generation ID: NONE
+Result: UNPROVEN
+Contribution: Peer review unavailable
+Error: HTTP_404: {"error":{"message":"A server error occurred. Please try again.","type":"not_found_error","code":"not_found"}}
+====================================================
+
+====================================================
+AGENT USAGE RECEIPT
+====================================================
+Agent: CLAUDE_OPUS_FINAL_PATCH_AUTHOR
+Role: CLAUDE_OPUS_FINAL_PATCH_AUTHOR
+Actual Provider: ANTHROPIC
+Transport Provider: GOROUTER
+Requested Model: claude-opus-5
+Returned Model: claude-opus-5
+Upstream Provider: UNKNOWN / NOT EXPOSED
+Task: acceptance-task-claude-opus-001
+Input Tokens: 11815
+Output Tokens: 1036
+Total Tokens: 12851
+Cost: N/A
+Latency: 21.998s
+HTTP/API Status: 200
+Generation ID: msg_5ac49b235e214f3dafbe97f30a792f83
+Result: PROVEN
+Contribution: Authored final definitive code patch after peer evaluation
+====================================================

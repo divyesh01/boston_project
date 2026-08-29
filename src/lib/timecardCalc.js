@@ -83,10 +83,10 @@ export function parseTime(value) {
   // Full datetime "2026-03-07 03:21 PM" — take the time portion (the time can
   // itself contain a space, e.g. "03:21 PM", so capture to end of string).
   const iso = s.match(/^\d{4}-\d{2}-\d{2}[T ](.*)$/);
-  const timePart = (iso ? iso[1] : s).trim();
+  const timePart = (iso ? iso[1] : s).replace(/[Zz]$/, '').trim();
 
-  // "HH:MM AM/PM" or "H:MM am"
-  let m = timePart.match(/^(\d{1,2}):(\d{2})\s*([AaPp][Mm])$/);
+  // "HH:MM[:SS] AM/PM" or "H:MM[:SS] am"
+  let m = timePart.match(/^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?\s*([AaPp][Mm])$/);
   if (m) {
     // Range-check BEFORE the mod, or an impossible hour becomes a plausible
     // one: 25 % 12 is 1, so "25:00 AM" would read as 01:00 rather than being
@@ -97,17 +97,25 @@ export function parseTime(value) {
     if (raw < 0 || raw > 23) return null;
     const min = Number(m[2]);
     if (min < 0 || min > 59) return null;
+    if (m[3] !== undefined) {
+      const sec = Number(m[3]);
+      if (sec < 0 || sec > 59) return null;
+    }
     let h = raw % 12;
-    if (/p/i.test(m[3])) h += 12;
+    if (/p/i.test(m[4])) h += 12;
     return h * MIN_PER_HOUR + min;
   }
-  // "HH:MM" 24h
-  m = timePart.match(/^(\d{1,2}):(\d{2})$/);
+  // "HH:MM[:SS]" 24h
+  m = timePart.match(/^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/);
   if (m) {
     const h = Number(m[1]);
     if (h < 0 || h > 23) return null;
     const min = Number(m[2]);
     if (min < 0 || min > 59) return null;
+    if (m[3] !== undefined) {
+      const sec = Number(m[3]);
+      if (sec < 0 || sec > 59) return null;
+    }
     return h * MIN_PER_HOUR + min;
   }
   // Bare "HH" 24h

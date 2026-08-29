@@ -13,6 +13,7 @@
 
 import { execSync } from 'node:child_process';
 import { classifyProviderIdentity, validateCompletionPayload } from './universalModelRouter.js';
+import { phoenixTracer } from './phoenixTracer.js';
 
 const NARA_BASE_URL = 'https://router.bynara.id/v1';
 
@@ -501,6 +502,27 @@ export class NaraHelperPool {
     };
 
     this.ledger.push(entry);
+
+    // Live Arize Phoenix OpenInference Tracing
+    phoenixTracer.recordLlmCall({
+      name: `Nara Worker: ${finalModel || candidateModels[0] || 'Unknown'} (${roleType})`,
+      provider: 'NaraRouter',
+      modelRequested: candidateModels[0],
+      modelReturned: finalModel || 'NONE',
+      input: prompt,
+      output: finalContent || (retryPath.length > 0 ? JSON.stringify(retryPath) : ''),
+      tokens: finalUsage,
+      latencySeconds: finalLatency,
+      status: success ? 'OK' : 'ERROR',
+      error: finalError,
+      customAttributes: {
+        'nara.account': account.alias,
+        'nara.task_name': taskName,
+        'nara.role_type': roleType,
+        'nara.retries': retryPath.length,
+      },
+    }).catch(() => {});
+
     return { success, entry, content: finalContent };
   }
 

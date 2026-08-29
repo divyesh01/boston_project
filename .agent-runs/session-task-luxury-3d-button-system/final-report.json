@@ -1,0 +1,33 @@
+{
+  "taskId": "task-luxury-3d-button-system",
+  "sessionId": "session-task-luxury-3d-button-system",
+  "verdict": "PASS",
+  "durationSeconds": 1615.602,
+  "classification": {
+    "scale": "LARGE",
+    "rationale": "Substantial architecture, multi-agent swarm, or multi-file system upgrade detected.",
+    "claudeWorkersCount": 4,
+    "reviewerCount": 6,
+    "includeAdversarialReview": true
+  },
+  "patch": {
+    "patchHash": "b6e4a0bfb0c8f28cbcab8eef8d324ac5c1680f241aa6162c6ae5c5429d873e45",
+    "filesAffected": [
+      "src/components/ui/button.jsx",
+      "src/components/ui/button.test.jsx"
+    ],
+    "linesAdded": 222,
+    "linesDeleted": 109
+  },
+  "tests": {
+    "passed": true,
+    "correctionAttempts": 2
+  },
+  "telemetry": {
+    "totalCalls": 40,
+    "successfulCalls": 12,
+    "totalTokens": 308070
+  },
+  "activeActiveStatus": "TEMPORARILY IMBALANCED",
+  "accounting": "====================================================\nSUBSCRIPTION USAGE CONSERVATION ACCOUNTING\n====================================================\nANTIGRAVITY SUBSCRIPTION\nSubstantive reasoning / code authoring: NO (100% offloaded to external API)\nInterface / launcher usage: YES (Interactive terminal & launch interface)\nEstimated role: Dashboard / Launcher only\nReason: None\n\nCODEX SUBSCRIPTION\nSubstantive reasoning / code authoring: NO (Conserved at 0% usage)\nInvocation status: IDLE / BLOCKED BY DEFAULT\nEstimated role: Idle reserve\nReason: None\nCould API have done this instead?: YES (Preserved for emergency reserve)\n===================================================="
+}

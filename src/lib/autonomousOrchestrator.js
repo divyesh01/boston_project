@@ -13,6 +13,7 @@ import { dualPillarSolver } from './dualPillarSolver.js';
 import { debateTribunal } from './adversarialDebateTribunal.js';
 import { productionSentinel } from './productionSentinel.js';
 import { generateForensicReport } from './sessionForensicReport.js';
+import { phoenixTracer } from './phoenixTracer.js';
 
 export const DOMAINS = {
   FINANCIAL_TRUTH: 'FINANCIAL_TRUTH',
@@ -365,11 +366,15 @@ export function buildOrchestrationPlan(classification, prompt) {
  * High-level orchestration execution entry point.
  */
 export async function executeAutonomousWorkflow(prompt, context = {}) {
+  const tStart = Date.now();
+  const traceId = phoenixTracer.generateTraceId();
+  const orchestratorContext = { ...context, traceId };
+
   const classification = classifyPrompt(prompt, context);
   const plan = buildOrchestrationPlan(classification, prompt);
 
   // 1. Mandatory Dual-Pillar Parallel Solver (Gemini Solution A + Claude Solution B)
-  const dualPillarResults = await dualPillarSolver.executeDualPillar(prompt, context);
+  const dualPillarResults = await dualPillarSolver.executeDualPillar(prompt, orchestratorContext);
 
   // 2. 5-Agent Adversarial Debate Tribunal (with synthesized dual solution context)
   let debateResults = null;
@@ -389,6 +394,24 @@ export async function executeAutonomousWorkflow(prompt, context = {}) {
     routerLedger: universalRouter.failoverLedger,
     status: productionAudit.overallVerdict.includes('PASS') ? 'PASS' : 'FAIL',
   });
+
+  const durationSeconds = Number(((Date.now() - tStart) / 1000).toFixed(3));
+
+  // Live Arize Phoenix Agent Orchestration Span
+  phoenixTracer.recordAgentCall({
+    name: `Autonomous Multi-Agent Orchestration: ${prompt}`,
+    role: 'Autonomous Engineering Orchestrator',
+    input: prompt,
+    output: forensicReport.summaryMarkdown || JSON.stringify(plan.squadSummary),
+    latencySeconds: durationSeconds,
+    status: productionAudit.overallVerdict.includes('PASS') ? 'OK' : 'ERROR',
+    traceId,
+    customAttributes: {
+      'orchestrator.domain': classification.primaryDomain,
+      'orchestrator.risk_level': classification.riskLevel,
+      'orchestrator.verdict': productionAudit.overallVerdict,
+    },
+  }).catch(() => {});
 
   return {
     classification,

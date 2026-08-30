@@ -41,20 +41,19 @@ function ModuleCard({ theme, statLabel, statValue, statSub }) {
   return (
     <Link
       to={t.to}
-      className="fx-clickable group relative block overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0F1F35]/90 p-5 transition-all duration-300 hover:-translate-y-1"
-      style={{ boxShadow: rgba("#000000", 0.45) }}
+      className="fx-clickable group relative block overflow-hidden rounded-2xl border border-white/[0.08] bg-gradient-to-b from-[#12233B]/90 to-[#0A1628]/95 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_10px_28px_rgba(0,0,0,0.45)] transition-all duration-300 hover:-translate-y-1 hover:border-white/20 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_18px_40px_rgba(0,0,0,0.65)] active:translate-y-[1px] active:scale-[0.995]"
       onMouseEnter={(e) => {
         e.currentTarget.style.borderColor = t.text;
-        e.currentTarget.style.boxShadow = `0 0 30px ${rgba(t.text, 0.35)}, 0 0 2px ${rgba(t.text, 0.6)}`;
+        e.currentTarget.style.boxShadow = `inset 0 1px 0 rgba(255,255,255,0.22), 0 0 30px ${rgba(t.text, 0.28)}, 0 16px 36px rgba(0,0,0,0.6)`;
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = "rgba(255,255,255,0.06)";
-        e.currentTarget.style.boxShadow = rgba("#000000", 0.45);
+        e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)";
+        e.currentTarget.style.boxShadow = "inset 0 1px 0 rgba(255,255,255,0.12), 0 10px 28px rgba(0,0,0,0.45)";
       }}
     >
       <div
-        className="pointer-events-none absolute -top-16 -right-16 h-40 w-40 rounded-full opacity-40 blur-2xl transition-opacity duration-300 group-hover:opacity-100"
-        style={{ background: `radial-gradient(circle, ${rgba(t.text, 0.18)}, transparent 70%)` }}
+        className="pointer-events-none absolute -top-16 -right-16 h-40 w-40 rounded-full opacity-30 blur-2xl transition-opacity duration-300 group-hover:opacity-90"
+        style={{ background: `radial-gradient(circle, ${rgba(t.text, 0.25)}, transparent 70%)` }}
       />
       <div
         className="pointer-events-none absolute inset-x-0 top-0 h-[2px]"
@@ -62,10 +61,10 @@ function ModuleCard({ theme, statLabel, statValue, statSub }) {
       />
       <div className="relative flex items-center gap-3">
         <span
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border"
-          style={{ borderColor: rgba(t.text, 0.4), background: rgba(t.text, 0.1), color: t.text }}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_4px_12px_rgba(0,0,0,0.3)] transition-transform duration-200 group-hover:scale-105"
+          style={{ borderColor: rgba(t.text, 0.45), background: `linear-gradient(135deg, ${rgba(t.text, 0.18)}, ${rgba(t.text, 0.06)})`, color: t.text }}
         >
-          <Icon className="h-5 w-5" />
+          <Icon className="h-5 w-5 drop-shadow-[0_2px_4px_rgba(0,0,0,0.4)]" />
         </span>
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.2em]" style={{ color: t.text }}>
@@ -77,14 +76,14 @@ function ModuleCard({ theme, statLabel, statValue, statSub }) {
 
       <div className="relative mt-5">
         <p className="text-[10px] uppercase tracking-widest text-slate-500">{statLabel}</p>
-        <p className="mt-1 font-heading text-3xl font-semibold tabular-nums text-white">{statValue}</p>
+        <p className="mt-1 font-heading text-3xl font-semibold tabular-nums text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.3)]">{statValue}</p>
         {statSub && <p className="mt-1 text-xs text-slate-400">{statSub}</p>}
       </div>
 
       <p className="relative mt-2 text-xs leading-relaxed text-slate-400">{t.description}</p>
 
       <p
-        className="relative mt-4 flex items-center gap-1.5 text-xs font-medium opacity-80 transition-opacity group-hover:opacity-100"
+        className="relative mt-4 flex items-center gap-1.5 text-xs font-semibold opacity-90 transition-opacity group-hover:opacity-100"
         style={{ color: t.text }}
       >
         {t.action}

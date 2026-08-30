@@ -218,9 +218,9 @@ export default function MonthlyCalendar() {
   return (
     <div className="space-y-6">
       <header>
-        <p className="text-[11px] uppercase tracking-[0.3em] text-[#00D4FF]">Owner Intelligence</p>
-        <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Monthly Calendar View</h1>
-        <p className="mt-1 text-sm text-slate-400">
+        <p className="text-[11px] uppercase tracking-[0.3em] text-[#00D4FF] drop-shadow-[0_1px_2px_rgba(0,212,255,0.35)]">Owner Intelligence</p>
+        <h1 className="mt-2 font-heading text-3xl font-semibold text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.75)]">Monthly Calendar View</h1>
+        <p className="mt-1 text-sm text-slate-400 drop-shadow-[0_1px_1px_rgba(0,0,0,0.55)]">
           Visualize daily performance patterns, channel dominance, and yield rhythms for {periodLabel}.
         </p>
       </header>
@@ -257,35 +257,35 @@ export default function MonthlyCalendar() {
           title={`${MONTHS_LONG[grid.month]} ${grid.year} Calendar`}
           subtitle={`Green ≥ ${money(revThresholds.highRevenueThreshold)} · Gray ${money(revThresholds.mediumRevenueThreshold)}–${money(revThresholds.highRevenueThreshold)} · Red < ${money(revThresholds.mediumRevenueThreshold)} (editable in Settings)`}
         >
-          <div className="mb-3 flex flex-wrap items-center gap-3 text-[10px] text-slate-400">
-            <span className="uppercase tracking-wider text-slate-500">Event demand:</span>
+          <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-white/[0.04] bg-gradient-to-b from-white/[0.04] to-transparent px-3 py-2 text-[10px] text-slate-400 ring-1 ring-inset ring-white/[0.03] shadow-[0_2px_8px_-4px_rgba(0,0,0,0.6),inset_0_1px_0_rgba(255,255,255,0.05)] transition-all duration-300 ease-out hover:border-white/[0.08] hover:shadow-[0_6px_18px_-8px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.08)]">
+            <span className="uppercase tracking-wider text-slate-500 drop-shadow-[0_1px_0_rgba(0,0,0,0.6)]">Event demand:</span>
             {Object.entries(DEMAND_COLORS).map(([label, color]) => (
-              <span key={label} className="flex items-center gap-1">
-                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+              <span key={label} className="flex items-center gap-1 rounded-full border border-white/5 bg-white/[0.03] px-2 py-0.5 ring-1 ring-inset ring-white/[0.03] shadow-[0_1px_2px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.05)] transition-all duration-200 hover:border-white/10 hover:bg-white/[0.06]">
+                <span className="h-2 w-2 rounded-full ring-1 ring-inset ring-white/20" style={{ backgroundColor: color, boxShadow: `0 0 8px -1px ${color}aa` }} />
                 {label}
               </span>
             ))}
-            <span className="mx-1 hidden h-3 w-px bg-white/10 sm:block" />
-            <span className="uppercase tracking-wider text-slate-500">Event distance:</span>
-            <span className="flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: distanceColor(0) }} />
+            <span className="mx-1 hidden h-3 w-px bg-gradient-to-b from-white/[0.03] via-white/15 to-white/[0.03] shadow-[1px_0_0_rgba(0,0,0,0.55)] sm:block" />
+            <span className="uppercase tracking-wider text-slate-500 drop-shadow-[0_1px_0_rgba(0,0,0,0.6)]">Event distance:</span>
+            <span className="flex items-center gap-1 rounded-full border border-white/5 bg-white/[0.03] px-2 py-0.5 ring-1 ring-inset ring-white/[0.03] shadow-[0_1px_2px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.05)] transition-all duration-200 hover:border-white/10 hover:bg-white/[0.06]">
+              <span className="h-2 w-2 rounded-full ring-1 ring-inset ring-white/20" style={{ backgroundColor: distanceColor(0), boxShadow: `0 0 8px -1px ${distanceColor(0)}aa` }} />
               close
             </span>
-            <span className="flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: distanceColor(20) }} />
+            <span className="flex items-center gap-1 rounded-full border border-white/5 bg-white/[0.03] px-2 py-0.5 ring-1 ring-inset ring-white/[0.03] shadow-[0_1px_2px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.05)] transition-all duration-200 hover:border-white/10 hover:bg-white/[0.06]">
+              <span className="h-2 w-2 rounded-full ring-1 ring-inset ring-white/20" style={{ backgroundColor: distanceColor(20), boxShadow: `0 0 8px -1px ${distanceColor(20)}aa` }} />
               20 mi
             </span>
-            <span className="flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: distanceColor(40) }} />
+            <span className="flex items-center gap-1 rounded-full border border-white/5 bg-white/[0.03] px-2 py-0.5 ring-1 ring-inset ring-white/[0.03] shadow-[0_1px_2px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.05)] transition-all duration-200 hover:border-white/10 hover:bg-white/[0.06]">
+              <span className="h-2 w-2 rounded-full ring-1 ring-inset ring-white/20" style={{ backgroundColor: distanceColor(40), boxShadow: `0 0 8px -1px ${distanceColor(40)}aa` }} />
               40+ mi
             </span>
           </div>
-          <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+          <div className="grid grid-cols-7 gap-1 sm:gap-2 lg:gap-2.5">
             {DOW.map((d) => (
-              <div key={d} className="pb-2 text-center text-xs font-medium text-slate-500">{d}</div>
+              <div key={d} className="rounded-md border-b border-white/[0.05] bg-gradient-to-b from-white/[0.04] to-transparent pb-1.5 pt-1 text-center text-[10px] font-medium uppercase tracking-[0.12em] text-slate-500 shadow-[0_1px_0_rgba(0,0,0,0.5)] drop-shadow-[0_1px_0_rgba(0,0,0,0.6)] sm:pb-2 sm:text-xs sm:tracking-[0.18em] lg:pb-2.5 lg:tracking-[0.22em]">{d}</div>
             ))}
             {grid.cells.map((cell, i) => {
-              if (!cell) return <div key={i} className="min-h-[90px] sm:min-h-[120px]" />;
+              if (!cell) return <div key={i} className="min-h-[76px] rounded-md border border-white/[0.02] bg-[#0A1628]/20 shadow-[inset_0_1px_2px_rgba(0,0,0,0.35)] sm:min-h-[110px] sm:rounded-lg lg:min-h-[128px] lg:rounded-xl" />;
               const revenue = cell.data?.room_revenue || 0;
               const color = cell.data ? getRevenueColor(revenue) : "transparent";
               const occPct = cell.data?.occupancy ? (cell.data.occupancy > 1 ? cell.data.occupancy : cell.data.occupancy * 100) : 0;
@@ -298,14 +298,16 @@ export default function MonthlyCalendar() {
                 <button
                   key={i}
                   onClick={() => setSelectedDay(cell.date)}
-                  className={`min-h-[90px] rounded-lg border p-2 text-left transition-all sm:min-h-[120px] ${
-                    selectedDay === cell.date ? "border-[#00D4FF] ring-1 ring-[#00D4FF]" : "border-white/5"
-                  } ${!cell.data ? "bg-[#0A1628]/40" : ""}`}
-                  style={cell.data ? { backgroundColor: `${color}15`, borderLeft: `3px solid ${color}` } : {}}
+                  className={`group relative min-h-[76px] rounded-md border p-1.5 text-left ring-1 ring-inset ring-white/[0.04] transition-[transform,box-shadow,border-color,filter] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform [transform:translateZ(0)] hover:-translate-y-[2px] hover:border-white/20 hover:ring-white/[0.10] hover:brightness-[1.06] hover:shadow-[0_12px_28px_-12px_rgba(0,0,0,0.8),0_4px_10px_-5px_rgba(0,0,0,0.6),0_0_0_1px_rgba(255,255,255,0.05),inset_0_1px_0_rgba(255,255,255,0.14),inset_0_-1px_0_rgba(0,0,0,0.45)] focus-visible:outline-none focus-visible:z-10 focus-visible:-translate-y-px focus-visible:ring-2 focus-visible:ring-[#00D4FF]/70 focus-visible:ring-offset-1 focus-visible:ring-offset-[#0A1628] focus-visible:shadow-[0_14px_34px_-14px_rgba(0,212,255,0.42),0_0_0_1px_rgba(0,212,255,0.30),inset_0_1px_0_rgba(255,255,255,0.14)] active:translate-y-0 active:scale-[0.985] active:brightness-95 active:duration-100 active:shadow-[inset_0_3px_8px_rgba(0,0,0,0.62),inset_0_-1px_0_rgba(255,255,255,0.04),0_1px_1px_rgba(0,0,0,0.4)] disabled:pointer-events-none disabled:translate-y-0 disabled:opacity-45 disabled:saturate-50 disabled:shadow-[inset_0_1px_2px_rgba(0,0,0,0.4)] sm:min-h-[110px] sm:rounded-lg sm:p-2 sm:hover:-translate-y-[3px] sm:hover:shadow-[0_18px_40px_-14px_rgba(0,0,0,0.82),0_6px_14px_-6px_rgba(0,0,0,0.65),0_0_0_1px_rgba(255,255,255,0.05),inset_0_1px_0_rgba(255,255,255,0.14),inset_0_-1px_0_rgba(0,0,0,0.45)] sm:focus-visible:ring-offset-2 lg:min-h-[128px] lg:rounded-xl lg:p-2.5 lg:hover:-translate-y-1 lg:hover:shadow-[0_24px_52px_-16px_rgba(0,0,0,0.85),0_8px_18px_-8px_rgba(0,0,0,0.68),0_0_0_1px_rgba(255,255,255,0.06),inset_0_1px_0_rgba(255,255,255,0.16),inset_0_-1px_0_rgba(0,0,0,0.48)] ${
+                    selectedDay === cell.date
+                      ? "z-10 -translate-y-0.5 border-[#00D4FF] ring-1 ring-[#00D4FF] shadow-[0_16px_38px_-12px_rgba(0,212,255,0.52),0_2px_8px_-2px_rgba(0,0,0,0.6),0_0_0_1px_rgba(0,212,255,0.32),inset_0_1px_0_rgba(255,255,255,0.18),inset_0_-1px_0_rgba(0,0,0,0.45)] hover:-translate-y-1 hover:border-[#00D4FF] hover:ring-[#00D4FF] hover:shadow-[0_22px_46px_-14px_rgba(0,212,255,0.60),0_0_0_1px_rgba(0,212,255,0.38),inset_0_1px_0_rgba(255,255,255,0.20)]"
+                      : "border-white/5 shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.05)]"
+                  } ${!cell.data ? "bg-[#0A1628]/40 shadow-[inset_0_1px_3px_rgba(0,0,0,0.45)] hover:bg-[#0A1628]/55 hover:shadow-[inset_0_1px_4px_rgba(0,0,0,0.5),0_10px_24px_-14px_rgba(0,0,0,0.7)]" : "bg-gradient-to-b from-white/[0.06] to-transparent hover:from-white/[0.10]"}`}
+                  style={cell.data ? { backgroundColor: `${color}15`, borderLeft: `3px solid ${color}`, boxShadow: `inset 3px 0 8px -4px ${color}66` } : {}}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-white">{cell.day}</span>
-                    {cell.data && <span className="text-[10px] text-slate-400">{occPct.toFixed(0)}%</span>}
+                    <span className="text-xs font-semibold text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.7)]">{cell.day}</span>
+                    {cell.data && <span className="rounded-full border border-white/10 bg-black/30 px-1 py-px text-[9px] tabular-nums text-slate-300 ring-1 ring-inset ring-white/[0.05] shadow-[0_1px_2px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.08)] transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:-translate-y-px group-hover:border-white/25 group-hover:bg-black/40 group-hover:text-white group-hover:ring-white/[0.10] group-hover:shadow-[0_4px_10px_-3px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.16)] group-focus-visible:border-[#00D4FF]/50 group-focus-visible:text-white group-active:translate-y-0 group-active:shadow-[inset_0_1px_3px_rgba(0,0,0,0.6)] sm:px-1.5 sm:text-[10px] lg:px-2 lg:py-0.5">{occPct.toFixed(0)}%</span>}
                   </div>
                   {/* One badge for every day that has events. It used to be two
                       variants: a tappable <button> when the night had imported
@@ -316,22 +318,22 @@ export default function MonthlyCalendar() {
                     <button
                       type="button"
                       onClick={(e) => { e.stopPropagation(); setEventPopupDay(cell.date); }}
-                      className="mt-1 flex w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-[9px] font-semibold uppercase tracking-wide transition-all hover:brightness-125"
-                      style={{ backgroundColor: `${eventColor}22`, color: distColor, borderLeft: `2px solid ${eventColor}` }}
+                      className="mt-0.5 flex w-full items-center gap-0.5 rounded-[5px] bg-gradient-to-b from-white/[0.07] to-transparent px-1 py-0.5 text-left text-[8px] font-semibold uppercase tracking-tight ring-1 ring-inset ring-white/[0.06] shadow-[0_1px_3px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.08)] transition-[transform,box-shadow,filter] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform [transform:translateZ(0)] hover:-translate-y-px hover:scale-[1.015] hover:brightness-125 hover:ring-white/20 hover:shadow-[0_8px_18px_-5px_rgba(0,0,0,0.75),0_2px_5px_-2px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.16)] focus-visible:outline-none focus-visible:z-10 focus-visible:-translate-y-px focus-visible:ring-2 focus-visible:ring-white/60 focus-visible:ring-offset-1 focus-visible:ring-offset-black/40 focus-visible:brightness-110 active:translate-y-0 active:scale-[0.98] active:brightness-95 active:duration-100 active:shadow-[inset_0_2px_6px_rgba(0,0,0,0.6)] disabled:pointer-events-none disabled:opacity-45 disabled:saturate-50 disabled:shadow-none sm:mt-1 sm:gap-1 sm:rounded-md sm:text-[9px] sm:tracking-wide lg:px-1.5 lg:py-1"
+                      style={{ backgroundColor: `${eventColor}22`, color: distColor, borderLeft: `2px solid ${eventColor}`, boxShadow: `inset 2px 0 6px -3px ${eventColor}88, 0 1px 3px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.08)` }}
                       title={cellEvents.map((e) => `${e.name} — ${e.demand}`).join(" / ")}
                     >
-                      <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: distColor }} />
+                      <span className="h-1.5 w-1.5 rounded-full ring-1 ring-inset ring-white/25" style={{ backgroundColor: distColor, boxShadow: `0 0 6px -1px ${distColor}cc` }} />
                       📅 {cellEvents.length} event{cellEvents.length > 1 ? "s" : ""} — tap for details
                     </button>
                   )}
                   {cell.data ? (
-                    <div className="mt-1 space-y-0.5 text-[10px] text-slate-300">
-                      <div className="font-heading font-semibold text-sm tabular-nums text-white">{money(revenue)}</div>
-                      <div>ADR {money2(cell.data.adr || 0)}</div>
-                      <div>RevPAR {money2(cell.data.revpar || 0)}</div>
+                    <div className="mt-0.5 space-y-0 text-[9px] text-slate-300 sm:mt-1 sm:space-y-0.5 sm:text-[10px] lg:mt-1.5">
+                      <div className="font-heading text-xs font-semibold tabular-nums text-white drop-shadow-[0_2px_3px_rgba(0,0,0,0.75)] transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:-translate-y-px group-hover:drop-shadow-[0_4px_8px_rgba(0,0,0,0.9)] group-active:translate-y-0 group-active:drop-shadow-[0_1px_2px_rgba(0,0,0,0.7)] sm:text-sm lg:text-base">{money(revenue)}</div>
+                      <div className="tabular-nums transition-colors duration-300 group-hover:text-slate-100 group-focus-visible:text-slate-100 drop-shadow-[0_1px_1px_rgba(0,0,0,0.6)]">ADR {money2(cell.data.adr || 0)}</div>
+                      <div className="tabular-nums transition-colors duration-300 group-hover:text-slate-100 group-focus-visible:text-slate-100 drop-shadow-[0_1px_1px_rgba(0,0,0,0.6)]">RevPAR {money2(cell.data.revpar || 0)}</div>
                     </div>
                   ) : (
-                    <div className="mt-2 text-[10px] text-slate-600">No Data</div>
+                    <div className="mt-1.5 text-[9px] text-slate-600 drop-shadow-[0_1px_0_rgba(0,0,0,0.5)] transition-colors duration-300 group-hover:text-slate-500 sm:mt-2 sm:text-[10px]">No Data</div>
                   )}
                 </button>
               );
@@ -345,8 +347,8 @@ export default function MonthlyCalendar() {
           into exactly the state this page was fixed out of: describing one span while
           measuring another. */}
       {hiddenGrids > 0 && (
-        <div className="rounded-xl border border-[#FFB547]/20 bg-[#FFB547]/[0.06] p-4">
-          <p className="text-sm text-[#FFB547]">
+        <div className="rounded-xl border border-[#FFB547]/20 bg-gradient-to-b from-[#FFB547]/[0.10] to-[#FFB547]/[0.04] p-4 ring-1 ring-inset ring-[#FFB547]/[0.08] shadow-[0_8px_22px_-12px_rgba(255,181,71,0.35),0_1px_2px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.08)] transition-all duration-300 ease-out hover:-translate-y-px hover:border-[#FFB547]/30 hover:shadow-[0_14px_30px_-14px_rgba(255,181,71,0.45),inset_0_1px_0_rgba(255,255,255,0.12)]">
+          <p className="text-sm text-[#FFB547] drop-shadow-[0_1px_2px_rgba(0,0,0,0.55)]">
             ⚠ Only the first {MAX_GRIDS} months of {periodLabel} are drawn above. The KPIs cover the full
             range, including {hiddenGrids} further month{hiddenGrids > 1 ? "s" : ""}. Narrow the date range to see them.
           </p>
@@ -362,21 +364,24 @@ export default function MonthlyCalendar() {
             <Card key={g} title={getRevenueGroupLabel(g)} subtitle={`${stats.days} days · ${pct(stats.pct)} of revenue`}>
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
-                  <div className="h-3 w-3 rounded-full" style={{ backgroundColor: color }} />
-                  <span className="text-2xl font-heading font-semibold text-white">{money(stats.revenue)}</span>
+                  <div
+                    className="h-3 w-3 rounded-full ring-1 ring-inset ring-white/20 shadow-[0_1px_3px_rgba(0,0,0,0.6)]"
+                    style={{ backgroundColor: color, boxShadow: `0 0 10px -2px ${color}99, inset 0 1px 0 rgba(255,255,255,0.25)` }}
+                  />
+                  <span className="text-2xl font-heading font-semibold tabular-nums text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.7)]">{money(stats.revenue)}</span>
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-xs">
-                  <div>
+                  <div className="rounded-lg border border-white/5 bg-gradient-to-b from-white/[0.05] to-transparent px-2 py-1.5 ring-1 ring-inset ring-white/[0.04] shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.06)] transition-all duration-300 ease-out hover:-translate-y-px hover:border-white/10 hover:shadow-[0_6px_16px_-8px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.10)]">
                     <p className="text-slate-500">Occ</p>
-                    <p className="text-slate-200">{pct(stats.occupancy)}</p>
+                    <p className="tabular-nums text-slate-200 drop-shadow-[0_1px_1px_rgba(0,0,0,0.6)]">{pct(stats.occupancy)}</p>
                   </div>
-                  <div>
+                  <div className="rounded-lg border border-white/5 bg-gradient-to-b from-white/[0.05] to-transparent px-2 py-1.5 ring-1 ring-inset ring-white/[0.04] shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.06)] transition-all duration-300 ease-out hover:-translate-y-px hover:border-white/10 hover:shadow-[0_6px_16px_-8px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.10)]">
                     <p className="text-slate-500">ADR</p>
-                    <p className="text-slate-200">{money2(stats.adr)}</p>
+                    <p className="tabular-nums text-slate-200 drop-shadow-[0_1px_1px_rgba(0,0,0,0.6)]">{money2(stats.adr)}</p>
                   </div>
-                  <div>
+                  <div className="rounded-lg border border-white/5 bg-gradient-to-b from-white/[0.05] to-transparent px-2 py-1.5 ring-1 ring-inset ring-white/[0.04] shadow-[0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.06)] transition-all duration-300 ease-out hover:-translate-y-px hover:border-white/10 hover:shadow-[0_6px_16px_-8px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.10)]">
                     <p className="text-slate-500">RevPAR</p>
-                    <p className="text-slate-200">{money2(stats.revpar)}</p>
+                    <p className="tabular-nums text-slate-200 drop-shadow-[0_1px_1px_rgba(0,0,0,0.6)]">{money2(stats.revpar)}</p>
                   </div>
                 </div>
               </div>
@@ -386,8 +391,8 @@ export default function MonthlyCalendar() {
       </div>
 
       {groups.nodata.length > 0 && (
-        <div className="rounded-xl border border-[#FFB547]/20 bg-[#FFB547]/[0.06] p-4">
-          <p className="text-sm text-[#FFB547]">
+        <div className="rounded-xl border border-[#FFB547]/20 bg-gradient-to-b from-[#FFB547]/[0.10] to-[#FFB547]/[0.04] p-4 ring-1 ring-inset ring-[#FFB547]/[0.08] shadow-[0_8px_22px_-12px_rgba(255,181,71,0.35),0_1px_2px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.08)] transition-all duration-300 ease-out hover:-translate-y-px hover:border-[#FFB547]/30 hover:shadow-[0_14px_30px_-14px_rgba(255,181,71,0.45),inset_0_1px_0_rgba(255,255,255,0.12)]">
+          <p className="text-sm text-[#FFB547] drop-shadow-[0_1px_2px_rgba(0,0,0,0.55)]">
             ⚠ {groups.nodata.length} days have no imported data for {periodLabel}. Import reports to see full performance.
           </p>
         </div>
@@ -396,21 +401,21 @@ export default function MonthlyCalendar() {
       {/* Daily Detail Panel */}
       <DialogPrimitive.Root open={!!selectedDay} onOpenChange={(open) => !open && setSelectedDay(null)}>
         <DialogPrimitive.Portal>
-          <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+          <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-gradient-to-b from-black/55 via-black/65 to-black/75 backdrop-blur-[3px] transition-opacity duration-300 ease-out data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
           <DialogPrimitive.Content 
             className="fixed inset-0 z-50 flex items-end justify-end sm:items-center sm:justify-center outline-none pointer-events-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
             aria-describedby={undefined}
           >
             <div
-              className="relative w-full max-w-lg rounded-t-3xl border border-white/10 bg-[#0F1F35] p-6 sm:rounded-2xl pointer-events-auto shadow-2xl"
+              className="relative w-full max-w-lg rounded-t-3xl border border-white/[0.14] bg-gradient-to-b from-[#162C4B] via-[#132743] to-[#0E1D31] p-6 sm:rounded-2xl pointer-events-auto ring-1 ring-inset ring-white/[0.08] shadow-[0_-32px_80px_-28px_rgba(0,0,0,0.92),0_32px_80px_-28px_rgba(0,0,0,0.92),0_2px_8px_-2px_rgba(0,0,0,0.7),0_0_0_1px_rgba(0,212,255,0.06),inset_0_1px_0_rgba(255,255,255,0.14),inset_0_-1px_0_rgba(0,0,0,0.5)] transition-all duration-300 ease-out"
               onClick={(e) => e.stopPropagation()}
               style={{ maxHeight: "85vh", overflowY: "auto" }}
             >
-              <div className="mb-4 flex items-center justify-between">
-                <DialogPrimitive.Title className="font-heading text-xl font-semibold text-white">
+              <div className="mb-4 flex items-center justify-between border-b border-white/[0.06] pb-3 shadow-[0_1px_0_rgba(255,255,255,0.04)]">
+                <DialogPrimitive.Title className="font-heading text-xl font-semibold text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.85)]">
                   {formatDayLabel(selectedDay)}
                 </DialogPrimitive.Title>
-                <DialogPrimitive.Close className="text-slate-400 hover:text-white" aria-label="Close">
+                <DialogPrimitive.Close className="rounded-full border border-white/[0.06] bg-white/[0.03] p-1.5 text-slate-400 ring-1 ring-inset ring-white/[0.04] shadow-[0_1px_3px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.07)] transition-[transform,box-shadow,border-color,background-color,color] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-px hover:border-white/20 hover:bg-white/[0.08] hover:text-white hover:ring-white/[0.10] hover:shadow-[0_8px_18px_-6px_rgba(0,0,0,0.75),0_1px_2px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.16)] focus-visible:outline-none focus-visible:-translate-y-px focus-visible:text-white focus-visible:ring-2 focus-visible:ring-[#00D4FF]/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#132743] focus-visible:shadow-[0_8px_20px_-8px_rgba(0,212,255,0.45),inset_0_1px_0_rgba(255,255,255,0.14)] active:translate-y-0 active:scale-95 active:duration-100 active:shadow-[inset_0_2px_6px_rgba(0,0,0,0.6)] disabled:pointer-events-none disabled:opacity-40 disabled:shadow-none" aria-label="Close">
                   <X className="h-5 w-5" />
                 </DialogPrimitive.Close>
               </div>
@@ -423,23 +428,23 @@ export default function MonthlyCalendar() {
                   no numbers yet, the events ARE the intelligence. */}
               {selectedEvents.length > 0 && (
                 <div className="mb-4">
-                  <p className="mb-2 text-xs uppercase tracking-widest text-slate-500">Events Driving Demand</p>
+                  <p className="mb-2 text-xs uppercase tracking-widest text-slate-500 drop-shadow-[0_1px_1px_rgba(0,0,0,0.6)]">Events Driving Demand</p>
                   <div className="space-y-2">
                     {selectedEvents.map((e, i) => {
                       const col = DEMAND_COLORS[e.demand] || "#94a3b8";
                       const distCol = distanceColor(e.distance);
                       return (
-                        <div key={`${e.name}-${i}`} className="rounded-xl border border-white/5 bg-[#0A1628] p-3">
+                        <div key={`${e.name}-${i}`} tabIndex={0} className="group/event rounded-xl border border-white/[0.06] bg-gradient-to-b from-[#12253C] via-[#0F2135] to-[#0A1628] p-3 ring-1 ring-inset ring-white/[0.05] shadow-[0_10px_24px_-14px_rgba(0,0,0,0.85),0_1px_2px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.08),inset_0_-1px_0_rgba(0,0,0,0.4)] transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform [transform:translateZ(0)] hover:-translate-y-0.5 hover:border-white/[0.14] hover:ring-white/[0.09] hover:shadow-[0_20px_42px_-16px_rgba(0,0,0,0.92),0_3px_8px_-2px_rgba(0,0,0,0.62),inset_0_1px_0_rgba(255,255,255,0.15)] focus-visible:outline-none focus-visible:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-[#00D4FF]/60 focus-visible:ring-offset-2 focus-visible:ring-offset-[#132743] focus-visible:shadow-[0_16px_36px_-16px_rgba(0,212,255,0.40),inset_0_1px_0_rgba(255,255,255,0.14)] active:translate-y-0 active:duration-100 active:shadow-[inset_0_2px_7px_rgba(0,0,0,0.6)]">
                           <div className="flex items-center justify-between gap-2">
-                            <p className="text-sm font-semibold" style={{ color: distCol }}>{e.name}</p>
-                            <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider" style={{ backgroundColor: `${col}22`, color: col }}>
+                            <p className="text-sm font-semibold drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]" style={{ color: distCol }}>{e.name}</p>
+                            <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ring-1 ring-inset ring-white/[0.12] shadow-[0_2px_5px_-1px_rgba(0,0,0,0.6),inset_0_1px_0_rgba(255,255,255,0.14)] transition-[transform,box-shadow,filter] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover/event:-translate-y-px group-hover/event:brightness-110 group-hover/event:ring-white/[0.20] group-hover/event:shadow-[0_5px_12px_-2px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.20)] group-focus-visible/event:ring-white/[0.20]" style={{ backgroundColor: `${col}22`, color: col }}>
                               {e.demand}
                             </span>
                           </div>
-                          <p className="mt-1 text-xs text-slate-400">
+                          <p className="mt-1 text-xs text-slate-400 drop-shadow-[0_1px_1px_rgba(0,0,0,0.55)]">
                             {e.venue}{e.address && e.address !== "Regional" ? ` — ${e.address}` : ""}
                           </p>
-                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-500 drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)]">
                             {e.time && <span>🕐 {e.time}</span>}
                             {e.distance > 0 && <span style={{ color: distCol }}>📍 {e.distance} mi away</span>}
                             {e.priceRange && <span>🎟 {e.priceRange}</span>}
@@ -466,22 +471,22 @@ export default function MonthlyCalendar() {
                   <Metric label="RevPAR" current={selectedData.revpar || 0} previous={prevDayData?.revpar || 0} fmt={money2} />
                 </div>
 
-                <div className="rounded-xl border border-white/5 bg-[#0A1628] p-4">
-                  <p className="text-xs text-slate-500">Rooms Sold</p>
-                  <p className="text-lg text-white">{num(selectedData.rooms_sold || 0)} / {num(selectedData.total_rooms || 0)}</p>
+                <div className="rounded-xl border border-white/[0.06] bg-gradient-to-b from-[#12253C] via-[#0F2135] to-[#0A1628] p-4 ring-1 ring-inset ring-white/[0.05] shadow-[0_10px_24px_-14px_rgba(0,0,0,0.85),0_1px_2px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.08),inset_0_-1px_0_rgba(0,0,0,0.4)] transition-all duration-300 ease-out will-change-transform [transform:translateZ(0)] hover:-translate-y-0.5 hover:border-white/[0.12] hover:ring-white/[0.08] hover:shadow-[0_18px_38px_-16px_rgba(0,0,0,0.9),0_2px_6px_-2px_rgba(0,0,0,0.6),inset_0_1px_0_rgba(255,255,255,0.13)]">
+                  <p className="text-xs text-slate-500 drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)]">Rooms Sold</p>
+                  <p className="text-lg tabular-nums text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.75)]">{num(selectedData.rooms_sold || 0)} / {num(selectedData.total_rooms || 0)}</p>
                 </div>
 
                 {channelRanking.length > 0 && (
                   <div>
-                    <p className="mb-2 text-xs uppercase tracking-widest text-slate-500">Channel Ecosystem · Ranked by Net Revenue</p>
+                    <p className="mb-2 text-xs uppercase tracking-widest text-slate-500 drop-shadow-[0_1px_1px_rgba(0,0,0,0.6)]">Channel Ecosystem · Ranked by Net Revenue</p>
                     <div className="space-y-1.5">
                       {channelRanking.slice(0, 10).map((ch) => (
-                        <div key={ch.rank} className="flex items-center justify-between rounded-lg bg-[#0A1628] px-3 py-2 text-sm">
-                          <span className="flex items-center gap-2 text-slate-200">
-                            <span className="w-5 text-xs text-slate-500">#{ch.rank}</span>
+                        <div key={ch.rank} className="group/row flex items-center justify-between rounded-lg border border-white/[0.06] bg-gradient-to-b from-white/[0.06] via-white/[0.02] to-[#0A1628] px-3 py-2 text-sm ring-1 ring-inset ring-white/[0.04] shadow-[0_3px_8px_-3px_rgba(0,0,0,0.65),0_1px_2px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.07),inset_0_-1px_0_rgba(0,0,0,0.35)] transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform [transform:translateZ(0)] hover:-translate-y-px hover:border-white/[0.14] hover:ring-white/[0.09] hover:shadow-[0_12px_26px_-8px_rgba(0,0,0,0.82),0_2px_5px_-2px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.13)] focus-within:border-[#00D4FF]/40 focus-within:ring-[#00D4FF]/30 focus-within:shadow-[0_10px_24px_-10px_rgba(0,212,255,0.35),inset_0_1px_0_rgba(255,255,255,0.12)] active:translate-y-0 active:duration-100 active:shadow-[inset_0_2px_5px_rgba(0,0,0,0.55)]">
+                          <span className="flex items-center gap-2 text-slate-200 transition-colors duration-300 group-hover/row:text-white">
+                            <span className="w-5 text-xs tabular-nums text-slate-500 drop-shadow-[0_1px_1px_rgba(0,0,0,0.55)] transition-colors duration-300 group-hover/row:text-slate-400">#{ch.rank}</span>
                             {ch.name}
                           </span>
-                          <span className="tabular-nums text-slate-300">
+                          <span className="tabular-nums text-slate-300 drop-shadow-[0_1px_1px_rgba(0,0,0,0.55)] transition-colors duration-300 group-hover/row:text-white">
                             {money(ch.gross)} · {pct(ch.pct)}
                           </span>
                         </div>
@@ -494,9 +499,9 @@ export default function MonthlyCalendar() {
               /* Missing revenue is still stated plainly — the events above are not
                  a substitute for the numbers. When events are present this is a
                  compact secondary note rather than the whole dialog body. */
-              <div className={selectedEvents.length > 0 ? "rounded-xl border border-white/5 bg-[#0A1628] px-4 py-3 text-center" : "py-8 text-center"}>
-                <p className="text-sm text-slate-500">No revenue data imported for this day.</p>
-                <Link to="/upload" className="mt-1 inline-block text-sm text-[#00D4FF] underline">Import reports →</Link>
+              <div className={selectedEvents.length > 0 ? "rounded-xl border border-white/[0.06] bg-gradient-to-b from-[#0D1D30] via-[#0B1A2C] to-[#08121F] px-4 py-3 text-center ring-1 ring-inset ring-white/[0.04] shadow-[inset_0_2px_6px_rgba(0,0,0,0.6),inset_0_-1px_0_rgba(255,255,255,0.04),0_1px_2px_rgba(0,0,0,0.5)] transition-all duration-300 ease-out" : "py-8 text-center"}>
+                <p className="text-sm text-slate-500 drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)]">No revenue data imported for this day.</p>
+                <Link to="/upload" className="mt-1 inline-block rounded-md px-1 text-sm text-[#00D4FF] underline decoration-[#00D4FF]/40 underline-offset-2 drop-shadow-[0_1px_3px_rgba(0,212,255,0.35)] transition-[transform,color,text-decoration-color,filter,box-shadow] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-px hover:text-white hover:decoration-white/70 hover:drop-shadow-[0_3px_8px_rgba(0,212,255,0.55)] focus-visible:outline-none focus-visible:-translate-y-px focus-visible:text-white focus-visible:ring-2 focus-visible:ring-[#00D4FF]/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0B1A2C] focus-visible:shadow-[0_6px_16px_-8px_rgba(0,212,255,0.5)] active:translate-y-0 active:duration-100 active:brightness-90 aria-disabled:pointer-events-none aria-disabled:opacity-45">Import reports →</Link>
               </div>
             )}
             </div>
@@ -507,24 +512,24 @@ export default function MonthlyCalendar() {
       {/* Event Details Popup — opened from the clickable "event" line on a day cell */}
       <DialogPrimitive.Root open={!!eventPopupDay} onOpenChange={(open) => !open && setEventPopupDay(null)}>
         <DialogPrimitive.Portal>
-          <DialogPrimitive.Overlay className="fixed inset-0 z-[60] bg-black/70 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+          <DialogPrimitive.Overlay className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-[2px] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
           <DialogPrimitive.Content
             className="fixed inset-0 z-[60] flex items-end justify-end sm:items-center sm:justify-center outline-none pointer-events-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
             aria-describedby={undefined}
           >
             <div
-              className="relative w-full max-w-md rounded-t-3xl border border-white/10 bg-[#0F1F35] p-6 sm:rounded-2xl pointer-events-auto shadow-2xl"
+              className="relative w-full max-w-md rounded-t-3xl border border-white/10 bg-gradient-to-b from-[#132743] to-[#0F1F35] p-6 sm:rounded-2xl pointer-events-auto ring-1 ring-inset ring-white/[0.06] shadow-[0_-24px_60px_-24px_rgba(0,0,0,0.9),0_24px_60px_-24px_rgba(0,0,0,0.9),inset_0_1px_0_rgba(255,255,255,0.10)]"
               onClick={(e) => e.stopPropagation()}
               style={{ maxHeight: "85vh", overflowY: "auto" }}
             >
               <div className="mb-4 flex items-center justify-between">
                 <div>
-                  <p className="text-[10px] uppercase tracking-[0.3em] text-[#FFB547]">Event Details</p>
-                  <DialogPrimitive.Title className="mt-1 font-heading text-xl font-semibold text-white">
+                  <p className="text-[10px] uppercase tracking-[0.3em] text-[#FFB547] drop-shadow-[0_1px_3px_rgba(255,181,71,0.35)]">Event Details</p>
+                  <DialogPrimitive.Title className="mt-1 font-heading text-xl font-semibold text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.7)]">
                     {formatDayLabel(eventPopupDay)}
                   </DialogPrimitive.Title>
                 </div>
-                <DialogPrimitive.Close className="text-slate-400 hover:text-white" aria-label="Close">
+                <DialogPrimitive.Close className="rounded-full border border-white/[0.06] bg-white/[0.03] p-1.5 text-slate-400 ring-1 ring-inset ring-white/[0.04] shadow-[0_1px_3px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.07)] transition-[transform,box-shadow,border-color,background-color,color] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-px hover:border-white/20 hover:bg-white/[0.08] hover:text-white hover:ring-white/[0.10] hover:shadow-[0_8px_18px_-6px_rgba(0,0,0,0.75),0_1px_2px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.16)] focus-visible:outline-none focus-visible:-translate-y-px focus-visible:text-white focus-visible:ring-2 focus-visible:ring-[#FFB547]/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#132743] focus-visible:shadow-[0_8px_20px_-8px_rgba(255,181,71,0.45),inset_0_1px_0_rgba(255,255,255,0.14)] active:translate-y-0 active:scale-95 active:duration-100 active:shadow-[inset_0_2px_6px_rgba(0,0,0,0.6)] disabled:pointer-events-none disabled:opacity-40 disabled:shadow-none" aria-label="Close">
                   <X className="h-5 w-5" />
                 </DialogPrimitive.Close>
               </div>
@@ -537,10 +542,10 @@ export default function MonthlyCalendar() {
                   const col = DEMAND_COLORS[e.demand] || "#94a3b8";
                   const distCol = distanceColor(e.distance);
                   return (
-                    <div key={`${e.name}-${i}`} className="rounded-xl border border-white/5 bg-[#0A1628] p-4">
+                    <div key={`${e.name}-${i}`} tabIndex={0} className="group/popup rounded-xl border border-white/5 bg-gradient-to-b from-[#0F2135] to-[#0A1628] p-4 ring-1 ring-inset ring-white/[0.04] shadow-[0_10px_26px_-14px_rgba(0,0,0,0.85),0_1px_2px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.06)] transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform [transform:translateZ(0)] hover:-translate-y-0.5 hover:border-white/[0.12] hover:ring-white/[0.08] hover:shadow-[0_18px_38px_-16px_rgba(0,0,0,0.92),0_2px_6px_-2px_rgba(0,0,0,0.6),inset_0_1px_0_rgba(255,255,255,0.12)] focus-visible:outline-none focus-visible:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-[#FFB547]/60 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0F1F35] focus-visible:shadow-[0_16px_36px_-16px_rgba(255,181,71,0.38),inset_0_1px_0_rgba(255,255,255,0.12)] active:translate-y-0 active:duration-100 active:shadow-[inset_0_2px_7px_rgba(0,0,0,0.6)]">
                       <div className="flex items-start justify-between gap-2">
-                        <p className="font-heading text-base font-semibold" style={{ color: distCol }}>{e.name}</p>
-                        <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider" style={{ backgroundColor: `${col}22`, color: col }}>
+                        <p className="font-heading text-base font-semibold drop-shadow-[0_1px_2px_rgba(0,0,0,0.65)] transition-[filter] duration-300 group-hover/popup:drop-shadow-[0_2px_5px_rgba(0,0,0,0.8)]" style={{ color: distCol }}>{e.name}</p>
+                        <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ring-1 ring-inset ring-white/10 shadow-[0_1px_3px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.10)] transition-[transform,box-shadow,filter] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover/popup:-translate-y-px group-hover/popup:brightness-110 group-hover/popup:ring-white/20 group-hover/popup:shadow-[0_4px_10px_-2px_rgba(0,0,0,0.65),inset_0_1px_0_rgba(255,255,255,0.16)] group-focus-visible/popup:ring-white/20" style={{ backgroundColor: `${col}22`, color: col }}>
                           {e.demand} Demand
                         </span>
                       </div>
@@ -560,7 +565,7 @@ export default function MonthlyCalendar() {
                       </div>
 
                       {e.audience && (
-                        <p className="mt-2 border-t border-white/5 pt-2 text-[11px] text-slate-500">👥 {e.audience}</p>
+                        <p className="mt-2 border-t border-white/5 pt-2 text-[11px] text-slate-500 shadow-[0_-1px_0_rgba(0,0,0,0.4)] transition-colors duration-300 group-hover/popup:border-white/10 group-hover/popup:text-slate-400">👥 {e.audience}</p>
                       )}
                     </div>
                   );
@@ -578,11 +583,11 @@ function Metric({ label, current, previous, fmt, suffix = "" }) {
   const diff = current - previous;
   const pctCh = previous > 0 ? (diff / previous) * 100 : 0;
   return (
-    <div className="rounded-xl border border-white/5 bg-[#0A1628] p-3">
-      <p className="text-[10px] uppercase tracking-widest text-slate-500">{label}</p>
-      <p className="mt-1 text-lg font-heading font-semibold text-white">{fmt(current)}</p>
-      <p className="text-xs text-slate-500">Previous: {fmt(previous)}</p>
-      <p className={`text-xs ${diff >= 0 ? "text-[#00E096]" : "text-[#FF6B6B]"}`}>
+    <div tabIndex={0} className="group/metric rounded-xl border border-white/[0.06] bg-gradient-to-b from-[#12253C] via-[#0F2135] to-[#0A1628] p-3 ring-1 ring-inset ring-white/[0.05] shadow-[0_10px_24px_-14px_rgba(0,0,0,0.85),0_2px_4px_-1px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.08),inset_0_-1px_0_rgba(0,0,0,0.4)] transition-[transform,box-shadow,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform [transform:translateZ(0)] hover:-translate-y-0.5 hover:border-white/[0.14] hover:ring-white/[0.09] hover:shadow-[0_22px_44px_-16px_rgba(0,0,0,0.92),0_3px_8px_-2px_rgba(0,0,0,0.65),inset_0_1px_0_rgba(255,255,255,0.16)] focus-visible:outline-none focus-visible:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-[#00D4FF]/60 focus-visible:ring-offset-2 focus-visible:ring-offset-[#132743] focus-visible:shadow-[0_18px_38px_-16px_rgba(0,212,255,0.38),inset_0_1px_0_rgba(255,255,255,0.14)] active:translate-y-0 active:duration-100 active:shadow-[inset_0_3px_8px_rgba(0,0,0,0.6)]">
+      <p className="text-[10px] uppercase tracking-widest text-slate-500 drop-shadow-[0_1px_1px_rgba(0,0,0,0.55)] transition-colors duration-300 group-hover/metric:text-slate-400">{label}</p>
+      <p className="mt-1 text-lg font-heading font-semibold tabular-nums text-white drop-shadow-[0_2px_5px_rgba(0,0,0,0.8)] transition-[filter] duration-300 group-hover/metric:drop-shadow-[0_3px_8px_rgba(0,0,0,0.9)]">{fmt(current)}</p>
+      <p className="text-xs tabular-nums text-slate-500 drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)]">Previous: {fmt(previous)}</p>
+      <p className={`text-xs tabular-nums drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)] ${diff >= 0 ? "text-[#00E096]" : "text-[#FF6B6B]"}`}>
         {previous === 0 ? "N/A" : `${diff >= 0 ? "+" : ""}${fmt(diff)}${suffix} (${pctCh >= 0 ? "+" : ""}${pctCh.toFixed(1)}%)`}
       </p>
     </div>

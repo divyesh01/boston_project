@@ -329,11 +329,11 @@ export default function Dashboard() {
         </div>
 
         {compareOn && prevStats && (
-          <div className="rounded-2xl border border-[#00D4FF]/20 bg-[#00D4FF]/[0.04] p-4">
-            <p className="text-xs uppercase tracking-widest text-[#00D4FF]">
+          <div className="rounded-2xl border border-[#00D4FF]/30 bg-gradient-to-b from-[#00D4FF]/[0.08] to-[#0A1628]/80 p-5 shadow-[inset_0_1px_0_rgba(0,212,255,0.2),0_10px_24px_rgba(0,0,0,0.4)]">
+            <p className="text-xs font-semibold uppercase tracking-widest text-[#00D4FF] drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
               Comparison · {compareDateRange.from || "—"} → {compareDateRange.to || "—"}
             </p>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="mt-3.5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               {[
                 { label: "Revenue", cur: revenue, prev: prevStats.revenue, fmt: money2 },
                 { label: "Rooms Sold", cur: roomsSold, prev: prevStats.roomsSold, fmt: num },
@@ -343,10 +343,10 @@ export default function Dashboard() {
                 const diff = m.cur - m.prev;
                 const ch = m.prev ? (diff / m.prev) * 100 : 0;
                 return (
-                  <div key={m.label} className="rounded-xl bg-[#0A1628]/60 p-3">
-                    <p className="text-[10px] uppercase tracking-widest text-slate-500">{m.label}</p>
-                    <p className="mt-1 text-sm text-white">{m.fmt(m.cur)} <span className="text-slate-500">vs {m.fmt(m.prev)}</span></p>
-                    <p className={`text-xs ${diff >= 0 ? "text-[#00E096]" : "text-[#FF6B6B]"}`}>
+                  <div key={m.label} className="rounded-xl border border-white/5 bg-[#0A1628]/80 p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_4px_12px_rgba(0,0,0,0.3)] transition-transform hover:-translate-y-0.5">
+                    <p className="text-[10px] font-medium uppercase tracking-widest text-slate-400">{m.label}</p>
+                    <p className="mt-1 text-sm font-semibold text-white">{m.fmt(m.cur)} <span className="text-xs font-normal text-slate-400">vs {m.fmt(m.prev)}</span></p>
+                    <p className={`mt-0.5 text-xs font-medium ${diff >= 0 ? "text-[#00E096]" : "text-[#FF6B6B]"}`}>
                       {m.prev === 0 ? "N/A" : `${diff >= 0 ? "+" : ""}${m.fmt(diff)} (${ch >= 0 ? "+" : ""}${ch.toFixed(1)}%)`}
                     </p>
                   </div>
@@ -384,23 +384,27 @@ export default function Dashboard() {
         {alerts.map((a, i) => (
           <div
             key={i}
-            className={`flex items-center gap-3 rounded-xl border p-4 ${
-              a.sev === "Critical" ? "border-[#FF6B6B]/30 bg-[#FF6B6B]/[0.08]" : "border-[#FFB547]/20 bg-[#FFB547]/[0.06]"
+            className={`flex items-center gap-3.5 rounded-2xl border p-4 shadow-[0_6px_18px_rgba(0,0,0,0.35)] transition-all ${
+              a.sev === "Critical"
+                ? "border-[#FF6B6B]/35 bg-gradient-to-b from-[#FF6B6B]/[0.12] to-[#0A1628]/90 shadow-[inset_0_1px_0_rgba(255,107,107,0.25)]"
+                : "border-[#FFB547]/25 bg-gradient-to-b from-[#FFB547]/[0.08] to-[#0A1628]/90 shadow-[inset_0_1px_0_rgba(255,181,71,0.2)]"
             }`}
           >
             <TrendingDown className={`h-5 w-5 shrink-0 ${a.sev === "Critical" ? "text-[#FF6B6B]" : "text-[#FFB547]"}`} />
             <div className="flex-1">
-              <p className="text-sm text-white">
+              <p className="text-sm font-semibold text-white">
                 {a.sev === "Critical" ? "🚨 " : "⚠ "}{a.metric} Alert
               </p>
-              <p className="text-xs text-slate-400">
+              <p className="mt-0.5 text-xs text-slate-300">
                 {a.metric} decreased {Math.abs(a.pct * 100).toFixed(1)}{a.metric === "Occupancy" ? " pts" : "%"} vs previous period
                 {" · "}Now {a.fmt(a.current)} · Was {a.fmt(a.previous)}
               </p>
             </div>
             <span
-              className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${
-                a.sev === "Critical" ? "bg-[#FF6B6B]/15 text-[#FF6B6B]" : "bg-[#FFB547]/15 text-[#FFB547]"
+              className={`shrink-0 rounded-full border px-3 py-1 text-xs font-semibold shadow-sm ${
+                a.sev === "Critical"
+                  ? "border-[#FF6B6B]/40 bg-[#FF6B6B]/20 text-[#FF6B6B]"
+                  : "border-[#FFB547]/40 bg-[#FFB547]/20 text-[#FFB547]"
               }`}
             >
               {a.sev}
@@ -410,34 +414,34 @@ export default function Dashboard() {
 
         {/* Operational Anomalies Alert — automated fraud/risk flags from CSV import */}
         {anomalyInRange.length > 0 && (
-          <div className="rounded-2xl border border-[#FF6B6B]/30 bg-[#FF6B6B]/[0.07] p-4">
+          <div className="rounded-2xl border border-[#FF6B6B]/35 bg-gradient-to-b from-[#FF6B6B]/[0.1] to-[#0A1628]/95 p-5 shadow-[inset_0_1px_0_rgba(255,107,107,0.25),0_10px_24px_rgba(0,0,0,0.45)]">
             <div className="flex items-center gap-3">
               <AlertTriangle className="h-5 w-5 shrink-0 text-[#FF6B6B]" />
               <div className="flex-1">
-                <p className="text-sm font-medium text-white">
+                <p className="text-sm font-semibold text-white">
                   Operational Anomalies Alert · {anomalyInRange.length} flagged {anomalyInRange.length === 1 ? "entry" : "entries"} require review
                 </p>
-                <p className="text-xs text-slate-400">
+                <p className="text-xs text-slate-300">
                   Automated flags from imported transaction ledgers — rate overrides, adjustment/void spikes, off-hours postings.
                 </p>
               </div>
             </div>
-            <div className="mt-3 space-y-2">
+            <div className="mt-3.5 space-y-2">
               {anomalyInRange.map((a) => (
-                <div key={a.id} className="flex flex-wrap items-center gap-3 rounded-lg bg-[#0A1628]/60 px-3 py-2">
+                <div key={a.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-white/5 bg-[#0A1628]/80 px-3.5 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_2px_8px_rgba(0,0,0,0.25)]">
                   <span
-                    className={`shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
-                      a.severity === "high" ? "bg-[#FF6B6B]/20 text-[#FF6B6B]" : "bg-[#FFB547]/15 text-[#FFB547]"
+                    className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                      a.severity === "high" ? "border-[#FF6B6B]/40 bg-[#FF6B6B]/20 text-[#FF6B6B]" : "border-[#FFB547]/40 bg-[#FFB547]/15 text-[#FFB547]"
                     }`}
                   >
                     {a.severity}
                   </span>
-                  <span className="shrink-0 rounded-full bg-[#00D4FF]/15 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[#00D4FF]">
+                  <span className="shrink-0 rounded-full border border-[#00D4FF]/30 bg-[#00D4FF]/15 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[#00D4FF]">
                     {a.alert_type === "rate_override" ? "Rate Override"
                       : a.alert_type === "excessive_adjustments" ? "Adjustment / Void Spike"
                       : "Off-Hours Posting"}
                   </span>
-                  <p className="min-w-0 flex-1 text-xs text-slate-300">{a.detail}</p>
+                  <p className="min-w-0 flex-1 text-xs text-slate-200">{a.detail}</p>
                   <p className="shrink-0 text-xs text-slate-400">
                     {a.date} · {a.username}
                     {a.folio_number ? ` · Folio ${a.folio_number}` : ""}
@@ -458,27 +462,33 @@ export default function Dashboard() {
             <Card title="🧠 Owner Intelligence" subtitle="AI-detected patterns, risks, and opportunities">
               <div className="space-y-3">
                 {insights.map((insight, i) => (
-                  <div key={i} className="flex items-start gap-3 rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">
-                    <div className="flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center"
-                         style={{ background: insight.category === 'Risk' || insight.category === 'Profit' ? '#FF6B6B20' : insight.category === 'Expenses' ? '#FFB54720' : '#00E09620' }}>
-                      {insight.category === 'Revenue' && <TrendingUp className="h-5 w-5 text-[#00E096]" />}
-                      {insight.category === 'Portfolio' && <TrendingUp className="h-5 w-5 text-[#00D4FF]" />}
-                      {insight.category === 'Channels' && <Lightbulb className="h-5 w-5 text-[#FFB547]" />}
-                      {insight.category === 'Expenses' && <AlertTriangle className="h-5 w-5 text-[#FFB547]" />}
-                      {insight.category === 'Risk' && <AlertTriangle className="h-5 w-5 text-[#FF6B6B]" />}
-                      {insight.category === 'Profit' && <AlertTriangle className="h-5 w-5 text-[#FF6B6B]" />}
+                  <div key={i} className="flex items-start gap-3.5 rounded-xl border border-white/[0.08] bg-gradient-to-b from-[#101F35]/70 to-[#0A1628]/80 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_4px_14px_rgba(0,0,0,0.3)] transition-transform duration-200 hover:-translate-y-0.5">
+                    <div className="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center border shadow-inner"
+                         style={{
+                           background: insight.category === 'Risk' || insight.category === 'Profit' ? 'linear-gradient(135deg, rgba(255,107,107,0.22), rgba(255,107,107,0.08))' : insight.category === 'Expenses' ? 'linear-gradient(135deg, rgba(255,181,71,0.22), rgba(255,181,71,0.08))' : 'linear-gradient(135deg, rgba(0,224,150,0.22), rgba(0,224,150,0.08))',
+                           borderColor: insight.category === 'Risk' || insight.category === 'Profit' ? 'rgba(255,107,107,0.35)' : insight.category === 'Expenses' ? 'rgba(255,181,71,0.35)' : 'rgba(0,224,150,0.35)'
+                         }}>
+                      {insight.category === 'Revenue' && <TrendingUp className="h-5 w-5 text-[#00E096] drop-shadow" />}
+                      {insight.category === 'Portfolio' && <TrendingUp className="h-5 w-5 text-[#00D4FF] drop-shadow" />}
+                      {insight.category === 'Channels' && <Lightbulb className="h-5 w-5 text-[#FFB547] drop-shadow" />}
+                      {insight.category === 'Expenses' && <AlertTriangle className="h-5 w-5 text-[#FFB547] drop-shadow" />}
+                      {insight.category === 'Risk' && <AlertTriangle className="h-5 w-5 text-[#FF6B6B] drop-shadow" />}
+                      {insight.category === 'Profit' && <AlertTriangle className="h-5 w-5 text-[#FF6B6B] drop-shadow" />}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-white">{insight.title}</p>
-                      <p className="text-xs text-slate-400 mt-0.5">{insight.detail}</p>
-                      <div className="mt-2 flex items-center gap-2">
-                        <span className="text-lg font-heading font-semibold tabular-nums"
+                      <p className="text-sm font-semibold text-white">{insight.title}</p>
+                      <p className="text-xs text-slate-300 mt-0.5 leading-relaxed">{insight.detail}</p>
+                      <div className="mt-2.5 flex items-center gap-2">
+                        <span className="text-lg font-heading font-semibold tabular-nums drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]"
                               style={{ color: insight.category === 'Risk' || insight.category === 'Profit' ? '#FF6B6B' : '#00E096' }}>
                           {insight.metric}
                         </span>
-                        <span className="text-[10px] uppercase tracking-widest text-slate-500 px-2 py-0.5 rounded"
-                              style={{ background: insight.category === 'Risk' || insight.category === 'Profit' ? '#FF6B6B20' : '#00D4FF20', 
-                                      color: insight.category === 'Risk' || insight.category === 'Profit' ? '#FF6B6B' : '#00D4FF' }}>
+                        <span className="text-[10px] uppercase font-semibold tracking-widest px-2.5 py-0.5 rounded-full border"
+                              style={{
+                                background: insight.category === 'Risk' || insight.category === 'Profit' ? 'rgba(255,107,107,0.15)' : 'rgba(0,212,255,0.15)', 
+                                borderColor: insight.category === 'Risk' || insight.category === 'Profit' ? 'rgba(255,107,107,0.3)' : 'rgba(0,212,255,0.3)',
+                                color: insight.category === 'Risk' || insight.category === 'Profit' ? '#FF6B6B' : '#00D4FF'
+                              }}>
                           {insight.category}
                         </span>
                       </div>

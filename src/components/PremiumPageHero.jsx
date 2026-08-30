@@ -63,12 +63,12 @@ export default function PremiumPageHero({
                   onClick={onClick}
                   disabled={disabled}
                   className={[
-                    "fx-clickable inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--brand)]",
+                    "fx-clickable inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold transition-all duration-150",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--s-raised)]",
                     "disabled:cursor-not-allowed disabled:opacity-50",
                     variant === "primary"
-                      ? "bg-[var(--brand)] text-[var(--s-canvas)] shadow-[0_10px_28px_rgba(0,224,150,0.18)] hover:brightness-110"
-                      : "border border-[var(--line)] bg-[var(--s-overlay)] text-[var(--t-primary)] hover:border-[var(--line-strong)] hover:bg-[var(--s-hover)]",
+                      ? "bg-gradient-to-b from-[#00FFA8] to-[#00E096] text-[#04241A] font-bold shadow-[inset_0_1px_0_rgba(255,255,255,0.45),0_6px_18px_rgba(0,224,150,0.28),0_1px_2px_rgba(0,0,0,0.25)] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.6),0_8px_24px_rgba(0,224,150,0.4)] hover:-translate-y-0.5 active:translate-y-[1px] active:shadow-[inset_0_2px_4px_rgba(0,0,0,0.3)]"
+                      : "border border-[var(--line-strong)] bg-gradient-to-b from-[var(--s-overlay)] to-[var(--s-raised)] text-[var(--t-primary)] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),var(--elev-1)] hover:border-white/20 hover:bg-[var(--s-hover)] hover:-translate-y-0.5 active:translate-y-[1px] active:shadow-[inset_0_2px_4px_rgba(0,0,0,0.35)]",
                   ].join(" ")}
                 >
                   {ActionIcon && <ActionIcon aria-hidden="true" className="h-4 w-4" />}

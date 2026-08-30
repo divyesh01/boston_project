@@ -44,7 +44,7 @@ number of rows below, verified against `src/pages/*.jsx` (excluding `*.test.jsx`
 | **ManualEntry** | `src/pages/ManualEntry.jsx` | Enter data by hand, copy-paste from spreadsheets | `manualEntryImport.js`, `manualEntrySave.js`, `manualDraft.js` |
 | **Housekeeping** | `src/pages/Housekeeping.jsx` | Room status board (clean/dirty/inspected), maid assignment | `housekeepingService.js`, `housekeepingConfig.js`, `laborOptimization.js` |
 | **RoomBoard** | `src/pages/RoomBoard.jsx` | Visual room grid: check-in/out, live cache invalidation | `roomBoard.js`, `pricingEngine.js`, `pricingSettings.js`, `realtime.js` |
-| **MonthlyCalendar** | `src/pages/MonthlyCalendar.jsx` | Heatmap calendar: daily occupancy + revenue tiers | `calendarGrids.js`, `revenueThresholds.js`, `hotel.js` |
+| **MonthlyCalendar** | `src/pages/MonthlyCalendar.jsx` | Heatmap calendar: uses the shared luxury executive surface system with dimensional day tiles, KPI emphasis, elevated controls and modal depth, while preserving daily occupancy + revenue tiers. | `calendarGrids.js`, `revenueThresholds.js`, `hotel.js` |
 
 ### Finance
 | Page | File | What It Does | Key Dependencies |

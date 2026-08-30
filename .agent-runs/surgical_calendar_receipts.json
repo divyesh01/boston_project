@@ -1,0 +1,46 @@
+[
+  {
+    "checkpoint": 6,
+    "task": "Responsive layout (sm/md/lg) spacing polish for the calendar grid only",
+    "transport": "GOROUTER",
+    "generationId": "msg_a41e08788aeb41acbd93f5896ac36676",
+    "tokens": 38238,
+    "latency": "48.882s",
+    "cost": "$0.7169",
+    "status": "SUCCESS",
+    "adopted": "YES"
+  },
+  {
+    "checkpoint": 7,
+    "task": "Reduced-motion (motion-safe/reduce) and accessibility (aria/focus-visible) polish",
+    "transport": "TABITOKEN",
+    "generationId": null,
+    "tokens": 0,
+    "latency": "115.016s",
+    "cost": "$0.0000",
+    "status": "API_ERROR",
+    "adopted": "NO"
+  },
+  {
+    "checkpoint": 7,
+    "task": "Reduced-motion (motion-safe/reduce) and accessibility (aria/focus-visible) polish",
+    "transport": "GOROUTER",
+    "generationId": null,
+    "tokens": 0,
+    "latency": "115.014s",
+    "cost": "$0.0000",
+    "status": "API_ERROR",
+    "adopted": "NO"
+  },
+  {
+    "checkpoint": 7,
+    "task": "Reduced-motion (motion-safe/reduce) and accessibility (aria/focus-visible) polish",
+    "transport": "TABITOKEN",
+    "generationId": null,
+    "tokens": 0,
+    "latency": "115.003s",
+    "cost": "$0.0000",
+    "status": "API_ERROR",
+    "adopted": "NO"
+  }
+]

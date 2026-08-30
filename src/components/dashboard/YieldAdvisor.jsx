@@ -27,26 +27,29 @@ export default function YieldAdvisor({ occupancy, adr, revpar, capacity, roomsSo
       title="Yield & ADR"
       subtitle={measured ? `ADR ${money2(adr)} · RevPAR ${money2(revpar)}` : "Nothing measured for this period"}
     >
-      <div className="flex gap-3 rounded-xl border p-4" style={{ borderColor: `${tone}33`, background: `${tone}0f` }}>
-        <Icon className="mt-0.5 h-4 w-4 shrink-0" style={{ color: tone }} />
+      <div
+        className="flex gap-3.5 rounded-xl border p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_4px_14px_rgba(0,0,0,0.3)] transition-transform hover:-translate-y-0.5"
+        style={{ borderColor: `${tone}44`, background: `linear-gradient(135deg, ${tone}18, ${tone}08)` }}
+      >
+        <Icon className="mt-0.5 h-4 w-4 shrink-0 drop-shadow" style={{ color: tone }} />
         <div>
-          <p className="text-sm font-medium" style={{ color: tone }}>
+          <p className="text-sm font-semibold" style={{ color: tone }}>
             {advice.headline}
             {measured ? ` — ${pct(advice.occupancy)} vs a ${pct(advice.target)} target` : ""}
           </p>
-          <p className="mt-1 text-sm leading-relaxed text-slate-300">{advice.action}</p>
+          <p className="mt-1 text-sm leading-relaxed text-slate-200">{advice.action}</p>
         </div>
       </div>
-      <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/5">
+      <div className="mt-4 h-2.5 overflow-hidden rounded-full border border-white/5 bg-[#0A1628] shadow-inner p-0.5">
         <div
-          className="h-full rounded-full transition-all duration-700"
+          className="h-full rounded-full transition-all duration-700 shadow-sm"
           style={{
             width: `${measured ? Math.min(100, Math.max(0, advice.occupancy * 100)) : 0}%`,
             background: `linear-gradient(90deg,${C.purple},${tone})`,
           }}
         />
       </div>
-      <p className="mt-2 text-xs text-slate-500">{advice.basis}</p>
+      <p className="mt-2 text-xs text-slate-400">{advice.basis}</p>
     </Card>
   );
 }

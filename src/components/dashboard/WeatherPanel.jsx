@@ -93,24 +93,24 @@ export default function WeatherPanel() {
       title="Weather & Demand"
       subtitle="Forecast for the selected property — weather drives a material share of demand swings"
       right={
-        <button onClick={() => setCfgOpen((v) => !v)} className="flex items-center gap-1.5 rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-300 hover:bg-white/5">
+        <button onClick={() => setCfgOpen((v) => !v)} className="flex items-center gap-1.5 rounded-lg border border-[var(--line-strong)] bg-gradient-to-b from-[var(--s-overlay)] to-[var(--s-raised)] px-2.5 py-1 text-xs font-medium text-[var(--t-primary)] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),var(--elev-1)] hover:border-white/20 hover:bg-[var(--s-hover)] active:translate-y-px transition-all">
           <Settings2 className="h-3.5 w-3.5" /> Configure
         </button>
       }
     >
       {cfgOpen && (
-        <div className="mb-4 rounded-xl border border-white/5 bg-[#0A1628]/50 p-3">
-          <p className="text-xs text-slate-400">Property coordinates (the OpenWeather API key is configured on the server and never stored in this browser).</p>
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            <input value={draftLat} onChange={(e) => setDraftLat(e.target.value)} placeholder="Latitude" className="rounded-lg border border-white/10 bg-[#0A1628] px-2 py-2 text-sm text-white" />
-            <input value={draftLon} onChange={(e) => setDraftLon(e.target.value)} placeholder="Longitude" className="rounded-lg border border-white/10 bg-[#0A1628] px-2 py-2 text-sm text-white" />
+        <div className="mb-4 rounded-xl border border-white/10 bg-[#0A1628]/80 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_6px_20px_rgba(0,0,0,0.4)]">
+          <p className="text-xs text-slate-300">Property coordinates (the OpenWeather API key is configured on the server and never stored in this browser).</p>
+          <div className="mt-2.5 grid gap-2.5 sm:grid-cols-2">
+            <input value={draftLat} onChange={(e) => setDraftLat(e.target.value)} placeholder="Latitude" className="rounded-lg border border-white/10 bg-[#06101E] px-3 py-2 text-sm text-white focus:border-[#00D4FF]/40 focus:outline-none" />
+            <input value={draftLon} onChange={(e) => setDraftLon(e.target.value)} placeholder="Longitude" className="rounded-lg border border-white/10 bg-[#06101E] px-3 py-2 text-sm text-white focus:border-[#00D4FF]/40 focus:outline-none" />
           </div>
-          <div className="mt-2 flex gap-2">
-            <button onClick={handleSaveCfg} className="rounded-lg bg-[#6C63FF] px-3 py-1.5 text-xs font-medium text-white">Save</button>
-            <button onClick={() => setCfgOpen(false)} className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-300">Cancel</button>
+          <div className="mt-3 flex gap-2">
+            <button onClick={handleSaveCfg} className="rounded-lg bg-gradient-to-b from-[#7C5CFF] to-[#5B3FE0] px-4 py-1.5 text-xs font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_4px_12px_rgba(108,99,255,0.3)] hover:-translate-y-0.5 active:translate-y-px transition-all">Save</button>
+            <button onClick={() => setCfgOpen(false)} className="rounded-lg border border-white/10 bg-white/5 px-3.5 py-1.5 text-xs text-slate-300 hover:bg-white/10 active:translate-y-px transition-all">Cancel</button>
           </div>
           {cfgError ? (
-            <p role="alert" className="mt-2 rounded-lg border border-[#FF6B6B]/30 bg-[#FF6B6B]/10 px-2 py-1.5 text-xs text-[#FFB4B4]">
+            <p role="alert" className="mt-2 rounded-lg border border-[#FF6B6B]/30 bg-[#FF6B6B]/10 px-2.5 py-1.5 text-xs text-[#FFB4B4]">
               {cfgError}
             </p>
           ) : null}
@@ -121,29 +121,29 @@ export default function WeatherPanel() {
       {!isLoading && (
         <div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
-              <p className="text-[10px] uppercase tracking-widest text-slate-500">Now</p>
-              <p className="mt-1 font-heading text-3xl font-semibold text-white">{tempC(current.temp)}</p>
+            <div className="rounded-xl border border-white/[0.08] bg-gradient-to-b from-[#101F35]/70 to-[#0A1628]/80 p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_4px_12px_rgba(0,0,0,0.3)] transition-transform hover:-translate-y-0.5">
+              <p className="text-[10px] uppercase tracking-widest text-slate-400">Now</p>
+              <p className="mt-1 font-heading text-3xl font-semibold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.3)]">{tempC(current.temp)}</p>
               <p className="text-xs text-slate-400">{conditionLabel(current.condition)}</p>
             </div>
-            <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
-              <p className="text-[10px] uppercase tracking-widest text-slate-500">Feels Like</p>
-              <p className="mt-1 font-heading text-2xl font-semibold text-white">{tempC(current.feels_like ?? current.temp)}</p>
+            <div className="rounded-xl border border-white/[0.08] bg-gradient-to-b from-[#101F35]/70 to-[#0A1628]/80 p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_4px_12px_rgba(0,0,0,0.3)] transition-transform hover:-translate-y-0.5">
+              <p className="text-[10px] uppercase tracking-widest text-slate-400">Feels Like</p>
+              <p className="mt-1 font-heading text-2xl font-semibold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.3)]">{tempC(current.feels_like ?? current.temp)}</p>
               <p className="text-xs text-slate-400">humidity {Math.round(Number(current.humidity) || 0)}%</p>
             </div>
-            <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
-              <p className="text-[10px] uppercase tracking-widest text-slate-500">Wind</p>
-              <p className="mt-1 font-heading text-2xl font-semibold text-white">{Math.round(Number(current.wind) || 0)}</p>
+            <div className="rounded-xl border border-white/[0.08] bg-gradient-to-b from-[#101F35]/70 to-[#0A1628]/80 p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_4px_12px_rgba(0,0,0,0.3)] transition-transform hover:-translate-y-0.5">
+              <p className="text-[10px] uppercase tracking-widest text-slate-400">Wind</p>
+              <p className="mt-1 font-heading text-2xl font-semibold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.3)]">{Math.round(Number(current.wind) || 0)}</p>
               <p className="text-xs text-slate-400">m/s</p>
             </div>
-            <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
-              <p className="text-[10px] uppercase tracking-widest text-slate-500">Forecast High</p>
-              <p className="mt-1 font-heading text-2xl font-semibold text-white">{tempC(forecast[0]?.temp_max)}</p>
+            <div className="rounded-xl border border-white/[0.08] bg-gradient-to-b from-[#101F35]/70 to-[#0A1628]/80 p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_4px_12px_rgba(0,0,0,0.3)] transition-transform hover:-translate-y-0.5">
+              <p className="text-[10px] uppercase tracking-widest text-slate-400">Forecast High</p>
+              <p className="mt-1 font-heading text-2xl font-semibold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.3)]">{tempC(forecast[0]?.temp_max)}</p>
               <p className="text-xs text-slate-400">{conditionLabel(forecast[0]?.condition)}</p>
             </div>
-            <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
-              <p className="text-[10px] uppercase tracking-widest text-slate-500">Data Source</p>
-              <p className="mt-1 font-heading text-2xl font-semibold text-white">{data?.source || "—"}</p>
+            <div className="rounded-xl border border-white/[0.08] bg-gradient-to-b from-[#101F35]/70 to-[#0A1628]/80 p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_4px_12px_rgba(0,0,0,0.3)] transition-transform hover:-translate-y-0.5">
+              <p className="text-[10px] uppercase tracking-widest text-slate-400">Data Source</p>
+              <p className="mt-1 font-heading text-2xl font-semibold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.3)]">{data?.source || "—"}</p>
               <p className="text-xs text-slate-400">{data?.source === "api" ? "Live OpenWeather (server)" : data?.source === "cache" ? "Cached" : "Demo (server key unavailable)"}</p>
             </div>
           </div>

@@ -53,9 +53,13 @@ export default function KpiCard(
     <div
       className={cn(
         "fx-enter group relative overflow-hidden rounded-2xl p-5",
-        "border border-[var(--line-subtle)] bg-[var(--s-raised)] shadow-[var(--elev-2)]",
+        // The `shadow:` type hint is not decoration. Tailwind 3.4 reads a bare
+        // var() in an arbitrary shadow value as a shadow COLOUR, so this class
+        // emitted --tw-shadow-color and NO box-shadow at all: the KPI row was
+        // flat and the hover lift had nothing to lift off. Compiled-CSS receipt.
+        "border border-[var(--line-subtle)] bg-[var(--s-raised)] shadow-[shadow:var(--elev-2)]",
         "transition-[border-color,transform,box-shadow] [transition-duration:var(--fx-base)] [transition-timing-function:var(--fx-ease)]",
-        "hover:-translate-y-0.5 hover:border-[var(--line)] hover:shadow-[var(--elev-3)]"
+        "hover:-translate-y-0.5 hover:border-[var(--line)] hover:shadow-[shadow:var(--elev-3)]"
       )}
     >
       {/* Accent hairline along the top edge. 1px, not the old 2px — at display

@@ -3,6 +3,7 @@ import confetti from "canvas-confetti";
 import { DollarSign, BedDouble, Percent, Gauge, RefreshCw, FileDown, TrendingDown, Lightbulb, AlertTriangle, TrendingUp, Loader2 } from "lucide-react";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import Card from "@/components/ui-exec/Card";
+import Button from "@/components/ui-exec/Button";
 import ClerkAudit from "@/components/dashboard/ClerkAudit";
 import YieldAdvisor from "@/components/dashboard/YieldAdvisor";
 import RevenueTrend from "@/components/dashboard/RevenueTrend";
@@ -285,14 +286,29 @@ export default function Dashboard() {
             {propName} · {dateRange.from || "—"} → {dateRange.to || "—"} · {uniqueDays} days
           </p>
         </div>
-        <button
+        {/* `primary`, and the reason is that there is nothing for it to compete
+            with: Export PDF is the only button on this page, so `soft` would
+            leave the flagship screen reading as though it offered no action at
+            all. It is also the only variant carrying the --brand-glow ambient
+            hover layer, which appears nowhere else in the app. The two exports
+            on Statistics stay `soft` — they sit in a Card header among other
+            controls, where one variant across pages does earn its keep.
+
+            aria-label mirrors the visible caption instead of being a static
+            string: the only text lives in a `hidden sm:inline` span, so below
+            the sm breakpoint this is a bare icon with no accessible name at all
+            (WCAG 4.1.2). Mirroring means a screen-reader user is told
+            "Generating…" at the same moment a sighted user reads it. */}
+        <Button
+          variant="primary"
+          size="lg"
           onClick={handleExport}
           disabled={exporting}
-          className="flex h-11 items-center gap-2 rounded-lg bg-[#6C63FF] px-4 text-sm font-medium text-white transition-colors hover:bg-[#5b52e8] disabled:opacity-50"
+          aria-label={exporting ? "Generating…" : "Export PDF"}
         >
           <FileDown className="h-4 w-4" />
           <span className="hidden sm:inline">{exporting ? "Generating…" : "Export PDF"}</span>
-        </button>
+        </Button>
       </header>
 
       {exportError && (

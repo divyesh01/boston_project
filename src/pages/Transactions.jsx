@@ -5,6 +5,8 @@ import {
 import { DollarSign, Wallet, Receipt, Users2, TrendingUp } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import KpiCard from "@/components/ui-exec/KpiCard";
+import Input from "@/components/ui-exec/Input";
+import SegmentedControl from "@/components/ui-exec/SegmentedControl";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { useTransactions, useSources } from "@/lib/useHotelData";
 import { money, money2, num, pct, C, CHART_COLORS, inRange } from "@/lib/hotel";
@@ -54,24 +56,6 @@ const TRANSACTION_EXPORT_COLUMNS = [
   { key: "amount", label: "Amount" },
   { key: "username", label: "Posted by" },
 ];
-
-function Segmented({ value, onChange, options }) {
-  return (
-    <div className="flex gap-1 rounded-lg bg-[#0A1628] p-1">
-      {options.map(([key, label]) => (
-        <button
-          key={key}
-          onClick={() => onChange(key)}
-          className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
-            value === key ? "bg-[#6C63FF] text-white" : "text-slate-400 hover:text-slate-200"
-          }`}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 export default function Transactions() {
   const { dateRange, property, months } = useGlobalFilters();
@@ -156,19 +140,28 @@ export default function Transactions() {
             {dateRange.from || "—"} → {dateRange.to || "—"} · {num(scoped.length)} lines · {num(stats.days)} trading days
           </p>
         </div>
-        <div className="flex flex-wrap gap-1 rounded-lg bg-[#0A1628] p-1">
-          {TABS.map(([key, label]) => (
-            <button
-              key={key}
-              onClick={() => setTab(key)}
-              className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
-                tab === key ? "bg-[#6C63FF] text-white" : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {/* `lg` (h-9 px-4 text-sm), not the default `md`. text-sm is preserved
+            exactly: this is the page-level view switch, and dropping to text-xs
+            would flatten it against the three size="sm" filter controls further
+            down the page. The old local pills signalled state with colour alone
+            — white on #6C63FF measures 4.32:1, under the 4.5:1 body floor — and
+            carried no aria-pressed; the track owns both now, plus the raised
+            pill and heavier weight as non-colour cues.
+
+            flex-wrap authorised here, the second and last site. Five text-sm
+            tabs at px-4 run wide, the track is inline-flex with no wrap of its
+            own, and the old markup was already `flex flex-wrap` — without this
+            the header row overflows horizontally at narrow widths instead of
+            stacking. className merges into the track last, so it reaches the
+            flex box. */}
+        <SegmentedControl
+          value={tab}
+          onChange={setTab}
+          options={TABS}
+          size="lg"
+          label="View"
+          className="flex-wrap"
+        />
       </header>
 
       {tab === "overview" && (
@@ -191,7 +184,7 @@ export default function Transactions() {
           <Card
             title="Revenue over time"
             subtitle="Charge side, with settlements overlaid"
-            right={<Segmented value={grain} onChange={setGrain} options={GRAINS} />}
+            right={<SegmentedControl value={grain} onChange={setGrain} options={GRAINS} size="sm" label="Grain" />}
           >
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
@@ -315,11 +308,14 @@ export default function Transactions() {
             subtitle="Revenue posted per account over the selected period"
             right={
               <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-400">
-                <input
+                {/* No className: Input's checkbox branch already renders native
+                    with accent-color, and the border/background it used to carry
+                    were inert on a native checkbox in any case. The event is
+                    forwarded untouched, so e.target.checked still reads. */}
+                <Input
                   type="checkbox"
                   checked={includeSystem}
                   onChange={(e) => setIncludeSystem(e.target.checked)}
-                  className="h-3.5 w-3.5 rounded border-white/20 bg-[#0A1628] accent-[#6C63FF]"
                 />
                 Include automation
               </label>

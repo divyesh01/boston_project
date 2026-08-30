@@ -37,7 +37,12 @@ export default function Card(
         // 24px instead of the old 20px. The brief is "generous whitespace",
         // and at 20px a chart's own labels sat too close to the hairline.
         flush ? "p-0" : "p-6",
-        "shadow-[var(--elev-2)]",
+        // The `shadow:` type hint is load-bearing. Without it Tailwind 3.4
+        // reads a bare var() in an arbitrary shadow value as a shadow COLOUR:
+        // the class compiled to --tw-shadow-color only and emitted NO
+        // box-shadow property at all, so every card sat flat. Compiled-CSS
+        // receipt, not taste. Button.jsx's raised stack already carries it.
+        "shadow-[shadow:var(--elev-2)]",
         // An explicit property list, never a blanket transition: blanket ones
         // animate layout properties too, so a card that reflows would slide.
         // (The string is spelled out nowhere here on purpose — verify-motion
@@ -60,7 +65,7 @@ export default function Card(
         // comments too, and a bracketed example here becomes a real candidate
         // class that re-triggers the very warning it describes.)
         "transition-[border-color,box-shadow] [transition-duration:var(--fx-base)] [transition-timing-function:var(--fx-ease)]",
-        "hover:border-[var(--line)] hover:shadow-[var(--elev-3)]",
+        "hover:border-[var(--line)] hover:shadow-[shadow:var(--elev-3)]",
         className
       )}
     >

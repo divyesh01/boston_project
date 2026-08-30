@@ -664,4 +664,48 @@ classification explanation and every available imported evidence field (remarks,
 payment detail, reason code, and charge type). If the source record itself contains only a
 short value, the UI states that limitation instead of inventing a fuller note.
 
+## 19. Two design systems, and the shadow hint that decides whether depth renders
+
+There are two component layers and they are not interchangeable. `src/components/ui/*` is
+the stock shadcn set; it sets `focus-visible:outline-none` and owns its own focus styling.
+`src/components/ui-exec/*` is the executive layer — `Button`, `Input`, `Select`,
+`SegmentedControl`, `Card`, `KpiCard` — and it is what Dashboard, Statistics, Transactions
+and Payroll use for controls and surfaces. Do not mix the two inside those four pages: the
+focus contract differs, and a stock control dropped in loses the outline the exec layer
+depends on.
+
+**The depth system.** Raised things (a `Button`, the selected `SegmentedControl` pill) carry
+`shadow-[shadow:var(--bevel-raised),var(--elev-1)]`. Sunken things (`Input`, `Select`, the
+`SegmentedControl` track) carry `shadow-[shadow:var(--well-inset),inset_0_0_0_1px_var(--line)]`.
+The tokens live in `src/index.css`.
+
+**The trap, which was a live defect.** A bare `var()` inside a Tailwind arbitrary shadow —
+`shadow-[var(--bevel-raised)]` — does not compile to a `box-shadow`. Tailwind reads it as a
+shadow *colour* and emits `--tw-shadow-color` with no shadow at all, so the surface renders
+perfectly flat and nothing errors. The `shadow:` type hint is what forces the box-shadow
+branch. `Card` and `KpiCard` shipped the bare form for a while and were flat on screen while
+every grep-based gate stayed green. `scripts/verify-ui-exec-gates.mjs` exists because of
+this: 16 checks over the exec layer covering shadow-hint recurrence, `transition-all`, stray
+hex literals in the four primitives, and focus suppression. It reads source, not compiled
+CSS — so it catches the bare-`var()` spelling, not a general CSS regression.
+
+**Focus is a floor, not a per-component style.** No exec primitive sets
+`focus-visible:outline-none`. They all inherit the global
+`:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px }` in `src/index.css`
+(`--brand` resolves to `rgb(0,224,150)`). This is deliberate: a 1px `focus:border-*`
+substitute fails WCAG 2.4.13 on thickness. Adding an outline suppressor to any exec control
+silently removes its keyboard affordance, which is why the gate checks for it.
+
+**Two behaviours worth knowing before you edit.** `Button` defaults to `type="button"`, so
+dropping one into a future `<form>` will not submit it — set `type="submit"` explicitly.
+`SegmentedControl` guards its handler (`if (!selected) onChange(...)`), so re-clicking the
+already-active segment fires nothing; every current call site is a plain `useState` setter,
+which React bails on anyway, but a handler with side effects on re-selection would not run.
+`SegmentedControl` uses `role="group"` with `aria-pressed`, not `tablist`/`radiogroup`,
+because it does not implement roving arrow-key focus — do not relabel the role without
+adding that keyboard model.
+
+`Input` and `Select` pass the raw DOM event to `onChange`; the 60-plus existing handlers read
+`e.target.value` / `e.target.checked` and depend on that.
+
 ---

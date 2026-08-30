@@ -5,6 +5,9 @@ import {
 import { BedDouble, DollarSign, Gauge, TrendingUp, Users2, Wallet, Info, Download } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import KpiCard from "@/components/ui-exec/KpiCard";
+import Button from "@/components/ui-exec/Button";
+import Select from "@/components/ui-exec/Select";
+import SegmentedControl from "@/components/ui-exec/SegmentedControl";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { useHotelMetrics, useMetricDates } from "@/lib/useHotelData";
 import { money, money2, num, C, CHART_COLORS } from "@/lib/hotel";
@@ -43,25 +46,6 @@ function listNames(names = []) {
   if (names.length === 1) return names[0];
   if (names.length > 4) return `${names.slice(0, 3).join(", ")} and ${names.length - 3} others`;
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-}
-
-function Segmented({ value, onChange, options }) {
-  return (
-    <div className="flex flex-wrap gap-1 rounded-lg bg-[#0A1628] p-1">
-      {options.map(([key, label, hint]) => (
-        <button
-          key={key}
-          onClick={() => onChange(key)}
-          title={hint}
-          className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
-            value === key ? "bg-[#6C63FF] text-white" : "text-slate-400 hover:text-slate-200"
-          }`}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
 }
 
 // Labels an owner reads, not the column names the PMS importer happened to use.
@@ -190,17 +174,24 @@ export default function Statistics() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {dates.length > 1 && (
-            <select
+            // w-auto on BOTH halves: Select ships w-full on the wrapper span and
+            // on the field, which is right for a form grid and wrong here — this
+            // is a flex row, and a 100%-wide item would claim the whole header
+            // and push the period control onto its own line. Content-width is the
+            // behaviour the raw <select> had.
+            <Select
               value={snapshot.date}
               onChange={(e) => setPickedDate(e.target.value)}
-              className="h-9 rounded-lg border border-white/10 bg-[#0A1628] px-3 text-sm text-slate-200 outline-none focus:border-[#6C63FF]"
+              aria-label="Snapshot date"
+              wrapperClassName="w-auto"
+              className="w-auto"
             >
               {[...dates].reverse().map((d) => (
                 <option key={d} value={d}>{d}</option>
               ))}
-            </select>
+            </Select>
           )}
-          <Segmented value={period} onChange={setPeriod} options={PERIODS} />
+          <SegmentedControl value={period} onChange={setPeriod} options={PERIODS} size="sm" label="Period" />
         </div>
       </header>
 
@@ -349,10 +340,18 @@ export default function Statistics() {
         subtitle="Built from the Today column only — MTD and YTD figures from consecutive days overlap"
         right={
           dates.length > 1 ? (
-            <Segmented
+            // flex-wrap only here. Six metric pills run ~470px, and Card's `right`
+            // slot is shrink-0 around a track that is inline-flex with no wrap —
+            // so without this the row overflows horizontally at narrow widths
+            // instead of stacking, which is what the old local control did.
+            // className merges into the track last, so it reaches the flex box.
+            <SegmentedControl
               value={trendKey}
               onChange={setTrendKey}
               options={HEADLINE.map((m) => [m.key, m.label])}
+              size="sm"
+              label="Trend metric"
+              className="flex-wrap"
             />
           ) : null
         }
@@ -400,18 +399,17 @@ export default function Statistics() {
         subtitle="What was imported and how much of it the app recognised"
         right={
           <div className="flex gap-2">
-            <button
-              onClick={() => exportSnapshot("csv")}
-              className="flex items-center gap-2 rounded-lg bg-[#6C63FF]/20 px-3 py-1.5 text-xs font-medium text-[#6C63FF] transition-colors hover:bg-[#6C63FF]/35"
-            >
+            {/* Both `soft`, deliberately the same. They are one action with two
+                file formats, sharing STATISTICS_EXPORT_COLUMNS and one handler,
+                so a different colour per button would claim a difference that
+                does not exist. The Excel-green literal that used to distinguish
+                them was brand decoration on a control, not information. */}
+            <Button variant="soft" size="sm" onClick={() => exportSnapshot("csv")}>
               <Download className="h-3.5 w-3.5" /> Export CSV
-            </button>
-            <button
-              onClick={() => exportSnapshot("excel")}
-              className="flex items-center gap-2 rounded-lg bg-[#107C41]/20 px-3 py-1.5 text-xs font-medium text-[#107C41] transition-colors hover:bg-[#107C41]/35"
-            >
+            </Button>
+            <Button variant="soft" size="sm" onClick={() => exportSnapshot("excel")}>
               <Download className="h-3.5 w-3.5" /> Export Excel
-            </button>
+            </Button>
           </div>
         }
       >

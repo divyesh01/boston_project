@@ -125,6 +125,17 @@
     --brand-line:  rgba(0, 224, 150, 0.35);
     --brand-glow:  rgba(0, 224, 150, 0.28);
 
+    /* The only text colour that may sit ON --brand. Emerald is a bright fill:
+       --t-primary on it measures 1.61:1 and white 1.74:1, both far under the
+       4.5:1 floor, so a primary button captioned in the text ramp is
+       unreadable. This near-black green measures 9.42:1 on --brand. It is a
+       token rather than a literal in Button.jsx because a hex typed into a
+       primitive becomes a hex on every page that composes it — the exact
+       sprawl the ramp above replaced. Payroll.jsx already types this value by
+       hand in six places; those call sites move onto the token in the page
+       adoption step, not here. */
+    --brand-ink:   #04251A;
+
     /* ── Semantic data palette — LOCKED ────────────────────────────────────
        These five are NOT decoration, they are meaning: a hotel P&L where
        profit and loss share a hue is a lie. They stay distinct on purpose and
@@ -137,6 +148,17 @@
     --data-warning:  #FFB547;
     --data-info:     #00D4FF;
     --data-violet:   #6C63FF;   /* graphics only — fails 4.5:1 as text */
+
+    /* Destructive washes, built from --data-negative's own channels at the same
+       alphas as --brand-quiet / --brand-line so a danger control reads as the
+       same KIND of control as a soft brand one, only in the loss hue. Typed as
+       tokens because a raw rgba() in a primitive is unverifiable: nothing can
+       tell whether 255,107,107 is still the palette's coral or a hue that
+       drifted. Measured: --data-negative on --danger-quiet over a card is
+       5.72:1, above the 4.5:1 body floor. Danger still never signals by colour
+       alone — the caller supplies the verb ("Delete", "Void"). */
+    --danger-quiet:  rgba(255, 107, 107, 0.12);
+    --danger-line:   rgba(255, 107, 107, 0.35);
 
     /* ── Multi-layer shadows ───────────────────────────────────────────────
        Depth comes from several cheap layers, never one big blur: a tight
@@ -151,6 +173,27 @@
     --elev-3: 0 1px 2px rgba(0, 0, 0, 0.50),
               0 18px 44px -16px rgba(0, 0, 0, 0.75),
               inset 0 1px 0 rgba(255, 255, 255, 0.06);
+
+    /* ── Control depth: raised vs sunken ───────────────────────────────────
+       Cards get their bevel from --elev-2/3, but a CONTROL needs the two
+       treatments separated so they can be composed with a hover elevation
+       change. Two directions of light, one rule: a thing you press is lit from
+       above, a thing you type into is a hole.
+
+       --bevel-raised is the 1px top highlight on its own, at 8% rather than
+       --elev-2's 4%: a button is smaller than a card, so the same bevel has
+       fewer pixels to read in and needs slightly more contrast to register as
+       an edge rather than as noise. Composed ahead of an elevation, never
+       instead of one.
+
+       --well-inset is the inverse — a tight dark shadow just inside the top
+       edge, which is what makes an input look recessed. Deliberately a
+       box-shadow and not a border: an inset shadow costs no layout space, so
+       dropping a well into a grid cell cannot shift the grid by 1px, the same
+       reason `.u-hairline` exists. Controls pair it with an inset hairline of
+       --line in the same box-shadow list. */
+    --bevel-raised: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    --well-inset:   inset 0 1px 2px rgba(0, 0, 0, 0.35);
 
     /* Glassmorphism, used sparingly. backdrop-filter forces a compositing
        pass per element, and pages here hold 30+ cards, so this is OPT-IN

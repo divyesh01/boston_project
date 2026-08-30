@@ -3,6 +3,9 @@ import { db, runInTransaction } from '@/api/base44Client';
 import React, { useState } from "react";
 import { Plus, Trash2, DollarSign, CheckCircle2, X, Save, Zap, CalendarClock, Power, UserPlus, Target, TrendingUp, History, Loader2, ArrowLeft, Wallet } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
+import Button from "@/components/ui-exec/Button";
+import Input from "@/components/ui-exec/Input";
+import Select from "@/components/ui-exec/Select";
 import { EmptyState, ErrorState } from "@/components/ui/status";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import StatusBadge from "@/components/ui-exec/StatusBadge";
@@ -847,28 +850,42 @@ export default function Payroll() {
           </div>
           <div className="flex items-center gap-2">
             <StatusBadge status={activeStaff.length ? "active" : "inactive"} size="sm" />
-            <button
+            {/* Run Payroll Now is the single action this panel exists to offer,
+                so it is the only `primary` in the cluster. Quick Add and Post
+                Historical are alternate entry paths into the same ledger, not the
+                answer to the panel's question, so both read as `soft` — two
+                identical-looking secondaries side by side is the same shape
+                Statistics already uses for its two exports.
+
+                fx-clickable is carried across deliberately. It is not a colour or
+                a geometry the primitive owns: it suppresses the mobile tap
+                highlight and adds a touch-only press scale, and dropping it would
+                be an unrequested behaviour change on touch devices. */}
+            <Button
+              variant="soft"
               onClick={() => { setQuickErr(null); setShowQuickAdd(true); }}
               disabled={running}
-              className="fx-clickable flex items-center gap-2 rounded-lg border border-[#00E096]/40 bg-[#00E096]/10 px-4 py-2 text-sm font-semibold text-[#00E096] transition-colors hover:bg-[#00E096]/20 disabled:opacity-50"
+              className="fx-clickable"
             >
               <Wallet className="h-4 w-4" /> Quick Add
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="soft"
               onClick={() => { setHistoricalStep("configure"); setHistoricalPreview(null); setShowHistoricalForm(true); }}
               disabled={running}
-              className="fx-clickable flex items-center gap-2 rounded-lg bg-[#6C63FF] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#5b52e8] disabled:opacity-50"
+              className="fx-clickable"
             >
               <History className="h-4 w-4" /> Post Historical
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="primary"
               onClick={handleRunEngine}
               disabled={running}
-              className="fx-clickable flex items-center gap-2 rounded-lg bg-[#00E096] px-4 py-2 text-sm font-semibold text-[#04251A] transition-all hover:bg-[#4FE3C1] disabled:opacity-50"
+              className="fx-clickable"
             >
               <Zap className={`h-4 w-4 ${running ? "animate-pulse" : ""}`} />
               {running ? "Running…" : "Run Payroll Now"}
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -923,33 +940,43 @@ export default function Payroll() {
         title="Payroll Projection & Break-Even"
         subtitle="Run payroll across a date range — past months use logged runs, the current month and future months are forecast from your active staff — then compare the cost against revenue at your occupancy target."
         right={
-          <button
-            onClick={handleRunProjection}
-            disabled={running}
-            className="fx-clickable flex items-center gap-1.5 rounded-lg bg-[#00D4FF] px-3 py-1.5 text-xs font-semibold text-[#04251A] hover:bg-[#5BE3FF] disabled:opacity-50"
-          >
-            <Target className="h-3.5 w-3.5" /> Run Projection
-          </button>
+          /* `primary`: the only control in this Card's header, and running the
+             projection is the whole point of the panel. `sm` matches the 32px
+             header actions the page already uses.
+
+             BARE block comment, deliberately. `right=` opens a JavaScript
+             expression slot, not a JSX children position, so the braced JSX
+             comment form is a syntax error here — the inner brace opens a second
+             expression the parser then cannot close, and it fails on the next
+             attribute name. Same applies to the two other `right=` slots below.
+
+             No icon size class: Button's BASE carries `[&_svg]:size-4` as a
+             descendant selector at specificity (0,1,1), which outranks any
+             `h-*`/`w-*` on the svg itself at (0,1,0). Writing a size here would
+             claim 14px and render 16px. */
+          <Button variant="primary" size="sm" onClick={handleRunProjection} disabled={running} className="fx-clickable">
+            <Target /> Run Projection
+          </Button>
         }
       >
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <label className="mb-1.5 block text-xs font-medium text-slate-400">From (period start)</label>
-            <input type="date" value={projectFrom} onChange={(e) => setProjectFrom(e.target.value)} className="w-full rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
+            <Input type="date" value={projectFrom} onChange={(e) => setProjectFrom(e.target.value)} />
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-medium text-slate-400">To (period end)</label>
-            <input type="date" value={projectTo} onChange={(e) => setProjectTo(e.target.value)} className="w-full rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
+            <Input type="date" value={projectTo} onChange={(e) => setProjectTo(e.target.value)} />
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-medium text-slate-400">Target occupancy %</label>
-            <input type="number" min="0" max="100" value={occPct} onChange={(e) => setOccPct(Number(e.target.value) || 0)} className="w-full rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
+            <Input type="number" min="0" max="100" value={occPct} onChange={(e) => setOccPct(Number(e.target.value) || 0)} />
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-medium text-slate-400">
               ADR ($/room) {!adrOverride && estAdr > 0 ? "(auto)" : ""}
             </label>
-            <input type="number" min="0" value={adrOverride} onChange={(e) => setAdrOverride(e.target.value)} placeholder={estAdr ? String(Math.round(estAdr * 100) / 100) : "e.g. 120"} className="w-full rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
+            <Input type="number" min="0" value={adrOverride} onChange={(e) => setAdrOverride(e.target.value)} placeholder={estAdr ? String(Math.round(estAdr * 100) / 100) : "e.g. 120"} />
             {!adrOverride && estAdr > 0 && (
               <p className="mt-1 flex items-center gap-1 text-[10px] text-slate-500">
                 <TrendingUp className="h-3 w-3" /> Estimated from {occRows.length.toLocaleString()} occupancy days
@@ -1034,12 +1061,12 @@ export default function Payroll() {
         title="Staff Directory"
         subtitle={`${num(staff.length)} staff · ${num(activeStaff.length)} active — the engine pays active staff every month-end`}
         right={
-          <button
-            onClick={() => setShowStaffForm(true)}
-            className="fx-clickable flex items-center gap-1.5 rounded-lg bg-[#00E096] px-3 py-1.5 text-xs font-semibold text-[#04251A] hover:bg-[#4FE3C1]"
-          >
-            <UserPlus className="h-3.5 w-3.5" /> Add Staff
-          </button>
+          /* Bare block comment — expression slot, see the projection Card above.
+             `primary`: the one action this panel offers. The empty-state twin
+             below is `soft` so the two never compete. */
+          <Button variant="primary" size="sm" onClick={() => setShowStaffForm(true)} className="fx-clickable">
+            <UserPlus /> Add Staff
+          </Button>
         }
       >
         {showStaffForm && (
@@ -1060,57 +1087,57 @@ export default function Payroll() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">Full Name *</label>
-                  <input value={staffForm.employee_name} onChange={(e) => setStaffForm({ ...staffForm, employee_name: e.target.value })} placeholder="Jane Smith" className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#00E096]" />
+                  <Input value={staffForm.employee_name} onChange={(e) => setStaffForm({ ...staffForm, employee_name: e.target.value })} placeholder="Jane Smith" />
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">Department</label>
-                  <input value={staffForm.department} onChange={(e) => setStaffForm({ ...staffForm, department: e.target.value })} placeholder="Front Office" className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#00E096]" />
+                  <Input value={staffForm.department} onChange={(e) => setStaffForm({ ...staffForm, department: e.target.value })} placeholder="Front Office" />
                 </div>
                 <div className="sm:col-span-2">
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">Pay Type</label>
-                  <select value={staffForm.pay_type} onChange={(e) => setStaffForm({ ...staffForm, pay_type: e.target.value })} className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#00E096]">
+                  <Select value={staffForm.pay_type} onChange={(e) => setStaffForm({ ...staffForm, pay_type: e.target.value })}>
                     <option value="hourly">Hourly</option>
                     <option value="salary">Salary</option>
-                  </select>
+                  </Select>
                 </div>
                 <div className="sm:col-span-2">
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">
                     {staffForm.pay_type === "salary" ? "Salary Amount ($/month)" : "Hourly Rate ($)"}
                   </label>
-                  <input type="number" value={staffForm.base_rate} onChange={(e) => setStaffForm({ ...staffForm, base_rate: e.target.value })} placeholder="0" className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#00E096]" />
+                  <Input type="number" value={staffForm.base_rate} onChange={(e) => setStaffForm({ ...staffForm, base_rate: e.target.value })} placeholder="0" />
                 </div>
                 {staffForm.pay_type === "hourly" && (
                   <>
                     <div>
                       <label className="mb-1.5 block text-xs font-medium text-slate-400">Hours / Month</label>
-                      <input type="number" value={staffForm.hours} onChange={(e) => setStaffForm({ ...staffForm, hours: e.target.value })} placeholder="160" className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#00E096]" />
+                      <Input type="number" value={staffForm.hours} onChange={(e) => setStaffForm({ ...staffForm, hours: e.target.value })} placeholder="160" />
                     </div>
                     <div>
                       <label className="mb-1.5 block text-xs font-medium text-slate-400">Overtime Hours</label>
-                      <input type="number" value={staffForm.overtime_hours} onChange={(e) => setStaffForm({ ...staffForm, overtime_hours: e.target.value })} placeholder="0" className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#00E096]" />
+                      <Input type="number" value={staffForm.overtime_hours} onChange={(e) => setStaffForm({ ...staffForm, overtime_hours: e.target.value })} placeholder="0" />
                     </div>
                     <div>
                       <label className="mb-1.5 block text-xs font-medium text-slate-400">Overtime Rate (blank = 1.5x)</label>
-                      <input type="number" value={staffForm.overtime_rate} onChange={(e) => setStaffForm({ ...staffForm, overtime_rate: e.target.value })} placeholder="Auto" className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#00E096]" />
+                      <Input type="number" value={staffForm.overtime_rate} onChange={(e) => setStaffForm({ ...staffForm, overtime_rate: e.target.value })} placeholder="Auto" />
                     </div>
                   </>
                 )}
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">Bonus ($)</label>
-                  <input type="number" value={staffForm.bonus} onChange={(e) => setStaffForm({ ...staffForm, bonus: e.target.value })} placeholder="0" className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#00E096]" />
+                  <Input type="number" value={staffForm.bonus} onChange={(e) => setStaffForm({ ...staffForm, bonus: e.target.value })} placeholder="0" />
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">Deductions ($)</label>
-                  <input type="number" value={staffForm.deductions} onChange={(e) => setStaffForm({ ...staffForm, deductions: e.target.value })} placeholder="0" className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#00E096]" />
+                  <Input type="number" value={staffForm.deductions} onChange={(e) => setStaffForm({ ...staffForm, deductions: e.target.value })} placeholder="0" />
                 </div>
               </div>
               <div className="mt-5 flex justify-end gap-3">
-                <button onClick={() => setShowStaffForm(false)} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 hover:bg-white/5">
+                <Button variant="secondary" onClick={() => setShowStaffForm(false)}>
                   Cancel
-                </button>
-                <button onClick={handleAddStaff} className="flex items-center gap-1.5 rounded-lg bg-[#00E096] px-4 py-2 text-sm font-semibold text-[#04251A] hover:bg-[#4FE3C1]">
+                </Button>
+                <Button variant="primary" onClick={handleAddStaff}>
                   <Save className="h-4 w-4" /> Save Staff
-                </button>
+                </Button>
               </div>
               </div>
           </DialogPrimitive.Content>
@@ -1133,20 +1160,46 @@ export default function Payroll() {
                 </div>
                 <div className="flex items-center gap-3">
                   <StatusBadge status={isActive ? "active" : "inactive"} size="sm" />
-                  <button
+                  {/* NOT a SegmentedControl. This is a single button that flips
+                      one boolean, and the handler computes the flip from the
+                      current value — `handleToggleStaff(s.id, s.active)`. A
+                      segmented control would have to hand the target value in
+                      instead, which is a logic change, and it only fires when the
+                      clicked item is NOT already selected, which is the opposite
+                      of what a re-clickable toggle needs. The variant carries the
+                      state (soft when active, neutral when not) and the caption
+                      still says which, so colour is not the only signal.
+
+                      Power's `h-3 w-3` is dropped: Button's `[&_svg]:size-4`
+                      descendant selector outranks it, so the icon renders at 16px
+                      either way — the same 16px-in-28px ratio the primitive's own
+                      `xs` size is designed around. */}
+                  <Button
+                    variant={isActive ? "soft" : "secondary"}
+                    size="xs"
                     onClick={() => handleToggleStaff(s.id, s.active)}
-                    className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition-colors ${
-                      isActive
-                        ? "border-[#00E096]/40 bg-[#00E096]/10 text-[#00E096] hover:bg-[#00E096]/20"
-                        : "border-white/10 bg-white/5 text-slate-500 hover:text-slate-300"
-                    }`}
                     title={isActive ? "Deactivate (excluded from payroll)" : "Activate (included in payroll)"}
                   >
-                    <Power className="h-3 w-3" /> {isActive ? "Active" : "Inactive"}
-                  </button>
-                  <button onClick={() => handleDeleteStaff(s)} className="text-slate-500 hover:text-[#FF6B6B]">
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                    <Power /> {isActive ? "Active" : "Inactive"}
+                  </Button>
+                  {/* `ghost`, not `danger`: this affordance carries no text, and
+                      `danger` would make colour the sole signal of a destructive
+                      action (WCAG 1.4.1). The destructive hover cue is preserved
+                      via the semantic token rather than the hex it replaces.
+                      aria-label is additive beyond a pure visual conversion —
+                      flagged in the report, trivially revertible — but a
+                      `size="icon"` button with no accessible name is not a
+                      control I am willing to leave behind. */}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => handleDeleteStaff(s)}
+                    aria-label={`Remove ${s.employee_name || "staff member"} from the directory`}
+                    title="Remove from directory"
+                    className="hover:text-[var(--data-negative)]"
+                  >
+                    <Trash2 />
+                  </Button>
                 </div>
               </div>
             );
@@ -1154,12 +1207,12 @@ export default function Payroll() {
           {!staff.length && (
             <div className="py-4 text-center">
               <p className="text-sm text-slate-500">No staff yet. Add staff members — the automated engine pays every active member on month-end.</p>
-              <button
-                onClick={() => setShowStaffForm(true)}
-                className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-[#00E096]/40 bg-[#00E096]/10 px-3 py-1.5 text-xs font-medium text-[#00E096] hover:bg-[#00E096]/20"
-              >
-                <UserPlus className="h-3.5 w-3.5" /> Add First Staff Member
-              </button>
+              {/* `soft`, not `primary`: the Card header's Add Staff is already
+                  the panel's primary and both call the same setter, so a second
+                  primary would put two competing answers on one panel. */}
+              <Button variant="soft" size="sm" onClick={() => setShowStaffForm(true)} className="mt-3">
+                <UserPlus /> Add First Staff Member
+              </Button>
             </div>
           )}
         </div>
@@ -1170,12 +1223,13 @@ export default function Payroll() {
         title="Payroll Runs"
         subtitle={`${payroll.length} entries · ${money2(totalPay)} total`}
         right={
-          <button
-            onClick={() => setShowForm(true)}
-            className="fx-clickable flex items-center gap-1.5 rounded-lg bg-[#6C63FF] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#5b52e8]"
-          >
-            <Plus className="h-3.5 w-3.5" /> Add Entry
-          </button>
+          /* Bare block comment — expression slot, see the projection Card above.
+             C-017 site: this was white on indigo at 4.32:1. `primary` because it
+             is the only control in this Card's header and adding an entry is the
+             panel's action. */
+          <Button variant="primary" size="sm" onClick={() => setShowForm(true)} className="fx-clickable">
+            <Plus /> Add Entry
+          </Button>
         }
       >
         {showForm && (
@@ -1196,65 +1250,67 @@ export default function Payroll() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">Name *</label>
-                  <input value={form.employee_name} onChange={(e) => setForm({ ...form, employee_name: e.target.value })} placeholder="John Doe" className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#6C63FF]" />
+                  <Input value={form.employee_name} onChange={(e) => setForm({ ...form, employee_name: e.target.value })} placeholder="John Doe" />
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">Department</label>
-                  <input value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} placeholder="Front Office" className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#6C63FF]" />
+                  <Input value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} placeholder="Front Office" />
                 </div>
                 <div className="sm:col-span-2">
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">Pay Type</label>
-                  <select value={form.pay_type} onChange={(e) => setForm({ ...form, pay_type: e.target.value })} className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#6C63FF]">
+                  <Select value={form.pay_type} onChange={(e) => setForm({ ...form, pay_type: e.target.value })}>
                     <option value="hourly">Hourly</option>
                     <option value="salary">Salary</option>
-                  </select>
+                  </Select>
                 </div>
                 <div className="sm:col-span-2">
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">
                     {form.pay_type === "salary" ? "Salary Amount ($)" : "Hourly Rate ($)"}
                   </label>
-                  <input type="number" value={form.base_rate} onChange={(e) => setForm({ ...form, base_rate: e.target.value })} placeholder="0" className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#6C63FF]" />
+                  <Input type="number" value={form.base_rate} onChange={(e) => setForm({ ...form, base_rate: e.target.value })} placeholder="0" />
                 </div>
                 {form.pay_type === "hourly" && (
                   <>
                     <div>
                       <label className="mb-1.5 block text-xs font-medium text-slate-400">Regular Hours</label>
-                      <input type="number" value={form.hours} onChange={(e) => setForm({ ...form, hours: e.target.value })} placeholder="40" className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#6C63FF]" />
+                      <Input type="number" value={form.hours} onChange={(e) => setForm({ ...form, hours: e.target.value })} placeholder="40" />
                     </div>
                     <div>
                       <label className="mb-1.5 block text-xs font-medium text-slate-400">Overtime Hours</label>
-                      <input type="number" value={form.overtime_hours} onChange={(e) => setForm({ ...form, overtime_hours: e.target.value })} placeholder="0" className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#6C63FF]" />
+                      <Input type="number" value={form.overtime_hours} onChange={(e) => setForm({ ...form, overtime_hours: e.target.value })} placeholder="0" />
                     </div>
                     <div>
                       <label className="mb-1.5 block text-xs font-medium text-slate-400">Overtime Rate (blank = 1.5x)</label>
-                      <input type="number" value={form.overtime_rate} onChange={(e) => setForm({ ...form, overtime_rate: e.target.value })} placeholder="Auto" className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#6C63FF]" />
+                      <Input type="number" value={form.overtime_rate} onChange={(e) => setForm({ ...form, overtime_rate: e.target.value })} placeholder="Auto" />
                     </div>
                   </>
                 )}
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">Bonus ($)</label>
-                  <input type="number" value={form.bonus} onChange={(e) => setForm({ ...form, bonus: e.target.value })} placeholder="0" className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#6C63FF]" />
+                  <Input type="number" value={form.bonus} onChange={(e) => setForm({ ...form, bonus: e.target.value })} placeholder="0" />
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">Deductions ($)</label>
-                  <input type="number" value={form.deductions} onChange={(e) => setForm({ ...form, deductions: e.target.value })} placeholder="0" className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#6C63FF]" />
+                  <Input type="number" value={form.deductions} onChange={(e) => setForm({ ...form, deductions: e.target.value })} placeholder="0" />
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">Pay Period Start</label>
-                  <input type="date" value={form.pay_period_start} onChange={(e) => setForm({ ...form, pay_period_start: e.target.value })} className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#6C63FF]" />
+                  <Input type="date" value={form.pay_period_start} onChange={(e) => setForm({ ...form, pay_period_start: e.target.value })} />
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">Pay Period End</label>
-                  <input type="date" value={form.pay_period_end} onChange={(e) => setForm({ ...form, pay_period_end: e.target.value })} className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#6C63FF]" />
+                  <Input type="date" value={form.pay_period_end} onChange={(e) => setForm({ ...form, pay_period_end: e.target.value })} />
                 </div>
               </div>
               <div className="mt-5 flex justify-end gap-3">
-                <button onClick={() => setShowForm(false)} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 hover:bg-white/5">
+                <Button variant="secondary" onClick={() => setShowForm(false)}>
                   Cancel
-                </button>
-                <button onClick={handleAdd} className="flex items-center gap-1.5 rounded-lg bg-[#6C63FF] px-4 py-2 text-sm font-medium text-white hover:bg-[#5b52e8]">
-                  <Save className="h-4 w-4" /> Save Entry
-                </button>
+                </Button>
+                {/* C-017 site: white on indigo at 4.32:1. `primary` — it is the
+                    dialog's affirmative action and Cancel is the only rival. */}
+                <Button variant="primary" onClick={handleAdd}>
+                  <Save /> Save Entry
+                </Button>
               </div>
               </div>
           </DialogPrimitive.Content>
@@ -1280,19 +1336,35 @@ export default function Payroll() {
                   <p className="text-xs text-slate-500">Reg {money2(p.regular_pay || 0)} · OT {money2(p.overtime_pay || 0)}</p>
                   <p className="text-sm font-heading text-white">{money2(p.total_pay || 0)}</p>
                 </div>
-                <select
+                {/* Content-width, not the primitive's default w-full: this sits in
+                    a flex row beside the money column, so BOTH the wrapper and the
+                    field need w-auto or the select eats the row. statusColor's
+                    class lands after the field's own text colour in cn(), so
+                    tailwind-merge lets the status hue win — the same behaviour the
+                    raw select had. aria-label is additive: this control has no
+                    label element of any kind, and it writes payroll status. */}
+                <Select
                   value={p.payroll_status || "draft"}
                   onChange={(e) => handleStatusChange(p.id, e.target.value)}
-                  className={`rounded-lg border border-white/10 bg-[#040D1A] px-2 py-1 text-xs ${statusColor(p.payroll_status)}`}
+                  aria-label={`Payroll status for ${p.employee_name || "this run"}`}
+                  wrapperClassName="w-auto"
+                  className={`w-auto text-xs ${statusColor(p.payroll_status)}`}
                 >
                   <option value="draft">Draft</option>
                   <option value="pending_review">Pending Review</option>
                   <option value="approved">Approved</option>
                   <option value="paid">Paid</option>
-                </select>
-                <button onClick={() => handleDelete(p)} className="text-slate-500 hover:text-[#FF6B6B]">
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                </Select>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => handleDelete(p)}
+                  aria-label={`Delete the payroll run for ${p.employee_name || "this employee"}`}
+                  title="Delete payroll run"
+                  className="hover:text-[var(--data-negative)]"
+                >
+                  <Trash2 />
+                </Button>
               </div>
             </div>
           ))}
@@ -1338,12 +1410,11 @@ export default function Payroll() {
             <div className="space-y-4">
               <div>
                 <label className="mb-1.5 block text-xs font-medium text-slate-400">Employee *</label>
-                <input
+                <Input
                   list="quick-staff-names"
                   value={quickForm.employee_name}
                   onChange={(e) => { setQuickForm({ ...quickForm, employee_name: e.target.value }); setQuickErr(null); }}
                   placeholder="Moin"
-                  className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#00E096]"
                 />
                 <datalist id="quick-staff-names">
                   {activeStaff.map((s) => <option key={s.id} value={s.employee_name} />)}
@@ -1352,14 +1423,17 @@ export default function Payroll() {
 
               <div>
                 <label className="mb-1.5 block text-xs font-medium text-slate-400">Amount Paid ($) *</label>
-                <input
+                {/* text-lg/font-semibold kept: this is the one figure the dialog
+                    exists to capture, and the emphasis is deliberate, not chrome.
+                    tailwind-merge drops the field's own text-sm in its favour. */}
+                <Input
                   type="number"
                   min="0"
                   step="0.01"
                   value={quickForm.amount}
                   onChange={(e) => { setQuickForm({ ...quickForm, amount: e.target.value }); setQuickErr(null); }}
                   placeholder="3000"
-                  className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-lg font-semibold text-white outline-none focus:border-[#00E096]"
+                  className="text-lg font-semibold"
                 />
                 <p className="mt-1 text-[10px] text-slate-500">The full amount for the month, take-home as you paid it.</p>
               </div>
@@ -1367,20 +1441,23 @@ export default function Payroll() {
               <div>
                 <label className="mb-1.5 block text-xs font-medium text-slate-400">Month Paid For</label>
                 <div className="flex items-center gap-2">
-                  <select
+                  {/* wrapperClassName carries the flex-1 the raw select had. The
+                      field keeps its default w-full, which a flex-basis of 0%
+                      overrides for the main size, so the geometry is unchanged. */}
+                  <Select
                     value={quickForm.month}
                     onChange={(e) => { setQuickForm({ ...quickForm, month: Number(e.target.value) }); setQuickErr(null); }}
-                    className="flex-1 rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#00E096]"
+                    wrapperClassName="flex-1"
                   >
                     {MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
-                  </select>
-                  <input
+                  </Select>
+                  <Input
                     type="number"
                     min="2020"
                     max="2030"
                     value={quickForm.year}
                     onChange={(e) => { setQuickForm({ ...quickForm, year: Number(e.target.value) }); setQuickErr(null); }}
-                    className="w-24 rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#00E096]"
+                    className="w-24"
                   />
                 </div>
                 <p className="mt-1 text-[10px] text-slate-500">
@@ -1391,33 +1468,34 @@ export default function Payroll() {
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">Department</label>
-                  <input
+                  <Input
                     value={quickForm.department}
                     onChange={(e) => setQuickForm({ ...quickForm, department: e.target.value })}
                     placeholder="Front Office"
-                    className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#00E096]"
                   />
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">Status</label>
-                  <select
+                  <Select
                     value={quickForm.status}
                     onChange={(e) => setQuickForm({ ...quickForm, status: e.target.value })}
-                    className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2.5 text-sm text-white outline-none focus:border-[#00E096]"
                   >
                     <option value="paid">Paid</option>
                     <option value="approved">Approved</option>
                     <option value="draft">Draft (not counted)</option>
-                  </select>
+                  </Select>
                 </div>
               </div>
 
               <label className="flex cursor-pointer items-start gap-2">
-                <input
+                {/* Native TOGGLE branch — no sizing classes passed, which is what
+                    keeps it a 16px checkbox instead of a 36px w-full trough. The
+                    accent moves from a hand-typed emerald to the brand token. */}
+                <Input
                   type="checkbox"
                   checked={quickForm.saveToStaff}
                   onChange={(e) => setQuickForm({ ...quickForm, saveToStaff: e.target.checked })}
-                  className="mt-0.5 h-4 w-4 accent-[#00E096]"
+                  className="mt-0.5"
                 />
                 <span className="text-xs text-slate-300">
                   Also add to Staff Directory as a {money2(Number(quickForm.amount) || 0)}/month salary
@@ -1443,18 +1521,18 @@ export default function Payroll() {
             </div>
 
             <div className="mt-5 flex justify-end gap-3">
-              <button onClick={() => setShowQuickAdd(false)} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 hover:bg-white/5">
+              <Button variant="secondary" onClick={() => setShowQuickAdd(false)}>
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
                 onClick={handleQuickAdd}
                 disabled={running || !quickForm.employee_name.trim() || !(Number(quickForm.amount) > 0) || !!quickDuplicate}
-                className="flex items-center gap-1.5 rounded-lg bg-[#00E096] px-4 py-2 text-sm font-semibold text-[#04251A] hover:bg-[#4FE3C1] disabled:opacity-50"
               >
                 {running
-                  ? <><Loader2 className="h-4 w-4 animate-spin" /> Saving…</>
-                  : <><Save className="h-4 w-4" /> Record Payroll</>}
-              </button>
+                  ? <><Loader2 className="animate-spin" /> Saving…</>
+                  : <><Save /> Record Payroll</>}
+              </Button>
               </div>
             </div>
           </DialogPrimitive.Content>
@@ -1535,18 +1613,18 @@ export default function Payroll() {
                 </div>
 
                 <div className="flex justify-end gap-3 pt-4 border-t border-white/10">
-                  <button onClick={handleBackToConfigure} disabled={running} className="flex items-center gap-1.5 rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 hover:bg-white/5 disabled:opacity-50">
-                    <ArrowLeft className="h-4 w-4" /> Back
-                  </button>
-                  <button
+                  <Button variant="secondary" onClick={handleBackToConfigure} disabled={running}>
+                    <ArrowLeft /> Back
+                  </Button>
+                  <Button
+                    variant="primary"
                     onClick={handlePostHistorical}
                     disabled={running || historicalPreview.totalRuns === 0}
-                    className="flex items-center gap-1.5 rounded-lg bg-[#00E096] px-4 py-2 text-sm font-semibold text-[#04251A] hover:bg-[#4FE3C1] disabled:opacity-50"
                   >
                     {running
-                      ? <><Loader2 className="h-4 w-4 animate-spin" /> Posting…</>
-                      : <><Save className="h-4 w-4" /> Post {historicalPreview.totalRuns} Run(s)</>}
-                  </button>
+                      ? <><Loader2 className="animate-spin" /> Posting…</>
+                      : <><Save /> Post {historicalPreview.totalRuns} Run(s)</>}
+                  </Button>
                 </div>
               </div>
             )}
@@ -1557,23 +1635,28 @@ export default function Payroll() {
               <div className="space-y-3">
                 <label className="block text-xs font-medium text-slate-400">Data Source</label>
                 <div className="flex items-center gap-4">
+                  {/* Kept as native radios, NOT converted to a SegmentedControl.
+                      A segmented control fires onChange only when the clicked item
+                      is not already selected and hands the caller a value, so these
+                      two independent no-argument handlers would have to be collapsed
+                      into one — a logic change. Native radios also keep the
+                      `name`-based grouping and arrow-key roving that
+                      SegmentedControl deliberately does not implement. */}
                   <label className="flex items-center gap-2 cursor-pointer">
-                    <input
+                    <Input
                       type="radio"
                       name="hist-source"
                       checked={historicalForm.useStaffDirectory}
                       onChange={() => setHistoricalForm(f => ({ ...f, useStaffDirectory: true }))}
-                      className="h-4 w-4 accent-[#6C63FF]"
                     />
                     <span className="text-sm text-white">Use Staff Directory (recommended)</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
-                    <input
+                    <Input
                       type="radio"
                       name="hist-source"
                       checked={!historicalForm.useStaffDirectory}
                       onChange={() => setHistoricalForm(f => ({ ...f, useStaffDirectory: false }))}
-                      className="h-4 w-4 accent-[#6C63FF]"
                     />
                     <span className="text-sm text-white">Custom Entries</span>
                   </label>
@@ -1590,40 +1673,40 @@ export default function Payroll() {
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">From Month</label>
                   <div className="flex items-center gap-2">
-                    <select
+                    <Select
                       value={historicalForm.fromMonth}
                       onChange={(e) => setHistoricalForm(f => ({ ...f, fromMonth: Number(e.target.value) }))}
-                      className="flex-1 rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2 text-sm text-white outline-none focus:border-[#6C63FF]"
+                      wrapperClassName="flex-1"
                     >
                       {MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
-                    </select>
-                    <input
+                    </Select>
+                    <Input
                       type="number"
                       min="2020"
                       max="2030"
                       value={historicalForm.fromYear}
                       onChange={(e) => setHistoricalForm(f => ({ ...f, fromYear: Number(e.target.value) }))}
-                      className="w-24 rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2 text-sm text-white outline-none focus:border-[#6C63FF]"
+                      className="w-24"
                     />
                   </div>
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-slate-400">To Month</label>
                   <div className="flex items-center gap-2">
-                    <select
+                    <Select
                       value={historicalForm.toMonth}
                       onChange={(e) => setHistoricalForm(f => ({ ...f, toMonth: Number(e.target.value) }))}
-                      className="flex-1 rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2 text-sm text-white outline-none focus:border-[#6C63FF]"
+                      wrapperClassName="flex-1"
                     >
                       {MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
-                    </select>
-                    <input
+                    </Select>
+                    <Input
                       type="number"
                       min="2020"
                       max="2030"
                       value={historicalForm.toYear}
                       onChange={(e) => setHistoricalForm(f => ({ ...f, toYear: Number(e.target.value) }))}
-                      className="w-24 rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2 text-sm text-white outline-none focus:border-[#6C63FF]"
+                      className="w-24"
                     />
                   </div>
                 </div>
@@ -1632,16 +1715,15 @@ export default function Payroll() {
               {/* Status */}
               <div>
                 <label className="mb-1.5 block text-xs font-medium text-slate-400">Status for Created Runs</label>
-                <select
+                <Select
                   value={historicalForm.status}
                   onChange={(e) => setHistoricalForm(f => ({ ...f, status: e.target.value }))}
-                  className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2 text-sm text-white outline-none focus:border-[#6C63FF]"
                 >
                   <option value="paid">Paid</option>
                   <option value="approved">Approved</option>
                   <option value="pending_review">Pending Review</option>
                   <option value="draft">Draft</option>
-                </select>
+                </Select>
                 <p className="mt-1 text-xs text-slate-500">Historical payments should typically be "Paid".</p>
               </div>
 
@@ -1673,36 +1755,33 @@ export default function Payroll() {
                   <p className="text-xs font-medium text-slate-400">Custom Entries (add one per staff member)</p>
                   {historicalForm.customEntries.map((entry, idx) => (
                     <div key={idx} className="grid gap-2 sm:grid-cols-4">
-                      <input
+                      <Input
                         placeholder="Name"
                         value={entry.employee_name}
                         onChange={(e) => setHistoricalForm(f => ({
                           ...f,
                           customEntries: f.customEntries.map((en, i) => i === idx ? { ...en, employee_name: e.target.value } : en)
                         }))}
-                        className="rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2 text-sm text-white outline-none focus:border-[#6C63FF]"
                       />
-                      <input
+                      <Input
                         placeholder="Department"
                         value={entry.department}
                         onChange={(e) => setHistoricalForm(f => ({
                           ...f,
                           customEntries: f.customEntries.map((en, i) => i === idx ? { ...en, department: e.target.value } : en)
                         }))}
-                        className="rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2 text-sm text-white outline-none focus:border-[#6C63FF]"
                       />
-                      <select
+                      <Select
                         value={entry.pay_type}
                         onChange={(e) => setHistoricalForm(f => ({
                           ...f,
                           customEntries: f.customEntries.map((en, i) => i === idx ? { ...en, pay_type: e.target.value } : en)
                         }))}
-                        className="rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2 text-sm text-white outline-none focus:border-[#6C63FF]"
                       >
                         <option value="hourly">Hourly</option>
                         <option value="salary">Salary</option>
-                      </select>
-                      <input
+                      </Select>
+                      <Input
                         type="number"
                         placeholder="Rate"
                         value={entry.base_rate}
@@ -1710,31 +1789,35 @@ export default function Payroll() {
                           ...f,
                           customEntries: f.customEntries.map((en, i) => i === idx ? { ...en, base_rate: e.target.value } : en)
                         }))}
-                        className="rounded-lg border border-white/10 bg-[#0b0e14] px-3 py-2 text-sm text-white outline-none focus:border-[#6C63FF]"
                       />
                     </div>
                   ))}
-                  <button
-                    type="button"
+                  {/* `link`, with the box collapsed: these are inline text
+                      affordances in a stack, not chrome, so the size's h-9/px-4
+                      would give them a button footprint they never had. */}
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="h-auto px-0"
                     onClick={() => setHistoricalForm(f => ({
                       ...f,
                       customEntries: [...f.customEntries, { employee_name: "", department: "", pay_type: "hourly", base_rate: "", hours: "40", overtime_hours: "0", overtime_rate: "", bonus: "0", deductions: "0" }]
                     }))}
-                    className="text-sm text-[#6C63FF] hover:underline"
                   >
                     + Add Another Staff Entry
-                  </button>
+                  </Button>
                   {!historicalForm.customEntries.length && (
-                    <button
-                      type="button"
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="h-auto px-0"
                       onClick={() => setHistoricalForm(f => ({
                         ...f,
                         customEntries: [{ employee_name: "", department: "", pay_type: "hourly", base_rate: "", hours: "40", overtime_hours: "0", overtime_rate: "", bonus: "0", deductions: "0" }]
                       }))}
-                      className="text-sm text-[#6C63FF] hover:underline"
                     >
                       Add First Staff Entry
-                    </button>
+                    </Button>
                   )}
                 </div>
               )}
@@ -1752,17 +1835,19 @@ export default function Payroll() {
 
               {/* Actions — configure step reviews first, it never posts blind */}
               <div className="flex justify-end gap-3 pt-4 border-t border-white/10">
-                <button onClick={closeHistorical} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-300 hover:bg-white/5">
+                <Button variant="secondary" onClick={closeHistorical}>
                   Cancel
-                </button>
-                <button
+                </Button>
+                {/* C-017 site: white on indigo at 4.32:1. `primary` — Review is
+                    the step's forward action and Cancel is the only rival. */}
+                <Button
+                  variant="primary"
                   onClick={handlePreviewHistorical}
                   disabled={running || !historicalReady}
-                  className="flex items-center gap-1.5 rounded-lg bg-[#6C63FF] px-4 py-2 text-sm font-semibold text-white hover:bg-[#5b52e8] disabled:opacity-50"
                 >
-                  <Target className="h-4 w-4" />
+                  <Target />
                   Review {historicalPlannedRuns > 0 ? `${historicalPlannedRuns} Run(s)` : "Payroll"}
-                </button>
+                </Button>
                 </div>
               </div>
             )}

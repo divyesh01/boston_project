@@ -5,10 +5,13 @@ Before substantive work:
 1. Read `manifest.json` and run `node scripts/verify-divyesh-v3.mjs --startup --json`.
 2. Read the owner’s actual request.
 3. Classify task type, affected workflow, risk, domains, and reversibility.
-4. Select the minimum packs from `PACK_INDEX.md`.
-5. Establish owner contract, non-goals, current phase, writer, and task state.
-6. Run the selected workflow through its required gates.
-7. Stop only for real authority, evidence, or external-state blockers.
+4. Classify `COMPUTE_MODE` as LIGHT, STANDARD, or DEEP. Gemini and Antigravity
+   load `QUALITY_FIRST_COMPUTE.md` for complex or high-risk work.
+5. Select the minimum packs from `PACK_INDEX.md`.
+6. Establish owner contract, non-goals, current phase, writer, and task state.
+7. Record agents used and why the chosen depth is sufficient.
+8. Run the selected workflow through its required gates.
+9. Stop only for real authority, evidence, or external-state blockers.
 
 Routing defaults:
 
@@ -25,4 +28,3 @@ Routing defaults:
 
 A host without parallel agents may execute roles sequentially while preserving sealed
 reports and phase barriers. It must label actual reviewer independence honestly.
-

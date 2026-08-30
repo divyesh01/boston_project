@@ -1,7 +1,7 @@
 {
   "system": "DIVYESH-V3",
   "protocol_version": "3.0.0",
-  "protocol_hash": "sha256:bd98f5b69515df288c24e0469ecd5fe171f1259db38f970f20f08e12b94dd730",
+  "protocol_hash": "sha256:8998c0c8b7363198bd601111a088dee96b526583b5fdbc47b6e9a0f7212ce003",
   "hash_algorithm": "sha256-normalized-v1",
   "bootstrap_schema_minimum": "1.0.0",
   "canonical_protocol": "PROTOCOL_V3_ADDENDUM.md",
@@ -13,7 +13,7 @@
   "canonical_files": [
     {
       "path": "PROTOCOL_V3_ADDENDUM.md",
-      "sha256": "d787c1c4d2152701565b28a350d23670f639d7c2663d359225985a298c2468c8"
+      "sha256": "58ec4a1874ba59bedeff9ff16dbff7b9439eb05ef575eb069267fc92f318c414"
     },
     {
       "path": "docs/divyesh-v3/KERNEL.md",
@@ -21,7 +21,7 @@
     },
     {
       "path": "docs/divyesh-v3/ROUTER.md",
-      "sha256": "8fa3df023359de9b275ce1309d5a148492560cc1a460b29957706cd7348a0220"
+      "sha256": "2aa4481f234ed72896fafba975d605056610da474ea39b55560526ab1bbab38c"
     },
     {
       "path": "docs/divyesh-v3/STATUS_VOCABULARY.md",
@@ -29,7 +29,11 @@
     },
     {
       "path": "docs/divyesh-v3/PACK_INDEX.md",
-      "sha256": "31ebffd5320f403aec5af69629d6540a8cfcfa0b8d69881f8a55da0a8188a7d0"
+      "sha256": "2929424ef8f22e47d2f8d8b8467580a1c11a28f49ae653866fe433071ba81dee"
+    },
+    {
+      "path": "docs/divyesh-v3/QUALITY_FIRST_COMPUTE.md",
+      "sha256": "8ddb1a034f24f552898572d2dc9b7843b460a3762a7ecd709283d63c02b7d661"
     },
     {
       "path": "docs/divyesh-v3/roles/commander.md",
@@ -121,7 +125,7 @@
     },
     {
       "path": "docs/divyesh-v3/schemas/task-state.schema.json",
-      "sha256": "508ae326fc46d88209aa886f3b092fb49e8855c0b2c7619fd5f6eb96e5e71dbe"
+      "sha256": "5e0becf4f0120c1e84c1fa3494c9801a3820b9e7ca82a0c6086ba821e698af08"
     },
     {
       "path": "docs/divyesh-v3/schemas/handoff.schema.json",
@@ -129,7 +133,7 @@
     },
     {
       "path": "docs/divyesh-v3/schemas/startup-self-check.schema.json",
-      "sha256": "2e17a871ffddd5addaabd883b06b8e6e4b1daf86495f00122cc4332a0b142bf9"
+      "sha256": "209a595dccc436f451d9b118d340c34518c5809b129d0e26f272c54326093460"
     }
   ],
   "adapters": [
@@ -152,10 +156,19 @@
       "platform": "claude-skill",
       "path": ".claude/skills/divyesh-v3-router/SKILL.md",
       "bootstrap_schema": "1.0.0"
+    },
+    {
+      "platform": "codex",
+      "path": "AGENTS.md",
+      "bootstrap_schema": "1.0.0",
+      "check_scope": "marked-block"
+    },
+    {
+      "platform": "claude",
+      "path": "CLAUDE.md",
+      "bootstrap_schema": "1.0.0",
+      "check_scope": "marked-block"
     }
   ],
-  "pending_protected_adapters": [
-    "AGENTS.md",
-    "CLAUDE.md"
-  ]
+  "pending_protected_adapters": []
 }

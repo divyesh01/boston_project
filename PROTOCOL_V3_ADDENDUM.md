@@ -234,6 +234,19 @@ The always-loaded kernel contains only authority, protected-file law, owner inte
 risk, evidence vocabulary, one-writer law, relevant invariants, the handoff contract,
 and open critical questions. `docs/divyesh-v3/PACK_INDEX.md` is the routing catalog.
 
+- **V3-152 — Quality-First Compute Policy:** Gemini and Antigravity must not
+  conserve quota, agent count, tokens, runtime, or provider calls at the expense of
+  correctness, evidence, or coverage. Complex or high-risk work uses as many
+  genuinely useful independent specialists as needed, gives each a distinct mission,
+  runs them concurrently where supported, cross-examines material disagreements,
+  red-teams the leading conclusion, and synthesizes only after adequate coverage.
+  One plausible answer is not a stop condition. Do not create useless agents to
+  consume quota; simple work may remain small. Finance, authentication, security,
+  property isolation, imports, migrations, destructive workflows, and production
+  incidents default to deep investigation when their risk is material. Record
+  `COMPUTE_MODE: LIGHT | STANDARD | DEEP`, `AGENTS_USED: N`, and
+  `WHY_THIS_DEPTH_WAS_SUFFICIENT` in durable task state.
+
 ## 8. Archaeology, semantic values, and ordering
 
 Relevant history is mandatory for auth, money, imports, routing, schema changes,
@@ -301,4 +314,3 @@ their own explicit authorization.
 4. Pilot one low-risk task.
 5. Pilot one security or financial task.
 6. Remove any rule that creates ceremony without better evidence.
-

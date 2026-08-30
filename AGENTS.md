@@ -4,6 +4,29 @@
 
 **CRITICAL: Before modifying ANY file, check [`PROTECTED_FILES.md`](./PROTECTED_FILES.md).** Files listed there are permanently locked from AI modification. No AI agent (Gemini, Antigravity, Claude, OpenCode, Cursor, Copilot, or any other) may create, modify, delete, rename, or overwrite protected files without explicit owner authorization. See `.agents/rules/no-modify-protected.md` for enforcement details.
 
+<!-- DIVYESH-V3-BOOTSTRAP:START -->
+## DIVYESH V3 AUTO-BOOTSTRAP
+
+SYSTEM: DIVYESH-V3
+VERSION: 3.0.0
+BOOTSTRAP_SCHEMA: 1.0.0
+CANONICAL_MANIFEST: docs/divyesh-v3/manifest.json
+
+Before substantive work on every repository task:
+
+1. Run `npm run verify:v3`. If manifest, protocol hash, or bootstrap verification
+   fails, stop with `SYSTEM_DRIFT = BLOCKED`.
+2. Read `docs/divyesh-v3/KERNEL.md`, `docs/divyesh-v3/ROUTER.md`, and
+   `docs/divyesh-v3/QUALITY_FIRST_COMPUTE.md`.
+3. Load only the relevant role, domain, and workflow packs selected by the router.
+4. Preserve V3-151 modular loading; never inject the full constitution by default.
+5. Preserve V3-152 quality-first compute; never conserve compute at the expense of
+   evidence, coverage, or correctness.
+
+The owner must not need to remind Codex to use DIVYESH V3 on future repository tasks.
+Platform capabilities may differ; project governance may not.
+<!-- DIVYESH-V3-BOOTSTRAP:END -->
+
 ## Project Context
 
 This is a Base44 app repository. Treat it as user-owned application code, keep changes focused on the user's request, and preserve existing project conventions.

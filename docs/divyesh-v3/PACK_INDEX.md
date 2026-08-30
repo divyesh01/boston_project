@@ -2,6 +2,9 @@
 
 Load `KERNEL.md` and `ROUTER.md`, then only the packs justified by the task.
 
+For complex or high-risk Gemini/Antigravity work, also load
+`QUALITY_FIRST_COMPUTE.md`. Simple tasks do not load it automatically.
+
 ## Roles
 
 | Need | Pack |
@@ -26,4 +29,3 @@ incident/recovery each have one file under `domains/`.
 
 Choose exactly one primary workflow under `workflows/`. Add domain packs as needed.
 Read-only work must not inherit a change workflow merely because one exists.
-

@@ -11,6 +11,8 @@ Before substantive work, verify the canonical manifest, classify the task, load 
 the selected role/domain/workflow packs, establish structured task state, and continue
 through required gates. If verification fails, set `SYSTEM_DRIFT = BLOCKED`.
 
+For complex or high-risk work, load the canonical
+`docs/divyesh-v3/QUALITY_FIRST_COMPUTE.md` pack. Do not copy its rules here.
+
 Do not create a Gemini-specific version of governance. Platform capabilities may
 differ; project governance may not.
-

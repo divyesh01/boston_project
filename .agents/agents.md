@@ -9,11 +9,12 @@ For every new task:
 1. Run the canonical V3 verifier.
 2. Load the universal kernel and router.
 3. Classify task type and risk.
-4. Load only selected role/domain/workflow packs.
-5. Establish owner contract, non-goals, phase, writer, and task state.
-6. Follow protected-file, one-writer, evidence, and gate rules.
-7. Continue until a real authority, evidence, or external-state blocker occurs.
+4. For complex or high-risk work, load the canonical
+   `docs/divyesh-v3/QUALITY_FIRST_COMPUTE.md` pack.
+5. Load only selected role/domain/workflow packs.
+6. Establish owner contract, non-goals, compute mode, phase, writer, and task state.
+7. Follow protected-file, one-writer, evidence, and gate rules.
+8. Continue until a real authority, evidence, or external-state blocker occurs.
 
 Never create an Antigravity-specific governance system. If versions or hashes
 disagree, return `SYSTEM_DRIFT = BLOCKED`.
-

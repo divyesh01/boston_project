@@ -58,6 +58,23 @@ async function readUtf8(root, relativePath) {
   return readFile(resolveInside(root, relativePath), 'utf8');
 }
 
+function adapterCheckContent(content, adapter, errors) {
+  if (adapter.check_scope !== 'marked-block') return content;
+  const start = '<!-- DIVYESH-V3-BOOTSTRAP:START -->';
+  const end = '<!-- DIVYESH-V3-BOOTSTRAP:END -->';
+  const startIndex = content.indexOf(start);
+  const endIndex = content.indexOf(end);
+  if (startIndex < 0 || endIndex < 0 || endIndex <= startIndex) {
+    errors.push({ path: adapter.path, reason: 'marked bootstrap block missing or malformed' });
+    return '';
+  }
+  if (content.indexOf(start, startIndex + start.length) >= 0 || content.indexOf(end, endIndex + end.length) >= 0) {
+    errors.push({ path: adapter.path, reason: 'multiple marked bootstrap blocks found' });
+    return '';
+  }
+  return content.slice(startIndex, endIndex + end.length);
+}
+
 export async function calculateCanonical(root, manifest) {
   const entries = [];
   const bodies = [];
@@ -139,8 +156,9 @@ export async function verifyRepository(root = process.cwd()) {
       errors.push({ path: adapter.path, reason: `adapter unreadable: ${error.message}` });
       continue;
     }
-    const schemaMatch = /BOOTSTRAP_SCHEMA:\s*`?([0-9]+\.[0-9]+\.[0-9]+)`?/i.exec(content);
-    const manifestMatch = /CANONICAL_MANIFEST:\s*`?([^\s`]+)`?/i.exec(content);
+    const checkedContent = adapterCheckContent(content, adapter, errors);
+    const schemaMatch = /BOOTSTRAP_SCHEMA:\s*`?([0-9]+\.[0-9]+\.[0-9]+)`?/i.exec(checkedContent);
+    const manifestMatch = /CANONICAL_MANIFEST:\s*`?([^\s`]+)`?/i.exec(checkedContent);
     if (!schemaMatch || !versionAtLeast(schemaMatch[1], manifest.bootstrap_schema_minimum)) {
       errors.push({ path: adapter.path, reason: `bootstrap schema is missing or older than ${manifest.bootstrap_schema_minimum}` });
     }
@@ -152,11 +170,11 @@ export async function verifyRepository(root = process.cwd()) {
         errors.push({ path: adapter.path, reason: `references ${manifestMatch[1]} instead of ${MANIFEST_PATH}` });
       }
     }
-    if (Buffer.byteLength(content, 'utf8') > ADAPTER_SIZE_LIMIT) {
+    if (Buffer.byteLength(checkedContent, 'utf8') > ADAPTER_SIZE_LIMIT) {
       errors.push({ path: adapter.path, reason: `adapter exceeds ${ADAPTER_SIZE_LIMIT} bytes` });
     }
     for (const canonical of calculated.bodies) {
-      if (content.includes(canonical.body)) {
+      if (checkedContent.includes(canonical.body)) {
         errors.push({ path: adapter.path, reason: `duplicates canonical body from ${canonical.path}` });
       }
     }

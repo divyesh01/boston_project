@@ -88,6 +88,21 @@ await test('CRLF normalizes to LF', async ({ root }) => {
   await writeFile(kernel, normalizeContent(original).replace(/\n/g, '\r\n'), 'utf8');
 }, null);
 
-const failed = 7 - passed;
+await test('marked legacy adapter checks only its bootstrap block', async ({ root }) => {
+  const manifestPath = path.join(root, 'docs/divyesh-v3/manifest.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  manifest.adapters[0].check_scope = 'marked-block';
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  await write(root, 'GEMINI.md', `${'Legacy instructions. '.repeat(500)}\n<!-- DIVYESH-V3-BOOTSTRAP:START -->\nBOOTSTRAP_SCHEMA: 1.0.0\nCANONICAL_MANIFEST: docs/divyesh-v3/manifest.json\n<!-- DIVYESH-V3-BOOTSTRAP:END -->\n`);
+}, null);
+
+await test('missing marked bootstrap block', async ({ root }) => {
+  const manifestPath = path.join(root, 'docs/divyesh-v3/manifest.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  manifest.adapters[0].check_scope = 'marked-block';
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}, 'marked bootstrap block missing or malformed');
+
+const failed = 9 - passed;
 console.log(`${failed === 0 ? 'PASSED' : 'FAILED'}: ${passed} mutation and normalization cases passed, ${failed} failed`);
 process.exitCode = failed === 0 ? 0 : 1;

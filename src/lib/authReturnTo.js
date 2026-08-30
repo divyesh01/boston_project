@@ -10,7 +10,7 @@
 // resolved path to be exactly one leading slash (no "//" prefix, no backslash).
 export function safeReturnTo() {
   const raw = new URLSearchParams(window.location.search).get("returnTo");
-  if (!raw) return "/dashboard";
+  if (!raw) return "/";
   try {
     const url = new URL(raw, window.location.origin);
     if (url.origin !== window.location.origin) return "/";

@@ -275,6 +275,10 @@ const AuthenticatedApp = () => {
         <Route path="/setup" element={<Suspended><Setup /></Suspended>} />
         <Route path="/privacy" element={<Suspended><PrivacyPolicy /></Suspended>} />
         <Route path="/terms" element={<Suspended><TermsOfService /></Suspended>} />
+        {/* `/` is the canonical Dashboard route. Keep this exact legacy alias
+            outside the catch-all so old bookmarks and post-login links recover
+            without turning genuine unknown URLs into Dashboard redirects. */}
+        <Route path="/dashboard" element={<Navigate to="/" replace />} />
         <Route path="/*" element={<ProtectedRoutes />} />
     </Routes>
   );

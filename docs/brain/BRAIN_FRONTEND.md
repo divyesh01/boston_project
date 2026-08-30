@@ -708,4 +708,38 @@ adding that keyboard model.
 `Input` and `Select` pass the raw DOM event to `onChange`; the 60-plus existing handlers read
 `e.target.value` / `e.target.checked` and depend on that.
 
+## 20. Post-login landing route: why `/dashboard` is an alias, not a destination
+
+The Dashboard is mounted at `/`. There has never been a `/dashboard` route. But
+`safeReturnTo()` in `src/lib/authReturnTo.js` returned `"/dashboard"` as its no-parameter
+default, so **any** login without a `?returnTo=` query — the ordinary case — handed the
+router a path nothing matched. The user authenticated successfully and landed on the
+catch-all instead of the scoreboard. The failure looked like a broken app rather than a
+broken constant, which is why it survived: the login itself worked, the redirect worked, and
+the only wrong thing was the string.
+
+Two changes hold the fix, and both are needed:
+
+1. `safeReturnTo()` now defaults to `"/"`. This is the actual correction — the function's job
+   is to name a real destination, and it was naming a fictional one. Everything else in that
+   function (same-origin enforcement, the single-leading-slash normalisation that rejects
+   `//host` and backslash tricks) is unchanged; it is an open-redirect guard and must stay
+   that way.
+2. `src/App.jsx` maps `/dashboard` to `<Navigate to="/" replace />`, declared **before** the
+   `/*` catch-all. This is for recovery, not for routing: old bookmarks, links in previously
+   sent email, and any stale client still holding the old default all resolve instead of
+   dead-ending. It is deliberately an exact-path alias rather than a broadened catch-all,
+   because making unknown URLs redirect to the Dashboard would hide genuine 404s — a
+   mistyped route would silently look like a working one.
+
+Regression coverage: `src/lib/authReturnTo.test.js` pins the default and the open-redirect
+rejections; `src/App.routing.test.jsx` pins that `/dashboard` renders the Dashboard via the
+alias and that an unknown path does **not**. `src/pages/Login.test.jsx` had hard-coded the
+old `/dashboard` string in both its `safeReturnTo` mock and its post-submit assertion, so
+those track the new default — the assertion is still an exact equality, not a loosened one.
+
+If you ever add a real page at `/dashboard`, delete the alias in the same commit. An alias
+and a route at the same path is a silent shadowing bug: the alias is declared first, so the
+real page would never render.
+
 ---

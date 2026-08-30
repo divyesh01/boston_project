@@ -25,7 +25,7 @@ vi.mock("@/lib/validator", () => ({
   isValidEmail: (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e)),
 }));
 vi.mock("@/lib/authReturnTo", () => ({
-  safeReturnTo: () => "/dashboard",
+  safeReturnTo: () => "/",
 }));
 
 import Login from "./Login";
@@ -127,6 +127,6 @@ describe("Login — spec A.1 / C.1 / C.3 / A.3 / B.3", () => {
     await waitFor(() => expect(mockLogin).toHaveBeenCalled());
     // Success path does not navigate in jsdom; password is cleared regardless.
     expect(passwordInput).toHaveValue("");
-    expect(locationStub.href).toBe("/dashboard");
+    expect(locationStub.href).toBe("/");
   });
 });

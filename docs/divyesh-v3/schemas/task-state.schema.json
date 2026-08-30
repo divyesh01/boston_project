@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://divyesh.local/schemas/task-state.schema.json",
+  "title": "DIVYESH V3 Task State",
+  "type": "object",
+  "required": ["task_id", "owner_request", "current_phase", "risk", "writer", "claims", "evidence"],
+  "properties": {
+    "task_id": { "type": "string", "minLength": 1 },
+    "owner_request": { "type": "string" },
+    "owner_contract": { "type": "object" },
+    "current_phase": { "type": "string" },
+    "risk": { "enum": [0, 1, 2, 3] },
+    "writer": { "type": ["string", "null"] },
+    "role_packs": { "type": "array", "items": { "type": "string" } },
+    "domain_packs": { "type": "array", "items": { "type": "string" } },
+    "workflows": { "type": "array" },
+    "states": { "type": "array" },
+    "handoffs": { "type": "array" },
+    "invariants": { "type": "array" },
+    "claims": { "type": "array" },
+    "evidence": { "type": "array" },
+    "hypotheses": { "type": "array" },
+    "rejected_claims": { "type": "array" },
+    "contradictions": { "type": "array" },
+    "checkpoints": { "type": "array" },
+    "test_results": { "type": "array" },
+    "mutation_results": { "type": "array" },
+    "open_questions": { "type": "array" },
+    "resolved_questions": { "type": "array" },
+    "deferred_items": { "type": "array" },
+    "final_status": { "type": ["string", "null"] }
+  },
+  "additionalProperties": true
+}
+

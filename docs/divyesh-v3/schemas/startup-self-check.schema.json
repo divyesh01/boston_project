@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://divyesh.local/schemas/startup-self-check.schema.json",
+  "title": "DIVYESH V3 Startup Self Check",
+  "type": "object",
+  "required": ["system", "canonical_version", "protocol_hash", "kernel", "task_type", "risk", "role_packs", "domain_packs", "writer", "current_phase", "system_drift"],
+  "properties": {
+    "system": { "const": "DIVYESH-V3" },
+    "canonical_version": { "type": "string" },
+    "protocol_hash": { "type": "string" },
+    "kernel": { "const": "LOADED" },
+    "task_type": { "type": "string" },
+    "risk": { "enum": [0, 1, 2, 3] },
+    "role_packs": { "type": "array", "items": { "type": "string" } },
+    "domain_packs": { "type": "array", "items": { "type": "string" } },
+    "writer": { "type": ["string", "null"] },
+    "current_phase": { "type": "string" },
+    "system_drift": { "enum": ["NO", "BLOCKED"] }
+  },
+  "additionalProperties": false
+}
+

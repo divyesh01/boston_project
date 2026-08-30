@@ -54,6 +54,7 @@ npm run verify:all -- --shard 3/10     # the 3rd of 10 consecutive slices of the
 npm run lint                    # 0 errors expected
 npm run typecheck               # tsc -p ./jsconfig.json with checkJs -- JSDoc is load-bearing
 npm run brain:map               # regenerates BRAIN_DEPENDENCIES.md -- never hand-edit that file
+npm run verify:v3               # DIVYESH V3 protocol pack: canonical files vs. their adapters
 ```
 
 A single suite: `node --import ./scripts/_loader-boot.mjs scripts/probe-<name>.mjs`.

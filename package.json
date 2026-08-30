@@ -22,7 +22,8 @@
     "brain:map": "node scripts/generate-brain-map.mjs",
     "brain:verify": "node scripts/verify-brain.mjs",
     "audit:gate": "node scripts/audit-gate.mjs",
-    "verify:all": "node scripts/verify-all.mjs"
+    "verify:all": "node scripts/verify-all.mjs",
+    "verify:v3": "node scripts/verify-divyesh-v3.mjs"
   },
   "dependencies": {
     "@base44/sdk": "^0.8.41",

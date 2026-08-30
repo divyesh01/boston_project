@@ -1,0 +1,161 @@
+{
+  "system": "DIVYESH-V3",
+  "protocol_version": "3.0.0",
+  "protocol_hash": "sha256:bd98f5b69515df288c24e0469ecd5fe171f1259db38f970f20f08e12b94dd730",
+  "hash_algorithm": "sha256-normalized-v1",
+  "bootstrap_schema_minimum": "1.0.0",
+  "canonical_protocol": "PROTOCOL_V3_ADDENDUM.md",
+  "universal_kernel": "docs/divyesh-v3/KERNEL.md",
+  "router": "docs/divyesh-v3/ROUTER.md",
+  "status_vocabulary": "docs/divyesh-v3/STATUS_VOCABULARY.md",
+  "pack_index": "docs/divyesh-v3/PACK_INDEX.md",
+  "task_state_schema": "docs/divyesh-v3/schemas/task-state.schema.json",
+  "canonical_files": [
+    {
+      "path": "PROTOCOL_V3_ADDENDUM.md",
+      "sha256": "d787c1c4d2152701565b28a350d23670f639d7c2663d359225985a298c2468c8"
+    },
+    {
+      "path": "docs/divyesh-v3/KERNEL.md",
+      "sha256": "ef4b2638fe594510bbfd8484c0ca6cb404d69a3d60d06732fb07006fc09a7413"
+    },
+    {
+      "path": "docs/divyesh-v3/ROUTER.md",
+      "sha256": "8fa3df023359de9b275ce1309d5a148492560cc1a460b29957706cd7348a0220"
+    },
+    {
+      "path": "docs/divyesh-v3/STATUS_VOCABULARY.md",
+      "sha256": "4a77cabd37f9181f971f5f5299130aaaddc16d3a5a6e158f71df83d7e94328d1"
+    },
+    {
+      "path": "docs/divyesh-v3/PACK_INDEX.md",
+      "sha256": "31ebffd5320f403aec5af69629d6540a8cfcfa0b8d69881f8a55da0a8188a7d0"
+    },
+    {
+      "path": "docs/divyesh-v3/roles/commander.md",
+      "sha256": "72dc0f6dbc95957b10e21d702ab2d33b93ea39a06f9646e6b4060d375bdf974b"
+    },
+    {
+      "path": "docs/divyesh-v3/roles/nisarg-1-architecture.md",
+      "sha256": "62cbb2d6882f3bb13f922e3fbaffe8e70d3d2efba0298a12c99bbf2a89c99a96"
+    },
+    {
+      "path": "docs/divyesh-v3/roles/nisarg-2-risk.md",
+      "sha256": "14cc8a457018b11fc78a2f0b181fcfabb722b3ec7162539811c1c0e94ce7201d"
+    },
+    {
+      "path": "docs/divyesh-v3/roles/nisarg-3-owner.md",
+      "sha256": "688c41e259bd47e2d64c712b8d4d2ff7cd535f98b6ee0c200603ed474165f15d"
+    },
+    {
+      "path": "docs/divyesh-v3/roles/editor.md",
+      "sha256": "a1edffd744f24f94d83b3006b2839de3b8836303deaae8df5b57b4e6b92e6c0d"
+    },
+    {
+      "path": "docs/divyesh-v3/roles/vansh.md",
+      "sha256": "fcc63cb2a86515e1b3c52fe8054f41c50e0e706856c1f2de0d846f289c68f99c"
+    },
+    {
+      "path": "docs/divyesh-v3/roles/independent-attacker.md",
+      "sha256": "d3fe18fb8efdd83dc9b182ecad0efbebd020a0bbcb355f642d821fd1caa42ff3"
+    },
+    {
+      "path": "docs/divyesh-v3/roles/tester.md",
+      "sha256": "6a2508a11dda9e0109435d2b3d51da20af0029fe4aece7e225e8e550e9ae22aa"
+    },
+    {
+      "path": "docs/divyesh-v3/roles/owner-agent.md",
+      "sha256": "98152986d7729816dbbc32698bcc3bcfeb70e9d103720e28951a1b2e12942e9e"
+    },
+    {
+      "path": "docs/divyesh-v3/domains/finance.md",
+      "sha256": "cd61d7a14e3452cf45dbc69cda3bb583ff43703135501adca873a3003ea6e881"
+    },
+    {
+      "path": "docs/divyesh-v3/domains/auth-security.md",
+      "sha256": "7eb1d471a6bc1aa377610e42f91f68feb5d14837d02e98fa7c6db5df32f972ee"
+    },
+    {
+      "path": "docs/divyesh-v3/domains/property-isolation.md",
+      "sha256": "f03f88b661364fa4e8c65862a836ce6e5ed80ed594ac94d78ead4f96eddb0f92"
+    },
+    {
+      "path": "docs/divyesh-v3/domains/imports-ingestion.md",
+      "sha256": "4814807c25de9069466aca4f64bcaff7e3dcbd9db6c3c1481883a91453a91072"
+    },
+    {
+      "path": "docs/divyesh-v3/domains/ui-accessibility.md",
+      "sha256": "c429fa3ed3f1d28c2e7c3174fea54f9626686d06e56b618be7017dac1b9a477f"
+    },
+    {
+      "path": "docs/divyesh-v3/domains/privacy-destructive.md",
+      "sha256": "7eb247ca88182677bdc9a93ccf81ca630f927e913254e32d2233d963b5d63a5d"
+    },
+    {
+      "path": "docs/divyesh-v3/domains/deployment-operations.md",
+      "sha256": "d897cc357abdf12909b71e7486db5a30839e0d0fc45fe6e98e9c4259f7f1292e"
+    },
+    {
+      "path": "docs/divyesh-v3/domains/incident-recovery.md",
+      "sha256": "71009f79a15ddf4c0ec81eb8c96396e8887e1e97025fa59815b4980ba801367d"
+    },
+    {
+      "path": "docs/divyesh-v3/workflows/read-only.md",
+      "sha256": "04ed0c4627bc8ebc11fd340e7e3a5f395569673308a9588515d3f2cf20ad6603"
+    },
+    {
+      "path": "docs/divyesh-v3/workflows/low-risk-change.md",
+      "sha256": "4648b16645c5c59cd58f294fedd4e707257aab39e93e0a12192282a0d39285f0"
+    },
+    {
+      "path": "docs/divyesh-v3/workflows/standard-change.md",
+      "sha256": "ddf43f5d868fa20855c6b12417b31aa5cc76671a9ad848411b7b59c29fa12010"
+    },
+    {
+      "path": "docs/divyesh-v3/workflows/high-risk-change.md",
+      "sha256": "1970cd62ec708e727fe6462f80574a1dae30fdbcdb3f6cc967a0c39cba748512"
+    },
+    {
+      "path": "docs/divyesh-v3/workflows/production-incident.md",
+      "sha256": "58a41b7200e39a278d32afd549bd2875ec83e9c5377e49c455e2a16a0c572d13"
+    },
+    {
+      "path": "docs/divyesh-v3/schemas/task-state.schema.json",
+      "sha256": "508ae326fc46d88209aa886f3b092fb49e8855c0b2c7619fd5f6eb96e5e71dbe"
+    },
+    {
+      "path": "docs/divyesh-v3/schemas/handoff.schema.json",
+      "sha256": "06e5a8a63f367165924b9617e7afb4af1b0725e188d35806874e94c46488760c"
+    },
+    {
+      "path": "docs/divyesh-v3/schemas/startup-self-check.schema.json",
+      "sha256": "2e17a871ffddd5addaabd883b06b8e6e4b1daf86495f00122cc4332a0b142bf9"
+    }
+  ],
+  "adapters": [
+    {
+      "platform": "gemini",
+      "path": "GEMINI.md",
+      "bootstrap_schema": "1.0.0"
+    },
+    {
+      "platform": "antigravity",
+      "path": ".agents/agents.md",
+      "bootstrap_schema": "1.0.0"
+    },
+    {
+      "platform": "codex-antigravity-skill",
+      "path": ".agents/skills/divyesh-v3-router/SKILL.md",
+      "bootstrap_schema": "1.0.0"
+    },
+    {
+      "platform": "claude-skill",
+      "path": ".claude/skills/divyesh-v3-router/SKILL.md",
+      "bootstrap_schema": "1.0.0"
+    }
+  ],
+  "pending_protected_adapters": [
+    "AGENTS.md",
+    "CLAUDE.md"
+  ]
+}

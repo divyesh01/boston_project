@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://divyesh.local/schemas/handoff.schema.json",
+  "title": "DIVYESH V3 Handoff",
+  "type": "object",
+  "required": ["from", "to", "input", "success_output", "failure_output", "retryable", "timeout_behavior"],
+  "properties": {
+    "from": { "type": "string" },
+    "to": { "type": "string" },
+    "input": { "type": "object" },
+    "success_output": { "type": "object" },
+    "failure_output": { "type": "object" },
+    "retryable": { "type": "boolean" },
+    "timeout_behavior": { "type": "string" },
+    "idempotency_or_compensation": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+}
+

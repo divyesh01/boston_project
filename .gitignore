@@ -114,3 +114,6 @@ fix_user.py
 /gemini-out/
 /graphify-out/
 /verif-logs/
+
+# Local DIVYESH V3 task/evidence state. Canonical schemas are committed under docs/.
+/.divyesh/runtime/

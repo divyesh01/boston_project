@@ -19,6 +19,8 @@
 # fails if any other key appears in it. Verify with:
 #   git check-ignore -v .env.production   ->  must print nothing
 !.env.production
+# Staging also contains public build-mode switches only; no credentials.
+!.env.staging
 
 # Logs
 /logs
@@ -117,3 +119,4 @@ fix_user.py
 
 # Local DIVYESH V3 task/evidence state. Canonical schemas are committed under docs/.
 /.divyesh/runtime/
+/.wrangler/

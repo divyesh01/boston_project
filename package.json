@@ -24,6 +24,11 @@
     "audit:gate": "node scripts/audit-gate.mjs",
     "verify:all": "node scripts/verify-all.mjs",
     "verify:v3": "node scripts/verify-divyesh-v3.mjs"
+    ,"cf:types:staging": "wrangler types --config wrangler.staging.jsonc"
+    ,"cf:d1:local": "wrangler d1 migrations apply boston-project-staging-data --local --config wrangler.staging.jsonc"
+    ,"cf:test": "vitest run --config vitest.worker.config.js"
+    ,"cf:build:staging": "vite build --mode staging"
+    ,"cf:deploy:staging": "npm run cf:build:staging && wrangler deploy --config wrangler.staging.jsonc"
   },
   "dependencies": {
     "@base44/sdk": "^0.8.41",
@@ -72,6 +77,7 @@
     "framer-motion": "^11.16.4",
     "html2canvas": "^1.4.1",
     "input-otp": "^1.4.2",
+    "jose": "^6.2.10",
     "jspdf": "^4.2.1",
     "leaflet": "^1.9.4",
     "lodash": "^4.17.21",
@@ -103,6 +109,8 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/workers-types": "^5.20260830.1",
     "@eslint/js": "^9.19.0",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.2",
@@ -127,6 +135,7 @@
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.2",
     "vite": "^6.1.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "wrangler": "^4.127.1"
   }
 }

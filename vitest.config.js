@@ -60,6 +60,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "jsdom",
+    exclude: ["worker/**/*.test.ts", "node_modules/**", "dist/**"],
     setupFiles: ["./src/test-setup.js"],
     // Tests exercise the local/offline auth shim, so opt into local auth mode.
     env: { VITE_USE_LOCAL_AUTH: "true" },

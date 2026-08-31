@@ -400,3 +400,48 @@ npm run test:watch
 > `verify-transactions.mjs` and `verify-coexistence.mjs` MUST be run with
 > `node --import ./scripts/_loader-boot.mjs`. Bare `node scripts/verify-*.mjs` dies on the
 > `@/lib` alias or attempts a real HTTP call, which looks like a code failure but is not.
+
+# 11. Cloudflare D1 cross-browser staging path (2026-08-30)
+
+The isolated branch `staging/cloudflare-d1-cross-browser` adds a staging-only server
+path without changing the production Worker configuration:
+
+```
+Browser -> Cloudflare Access -> boston-project-staging Worker
+        -> D1 authoritative snapshot -> IndexedDB cache
+```
+
+`wrangler.staging.jsonc` is deliberately separate from the production
+`wrangler.jsonc`. It binds `boston-project-staging-data` and routes `/api/*` through
+`worker/index.ts`; all other requests use the static asset binding. Cloudflare Access
+protects the exact staging hostname. The Worker independently verifies the signed
+`Cf-Access-Jwt-Assertion` issuer, audience, expiry, stable subject, and email before
+looking up the D1 principal. Account id, role, and property scope come from D1 and are
+never accepted from browser JSON.
+
+The D1 representation is an immutable snapshot revision split into sub-2 MB BLOB
+chunks. Revision metadata, every chunk, and the account's visible version pointer are
+submitted in one `DB.batch`; a stale base version rolls the batch back, so readers
+cannot see a partial financial snapshot and conflicts do not leave orphan revisions.
+Reads reconstruct only the current revision, then verify chunk count, byte length,
+SHA-256, table/setting allowlists, and every property reference before returning data.
+
+`src/lib/dataHydration.js` treats D1 as authoritative and IndexedDB as a cache. It
+blocks protected routes while state is unresolved, so KPI components cannot render
+false zeroes during loading. A populated legacy browser is never uploaded
+automatically: the owner must explicitly authorize the first bootstrap. A dirty or
+differently-owned cache is preserved and shown as a conflict. No cleanup, password
+hash, local session, MFA secret, or existing hotel row is migrated or deleted by this
+stage.
+
+The staging server path is deployed and its unauthenticated Access challenge is
+proven. The D1 owner principal was provisioned from the verified Access identity, but
+there are zero authoritative snapshots. Full fresh-browser hydration remains blocked
+until the owner grants a one-time, file-specific exception for the protected
+`src/lib/AuthContext.jsx`; it still routes the admitted browser to the legacy local
+login. Do not describe cross-browser consistency as complete until that protected
+adapter and the staging browser matrix pass.
+
+Worker-runtime regression coverage lives in `worker/accountData.test.ts` and runs via
+`npm run cf:test`. Deployment commands and identifiers are recorded in
+`docs/cloudflare-staging-cross-browser.md`.

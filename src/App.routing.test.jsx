@@ -14,6 +14,30 @@ vi.mock("@/lib/AuthContext", () => ({
   AuthProvider: ({ children }) => children,
   useAuth: () => authState,
 }));
+vi.mock("@/lib/dataHydration", () => ({
+  getHydrationState: () => ({
+    phase: "ready",
+    accountId: "owner-1",
+    isHydrating: false,
+    hydrationComplete: true,
+    hydrationError: null,
+  }),
+  subscribeHydration: (listener) => {
+    listener({
+      phase: "ready",
+      accountId: "owner-1",
+      isHydrating: false,
+      hydrationComplete: true,
+      hydrationError: null,
+    });
+    return () => {};
+  },
+  hydrateAccountData: vi.fn(),
+  startAccountSync: vi.fn(),
+  stopAccountSync: vi.fn(),
+  authorizeServerBootstrap: vi.fn(),
+  acceptAuthoritativeServerData: vi.fn(),
+}));
 vi.mock("@/crdt", () => ({ YDocProvider: ({ children }) => children }));
 vi.mock("@tanstack/react-query", () => ({
   QueryClientProvider: ({ children }) => children,

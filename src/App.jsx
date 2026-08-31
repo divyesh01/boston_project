@@ -12,6 +12,7 @@ import { isRouteMapped } from '@/lib/permissions';
 import { logAuditEvent } from '@/lib/auditLogger';
 import ScrollToTop from './components/ScrollToTop';
 import Layout from '@/components/Layout';
+import DataHydrationGate from '@/components/DataHydrationGate';
 import { attachClickSounds } from '@/lib/sound';
 
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
@@ -218,17 +219,24 @@ const PasswordGate = ({ children }) => {
   return children;
 };
 
+const AccountDataGate = ({ children }) => {
+  if (import.meta.env.VITE_CLOUDFLARE_ACCESS_AUTH !== 'true') return children;
+  return <DataHydrationGate>{children}</DataHydrationGate>;
+};
+
 const ProtectedRoutes = () => {
   return (
     <Routes>
       <Route
         element={
           <RequireAuth>
-            <RequirePermission>
-              <PasswordGate>
-                <Layout />
-              </PasswordGate>
-            </RequirePermission>
+            <AccountDataGate>
+              <RequirePermission>
+                <PasswordGate>
+                  <Layout />
+                </PasswordGate>
+              </RequirePermission>
+            </AccountDataGate>
           </RequireAuth>
         }
       >

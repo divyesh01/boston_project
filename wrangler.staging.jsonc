@@ -1,0 +1,36 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "boston-project-staging",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-08-22",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": true,
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "boston-project-staging-data",
+      "database_id": "5d5ff049-c273-4557-9938-e89c5d32112c",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "ENVIRONMENT": "staging",
+    "ACCESS_TEAM_DOMAIN": "https://tight-feather-dba0.cloudflareaccess.com",
+    "ACCESS_AUD": "67befe0c14f5acc168e10af9e93ad7a58880875d5251f3d87497a86c2f019128",
+    "BOOTSTRAP_OWNER_EMAIL": "divyesh.boston@gmail.com",
+    "MAX_SNAPSHOT_BYTES": "20000000",
+    "SNAPSHOT_CHUNK_BYTES": "750000"
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.05 }
+  }
+}

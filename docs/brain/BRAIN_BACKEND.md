@@ -456,3 +456,13 @@ continues to revalidate. D1 read replication remains off because a stale replica
 wrong trade for authoritative finance data. Query-string redaction is currently an
 API-managed Worker script setting because Wrangler 4.127 cannot encode it; staging
 deploy verification must confirm and re-apply that setting.
+
+Production Git branch isolation was verified and tightened on 2026-08-31. The active
+`boston-project` deployment stayed at version
+`36993034-a938-4fb9-8b19-e7ac87820b34`, but its non-production trigger was building
+every branch with `wrangler versions upload`; the observed staging alias was publicly
+reachable even though a separate Access-protected staging Worker already existed. The
+non-production trigger was removed, the `main` production trigger was preserved, and
+`wrangler.jsonc` plus `probe-deploy-config.mjs` now require `preview_urls: false`.
+Post-change evidence: production HTTP 200, former preview HTTP 404, protected staging
+HTTP 302.

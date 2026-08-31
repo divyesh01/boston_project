@@ -18,6 +18,14 @@ production review and authorization.
 
 - `workers.dev` remains the hostname because this account has no active DNS zone;
   a custom domain would require onboarding or buying one.
+- The production Worker now accepts Git builds from `main` only. Its redundant
+  non-production trigger was removed on 2026-08-31, and `wrangler.jsonc` pins
+  `preview_urls: false`. Before this guardrail, every branch push spent build quota
+  and exposed an unauthenticated preview alias inside the production Worker. The
+  observed staging alias changed from HTTP 200 to HTTP 404; production remained on
+  version `36993034-a938-4fb9-8b19-e7ac87820b34` throughout. Re-enable non-production
+  builds only if previews are deliberately protected and no longer duplicate the
+  separate staging Worker.
 - Preview URLs are disabled so every live staging hostname is covered by the
   explicit Access application.
 - Workers Free itself enforces the fixed 10 ms CPU ceiling, 50 external subrequests,

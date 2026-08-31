@@ -647,6 +647,9 @@ if (wrangler) {
   check('the SPA fallback is configured',
     wrangler.assets?.not_found_handling === 'single-page-application',
     `not_found_handling=${JSON.stringify(wrangler.assets?.not_found_handling)} — without this every hard refresh off / returns 404`);
+  check('production branch preview URLs are disabled',
+    wrangler.preview_urls === false,
+    `preview_urls=${JSON.stringify(wrangler.preview_urls)} — non-main branches belong on the Access-protected staging Worker, not public aliases of production`);
   check('a compatibility_date is pinned',
     /^\d{4}-\d{2}-\d{2}$/.test(String(wrangler.compatibility_date || '')),
     `compatibility_date=${JSON.stringify(wrangler.compatibility_date)}`);

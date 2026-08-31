@@ -445,3 +445,14 @@ adapter and the staging browser matrix pass.
 Worker-runtime regression coverage lives in `worker/accountData.test.ts` and runs via
 `npm run cf:test`. Deployment commands and identifiers are recorded in
 `docs/cloudflare-staging-cross-browser.md`.
+
+The staging config also pins the Free-plan failure envelope: preview URLs off, the
+platform's fixed 10 ms CPU ceiling and fixed subrequest ceilings, full query-redacted
+error/invocation logs, and traces off. Cloudflare error `100328` rejected the entire
+configurable `limits` block because this account is on Free; the fixed platform limits
+are therefore evidence, not assumptions. Hashed
+assets retain the existing one-year immutable rule in `public/_headers`; the HTML shell
+continues to revalidate. D1 read replication remains off because a stale replica is the
+wrong trade for authoritative finance data. Query-string redaction is currently an
+API-managed Worker script setting because Wrangler 4.127 cannot encode it; staging
+deploy verification must confirm and re-apply that setting.

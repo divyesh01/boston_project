@@ -5,7 +5,9 @@
   "compatibility_date": "2026-08-22",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
-  "preview_urls": true,
+  // Preview URLs are unnecessary for this protected staging environment and
+  // would create extra hostnames outside the explicit Access application.
+  "preview_urls": false,
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
@@ -30,7 +32,13 @@
   },
   "observability": {
     "enabled": true,
+    // Keep full invocation/error logs for diagnosis. At the Free Worker ceiling
+    // of 100k requests/day this remains within the 200k log-event allowance as
+    // long as application code logs errors only (worker/index.ts does).
+    "head_sampling_rate": 1,
     "logs": { "enabled": true, "head_sampling_rate": 1 },
-    "traces": { "enabled": true, "head_sampling_rate": 0.05 }
+    // Traces begin sharing the metered observability-event pool in Oct 2026.
+    // Logs give this small staging service the useful evidence without spans.
+    "traces": { "enabled": false, "head_sampling_rate": 0 }
   }
 }

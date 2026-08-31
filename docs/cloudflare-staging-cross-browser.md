@@ -14,6 +14,33 @@ production review and authorization.
 - D1 database ID: `5d5ff049-c273-4557-9938-e89c5d32112c`
 - Worker configuration: `wrangler.staging.jsonc` (intentionally separate from production `wrangler.jsonc`)
 
+## Free-plan guardrails
+
+- `workers.dev` remains the hostname because this account has no active DNS zone;
+  a custom domain would require onboarding or buying one.
+- Preview URLs are disabled so every live staging hostname is covered by the
+  explicit Access application.
+- Workers Free itself enforces the fixed 10 ms CPU ceiling, 50 external subrequests,
+  and 1,000 Cloudflare-service subrequests per invocation. Free-plan quota exhaustion
+  fails closed, and the project does not opt into paid overages. Cloudflare rejected
+  the configurable `limits` block with error `100328`, which independently proves
+  this account is on Workers Free and means the platform ceilings—not a local override—
+  are authoritative.
+- Invocation/error logs stay enabled at 100% with query strings redacted. Traces are
+  disabled so they do not consume the observability event allowance when trace
+  metering changes in October 2026. Query-string redaction is an API-managed script
+  setting because Wrangler 4.127 does not expose that field in its config schema;
+  verify and re-apply it after every staging deploy.
+- Fingerprinted `/assets/*` files already use a one-year immutable browser cache in
+  `public/_headers`; HTML keeps Cloudflare's revalidation behavior so deployments do
+  not strand an old application shell.
+- D1 read replication stays disabled. Account snapshots are financial authority, so
+  strong, current reads are more important than eventually consistent replicas.
+
+Cloudflare controls its plans and may change allowances; no configuration can promise
+that a third-party free tier will exist forever. Re-check the official Workers, D1,
+Access, and observability limits before production promotion.
+
 The Worker verifies the `Cf-Access-Jwt-Assertion` signature, issuer, audience,
 expiry, stable subject, and email. It derives account, role, and property scope
 from D1; the browser cannot select them.

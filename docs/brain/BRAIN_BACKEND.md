@@ -466,3 +466,9 @@ non-production trigger was removed, the `main` production trigger was preserved,
 `wrangler.jsonc` plus `probe-deploy-config.mjs` now require `preview_urls: false`.
 Post-change evidence: production HTTP 200, former preview HTTP 404, protected staging
 HTTP 302.
+
+Production observability was enabled on 2026-08-31 without deploying code or changing
+traffic: 100% invocation/error logs, query-string redaction, and traces off. The active
+production artifact is assets-only, so the dashboard's zero Worker/service/queue/binding
+counts are accurate topology—not missing features—and tracing has no runtime spans to
+collect until a fetch handler or binding is deliberately promoted.

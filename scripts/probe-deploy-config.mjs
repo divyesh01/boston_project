@@ -650,6 +650,12 @@ if (wrangler) {
   check('production branch preview URLs are disabled',
     wrangler.preview_urls === false,
     `preview_urls=${JSON.stringify(wrangler.preview_urls)} — non-main branches belong on the Access-protected staging Worker, not public aliases of production`);
+  check('production diagnostic logs are enabled',
+    wrangler.observability?.enabled === true && wrangler.observability?.logs?.enabled === true,
+    `observability=${JSON.stringify(wrangler.observability)} — production failures need durable diagnostic evidence`);
+  check('empty production traces are disabled',
+    wrangler.observability?.traces?.enabled === false,
+    `traces=${JSON.stringify(wrangler.observability?.traces)} — this assets-only Worker has no fetch, binding, or D1 spans to trace`);
   check('a compatibility_date is pinned',
     /^\d{4}-\d{2}-\d{2}$/.test(String(wrangler.compatibility_date || '')),
     `compatibility_date=${JSON.stringify(wrangler.compatibility_date)}`);

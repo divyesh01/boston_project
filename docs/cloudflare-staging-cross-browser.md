@@ -26,6 +26,11 @@ production review and authorization.
   version `36993034-a938-4fb9-8b19-e7ac87820b34` throughout. Re-enable non-production
   builds only if previews are deliberately protected and no longer duplicate the
   separate staging Worker.
+- Production Workers Logs are enabled at 100% with query strings redacted. Traces
+  remain disabled because the active production deployment is assets-only and has
+  no fetch handler, D1 operation, or service-binding span to inspect. `Workers 0`,
+  `Queues 0`, and `Bindings 0` on the dashboard are correct resource counts, not
+  disabled website features.
 - Preview URLs are disabled so every live staging hostname is covered by the
   explicit Access application.
 - Workers Free itself enforces the fixed 10 ms CPU ceiling, 50 external subrequests,

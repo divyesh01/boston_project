@@ -25,5 +25,13 @@
   "assets": {
     "directory": "./dist",
     "not_found_handling": "single-page-application"
+  },
+  "observability": {
+    // Keep diagnostic evidence without metering empty traces for this
+    // assets-only production Worker.
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": false, "head_sampling_rate": 0 }
   }
 }

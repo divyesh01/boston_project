@@ -25,7 +25,7 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [returnTo, setReturnTo] = useState("/");
   const [searchParams] = useSearchParams();
-  const [setupRequired, setSetupRequired] = useState(false);
+  const [initializationState, setInitializationState] = useState('checking');
   
   // MFA flow states
   const [mfaStep, setMfaStep] = useState(null); // null = password step, 'verify' = MFA token, 'setup' = first-time setup
@@ -54,9 +54,9 @@ export default function Login() {
     (async () => {
       try {
         const initialized = await db.users.initialized();
-        if (mounted) setSetupRequired(!initialized);
+        if (mounted) setInitializationState(initialized ? 'initialized' : 'uninitialized');
       } catch (e) {
-        if (mounted) setSetupRequired(true);
+        if (mounted) setInitializationState('error');
       }
     })();
     return () => { mounted = false; };
@@ -220,7 +220,7 @@ export default function Login() {
         </>
       }
     >
-      {setupRequired && mfaStep === null && (
+      {initializationState === 'uninitialized' && mfaStep === null && (
         <div className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-300">
           <p className="font-medium">First-time setup</p>
           <p className="mt-1">

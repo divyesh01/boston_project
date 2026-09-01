@@ -208,9 +208,14 @@ T("the fallback is still non-fatal — no throw when the env var is unset",
   "an unset VITE_BASE44_APP_ID must keep working: making it fatal would brick every current deployment, which is the opposite of a fix");
 
 const appJsonc = read("base44/.app.jsonc");
-T("the id matches base44/.app.jsonc (same tenant, one truth)",
-  appJsonc.includes(APP_ID),
-  "base44/.app.jsonc is what the base44 CLI deploys against; a mismatch means the client talks to a different tenant than the functions deploy to");
+const prodEnv = read(".env.production");
+const standaloneServerAuth = /^\s*VITE_USE_SERVER_AUTH=true\s*$/m.test(prodEnv)
+  && /^\s*VITE_USE_D1_API=false\s*$/m.test(prodEnv);
+T("an existing Base44 app link matches the client, or standalone server-auth mode is explicit",
+  appJsonc ? appJsonc.includes(APP_ID) : standaloneServerAuth,
+  appJsonc
+    ? "base44/.app.jsonc exists but names a different tenant"
+    : "without base44/.app.jsonc, production must explicitly use Worker auth while keeping business data in IndexedDB");
 
 T(".env.example documents VITE_BASE44_APP_ID and its fallback",
   /VITE_BASE44_APP_ID/.test(envExample) && /not a secret/i.test(envExample),

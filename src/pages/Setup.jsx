@@ -14,8 +14,7 @@ import { getCsrfToken, validateCsrfToken, rotateCsrfToken, sanitizeAlphanumeric,
 export default function Setup() {
   const navigate = useNavigate();
   const { login } = useAuth();
-  const [checked, setChecked] = useState(false);
-  const [alreadyExists, setAlreadyExists] = useState(false);
+  const [initializationState, setInitializationState] = useState('checking');
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [fullName, setFullName] = useState("");
@@ -30,17 +29,15 @@ export default function Setup() {
     (async () => {
       try {
         const initialized = await db.users.initialized();
-        if (mounted) setAlreadyExists(initialized);
+        if (mounted) setInitializationState(initialized ? 'initialized' : 'uninitialized');
       } catch (e) {
-        if (mounted) setAlreadyExists(false);
-      } finally {
-        if (mounted) setChecked(true);
+        if (mounted) setInitializationState('error');
       }
     })();
     return () => { mounted = false; };
   }, []);
 
-  if (!checked) {
+  if (initializationState === 'checking') {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#040D1A]">
         <Loader2 className="h-8 w-8 animate-spin text-[#6C63FF]" />
@@ -124,7 +121,13 @@ export default function Setup() {
       title="Create Owner account"
       subtitle="Set up the first administrator account"
     >
-      {alreadyExists ? (
+      {initializationState === 'error' ? (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          <p className="font-medium">Unable to verify account setup</p>
+          <p className="mt-1">Setup is unavailable until the server confirms that no account exists. Please retry after checking your connection.</p>
+          <Button className="mt-4 w-full" onClick={() => window.location.reload()}>Retry</Button>
+        </div>
+      ) : initializationState === 'initialized' ? (
         <div className="rounded-lg border border-white/10 bg-[#0A1628] p-4 text-sm text-slate-400">
           <p className="text-slate-200 font-medium">Setup already complete</p>
           <p className="mt-1">

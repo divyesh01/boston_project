@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agy Evidence Arbitration"
+  short_description: "Codex–Gemini solutions settled by evidence"
+  default_prompt: "Use $agy-arbitration to solve this substantial coding task with independent Codex and Gemini proposals, mutual critique, and test-based arbitration."

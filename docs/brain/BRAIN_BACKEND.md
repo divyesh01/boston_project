@@ -237,6 +237,26 @@ node scripts/probe-cors-config.mjs        # 35/0, standalone — no loader neede
 
 # 9. ALL CONFIG FILES
 
+### Production Worker authentication (2026-09-01)
+
+- `wrangler.jsonc` now routes `/api/*` through `worker/index.js`, binds
+  `boston-project-production-auth`, and keeps `ENABLE_D1_DATA_API=false`.
+- `.env.production` selects `VITE_USE_SERVER_AUTH=true` and
+  `VITE_USE_D1_API=false`. Authentication is server-backed; hotel/business
+  entities remain browser-local IndexedDB.
+- Password records use the versioned
+  `$rri-pbkdf2-sha256$v=1$i=100000$p=1$...` contract plus the
+  `PASSWORD_PEPPER_V1` Cloudflare secret. Legacy/unknown formats fail closed.
+- `app_session` and `app_mfa_challenge` are the browser-independent session
+  and single-use MFA stores. D1 stores token digests, never bearer cookies.
+- Owner migration is compare-and-swap and profile-preserving; provisioning and
+  migration scripts never persist plaintext passwords.
+- Property deletion in the browser walks 24 dependent IndexedDB tables.
+  `propertyCascadeIds` handles numeric/string legacy ids without deleting a
+  separately owned cross-type property.
+- Production Worker `7675fe25-fa8f-4c1d-860a-4f43689e156d` passed the 22-check
+  live smoke. Rollback target is `36993034-a938-4fb9-8b19-e7ac87820b34`.
+
 ### Build & Deploy
 | File | What It Does | If You Edit This... |
 |------|-------------|-------------------|
@@ -244,7 +264,7 @@ node scripts/probe-cors-config.mjs        # 35/0, standalone — no loader neede
 | `vite.config.js` | Vite build: React plugin, Base44 plugin, standalone env guard, SRI hash generator, dev security headers, console stripping, vendor chunk splitting | Production build fails |
 | `vercel.json` | Vercel deploy: SPA routing (/* -> /index.html), 1-year immutable caching for /assets/*, production security headers | 404 on refresh, security headers lost |
 | `sriPlugin.js` | Hashes every `/assets/` subresource in the built index.html. Digests are taken in `writeBundle` (the file ON DISK) and re-verified in `closeBundle`, after every other plugin has written | Move the hashing back into `transformIndexHtml` and the browser blocks the entry chunk: blank page, whole app down. See BRAIN_SECURITY "Subresource Integrity" |
-| `envGuardPlugin.js` | Fails a **production** build whose resolved `import.meta.env` does not have BOTH `VITE_USE_LOCAL_AUTH=true` and `VITE_STANDALONE_LOCAL=true` | It is the reason a broken deploy is now a 1-second build failure instead of a site nobody can log into. Since `.env.production` is committed it normally stays silent; it still catches that file being deleted, renamed, emptied, re-ignored, or holding a value other than the exact string `true` |
+| `envGuardPlugin.js` | Accepts either the current server-auth shape (`VITE_USE_SERVER_AUTH=true`, D1 data off) or the complete legacy standalone shape | It refuses a production bundle with neither usable authentication shape |
 | `eslint.config.js` | ESLint 9: React + Hooks rules, unused import removal | Linting breaks in CI |
 | `vitest.config.js` | Test runner: JSDOM env, @/ path alias, setup hooks, coverage | Tests cannot run |
 | `tailwind.config.js` | Design tokens: HSL color vars, chart colors 1-5, sidebar colors, fonts, accordion animations | ALL styling breaks |
@@ -298,7 +318,9 @@ can only be verified against the dashboard by eye, since nothing in the repo can
 | `.env.example` | **committed template** | The only place the required variable names are written down, each annotated with the file:line that reads it. `.gitignore` has an explicit `!.env.example` negation so `.env.*` cannot swallow it. | Deleting it leaves a new deploy nothing to copy |
 | `.env.local` | `VITE_USE_LOCAL_AUTH=false` | Default: use real serverless auth | Loaded by Vite in **every** mode including `vite build` — never put `true` here |
 | `.env.development` | `VITE_USE_LOCAL_AUTH=true` | Dev: use local IndexedDB auth shim | - |
-| `.env.production` | `VITE_USE_LOCAL_AUTH=true` + `VITE_STANDALONE_LOCAL=true` | **STANDALONE shape, 2026-08-23.** base44 is gone, so there is no server left to authenticate against: a production build MUST run the in-browser auth path or nobody can log in at all. | **This file is COMMITTED (2026-08-24), on purpose** -- `.gitignore` carries a `!.env.production` negation, `.gitattributes` pins it `text eol=lf`. Both values are public: vite folds every `VITE_`-prefixed variable into the shipped JS, so tracking them loses no secrecy, while NOT tracking them cost two dead Cloudflare deploys. **NEVER add a secret to it** -- `probe-standalone-deploy.mjs` section 7 fails on any key outside those two |
+| `.env.production` | `VITE_USE_SERVER_AUTH=true` + `VITE_USE_D1_API=false` | Current production: same-origin Worker authentication with browser-local business storage | This committed file contains public build flags only. Never add a password, token, pepper, or other secret |
+| `PASSWORD_PEPPER_V1` | Cloudflare Worker secret (not a file) | Post-hash HMAC pepper for versioned owner credentials | Missing/short values make authentication return controlled 503; never place this value in source, logs, chat, or `.env.production` |
+| `ENABLE_D1_DATA_API` | `false` in `wrangler.jsonc` | Runtime kill switch for Worker business-data endpoints | Do not enable during the auth-only rollout; existing hotel data remains in IndexedDB |
 | `VITE_STANDALONE_LOCAL` | `true` in the standalone shape only | The SECOND flag `src/main.jsx` requires. A PROD build with `VITE_USE_LOCAL_AUTH=true` and this one absent, `false` or empty still refuses to boot, so a stray build cannot ship the untrusted auth path by accident. | Setting this on a build that can be reached anonymously = SECURITY DISASTER. Browser-side login and MFA are bypassable by anyone who loads the page; the upstream identity proxy (e.g. Cloudflare Access) is then the ONLY real boundary |
 | `VITE_WEBSOCKET_ENDPOINT` | unset, or a `ws://` / `wss://` URL | Realtime CRDT sync (`src/crdt.jsx`). Only a ws/wss URL enables it; **any** other value (`disabled`, `off`, an `https://` URL, whitespace) resolves to unset and is warned about, so a hosting dashboard that refuses an empty value can still express "off". | Before 2026-08-23 any non-empty value reached `new WebsocketProvider()` and started a backoff loop that retried for as long as the tab stayed open |
 
@@ -320,7 +342,21 @@ into `vite.config.js` and that the CI build step supplies both flags.
 
 ---
 
-# 10. ALL TEST SCRIPTS — counts RE-MEASURED 2026-08-22
+# 10. TEST SCRIPTS — live gate re-measured 2026-09-01
+
+The current auto-discovered gate is **142 suites** at list
+`b24b8cfa`: the production-auth completion run reported 141 PASS, 0 FAIL,
+and one explicit Not Run (`probe-config-exposure`, because no localhost dev
+server was running). Vitest separately passed 45 files / 341 tests.
+
+Auth-specific evidence:
+
+- `probe-worker-app-auth.mjs`: 15/15 local Worker contract.
+- `probe-worker-auth-remote.mjs`: 8/8 isolated remote Cloudflare runtime.
+- `smoke-production-auth.mjs`: 22/22 real production; cleanup proved one
+  versioned owner, zero legacy owners, and zero residual sessions, challenges,
+  or smoke users.
+- `probe-property-id-type.mjs`: 29/29 numeric/string cascade and isolation.
 
 Measured, not estimated. The heading here previously read "106 Files", which matched
 nothing countable. Re-counted 2026-08-22; the 2026-08-20 set (117 / 95 / 73 / 71 / 34)

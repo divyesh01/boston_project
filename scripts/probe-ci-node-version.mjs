@@ -455,9 +455,9 @@ console.log("\n=== 6. the workflow still runs what it claims ===");
   ok("no step is allowed to fail silently",
     !/continue-on-error/.test(live),
     "a green job that skipped a failing step is the same defect in a new costume");
-  ok("the build step still declares the standalone flags",
-    /VITE_USE_LOCAL_AUTH:\s*'true'/.test(live) && /VITE_STANDALONE_LOCAL:\s*'true'/.test(live),
-    "without both, envGuardPlugin.js fails the production build");
+  ok("the build step declares server auth without D1 business storage",
+    /VITE_USE_SERVER_AUTH:\s*'true'/.test(live) && /VITE_USE_D1_API:\s*'false'/.test(live),
+    "without this exact pair, CI verifies a different production mode or envGuardPlugin.js refuses the build");
 }
 
 console.log("\n" + "─".repeat(70));

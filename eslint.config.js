@@ -259,6 +259,25 @@ export default [
   },
 
   // -------------------------------------------------------------------------
+  // 4b. CLOUDFLARE WORKER BACKEND (worker/**). A THIRD runtime, distinct from
+  //     the browser bundle (APP_FILES) and from Node (NODE_FILES): it runs on
+  //     the Cloudflare Workers runtime, so it gets Worker globals (Request,
+  //     Response, URL, crypto, fetch, …) — NOT Node globals, so an accidental
+  //     `process`/`require` here is still a no-undef error, and NOT browser
+  //     globals, so `window`/`document` are too. It is deliberately NOT given
+  //     the 0-rule treatment backend/ and scripts/ get: the recommended base
+  //     (object 2) and the project policy (object 8) already apply repo-wide,
+  //     and this block only supplies the correct globals plus the same
+  //     no-console strictness app code uses, so worker/index.js — which handles
+  //     auth and D1 writes — is linted with real rules.
+  // -------------------------------------------------------------------------
+  {
+    files: ["worker/**/*.{js,mjs}"],
+    languageOptions: { globals: { ...globals.worker } },
+    rules: { "no-console": ["warn", { allow: ["warn", "error"] }] },
+  },
+
+  // -------------------------------------------------------------------------
   // 5. NODE CODE — harnesses, sync server, root tooling.
   // -------------------------------------------------------------------------
   {

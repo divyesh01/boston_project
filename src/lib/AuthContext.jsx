@@ -4,7 +4,6 @@ import { db } from '@/api/base44Client';
 import { canUser, canAccessRoute as checkRouteAccess } from '@/lib/permissions';
 import { subscribeSessionRevoked } from '@/lib/sessionChannel';
 import { logAuditEvent } from '@/lib/auditLogger';
-import { hasAllPropertyAccess } from '@/lib/launchPolicy';
 
 const AuthContext = /** @type {import('react').Context<any>} */ (createContext(null));
 
@@ -190,11 +189,6 @@ export const AuthProvider = ({ children }) => {
       if (!me) return { valid: false, status: 'revoked' };
       if (me.is_active === false) return { valid: false, status: 'disabled' };
       if (me.is_locked === true) return { valid: false, status: 'locked' };
-      // Launch policy (src/lib/launchPolicy.js): this release admits only
-      // accounts entitled to every property. Re-checked here, not just at login,
-      // so narrowing someone's property_access takes effect on their next
-      // navigation instead of waiting for their week-long session to expire.
-      if (!hasAllPropertyAccess(me)) return { valid: false, status: 'property_restricted' };
       return { valid: true, user: me };
     } catch (e) {
       console.error('[AuthProvider] validateCurrentAccountStatus error:', e);

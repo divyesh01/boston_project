@@ -183,6 +183,8 @@ for (const rel of targets) {
 // ── Summary ────────────────────────────────────────────────────────────────
 console.log(`\nprobe-channel-commission-cents: ${pass} passed, ${fail} failed`);
 if (fail) {
+  console.log('FAILED: channel commission contract');
   console.log('FAILURES:\n  - ' + failures.join('\n  - '));
   process.exit(1);
 }
+console.log(`PASSED: ${pass} passed, 0 failed`);

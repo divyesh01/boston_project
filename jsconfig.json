@@ -42,7 +42,13 @@
   // src/tests, and App.jsx / main.jsx / crdt.jsx / test-setup.js at the src root.
   // A glob cannot develop that kind of gap as the tree grows.
   // Measured: 185 files -> 201 files in the program, 0 errors, nothing dropped.
-  "include": ["src/**/*.js", "src/**/*.jsx"],
+  //
+  // EXTENDED 2026-08-30: `worker/**/*.js` added so the off-production Cloudflare
+  // Worker backend (worker/index.js) is type-checked under the same checkJs gate
+  // as src/. It is a distinct runtime (Cloudflare Workers) but is authored in
+  // plain JS with JSDoc and MUST NOT import from src/, so no browser/Node type
+  // conflict arises; dom lib already supplies Request/Response/URL.
+  "include": ["src/**/*.js", "src/**/*.jsx", "worker/**/*.js"],
 
   // Every exclusion is a factual statement with a measured cost, so that a
   // future reader can re-decide rather than guess at the intent.

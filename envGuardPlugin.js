@@ -43,8 +43,6 @@
 //
 // Gated by scripts/probe-standalone-deploy.mjs.
 
-const REQUIRED = ['VITE_USE_LOCAL_AUTH', 'VITE_STANDALONE_LOCAL'];
-
 export default function standaloneEnvGuard() {
   return {
     name: 'standalone-env-guard',
@@ -54,17 +52,18 @@ export default function standaloneEnvGuard() {
       if (config.mode !== 'production') return;
 
       const env = config.env || {};
-      const missing = REQUIRED.filter((key) => env[key] !== 'true');
-      if (missing.length === 0) return;
+      const standaloneLocal = env.VITE_USE_LOCAL_AUTH === 'true' && env.VITE_STANDALONE_LOCAL === 'true';
+      const serverAuth = env.VITE_USE_SERVER_AUTH === 'true' && env.VITE_USE_D1_API !== 'true';
+      if (standaloneLocal || serverAuth) return;
 
       throw new Error(
         [
           '[standalone-env-guard] refusing to build a production bundle that cannot log anybody in.',
           '',
-          `  not set to "true": ${missing.join(', ')}`,
+          '  neither a complete server-auth shape nor the legacy standalone shape is configured.',
           '',
-          '  With base44 retired, the only working production shape is the standalone one:',
-          '  in-browser auth behind an identity proxy. Both flags must be "true".',
+          '  Preferred: VITE_USE_SERVER_AUTH=true and VITE_USE_D1_API=false.',
+          '  Legacy: VITE_USE_LOCAL_AUTH=true and VITE_STANDALONE_LOCAL=true behind Access.',
           '',
           '  Normally .env.production carries both flags and this never fires. If you are',
           '  seeing it, that file is missing, renamed, emptied, re-gitignored, or holds a',

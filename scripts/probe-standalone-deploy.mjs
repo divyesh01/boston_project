@@ -186,10 +186,12 @@ if (existsSync(path.join(ROOT, envProdPath))) {
   };
   const local = flag('VITE_USE_LOCAL_AUTH');
   const standalone = flag('VITE_STANDALONE_LOCAL');
-  check('.env.production sets VITE_USE_LOCAL_AUTH=true',
-    local === 'true', `value is ${local === undefined ? 'absent' : `<${String(local).length} chars>`}`);
-  check('.env.production sets VITE_STANDALONE_LOCAL=true',
-    standalone === 'true', `value is ${standalone === undefined ? 'absent' : `<${String(standalone).length} chars>`}`);
+  const server = flag('VITE_USE_SERVER_AUTH');
+  const d1Data = flag('VITE_USE_D1_API');
+  check('.env.production disables legacy browser-local auth',
+    local === 'false' && standalone === 'false', `local=${local}; standalone=${standalone}`);
+  check('.env.production selects server auth without D1 business storage',
+    server === 'true' && d1Data === 'false', `server=${server}; d1Data=${d1Data}`);
   if (evalGuard) {
     check('a build from .env.production would actually boot',
       evalGuard({ PROD: true, VITE_USE_LOCAL_AUTH: local, VITE_STANDALONE_LOCAL: standalone }) === false,
@@ -240,6 +242,10 @@ if (existsSync(path.join(ROOT, guardPluginPath))) {
   const BUILD_CASES = [
     ['the deployed standalone config builds',
       { mode: 'production', env: { VITE_USE_LOCAL_AUTH: 'true', VITE_STANDALONE_LOCAL: 'true' } }, false],
+    ['the server-auth/local-business-data config builds',
+      { mode: 'production', env: { VITE_USE_SERVER_AUTH: 'true', VITE_USE_D1_API: 'false' } }, false],
+    ['server auth refuses when D1 business-data mode is also enabled',
+      { mode: 'production', env: { VITE_USE_SERVER_AUTH: 'true', VITE_USE_D1_API: 'true' } }, true],
     ['a production build with NO flags refuses (the Cloudflare/CI case)',
       { mode: 'production', env: {} }, true],
     ['a production build with only VITE_USE_LOCAL_AUTH refuses',
@@ -266,9 +272,10 @@ if (existsSync(path.join(ROOT, guardPluginPath))) {
     check(name, refused === expectRefuse, `refused=${refused} (expected ${expectRefuse})`);
   }
 
-  check('the refusal names both variables and where to set them',
+  check('the refusal names the supported authentication shapes and where to set them',
     /VITE_USE_LOCAL_AUTH/.test(message) &&
     /VITE_STANDALONE_LOCAL/.test(message) &&
+    /VITE_USE_SERVER_AUTH/.test(message) &&
     /Cloudflare/.test(message),
     'a build failure that does not say which knob to turn costs an hour');
 }
@@ -294,11 +301,11 @@ if (existsSync(path.join(ROOT, workflowPath))) {
   const stepIdx = wf.indexOf('Verify Production Build');
   const step = stepIdx >= 0 ? wf.slice(stepIdx, stepIdx + 900) : '';
   check('the CI production-build step exists', stepIdx >= 0);
-  check('the CI production-build step sets VITE_USE_LOCAL_AUTH=true',
-    /VITE_USE_LOCAL_AUTH:\s*'?true'?/.test(step),
-    'otherwise the build the pipeline verifies is one that can never be deployed');
-  check('the CI production-build step sets VITE_STANDALONE_LOCAL=true',
-    /VITE_STANDALONE_LOCAL:\s*'?true'?/.test(step));
+  check('the CI production-build step sets VITE_USE_SERVER_AUTH=true',
+    /VITE_USE_SERVER_AUTH:\s*'?true'?/.test(step),
+    'otherwise CI verifies the wrong authentication shape');
+  check('the CI production-build step keeps VITE_USE_D1_API=false',
+    /VITE_USE_D1_API:\s*'?false'?/.test(step));
 } else {
   check('.github/workflows/security.yml exists', false, 'the CI gate went missing');
 }
@@ -318,7 +325,12 @@ console.log('\nSection 7: .env.production is committed, LF-only and flag-only');
 // the rule "never put a secret here" is enforced below as a key ALLOWLIST rather
 // than left as a comment nobody re-reads.
 const ENV_PROD = '.env.production';
-const ENV_PROD_ALLOWED = ['VITE_USE_LOCAL_AUTH', 'VITE_STANDALONE_LOCAL'];
+const ENV_PROD_ALLOWED = [
+  'VITE_USE_LOCAL_AUTH',
+  'VITE_STANDALONE_LOCAL',
+  'VITE_USE_SERVER_AUTH',
+  'VITE_USE_D1_API',
+];
 
 check(`${ENV_PROD} exists`, existsSync(path.join(ROOT, ENV_PROD)),
   'without it, a cloned checkout builds a bundle that cannot authenticate anyone');
@@ -378,7 +390,7 @@ const envProdKeys = envProdRaw
   .filter(Boolean);
 
 const unexpected = envProdKeys.filter((k) => !ENV_PROD_ALLOWED.includes(k));
-check(`${ENV_PROD} contains ONLY the two public flags`,
+check(`${ENV_PROD} contains ONLY the approved public mode flags`,
   unexpected.length === 0,
   unexpected.length
     ? `unexpected key(s): ${unexpected.join(', ')} — this file is committed; secrets belong in the hosting dashboard`
@@ -389,9 +401,15 @@ const envProdValue = (key) => {
   const m = envProdRaw.match(new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=\\s*(.*)$`, 'm'));
   return m ? m[1].trim().replace(/^['"]|['"]$/g, '') : undefined;
 };
-for (const key of ENV_PROD_ALLOWED) {
-  check(`${ENV_PROD} sets ${key} to the exact string "true"`,
-    envProdValue(key) === 'true',
+const ENV_PROD_EXPECTED = {
+  VITE_USE_LOCAL_AUTH: 'false',
+  VITE_STANDALONE_LOCAL: 'false',
+  VITE_USE_SERVER_AUTH: 'true',
+  VITE_USE_D1_API: 'false',
+};
+for (const [key, expected] of Object.entries(ENV_PROD_EXPECTED)) {
+  check(`${ENV_PROD} sets ${key} to the exact string ${JSON.stringify(expected)}`,
+    envProdValue(key) === expected,
     `value=${JSON.stringify(envProdValue(key))}`);
 }
 

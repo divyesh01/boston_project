@@ -115,6 +115,38 @@ const realClient = createClient({
   }
 });
 
+// These switches deliberately control different trust/storage boundaries.
+// Server auth moves ONLY identity/session checks to the same-origin Worker.
+// D1 API moves hotel/business entities away from IndexedDB and remains a
+// separate, explicit opt-in. Never infer one mode from the other.
+const USE_SERVER_AUTH = import.meta.env?.VITE_USE_SERVER_AUTH === 'true';
+const USE_D1_API = import.meta.env?.VITE_USE_D1_API === 'true';
+const D1_ENTITY_NAMES = new Set(['Property', 'TransactionLine', 'OccupancyDay', 'SourceDay', 'GrossRevenueDay', 'PaymentDay', 'ClerkShiftRecord', 'Expense', 'PayrollRun', 'Staff', 'TimecardPunch', 'UploadedReport', 'HotelMetric', 'AnomalyAlert', 'Room', 'RoomStay', 'HousekeepingTask', 'WeatherSnapshot', 'Review', 'AdjustmentRefund', 'DailyFinancialAggregate', 'ScanResult', 'Reservation', 'RoomType', 'ChannelMap']);
+
+async function d1Request(path, options = {}) {
+  const response = await fetch(`/api/${path}`, { credentials: 'same-origin', headers: { 'content-type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', ...(options.headers || {}) }, ...options });
+  let body = null;
+  try { body = await response.json(); } catch {}
+  if (!response.ok) { const error = new Error(body?.error || `D1 API request failed (${response.status})`); /** @type {any} */ (error).status = response.status; throw error; }
+  return body;
+}
+
+function createServerEntityProxy(tableName) {
+  const endpoint = `entities/${encodeURIComponent(tableName)}`;
+  return {
+    async filter(query = {}, sortField, limit) { return (await d1Request(`${endpoint}/query`, { method: 'POST', body: JSON.stringify({ filter: query, sort: sortField, limit }) })).items; },
+    async list(sortField, limit) { return (await d1Request(`${endpoint}/query`, { method: 'POST', body: JSON.stringify({ sort: sortField, limit }) })).items; },
+    async paginate(query = {}, sortField, limit = 50, cursor = null) { const result = await d1Request(`${endpoint}/query`, { method: 'POST', body: JSON.stringify({ filter: query, sort: sortField, limit, skip: Number(cursor) || 0 }) }); return { items: result.items, total: result.total, hasMore: result.hasMore, nextCursor: result.nextCursor }; },
+    async get(id) { try { return await d1Request(`${endpoint}/${encodeURIComponent(id)}`); } catch (error) { if (/** @type {any} */ (error).status === 404) return null; throw error; } },
+    async create(data) { return d1Request(endpoint, { method: 'POST', body: JSON.stringify({ data }) }); },
+    async update(id, data) { return d1Request(`${endpoint}/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ data }) }); },
+    async delete(id) { return d1Request(`${endpoint}/${encodeURIComponent(id)}`, { method: 'DELETE' }); },
+    async bulkCreate(dataArray) { return (await d1Request(`${endpoint}/bulk-create`, { method: 'POST', body: JSON.stringify({ rows: dataArray }) })).items; },
+    async bulkDelete(ids) { return d1Request(`${endpoint}/bulk-delete`, { method: 'POST', body: JSON.stringify({ ids }) }); },
+    async count(query = {}) { return (await d1Request(`${endpoint}/count`, { method: 'POST', body: JSON.stringify({ filter: query }) })).count; },
+  };
+}
+
 // ─── Tables that trigger recalculation when modified ───
 const RECALCULATION_TABLES = new Set([
   'OccupancyDay', 'SourceDay', 'GrossRevenueDay', 'PaymentDay',
@@ -131,6 +163,11 @@ function notifyRecalculation(tableName, changeType, record) {
 // ─── Transaction Support ───
 export async function runInTransaction(operations) {
   const ops = Array.isArray(operations) ? operations : [operations];
+  if (USE_D1_API) {
+    const results = [];
+    for (const op of ops) results.push(await op());
+    return results;
+  }
   // Resolve the caller's property access BEFORE opening the Dexie zone. Entity
   // methods called inside the transaction then read a cached snapshot instead of
   // awaiting custom_auth_me, which would leave the zone and force an early
@@ -640,6 +677,7 @@ async function getUserPropertyAccess() {
 
 // ─── Create an entity proxy for a Dexie table with property isolation ───
 function createEntityProxy(tableName) {
+  if (USE_D1_API && D1_ENTITY_NAMES.has(tableName)) return createServerEntityProxy(tableName);
   const table = localDb[tableName];
 
   // Tables that carry a property_id and must be scoped to the caller's access.
@@ -733,6 +771,28 @@ function createEntityProxy(tableName) {
     if (isRoster && propertyAccess !== ALL_PROPERTIES) {
       throw new Error('Access denied: only accounts with access to all properties can change the property roster');
     }
+  }
+
+  // Older browser rows may carry the string form of an autoincremented numeric
+  // Property id. Include that legacy representation only when a distinct
+  // cross-type Property row does not own it; IndexedDB treats `1` and `"1"` as
+  // different keys, so blindly deleting both could cross a tenancy boundary.
+  async function propertyCascadeIds(records) {
+    const deletingIds = new Set(records.map((record) => record.id));
+    const variants = new Set(deletingIds);
+    for (const id of deletingIds) {
+      let alternate;
+      if (typeof id === 'number' && Number.isSafeInteger(id)) {
+        alternate = String(id);
+      } else if (typeof id === 'string') {
+        const numeric = Number(id);
+        if (Number.isSafeInteger(numeric) && String(numeric) === id) alternate = numeric;
+      }
+      if (alternate === undefined || deletingIds.has(alternate)) continue;
+      const separatelyOwned = await localDb.Property.get(/** @type {any} */ (alternate));
+      if (!separatelyOwned) variants.add(alternate);
+    }
+    return [...variants];
   }
 
   return {
@@ -861,10 +921,10 @@ function createEntityProxy(tableName) {
       
       // Cascading delete for Property
       if (tableName === 'Property' && deletedRecord) {
-        const propId = String(deletedRecord.id);
+        const propIds = await propertyCascadeIds([deletedRecord]);
         for (const related of PROPERTY_TABLES) {
           if (typeof localDb[related]?.where === 'function') {
-            const keys = await localDb[related].where({ property_id: propId }).primaryKeys();
+            const keys = await localDb[related].where('property_id').anyOf(propIds).primaryKeys();
             if (keys.length > 0) await localDb[related].bulkDelete(keys);
           }
         }
@@ -924,7 +984,7 @@ function createEntityProxy(tableName) {
       
       // Cascading delete for Property
       if (tableName === 'Property' && deletedRecords.length > 0) {
-        const propIds = deletedRecords.map(r => String(r.id));
+        const propIds = await propertyCascadeIds(deletedRecords);
         for (const related of PROPERTY_TABLES) {
           if (typeof localDb[related]?.where === 'function') {
             const keys = await localDb[related].where('property_id').anyOf(propIds).primaryKeys();
@@ -1260,18 +1320,30 @@ const THROTTLE_MS = 5 * 60 * 1000;
 
 const auth = {
   async isAuthenticated() {
+    if (USE_SERVER_AUTH) {
+      try { return !!(await d1Request('session')).authenticated; } catch { return false; }
+    }
     try {
       const res = await functions.invoke('custom_auth_check');
       return !!res.user;
     } catch { return false; }
   },
   async me() {
+    if (USE_SERVER_AUTH) {
+      try { return (await d1Request('session')).user || null; } catch { return null; }
+    }
     try {
       const res = await functions.invoke('custom_auth_me');
       return res.user;
     } catch { return null; }
   },
   async login(identifier, password, remember = false, totpToken = null) {
+    if (USE_SERVER_AUTH) {
+      const result = await d1Request('auth/login', { method: 'POST', body: JSON.stringify({ identifier, password, remember, totpToken }) });
+      if (result.require_mfa) return { mfaRequired: true, userId: result.userId, username: result.username };
+      const session = await d1Request('session');
+      return { user: session.user, session: { token: 'http-only' } };
+    }
     try {
       const res = await functions.invoke('custom_auth_login', { email: identifier, password, mfa_token: totpToken, remember });
       if (res.require_mfa_setup) {
@@ -1286,6 +1358,7 @@ const auth = {
     }
   },
   async touchSession() {
+    if (USE_SERVER_AUTH) { await d1Request('session'); return; }
     const now = Date.now();
     if (now - lastTouchTime < THROTTLE_MS) return;
     lastTouchTime = now;
@@ -1297,21 +1370,33 @@ const auth = {
     return this.touchSession();
   },
   async logout(redirect) {
+    if (USE_SERVER_AUTH) {
+      await d1Request('auth/logout', { method: 'POST', body: '{}' });
+      if (redirect) window.location.href = redirect;
+      return;
+    }
     try {
       await functions.invoke('custom_auth_logout');
     } catch {}
     if (redirect) window.location.href = redirect;
   },
   async resetPasswordRequest(identifier) {
+    if (USE_SERVER_AUTH) throw new Error('Server password recovery is not configured. Contact the administrator.');
     return functions.invoke('custom_auth_reset_request', { identifier });
   },
   async resetPassword(token, newPassword) {
+    if (USE_SERVER_AUTH) throw new Error('Server password recovery is not configured. Contact the administrator.');
     return functions.invoke('custom_auth_reset_password', { token, newPassword });
   },
   async registerUser(userData) {
+    if (USE_SERVER_AUTH) throw new Error('Server self-registration is disabled. Contact the administrator.');
     return functions.invoke('custom_auth_register', { userData });
   },
   async getCurrentSession() {
+    if (USE_SERVER_AUTH) {
+      const session = await d1Request('session');
+      return session.user ? { userId: session.user.id, token: 'http-only' } : null;
+    }
     if (USE_LOCAL_AUTH) {
       // Reads through readLocalSessionRecord(), the single reader that matches
       // the writer. This used to do its own localStorage.getItem(LOCAL_SESSION_KEY)
@@ -2189,6 +2274,29 @@ async function invokeBackend(functionName, params) {
 
 const functions = {
   async invoke(functionName, params = {}) {
+    // Identity is server-authoritative even while every hotel/business entity
+    // remains in IndexedDB. These branches never activate the D1 entity proxy.
+    if (USE_SERVER_AUTH) {
+      if (functionName === 'custom_auth_me' || functionName === 'custom_auth_check') {
+        const session = await d1Request('session');
+        return { user: session.user, initialized: session.initialized };
+      }
+      if (functionName === 'custom_auth_login') return auth.login(params.email || params.identifier, params.password, params.remember, params.mfa_token || params.totpToken);
+      if (functionName === 'custom_auth_logout') return auth.logout();
+      if (functionName === 'custom_auth_register' || functionName === 'custom_auth_reset_request' || functionName === 'custom_auth_reset_password') {
+        throw new Error('This server authentication operation is not configured. Contact the administrator.');
+      }
+      if (functionName === 'custom_user_admin') {
+        const action = params.action;
+        if (action === 'initialized') return { initialized: (await d1Request('session')).initialized === true };
+        if (action === 'list' || action === 'search') return d1Request(`users${action === 'search' ? `?q=${encodeURIComponent(params.query || '')}` : ''}`);
+        if (action === 'getById') return d1Request(`users/${encodeURIComponent(params.id)}`);
+        if (action === 'create') return d1Request('users', { method: 'POST', body: JSON.stringify({ data: params.data }) });
+        if (action === 'update' || action === 'set_status') return d1Request(`users/${encodeURIComponent(params.id)}`, { method: 'PATCH', body: JSON.stringify({ data: action === 'set_status' ? params.status : params.data }) });
+        if (action === 'delete') return d1Request(`users/${encodeURIComponent(params.id)}`, { method: 'DELETE' });
+        throw new Error(`Worker user API does not implement ${action}`);
+      }
+    }
     // Drop the cached authorization snapshot before any call that can change
     // identity or privileges. Invalidating up front (rather than on success)
     // means a partially-applied change can never leave a wider grant cached.
@@ -2237,7 +2345,10 @@ const functions = {
     // ─── Local-first dev path: ONLY when explicitly enabled (VITE_USE_LOCAL_AUTH) ───
     // When the flag is OFF (production default) we skip the untrusted local
     // auth shims entirely and delegate to the authoritative backend below.
-    if (!USE_LOCAL_AUTH) {
+    // Server authentication replaces only the identity boundary. Keep the
+    // browser-local business operations below when D1 data mode is off, even
+    // though the legacy local-auth flag is correctly disabled in production.
+    if (!USE_LOCAL_AUTH && !USE_SERVER_AUTH) {
       return invokeBackend(functionName, params);
     }
 

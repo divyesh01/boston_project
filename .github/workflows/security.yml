@@ -76,5 +76,5 @@ jobs:
           # file is ever renamed, emptied or re-gitignored, and they state the
           # required shape where a reader of this workflow will actually see it.
           # Asserted by scripts/probe-standalone-deploy.mjs section 6.
-          VITE_USE_LOCAL_AUTH: 'true'
-          VITE_STANDALONE_LOCAL: 'true'
+          VITE_USE_SERVER_AUTH: 'true'
+          VITE_USE_D1_API: 'false'

@@ -188,10 +188,13 @@ const ALLOWED_TEST_FIXTURES = new Map([
   // they stand in for AUDIT_CHAIN_SECRET which production reads from the env.
   ['probe-chain-secret', 'probe-audit-chain / probe-auth-audit chain secret'],
   ['probe-race-secret', 'probe-audit-chain-race chain secret'],
+  ['attacker-secret', 'probe-worker-auth HS256 algorithm-confusion adversary fixture'],
   // The canonical TOTP test vector from RFC 6238 / the otplib docs.
   ['JBSWY3DPEHPK3PXP', 'RFC 6238 published TOTP test secret'],
   // Property-isolation harness sign-in. Self-describing name.
   ['Probe-Password-9!', 'probe-property-isolation.mjs harness sign-in'],
+  ['Sentinel-Probe-Password-1!', 'property-access sentinel sign-in fixture'],
+  ['Manager-Probe-Password-1!', 'property-id normalization sign-in fixture'],
   // The welcome-email probe asserts this string is ABSENT from the sent mail, so
   // the literal is the thing under test, not a usable credential.
   ['MySuperSecretPassword123!', 'probe-welcome-email.mjs negative assertion — must NOT appear in the email body'],

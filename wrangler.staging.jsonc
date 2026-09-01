@@ -1,0 +1,58 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+
+  // SAME-ORIGIN staging deployment. This is the browser-facing target:
+  //   https://boston-project-staging.divyesh-boston.workers.dev/api/*  -> this Worker
+  //   everything else                                                  -> SPA assets
+  //
+  // It is DISTINCT from:
+  //   * wrangler.jsonc      (production "boston-project", assets-only, untouched)
+  //   * wrangler.api.jsonc  (separate API-only host "boston-project-api-staging",
+  //                          NOT behind the Access edge — do not use from the browser)
+  //
+  // The relational Worker (worker/index.js) owns /api/*. With run_worker_first
+  // scoped to ["/api/*"], every non-/api path is served straight from ./dist by
+  // the assets pipeline (SPA fallback), so the Worker's own non-/api 404 branch
+  // is never reached. Cloudflare Access already fronts this hostname at the edge
+  // (team domain tight-feather-dba0.cloudflareaccess.com, AUD 67befe0c…), so an
+  // unauthenticated request is 302'd to login before the Worker runs; the
+  // Worker's RS256 JWT validation (worker/auth.js) is defense-in-depth behind it.
+  "name": "boston-project-staging",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-08-31",
+
+  // Non-main branch previews would mint hostnames outside the Access application.
+  "preview_urls": false,
+
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    // Only /api/* hits the Worker; all other paths are served from ./dist.
+    "run_worker_first": ["/api/*"]
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "boston-project-staging-data",
+      "database_id": "5d5ff049-c273-4557-9938-e89c5d32112c"
+    }
+  ],
+
+  // Non-secret Access parameters. These are the AUDIENCE and TEAM DOMAIN the
+  // Worker checks the injected Cf-Access JWT against — they are the public
+  // identifiers of the Access application, not credentials, so they live here.
+  // worker/auth.js normalizes the scheme and derives the JWKS certs URL from it.
+  "vars": {
+    "ENVIRONMENT": "staging",
+    "ACCESS_TEAM_DOMAIN": "https://tight-feather-dba0.cloudflareaccess.com",
+    "ACCESS_AUD": "67befe0c14f5acc168e10af9e93ad7a58880875d5251f3d87497a86c2f019128"
+  },
+
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": false, "head_sampling_rate": 0 }
+  }
+}

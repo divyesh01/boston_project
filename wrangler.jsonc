@@ -18,9 +18,33 @@
   // therefore boston-project.divyesh-boston.workers.dev; "divyeshpro" is an
   // orphan and can be deleted in the dashboard.
   "name": "boston-project",
-  "compatibility_date": "2024-09-23",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-08-31",
+  "preview_urls": false,
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "boston-project-production-auth",
+      "database_id": "e9008126-d4b4-4588-841c-128eadd94c8d",
+      "migrations_dir": "migrations-production"
+    }
+  ],
+  "vars": {
+    "ENVIRONMENT": "production",
+    "ENABLE_D1_DATA_API": "false"
+  },
+  "secrets": {
+    "required": ["PASSWORD_PEPPER_V1"]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": false, "head_sampling_rate": 0 }
   }
 }

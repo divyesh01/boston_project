@@ -3,36 +3,44 @@
 ### Authentication Flow
 ```
 User enters email + password
-  --> Rate limiter checks (5 attempts / 15 min per IP)
-  --> scrypt hash verification (legacy PBKDF2 auto-upgrades to scrypt)
-  --> If MFA enabled: TOTP verification (counter replay prevented via mfa_last_counter)
-  --> Session created (SHA-256 token hash stored in Session entity)
-  --> HTTP-only Secure cookie set (7-day expiry, 30-day absolute max)
-  --> Audit log entry written (SHA-256 HMAC chained with AUDIT_CHAIN_SECRET)
+  --> same-origin Worker requires X-Requested-With: XMLHttpRequest
+  --> D1 resolves exactly one username/email candidate
+  --> versioned PBKDF2-HMAC-SHA256 verifier (100,000 iterations)
+  --> HMAC-SHA256 post-hash pepper from PASSWORD_PEPPER_V1
+  --> If MFA enabled: five-minute D1 challenge + TOTP counter replay check
+  --> D1 app_session stores only SHA-256(token)
+  --> __Host-rri_session is HttpOnly; Secure; SameSite=Strict; Path=/
 ```
+
+Unknown users, wrong passwords, legacy verifiers, and unsupported credential versions
+fail closed with controlled 401 responses. Unknown/malformed stored credentials still
+perform a dummy PBKDF2 derivation so the username lookup is not a cheap timing oracle.
+Missing/short pepper is a controlled 503, never a fallback to browser-local auth.
 
 ### Session Management
 ```
-Session lifetime:    7 days (slides if <3 days remaining)
-Absolute maximum:    30 days (no sliding after this)
-Idle detection:      30-second polling in AuthContext
-Revocation:          Immediate on logout, password change, or privilege change
-Cross-tab sync:      BroadcastChannel (sessionChannel.js)
-Storage:             Server-side (Session entity), client gets opaque HTTP-only cookie
+Normal session:      12 hours, sliding on authenticated reads
+Remembered session:  30 days, fixed expiry
+Revocation:          delete the matching D1 app_session token digest
+Isolation:           every browser login receives a different random bearer token
+Storage:             D1 app_session; browser receives only the opaque HttpOnly cookie
+Invalid app cookie:  401; never falls through to Cloudflare Access
 ```
 
 ### CSRF Protection
 ```
-Cookie name:     __Host-csrf_token
-Flags:           Secure; Path=/; SameSite=Lax
-__Host- prefix:  HTTPS only, no subdomain override, Path must be /
+Production mutation proof: X-Requested-With: XMLHttpRequest
+Origin rule:              absent or exactly the request URL's origin
+Cookie defense:           __Host-rri_session is SameSite=Strict
+Failure:                  controlled 403 before credential/data processing
 ```
 
 ### Rate Limiting
 ```
-Login:            5 attempts per IP per 15 minutes
-Password Reset:   Rate limited by IP AND by target email
-MFA Verification: Rate limited per account
+Login lockout:     5 failed attempts on the account
+Lock duration:    15 minutes
+Recovery:         an expired lock restarts the failure count; valid login clears it
+Server reset:     intentionally unavailable; contact the administrator
 ```
 
 ### Audit Log (Tamper-Proof Blockchain-Style)
@@ -87,9 +95,30 @@ Rules that are easy to break by accident:
 | `accountant` | Financial data only | View-only financial reports |
 | `read_only` | Limited dashboard only | View-only, no actions |
 
-### Standalone Local Administration (Cloudflare deployment)
+### Production Server Authentication + Browser-Local Business Data (current)
 
-The deployed standalone build intentionally sets `VITE_USE_LOCAL_AUTH=true` and
+Production sets `VITE_USE_SERVER_AUTH=true` and `VITE_USE_D1_API=false`.
+`worker/index.js` owns `/api/auth/*`, `/api/session`, and account/user
+administration through the production-auth D1 binding. Business-data routes remain
+hard-disabled by `ENABLE_D1_DATA_API=false`, so hotel rows are not migrated to D1:
+the existing IndexedDB tables remain the source of truth in each browser profile.
+
+The two flags are deliberately independent. Turning on server authentication must
+not activate the D1 entity proxy, hide existing browser data, or copy any old
+browser-local password hash. The one production owner was migrated in place: the
+owner id/profile/account link stayed unchanged, the legacy verifier count became
+zero, and the password pepper exists only in Cloudflare secret storage.
+
+Evidence: `scripts/probe-worker-app-auth.mjs` (15/15 local contract),
+`scripts/probe-worker-auth-remote.mjs` (8/8 isolated Cloudflare runtime), and
+`scripts/smoke-production-auth.mjs` (22/22 real production, with disposable
+non-owner cleanup). The deployed version is
+`7675fe25-fa8f-4c1d-860a-4f43689e156d`; rollback is
+`36993034-a938-4fb9-8b19-e7ac87820b34`.
+
+### Legacy Standalone Local Administration (retired production mode)
+
+Development/legacy standalone builds may set `VITE_USE_LOCAL_AUTH=true` and
 `VITE_STANDALONE_LOCAL=true`. In that mode, `src/api/base44Client.js` implements
 the user-administration contract locally because the retired Base44 functions are
 not the runtime path. This is a **consistency and operator-safety control**, not a

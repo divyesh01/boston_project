@@ -1,0 +1,39 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+
+  // SEPARATE from production wrangler.jsonc (which stays byte-identical). This
+  // config exists ONLY for the off-production Phase 1 D1 + Worker backend.
+  // It has no production route and must never be used with the production
+  // Worker configuration.
+  //
+  // A DISTINCT worker name so it can never collide with the production worker
+  // "boston-project" in the dashboard or in either deploy path.
+  "name": "boston-project-api-staging",
+  "main": "worker/index.js",
+
+  // Recent, valid compatibility date.
+  "compatibility_date": "2026-08-31",
+
+  "observability": {
+    "enabled": true,
+    "logs": { "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 }
+  },
+
+  // NO "assets" block on purpose: this Worker serves the /api/* JSON surface
+  // only; it must never take over static asset / SPA serving from production.
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "boston-project-staging-data",
+      "database_id": "5d5ff049-c273-4557-9938-e89c5d32112c"
+    }
+  ]
+
+  // SECRETS / VARS (increment 2 — never committed, set via `wrangler secret put`):
+  //   ACCESS_AUD          Cloudflare Access application audience (AUD) tag.
+  //   ACCESS_TEAM_DOMAIN  e.g. "acme.cloudflareaccess.com" (for the JWKS certs URL).
+  // These back the fail-closed JWT validator seam in worker/index.js. They are
+  // Worker secrets, NOT entries in this file — nothing authenticating goes here.
+}

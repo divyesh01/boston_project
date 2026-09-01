@@ -103,18 +103,25 @@ administration through the production-auth D1 binding. Business-data routes rema
 hard-disabled by `ENABLE_D1_DATA_API=false`, so hotel rows are not migrated to D1:
 the existing IndexedDB tables remain the source of truth in each browser profile.
 
+The Worker session response normalizes frontend capabilities at the trust
+boundary. `owner` and `admin` receive their role baseline before stored
+permission overrides are applied; other roles receive only stored grants. This
+matches server authority without widening property scope. It also prevents the
+2026-09-01 blank-page incident where a valid owner with stored permissions `{}`
+was redirected from `/` back to `/` by the client route guard.
+
 The two flags are deliberately independent. Turning on server authentication must
 not activate the D1 entity proxy, hide existing browser data, or copy any old
 browser-local password hash. The one production owner was migrated in place: the
 owner id/profile/account link stayed unchanged, the legacy verifier count became
 zero, and the password pepper exists only in Cloudflare secret storage.
 
-Evidence: `scripts/probe-worker-app-auth.mjs` (15/15 local contract),
+Evidence: `scripts/probe-worker-app-auth.mjs` (16/16 local contract),
 `scripts/probe-worker-auth-remote.mjs` (8/8 isolated Cloudflare runtime), and
 `scripts/smoke-production-auth.mjs` (22/22 real production, with disposable
 non-owner cleanup). The deployed version is
-`7675fe25-fa8f-4c1d-860a-4f43689e156d`; rollback is
-`36993034-a938-4fb9-8b19-e7ac87820b34`.
+`6b04c93d-f5e4-4de7-9832-357a8aeffee5`; immediate rollback is
+`623b3ee9-6815-43fb-a70c-1c1cdea0a2c8`.
 
 ### Legacy Standalone Local Administration (retired production mode)
 

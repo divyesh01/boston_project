@@ -249,13 +249,22 @@ node scripts/probe-cors-config.mjs        # 35/0, standalone — no loader neede
   `PASSWORD_PEPPER_V1` Cloudflare secret. Legacy/unknown formats fail closed.
 - `app_session` and `app_mfa_challenge` are the browser-independent session
   and single-use MFA stores. D1 stores token digests, never bearer cookies.
+- `/api/session` derives the frontend route-capability baseline for `owner` and
+  `admin` from their authoritative server role, then applies any stored
+  permission overrides. This prevents a provisioned owner whose legacy
+  `permissions` JSON is `{}` from being authenticated but trapped in a blank
+  same-path `/` permission redirect. Non-owner roles receive no elevated
+  defaults from this boundary.
 - Owner migration is compare-and-swap and profile-preserving; provisioning and
-  migration scripts never persist plaintext passwords.
+  migration scripts never persist plaintext passwords. New-owner provisioning
+  stores the same complete owner capability map returned by the session API.
 - Property deletion in the browser walks 24 dependent IndexedDB tables.
   `propertyCascadeIds` handles numeric/string legacy ids without deleting a
   separately owned cross-type property.
-- Production Worker `7675fe25-fa8f-4c1d-860a-4f43689e156d` passed the 22-check
-  live smoke. Rollback target is `36993034-a938-4fb9-8b19-e7ac87820b34`.
+- Production Worker `6b04c93d-f5e4-4de7-9832-357a8aeffee5` includes the
+  permission-bootstrap incident repair. Its pre-change rollback target is
+  `623b3ee9-6815-43fb-a70c-1c1cdea0a2c8`; the earlier authentication rollout
+  passed the 22-check live smoke.
 
 ### Build & Deploy
 | File | What It Does | If You Edit This... |
@@ -351,7 +360,8 @@ server was running). Vitest separately passed 45 files / 341 tests.
 
 Auth-specific evidence:
 
-- `probe-worker-app-auth.mjs`: 15/15 local Worker contract.
+- `probe-worker-app-auth.mjs`: 16/16 local Worker contract, including owner
+  route capabilities and a non-owner privilege-escalation negative.
 - `probe-worker-auth-remote.mjs`: 8/8 isolated remote Cloudflare runtime.
 - `smoke-production-auth.mjs`: 22/22 real production; cleanup proved one
   versioned owner, zero legacy owners, and zero residual sessions, challenges,

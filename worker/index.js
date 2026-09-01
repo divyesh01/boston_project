@@ -26,6 +26,7 @@ import { queryAll } from "./db.js";
 import { handleEntityRequest } from "./entities.js";
 import { handleUsersRequest } from "./users.js";
 import { appSessionCookiePresent, authenticateAppSession, handleAppAuthRequest, sameOriginMutation } from "./app-auth.js";
+import { permissionsForSession } from "./session-permissions.js";
 
 /**
  * D1 + Access bindings. Secrets (ACCESS_AUD, ACCESS_TEAM_DOMAIN) are provided as
@@ -95,8 +96,7 @@ function jsonResponse(body, status) {
  */
 async function handleRead(url, env, scope) {
   if (url.pathname === "/api/session") {
-    let permissions = {};
-    try { permissions = scope.user.permissions ? JSON.parse(scope.user.permissions) : {}; } catch { permissions = {}; }
+    const permissions = permissionsForSession(scope.user.role, scope.user.permissions);
     return jsonResponse({
       authenticated: true,
       initialized: true,

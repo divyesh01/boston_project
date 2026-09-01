@@ -37,6 +37,7 @@ seedProperties(db);
 seedUser(db, { id: "U_SHARED", email: "shared@example.com", role: "owner", mode: "all" });
 seedUser(db, { id: "U_LOCK", email: "locked@example.com", role: "owner", mode: "all" });
 seedUser(db, { id: "U_MFA", email: "mfa@example.com", role: "owner", mode: "all" });
+seedUser(db, { id: "U_STAFF", email: "staff@example.com", role: "staff", mode: "specific" });
 const credential = await createCredential(password, pepper, new TextEncoder().encode(salt));
 db.prepare("UPDATE user SET username=?,password_hash=?,salt=?,is_active=1,is_locked=0,failed_login_count=0 WHERE id=?")
   .run("shared-user", credential.encoded, credential.salt, "U_SHARED");
@@ -44,6 +45,8 @@ db.prepare("UPDATE user SET username=?,password_hash=?,salt=?,is_active=1,is_loc
   .run("locked-user", credential.encoded, credential.salt, "U_LOCK");
 db.prepare("UPDATE user SET username=?,password_hash=?,salt=?,is_active=1,is_locked=0,failed_login_count=0,mfa_enabled=1,mfa_secret=? WHERE id=?")
   .run("mfa-user", credential.encoded, credential.salt, "JBSWY3DPEHPK3PXP", "U_MFA");
+db.prepare("UPDATE user SET username=?,password_hash=?,salt=?,permissions=?,is_active=1,is_locked=0 WHERE id=?")
+  .run("staff-user", credential.encoded, credential.salt, JSON.stringify({ view_dashboard: true }), "U_STAFF");
 const env = makeEnv(db, { ENABLE_D1_DATA_API: "false", PASSWORD_PEPPER_V1: pepper });
 
 await run.check("legacy and unsupported credential versions fail closed without HTTP 500", async () => {
@@ -88,6 +91,21 @@ await run.check("browser one session resolves the D1 user", async () => {
   assertEqual(response.status, 200);
   assertEqual(body.user.email, "shared@example.com");
   assertEqual(body.user.id, "U_SHARED");
+  assertEqual(body.user.permissions.view_dashboard, true);
+  assertEqual(body.user.permissions.manage_users, true);
+});
+
+await run.check("non-owner session permissions do not inherit owner capabilities", async () => {
+  const login = await request(env, "/api/auth/login", {
+    method: "POST",
+    body: { identifier: "staff-user", password },
+  });
+  assertEqual(login.status, 200);
+  const response = await request(env, "/api/session", { cookie: cookieValue(login.headers.get("set-cookie")) });
+  const body = await response.json();
+  assertEqual(response.status, 200);
+  assertEqual(body.user.permissions.view_dashboard, true);
+  assertEqual(body.user.permissions.manage_users, undefined);
 });
 
 let browserTwoCookie = "";

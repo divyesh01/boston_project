@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { createCredential } from "../worker/password-credential.js";
+import { ownerPermissionsJson } from "../worker/session-permissions.js";
 
 
 function sql(value) {
@@ -66,6 +67,7 @@ const credential = await createCredential(password, pepper);
 const now = new Date().toISOString();
 const accountId = randomUUID();
 const userId = randomUUID();
+const ownerPermissions = ownerPermissionsJson();
 const tempRoot = await mkdtemp(path.join(tmpdir(), "rri-owner-"));
 const sqlPath = path.join(tempRoot, "owner.sql");
 try {
@@ -74,7 +76,7 @@ try {
     // the file back on failure. Explicit BEGIN/COMMIT are rejected by D1.
     `INSERT INTO account (id,name,created_date) VALUES (${sql(accountId)},${sql("RRI Executive")},${sql(now)});`,
     "INSERT INTO user (id,account_id,username,display_name,email,role,property_access_mode,permissions,is_active,is_locked,must_change_password,mfa_enabled,email_confirmed,password_hash,salt,failed_login_count,created_date,updated_date) VALUES " +
-      `(${sql(userId)},${sql(accountId)},${sql(username)},${sql(displayName)},${sql(email)},'owner','all','{}',1,0,0,0,1,${sql(credential.encoded)},${sql(credential.salt)},0,${sql(now)},${sql(now)});`,
+      `(${sql(userId)},${sql(accountId)},${sql(username)},${sql(displayName)},${sql(email)},'owner','all',${sql(ownerPermissions)},1,0,0,0,1,${sql(credential.encoded)},${sql(credential.salt)},0,${sql(now)},${sql(now)});`,
   ].join("\n");
   await writeFile(sqlPath, statement, { encoding: "utf8", mode: 0o600 });
   // Node cannot spawn a .cmd file directly with shell:false on Windows: it

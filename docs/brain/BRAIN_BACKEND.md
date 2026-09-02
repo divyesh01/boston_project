@@ -446,3 +446,16 @@ npm run test:watch
 > `verify-transactions.mjs` and `verify-coexistence.mjs` MUST be run with
 > `node --import ./scripts/_loader-boot.mjs`. Bare `node scripts/verify-*.mjs` dies on the
 > `@/lib` alias or attempts a real HTTP call, which looks like a code failure but is not.
+
+---
+
+## Worker D1 write contracts (2026-09-02)
+
+- `worker/schema.sql` must remain column/index/constraint compatible with `migrations-production/0001_auth_schema.sql` for every production-auth table. `scripts/verify-schema-parity.mjs` compares the real DDLs and keeps production authentication-only.
+- Generic entity creation suppresses only deterministic same-primary-key replays with `ON CONFLICT(id) DO NOTHING`. It does not use blanket `INSERT OR IGNORE`, which previously hid required-field, foreign-key, and business-key failures.
+- D1 write failures are classified by constraint kind: uniqueness is 409; missing/invalid/reference data is 422; non-constraint failures remain generic 500 without SQL details.
+- Roster business keys are preflighted for an actionable conflict response, while the database uniqueness constraint remains the authority for races.
+- Bulk writes remain one D1 batch so a rejected row cannot leave neighboring rows committed.
+- The Worker user API stores real versioned credentials in the same atomic batch as the new user and grants. Password change/reset operations revoke sessions and MFA challenges in the same batch as the credential replacement.
+
+Primary gates: `scripts/probe-worker-entities-conflict.mjs`, `scripts/probe-worker-entities-roster-create.mjs`, `scripts/probe-worker-credential-lifecycle.mjs`, and `scripts/verify-schema-parity.mjs`.

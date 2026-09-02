@@ -338,7 +338,7 @@ await r.check(`full ${MAX_ROWS_PER_CHUNK}-row chunk stays under the D1 query bud
 // binding limit, and it is unchanged.
 await r.check("worst-case chunk (every row a DISTINCT property) stays inside both D1 ceilings", async () => {
   const db = makeDb();
-  db.prepare("INSERT INTO account (id, name) VALUES (?,?)").run("A_1", "Boston Hotels");
+  db.prepare("INSERT INTO account (id, name, created_date) VALUES (?,?,?)").run("A_1", "Boston Hotels", "2026-01-01");
   const codes = [];
   for (let i = 0; i < MAX_ROWS_PER_CHUNK; i++) {
     const code = `RRI-W${String(i).padStart(2, "0")}`;
@@ -418,7 +418,7 @@ await r.check("worst-case chunk (every row a DISTINCT property) stays inside bot
 // `local_numeric_id IN (…)` clause must be gone.
 await r.check("CHANGE 10 param budget: the resolver binds ONE param per distinct property_code and NEVER binds a property_local_id", async () => {
   const db = makeDb();
-  db.prepare("INSERT INTO account (id, name) VALUES (?,?)").run("A_1", "Boston Hotels");
+  db.prepare("INSERT INTO account (id, name, created_date) VALUES (?,?,?)").run("A_1", "Boston Hotels", "2026-01-01");
   const codes = [];
   const localIds = new Set();
   for (let i = 0; i < MAX_ROWS_PER_CHUNK; i++) {

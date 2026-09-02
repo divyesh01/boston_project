@@ -30,6 +30,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const SCHEMA_PATH = fileURLToPath(new URL("../worker/schema.sql", import.meta.url));
+const PRODUCTION_SCHEMA_PATH = fileURLToPath(
+  new URL("../migrations-production/0001_auth_schema.sql", import.meta.url),
+);
 
 // ---------------------------------------------------------------------------
 // D1 binding shim over node:sqlite
@@ -136,6 +139,25 @@ export function makeDb() {
   return db;
 }
 
+/**
+ * Build a fresh in-memory DB loaded with the EXACT DDL the live production
+ * authentication database was built from — migrations-production/0001_auth_schema.sql,
+ * byte for byte, with nothing added.
+ *
+ * worker/schema.sql is now held to that DDL by scripts/verify-schema-parity.mjs,
+ * so the two agree; this loader exists so a credential/authorization probe is
+ * proven against production's own file and cannot be satisfied by a staging
+ * convenience column that production does not have. A probe that must run
+ * against the auth surface ONLY should prefer this one.
+ */
+export function makeProductionDb() {
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON;");
+  db.exec(readFileSync(PRODUCTION_SCHEMA_PATH, "utf8"));
+  db.exec("PRAGMA foreign_keys = ON;");
+  return db;
+}
+
 /** Seed two properties (P_A, P_B) and their property_id_map rows. */
 export function seedProperties(db, { accountId = "A_1", accountName = "Boston Hotels" } = {}) {
   db.prepare("INSERT OR IGNORE INTO account (id, name, created_date) VALUES (?,?,?)")
@@ -151,16 +173,76 @@ export function seedProperties(db, { accountId = "A_1", accountName = "Boston Ho
   );
 }
 
-/** Insert a user row (scope resolver reads id, email, role, property_access_mode). */
-export function seedUser(db, { id, email, role, mode, grants = [], accountId = "A_1" }) {
+/**
+ * Seed an account and two properties using ONLY columns the production auth
+ * schema declares. seedProperties() cannot be used against makeProductionDb()
+ * because it writes property.created_date and property_id_map, neither of which
+ * exists in production.
+ */
+export function seedAuthFixture(db, { accountId = "A_1", accountName = "Boston Hotels" } = {}) {
+  db.prepare("INSERT OR IGNORE INTO account (id, name, created_date) VALUES (?,?,?)")
+    .run(accountId, accountName, "2026-01-01");
+  db.prepare("INSERT INTO property (id, account_id, code, name, rooms, active) VALUES (?,?,?,?,?,?)")
+    .run("P_A", accountId, "RRI-BOS", "Boston Downtown", 120, 1);
+  db.prepare("INSERT INTO property (id, account_id, code, name, rooms, active) VALUES (?,?,?,?,?,?)")
+    .run("P_B", accountId, "RRI-CAM", "Cambridge Riverside", 88, 1);
+}
+
+/**
+ * A NOT NULL-satisfying credential that can never verify: worker/password-credential.js
+ * refuses to parse it, so verifyCredential() returns false for every password.
+ */
+export const UNUSABLE_CREDENTIAL = "$unusable$no-credential-provisioned";
+
+/**
+ * Insert a user row. The scope resolver reads id/email/role/property_access_mode,
+ * but the schema now enforces production's NOT NULL set, so this must also supply
+ * password_hash, salt, created_date and updated_date.
+ *
+ * `password_hash` defaults to a deliberately UNUSABLE sentinel: it satisfies
+ * NOT NULL, it is not a parseable `$rri-pbkdf2-sha256$...` envelope, and it
+ * therefore makes every login attempt for a seeded-but-credential-less user fail
+ * closed. Tests that need a real credential mint one with seedCredential(), the
+ * same way production creates one.
+ */
+export function seedUser(db, {
+  id,
+  email,
+  role,
+  mode,
+  grants = [],
+  accountId = "A_1",
+  username = email,
+  passwordHash = UNUSABLE_CREDENTIAL,
+  salt = "",
+  createdDate = "2026-01-01T00:00:00.000Z",
+}) {
   db.prepare(
-    "INSERT INTO user (id, account_id, username, email, role, property_access_mode) VALUES (?,?,?,?,?,?)",
-  ).run(id, accountId, email, email, role, mode);
+    "INSERT INTO user (id, account_id, username, email, role, property_access_mode, password_hash, salt, created_date, updated_date) VALUES (?,?,?,?,?,?,?,?,?,?)",
+  ).run(id, accountId, username, email, role, mode, passwordHash, salt, createdDate, createdDate);
   for (const pid of grants) {
     db.prepare(
       "INSERT INTO user_property_access (account_id, user_id, property_id) VALUES (?,?,?)",
     ).run(accountId, id, pid);
   }
+}
+
+/**
+ * Mint a REAL versioned credential for a seeded user through the production code
+ * path (worker/password-credential.js), so a probe never hand-rolls hashing.
+ */
+export async function seedCredential(db, { userId, password, pepper, salt, accountId = "A_1" }) {
+  const { createCredential } = await import("../worker/password-credential.js");
+  const credential = await createCredential(
+    password,
+    pepper,
+    salt === undefined ? undefined : new TextEncoder().encode(salt),
+  );
+  const changed = db
+    .prepare("UPDATE user SET password_hash=?, salt=?, updated_date=? WHERE id=? AND account_id=?")
+    .run(credential.encoded, credential.salt, new Date().toISOString(), userId, accountId);
+  if (Number(changed.changes) !== 1) throw new Error(`seedCredential: user ${userId} not found`);
+  return credential;
 }
 
 /** Insert a transaction_line row directly (for scope read tests). */

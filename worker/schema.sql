@@ -40,7 +40,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE account (
   id           TEXT PRIMARY KEY,
   name         TEXT NOT NULL,
-  created_date TEXT
+  created_date TEXT NOT NULL
 );
 
 -- The parent every property-scoped table cascades from. `id` is the server's
@@ -76,6 +76,12 @@ CREATE INDEX idx_property_account ON property (account_id);
 -- owner/admin override the mode entirely and are ALWAYS treated as 'all'; the
 -- stored mode for such a user is irrelevant to the scope resolver. There is NO
 -- null sentinel column — the CHECK forbids any third value.
+--
+-- CONSTRAINT PARITY: every column below is declared EXACTLY as
+-- migrations-production/0001_auth_schema.sql declares it, and
+-- scripts/verify-schema-parity.mjs fails the build if the two ever drift again.
+-- The NOT NULLs are not decoration: they are what makes a harness INSERT that
+-- omits password_hash/salt fail here the same way it fails in production.
 CREATE TABLE user (
   id                     TEXT PRIMARY KEY,
   account_id             TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
@@ -85,25 +91,25 @@ CREATE TABLE user (
   role                   TEXT NOT NULL,
   property_access_mode   TEXT NOT NULL CHECK (property_access_mode IN ('all','specific')),
   permissions            TEXT,             -- JSON object, per-feature flags
-  is_active              INTEGER,          -- boolean 0/1
-  is_locked              INTEGER,
-  must_change_password   INTEGER,
-  mfa_enabled            INTEGER,
-  email_confirmed        INTEGER,
-  password_hash          TEXT,
-  salt                   TEXT,
+  is_active              INTEGER NOT NULL DEFAULT 1,  -- boolean 0/1
+  is_locked              INTEGER NOT NULL DEFAULT 0,
+  must_change_password   INTEGER NOT NULL DEFAULT 0,
+  mfa_enabled            INTEGER NOT NULL DEFAULT 0,
+  email_confirmed        INTEGER NOT NULL DEFAULT 1,
+  password_hash          TEXT NOT NULL,
+  salt                   TEXT NOT NULL,
   mfa_secret             TEXT,
   mfa_secret_pending     TEXT,
   mfa_last_counter       INTEGER,
   reset_token_hash       TEXT,
   reset_token_expires_at TEXT,
   last_login             TEXT,
-  failed_login_count     INTEGER,
+  failed_login_count     INTEGER NOT NULL DEFAULT 0,
   locked_until           TEXT,
   session_created        TEXT,
   session_expires        TEXT,
-  created_date           TEXT,
-  updated_date           TEXT,
+  created_date           TEXT NOT NULL,
+  updated_date           TEXT NOT NULL,
   UNIQUE (account_id, id)
 );
 CREATE INDEX idx_user_username ON user (username);

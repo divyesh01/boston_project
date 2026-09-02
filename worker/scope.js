@@ -50,6 +50,7 @@ import { queryFirst, queryAll, inClause } from "./db.js";
  * @property {string} accountId
  * @property {boolean} all       True when the caller is unrestricted (owner/admin/'all').
  * @property {string[]} propertyIds
+ * @property {string|null} sessionId Application-session id; null for Access compatibility callers.
  */
 
 /**
@@ -95,7 +96,7 @@ export async function resolveScope(env, principal) {
   if (unrestricted) {
     const rows = await queryAll(env, "SELECT id FROM property WHERE account_id = ?", [accountId]);
     const ids = rows.map((r) => String(/** @type {{ id: unknown }} */ (r).id));
-    return { ok: true, scope: { user: u, accountId, all: true, propertyIds: ids } };
+    return { ok: true, scope: { user: u, accountId, all: true, propertyIds: ids, sessionId: principal.sessionId ? String(principal.sessionId) : null } };
   }
 
   // 'specific' — only explicitly granted ids. Zero grants => empty set.
@@ -105,7 +106,7 @@ export async function resolveScope(env, principal) {
     [accountId, u.id],
   );
   const ids = grants.map((r) => String(/** @type {{ property_id: unknown }} */ (r).property_id));
-  return { ok: true, scope: { user: u, accountId, all: false, propertyIds: ids } };
+  return { ok: true, scope: { user: u, accountId, all: false, propertyIds: ids, sessionId: principal.sessionId ? String(principal.sessionId) : null } };
 }
 
 /**

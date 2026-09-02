@@ -1,4 +1,11 @@
 import { queryAll, queryFirst } from "./db.js";
+import { createCredentialForEnv, verifyCredentialForEnv } from "./password-credential.js";
+import {
+  generateTemporaryPassword,
+  isValidEmail,
+  isValidUsername,
+  validatePasswordStrength,
+} from "./password-policy.js";
 
 const ADMIN_ROLES = new Set(["owner", "admin", "gm"]);
 const ASSIGNABLE_ROLES = new Set(["owner", "admin", "gm", "manager", "front_desk"]);
@@ -14,6 +21,14 @@ function requireAdmin(scope) {
   if (!ADMIN_ROLES.has(role) || (role !== "owner" && permissions.manage_users !== true)) {
     throw new UserRequestError("forbidden", 403);
   }
+}
+
+function isOwner(scope) {
+  return String(scope.user.role || "").toLowerCase() === "owner";
+}
+
+function assertMayManageRole(scope, role) {
+  if (String(role).toLowerCase() === "owner" && !isOwner(scope)) throw new UserRequestError("only an owner may manage an owner account", 403);
 }
 
 function mayReadRoster(scope) {
@@ -51,9 +66,29 @@ async function bodyOf(request) {
   try { return await request.json(); } catch { throw new UserRequestError("invalid JSON body"); }
 }
 
+async function newCredential(env, password) {
+  const passwordError = validatePasswordStrength(password);
+  if (passwordError) throw new UserRequestError(passwordError);
+  try {
+    return await createCredentialForEnv(password, env);
+  } catch {
+    throw new UserRequestError("credential service unavailable", 503);
+  }
+}
+
+function isUniqueConstraint(error) {
+  let current = error;
+  for (let depth = 0; current != null && depth < 5; depth += 1) {
+    if (/\b(UNIQUE constraint failed|PRIMARY KEY must be unique)\b/i.test(String(current?.message || current))) return true;
+    current = typeof current === "object" ? current.cause : null;
+  }
+  return false;
+}
+
 export async function handleUsersRequest(request, env, scope, pathParts) {
   try {
     const id = pathParts[2] ? decodeURIComponent(pathParts[2]) : "";
+    const passwordAction = pathParts[3] === "password" ? pathParts[4] : "";
     if (!id && request.method === "GET") {
       if (!mayReadRoster(scope)) throw new UserRequestError("forbidden", 403);
       return Response.json({ users: await listUsers(env, scope.accountId, new URL(request.url).searchParams.get("q") || "") });
@@ -63,51 +98,139 @@ export async function handleUsersRequest(request, env, scope, pathParts) {
       const user = (await listUsers(env, scope.accountId)).find((item) => String(item.id) === id);
       return user ? Response.json({ user }) : Response.json({ error: "not found" }, { status: 404 });
     }
+    if (id && passwordAction === "change" && request.method === "POST") {
+      if (id !== String(scope.user.id) || !scope.sessionId) throw new UserRequestError("forbidden", 403);
+      const input = await bodyOf(request);
+      const currentPassword = input.currentPassword;
+      const newPassword = input.newPassword;
+      if (typeof currentPassword !== "string" || typeof newPassword !== "string") throw new UserRequestError("currentPassword and newPassword are required");
+      const current = await queryFirst(env, "SELECT password_hash FROM user WHERE id=? AND account_id=?", [id, scope.accountId]);
+      if (!current) throw new UserRequestError("not found", 404);
+      const verification = await verifyCredentialForEnv(currentPassword, current.password_hash, env);
+      if (!verification.ok) throw new UserRequestError("current password is incorrect", 403);
+      const credential = await newCredential(env, newPassword);
+      const now = new Date().toISOString();
+      await env.DB.batch([
+        env.DB.prepare("UPDATE user SET password_hash=?,salt=?,must_change_password=0,updated_date=? WHERE id=? AND account_id=? AND password_hash=?")
+          .bind(credential.encoded, credential.salt, now, id, scope.accountId, current.password_hash),
+        env.DB.prepare("DELETE FROM app_session WHERE user_id=? AND id<>? AND EXISTS (SELECT 1 FROM user WHERE id=? AND account_id=? AND password_hash=?)")
+          .bind(id, scope.sessionId, id, scope.accountId, credential.encoded),
+        env.DB.prepare("DELETE FROM app_mfa_challenge WHERE user_id=? AND EXISTS (SELECT 1 FROM user WHERE id=? AND account_id=? AND password_hash=?)")
+          .bind(id, id, scope.accountId, credential.encoded),
+      ]);
+      const changed = await queryFirst(env, "SELECT password_hash FROM user WHERE id=? AND account_id=?", [id, scope.accountId]);
+      if (changed?.password_hash !== credential.encoded) throw new UserRequestError("password changed concurrently; retry", 409);
+      return Response.json({ success: true });
+    }
+
     requireAdmin(scope);
+
+    if (id && ["reset", "set"].includes(passwordAction) && request.method === "POST") {
+      if (id === String(scope.user.id)) throw new UserRequestError("use current-password verification to change your own password", 403);
+      const target = await queryFirst(env, "SELECT id,role FROM user WHERE id=? AND account_id=?", [id, scope.accountId]);
+      if (!target) throw new UserRequestError("not found", 404);
+      assertMayManageRole(scope, target.role);
+      const input = await bodyOf(request);
+      const suppliedPassword = Object.prototype.hasOwnProperty.call(input, "newPassword");
+      if (passwordAction === "set" && !suppliedPassword) throw new UserRequestError("newPassword is required");
+      if (suppliedPassword && typeof input.newPassword !== "string") throw new UserRequestError("newPassword must be a string");
+      const password = suppliedPassword ? input.newPassword : generateTemporaryPassword();
+      const credential = await newCredential(env, password);
+      const mustChangePassword = passwordAction === "reset" ? 1 : 0;
+      const now = new Date().toISOString();
+      await env.DB.batch([
+        env.DB.prepare("UPDATE user SET password_hash=?,salt=?,must_change_password=?,failed_login_count=0,locked_until=NULL,is_locked=0,updated_date=? WHERE id=? AND account_id=?")
+          .bind(credential.encoded, credential.salt, mustChangePassword, now, id, scope.accountId),
+        env.DB.prepare("DELETE FROM app_session WHERE user_id=?").bind(id),
+        env.DB.prepare("DELETE FROM app_mfa_challenge WHERE user_id=?").bind(id),
+      ]);
+      return Response.json(
+        { success: true, ...(!suppliedPassword ? { temporary_password: password } : {}) },
+        { headers: { "cache-control": "no-store" } },
+      );
+    }
+
     if (!id && request.method === "POST") {
       const input = await bodyOf(request); const data = input.data || input;
+      const username = String(data.username || "").trim();
+      const email = String(data.email || "").trim().toLowerCase();
+      if (!isValidUsername(username)) throw new UserRequestError("username must be 3-30 letters, numbers, or underscores");
+      if (!isValidEmail(email)) throw new UserRequestError("invalid email address");
       const role = String(data.role || "front_desk").toLowerCase();
       if (!ASSIGNABLE_ROLES.has(role)) throw new UserRequestError("invalid role");
+      assertMayManageRole(scope, role);
       const access = data.property_access === "all" ? "all" : "specific";
       const grants = access === "all" ? [] : [...new Set((Array.isArray(data.property_access) ? data.property_access : []).map(String))];
       if (["owner", "admin", "gm"].includes(role) && access !== "all") throw new UserRequestError("this role requires all-property access");
       await assertProperties(env, scope.accountId, grants);
+      const duplicate = await queryFirst(env, "SELECT id FROM user WHERE lower(username)=lower(?) OR lower(email)=lower(?) LIMIT 1", [username, email]);
+      if (duplicate) throw new UserRequestError("username or email already in use", 409);
+
+      const suppliedPassword = Object.prototype.hasOwnProperty.call(data, "password");
+      if (suppliedPassword && typeof data.password !== "string") throw new UserRequestError("password must be a string");
+      const password = suppliedPassword ? data.password : generateTemporaryPassword();
+      const credential = await newCredential(env, password);
+
       const userId = crypto.randomUUID();
-      const statements = [env.DB.prepare("INSERT INTO user (id,account_id,username,display_name,email,role,property_access_mode,permissions,is_active,is_locked,must_change_password,created_date,updated_date) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(userId, scope.accountId, String(data.username || "").trim(), data.display_name || data.full_name || null, String(data.email || "").trim().toLowerCase(), role, access, JSON.stringify(data.permissions || {}), data.is_active === false ? 0 : 1, data.is_locked ? 1 : 0, data.must_change_password ? 1 : 0, new Date().toISOString(), new Date().toISOString())];
+      const now = new Date().toISOString();
+      const mustChangePassword = suppliedPassword ? (data.must_change_password ? 1 : 0) : 1;
+      const statements = [env.DB.prepare("INSERT INTO user (id,account_id,username,display_name,email,role,property_access_mode,permissions,is_active,is_locked,must_change_password,password_hash,salt,created_date,updated_date) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(userId, scope.accountId, username, data.display_name || data.full_name || null, email, role, access, JSON.stringify(data.permissions || {}), data.is_active === false ? 0 : 1, data.is_locked ? 1 : 0, mustChangePassword, credential.encoded, credential.salt, now, now)];
       for (const propertyId of grants) statements.push(env.DB.prepare("INSERT INTO user_property_access (account_id,user_id,property_id) VALUES (?,?,?)").bind(scope.accountId, userId, propertyId));
-      await env.DB.batch(statements);
+      try {
+        await env.DB.batch(statements);
+      } catch (error) {
+        if (isUniqueConstraint(error)) throw new UserRequestError("username or email already in use", 409);
+        throw error;
+      }
       const user = (await listUsers(env, scope.accountId)).find((item) => item.id === userId);
-      return Response.json({ user }, { status: 201 });
+      return Response.json(
+        { user, ...(!suppliedPassword ? { temporary_password: password } : {}) },
+        { status: 201, headers: { "cache-control": "no-store" } },
+      );
     }
     if (id && request.method === "PATCH") {
       if (id === String(scope.user.id)) throw new UserRequestError("cannot modify your own account", 409);
       const current = await queryFirst(env, "SELECT * FROM user WHERE id=? AND account_id=?", [id, scope.accountId]);
       if (!current) throw new UserRequestError("not found", 404);
       const input = await bodyOf(request); const data = input.data || input;
+      const username = String(data.username ?? current.username).trim();
+      const email = String(data.email ?? current.email).trim().toLowerCase();
+      if (!isValidUsername(username)) throw new UserRequestError("username must be 3-30 letters, numbers, or underscores");
+      if (!isValidEmail(email)) throw new UserRequestError("invalid email address");
       const role = data.role == null ? current.role : String(data.role).toLowerCase();
       if (!ASSIGNABLE_ROLES.has(role)) throw new UserRequestError("invalid role");
+      assertMayManageRole(scope, current.role);
+      assertMayManageRole(scope, role);
       const requestedAccess = data.property_access === undefined ? current.property_access_mode : (data.property_access === "all" ? "all" : "specific");
       const grants = requestedAccess === "all" ? [] : [...new Set((Array.isArray(data.property_access) ? data.property_access : (await queryAll(env, "SELECT property_id FROM user_property_access WHERE account_id=? AND user_id=?", [scope.accountId,id])).map((row) => row.property_id)).map(String))];
       if (["owner", "admin", "gm"].includes(role) && requestedAccess !== "all") throw new UserRequestError("this role requires all-property access");
       await assertProperties(env, scope.accountId, grants);
-      if (current.role === "owner" && (role !== "owner" || data.is_active === false)) {
-        const owners = await queryFirst(env, "SELECT COUNT(*) count FROM user WHERE account_id=? AND role='owner' AND is_active<>0", [scope.accountId]);
-        if (Number(owners?.count || 0) <= 1) throw new UserRequestError("cannot remove or demote the last active owner", 409);
+      const active = data.is_active === undefined ? current.is_active : (data.is_active ? 1 : 0);
+      const changingActiveOwner = current.role === "owner" && current.is_active !== 0 && (role !== "owner" || active === 0);
+      const mutationTime = new Date().toISOString();
+      const ownerGuard = changingActiveOwner
+        ? " AND EXISTS (SELECT 1 FROM user other WHERE other.account_id=? AND other.role='owner' AND other.is_active<>0 AND other.id<>?)"
+        : "";
+      const updateParams = [username, data.display_name ?? data.full_name ?? current.display_name, email, role, requestedAccess, JSON.stringify(data.permissions ?? JSON.parse(current.permissions || "{}")), active, data.is_locked === undefined ? current.is_locked : (data.is_locked ? 1 : 0), data.must_change_password === undefined ? current.must_change_password : (data.must_change_password ? 1 : 0), mutationTime, id, scope.accountId, ...(changingActiveOwner ? [scope.accountId, id] : [])];
+      const statements = [env.DB.prepare(`UPDATE user SET username=?,display_name=?,email=?,role=?,property_access_mode=?,permissions=?,is_active=?,is_locked=?,must_change_password=?,updated_date=? WHERE id=? AND account_id=?${ownerGuard}`).bind(...updateParams)];
+      statements.push(env.DB.prepare("DELETE FROM user_property_access WHERE account_id=? AND user_id=? AND EXISTS (SELECT 1 FROM user WHERE id=? AND account_id=? AND updated_date=?)").bind(scope.accountId, id, id, scope.accountId, mutationTime));
+      for (const propertyId of grants) statements.push(env.DB.prepare("INSERT INTO user_property_access (account_id,user_id,property_id) SELECT ?,?,? WHERE EXISTS (SELECT 1 FROM user WHERE id=? AND account_id=? AND updated_date=?)").bind(scope.accountId,id,propertyId,id,scope.accountId,mutationTime));
+      let results;
+      try { results = await env.DB.batch(statements); }
+      catch (error) {
+        if (isUniqueConstraint(error)) throw new UserRequestError("username or email already in use", 409);
+        throw error;
       }
-      const statements = [env.DB.prepare("UPDATE user SET username=?,display_name=?,email=?,role=?,property_access_mode=?,permissions=?,is_active=?,is_locked=?,must_change_password=?,updated_date=? WHERE id=? AND account_id=?").bind(data.username ?? current.username, data.display_name ?? data.full_name ?? current.display_name, String(data.email ?? current.email).toLowerCase(), role, requestedAccess, JSON.stringify(data.permissions ?? JSON.parse(current.permissions || "{}")), data.is_active === undefined ? current.is_active : (data.is_active ? 1 : 0), data.is_locked === undefined ? current.is_locked : (data.is_locked ? 1 : 0), data.must_change_password === undefined ? current.must_change_password : (data.must_change_password ? 1 : 0), new Date().toISOString(), id, scope.accountId), env.DB.prepare("DELETE FROM user_property_access WHERE account_id=? AND user_id=?").bind(scope.accountId,id)];
-      for (const propertyId of grants) statements.push(env.DB.prepare("INSERT INTO user_property_access (account_id,user_id,property_id) VALUES (?,?,?)").bind(scope.accountId,id,propertyId));
-      await env.DB.batch(statements);
+      if (Number(results?.[0]?.meta?.changes ?? results?.[0]?.changes ?? 0) !== 1) throw new UserRequestError("cannot remove or demote the last active owner", 409);
       return Response.json({ user: (await listUsers(env, scope.accountId)).find((item) => item.id === id) });
     }
     if (id && request.method === "DELETE") {
       if (id === String(scope.user.id)) throw new UserRequestError("cannot delete your own account", 409);
       const target = await queryFirst(env, "SELECT role,is_active FROM user WHERE id=? AND account_id=?", [id, scope.accountId]);
       if (!target) throw new UserRequestError("not found", 404);
-      if (target.role === "owner" && target.is_active !== 0) {
-        const owners = await queryFirst(env, "SELECT COUNT(*) count FROM user WHERE account_id=? AND role='owner' AND is_active<>0", [scope.accountId]);
-        if (Number(owners?.count || 0) <= 1) throw new UserRequestError("cannot delete the last active owner", 409);
-      }
-      await env.DB.prepare("DELETE FROM user WHERE id=? AND account_id=?").bind(id, scope.accountId).run();
+      assertMayManageRole(scope, target.role);
+      const result = await env.DB.prepare("DELETE FROM user WHERE id=? AND account_id=? AND (role<>'owner' OR is_active=0 OR EXISTS (SELECT 1 FROM user other WHERE other.account_id=? AND other.role='owner' AND other.is_active<>0 AND other.id<>?))").bind(id, scope.accountId, scope.accountId, id).run();
+      if (Number(result?.meta?.changes ?? result?.changes ?? 0) !== 1) throw new UserRequestError("cannot delete the last active owner", 409);
       return Response.json({ success: true });
     }
     return Response.json({ error: "method not allowed" }, { status: 405 });

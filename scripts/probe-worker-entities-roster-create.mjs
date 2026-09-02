@@ -389,21 +389,17 @@ await r.check("GUARD 08 PIN: an account_id in the payload is REFUSED and nothing
 });
 
 // ===========================================================================
-// GUARD 09 — RECORDED CURRENT BEHAVIOUR for a DEFERRED defect. NOT a 409 demand.
+// GUARD 09 — RED. A roster create whose (account_id, code) already exists, with a
+// fresh server-derived id, hits `UNIQUE (account_id, code)` (worker/schema.sql).
+// It must be answered 409 NAMING the conflicting code — a client conflict, not a
+// server error — and the pre-existing row must be byte-identical afterwards.
 //
-// A roster create whose (account_id, code) already exists, with a fresh
-// server-derived id, hits `UNIQUE (account_id, code)` (worker/schema.sql) and
-// INSERT OR IGNORE silently skips it. The DESIRED future behaviour is a 409
-// naming the conflicting code; that is filed separately and is deliberately NOT
-// asserted here, because Agent B's write-confirmation fix does not address it and
-// this guard must survive that fix unchanged.
-//
-// The invariant asserted instead is the one that is stable across both states and
-// is the actual data-integrity requirement: A DUPLICATE MUST NOT OVERWRITE,
-// MUTATE, OR DUPLICATE THE EXISTING ROW, and it must not be reported as a
-// successful create. The observed status is printed as a diagnostic.
+// This guard previously only RECORDED the observed status, because the fix was
+// deferred and filed separately. It has since landed (see
+// scripts/probe-worker-entities-conflict.mjs for the full contract), so the demand
+// is now asserted here too: the data-integrity invariant AND the truthful status.
 // ===========================================================================
-await r.check("GUARD 09 RECORDED: a duplicate (account_id, code) roster create does not overwrite, mutate, or duplicate the existing row, and is not reported as a create", async () => {
+await r.check("GUARD 09 RED: a duplicate (account_id, code) roster create => 409 naming the code; the existing row is not overwritten, mutated, or duplicated", async () => {
   const { db, env } = base();
   // PRECONDITION (non-vacuity): the collision target really exists, so the
   // request really is a duplicate.
@@ -411,7 +407,11 @@ await r.check("GUARD 09 RECORDED: a duplicate (account_id, code) roster create d
   assert(before, "precondition: P_A exists");
   assertEqual(before.code, "RRI-BOS", "precondition: P_A holds the code we are about to collide with");
   const out = await post(env, OWNER, "/api/entities/Property", { data: { code: "RRI-BOS", name: "Impostor", rooms: 1 } });
-  console.log(`        [diagnostic] duplicate-code create => ${out.status} ${JSON.stringify(out.body)} (desired future behaviour: 409, filed separately)`);
+  assertEqual(out.status, 409, `a duplicate business key must be 409, got ${out.status} ${JSON.stringify(out.body)}`);
+  assert(
+    JSON.stringify(out.body).includes("RRI-BOS"),
+    `the 409 must NAME the conflicting code so the UI can report it; got ${JSON.stringify(out.body)}`,
+  );
   const after = propById(db, "P_A");
   assertEqual(JSON.stringify(after), JSON.stringify(before), "EVERY field of the pre-existing row must be byte-identical after the duplicate attempt");
   assertEqual(after.name, "Boston Downtown", "specifically: the name was not overwritten by 'Impostor'");
@@ -422,7 +422,6 @@ await r.check("GUARD 09 RECORDED: a duplicate (account_id, code) roster create d
     "exactly ONE row may hold (A_1, RRI-BOS) — the duplicate must not create a second",
   );
   assertEqual(propCount(db), 2, "the roster still holds exactly the 2 seeded rows");
-  assert(out.status !== 201, `a duplicate must never be answered as a successful create, got ${out.status} ${JSON.stringify(out.body)}`);
 });
 
 // ===========================================================================
@@ -435,7 +434,7 @@ await r.check("GUARD 09 RECORDED: a duplicate (account_id, code) roster create d
 // ===========================================================================
 await r.check("GUARD 10 RED: account A_2 creating a code A_1 already uses => 201 describing A_2's OWN new row; A_1's row is untouched", async () => {
   const db = baseDb();
-  db.prepare("INSERT INTO account (id, name) VALUES (?,?)").run("A_2", "Second Hotel Group");
+  db.prepare("INSERT INTO account (id, name, created_date) VALUES (?,?,?)").run("A_2", "Second Hotel Group", "2026-01-01");
   db.prepare(INSERT_PROPERTY).run("P_SHARED_A1", "A_1", "HOTEL_SHARED", "A1 Shared", 7, 1, "2026-01-01");
   db.prepare(INSERT_PROPERTY).run("P_A2_OWN", "A_2", "A2-OWN", "A2 Own", 5, 1, "2026-01-01");
   seedUser(db, { id: "owner-2", email: "owner2@hotel.test", role: "owner", mode: "all", accountId: "A_2" });
@@ -480,7 +479,7 @@ await r.check("GUARD 11 RED: the roster write-confirmation statement binds EXACT
   const out = await post(env, OWNER, "/api/entities/Property", { data: { code: "HOTEL_I", name: "Hotel I" } });
   // PRECONDITIONS (non-vacuity): the INSERT really executed, and at least one
   // statement ran after it — so there IS a confirmation to inspect.
-  const insertIdx = stats.calls.findIndex((c) => /INSERT\s+OR\s+IGNORE\s+INTO\s+property\b/i.test(c.sql));
+  const insertIdx = stats.calls.findIndex((c) => /^\s*INSERT\s+INTO\s+property\b/i.test(c.sql));
   assert(insertIdx >= 0, `precondition: the roster INSERT must have executed; saw ${JSON.stringify(stats.calls.map((c) => c.sql))}`);
   const insertCall = stats.calls[insertIdx];
   const afterInsert = stats.calls.slice(insertIdx + 1);
@@ -578,7 +577,10 @@ await r.check("GUARD 12 PIN: non-roster tables never acquire account_id SQL; and
   assert(idScoped.every(([, c]) => c.roster === true), "TRIPWIRE: every scopeColumn 'id' contract must also be roster:true");
 
   // 12c — lexical negative (documented above as NOT behavioural proof).
-  assert(/async function createRows/.test(ENTITIES_SRC) && /INSERT OR IGNORE/.test(ENTITIES_SRC), "precondition: worker/entities.js was really read");
+  assert(
+    /async function createRows/.test(ENTITIES_SRC) && /ON CONFLICT\(id\) DO NOTHING/.test(ENTITIES_SRC),
+    "precondition: worker/entities.js was really read",
+  );
   for (const pattern of [
     /\bscopeColumn\s*[!=]==\s*["']id["']/,
     /["']id["']\s*[!=]==\s*[\w.]*scopeColumn\b/,
@@ -594,32 +596,30 @@ await r.check("GUARD 12 PIN: non-roster tables never acquire account_id SQL; and
 });
 
 // ===========================================================================
-// GUARD 13 — RECORDED CURRENT BEHAVIOUR: THE PARTIAL-COMMIT GAP (deferred, filed
-// separately, expected to PERSIST after the endorsed fix).
+// GUARD 13 — RED / NO PARTIAL COMMIT. bulk-create prepares every row and commits
+// them in ONE env.DB.batch(). A mid-list row that violates a constraint must
+// therefore roll the WHOLE request back: the caller may not see an error while
+// its neighbours sit permanently on disk.
 //
-// bulk-create prepares every row, commits them in ONE env.DB.batch() (:215), and
-// only THEN confirms them one by one (:217-221). A mid-list row that INSERT OR
-// IGNORE skips therefore throws AFTER the other rows are already committed. The
-// caller sees an error while two rows are permanently on disk. The endorsed
-// write-confirmation fix does not change that ordering, so the assertions here
-// are limited to what is stable: the committed rows and the non-success response.
+// This guard previously RECORDED the partial commit (`committed: NEW_A, NEW_B`) as
+// a deferred defect. Removing the blanket `INSERT OR IGNORE` restored the batch's
+// atomicity, so the demand is asserted here now: 409 and nothing lands.
 // ===========================================================================
-await r.check("GUARD 13 RECORDED: bulk create [NEW_A, duplicate, NEW_B] commits the two new rows and still answers with an error (partial-commit gap)", async () => {
+await r.check("GUARD 13 RED: bulk create [NEW_A, duplicate, NEW_B] => 409 and NEITHER new row is committed", async () => {
   const { db, env } = base();
   // PRECONDITION (non-vacuity): the middle row is genuinely a duplicate and the
-  // two flanking codes are genuinely unused.
+  // two flanking codes are genuinely unused, so a clean run WOULD have landed them.
   assertEqual(propsByCode(db, "RRI-BOS").length, 1, "precondition: RRI-BOS already exists (the duplicate)");
   assertEqual(propsByCode(db, "NEW_A").length + propsByCode(db, "NEW_B").length, 0, "precondition: NEW_A/NEW_B are unused");
   const out = await post(env, OWNER, "/api/entities/Property/bulk-create", {
     rows: [{ code: "NEW_A", name: "New A" }, { code: "RRI-BOS", name: "Dup" }, { code: "NEW_B", name: "New B" }],
   });
+  assertEqual(out.status, 409, `the conflicting bulk create must be 409, got ${out.status} ${JSON.stringify(out.body)}`);
   const committed = db.prepare("SELECT code FROM property WHERE code IN ('NEW_A','NEW_B') ORDER BY code").all().map((x) => x.code);
-  console.log(`        [diagnostic] bulk create => ${out.status} ${JSON.stringify(out.body)}; committed new rows: ${JSON.stringify(committed)} (partial-commit gap, filed separately)`);
-  assertEqual(JSON.stringify(committed), JSON.stringify(["NEW_A", "NEW_B"]), "both non-duplicate rows are committed by the batch");
-  assertEqual(propCount(db), 4, "the roster holds 2 seeded + 2 new rows");
+  assertEqual(JSON.stringify(committed), "[]", `NEITHER flanking row may be committed; found ${JSON.stringify(committed)}`);
+  assertEqual(propCount(db), 2, "the roster still holds exactly the 2 seeded rows");
   assertEqual(propsByCode(db, "RRI-BOS").length, 1, "the duplicate did not create a second RRI-BOS row");
   assertEqual(propById(db, "P_A").name, "Boston Downtown", "the duplicate did not overwrite the existing row");
-  assert(out.status !== 201, `the partial commit must not be reported as a clean 201, got ${out.status} ${JSON.stringify(out.body)}`);
 });
 
 // ===========================================================================
@@ -674,7 +674,7 @@ await r.check(`GUARD 15 RED: with 122 properties, no statement in the roster cre
   const out = await post(env, "big@hotel.test", "/api/entities/Property", { data: { code: "BIG-NEW", name: "Big New" } });
   // PRECONDITION (non-vacuity): the create path really executed its write and a
   // confirmation after it — otherwise a low param count would prove nothing.
-  const insertIdx = stats.calls.findIndex((c) => /INSERT\s+OR\s+IGNORE\s+INTO\s+property\b/i.test(c.sql));
+  const insertIdx = stats.calls.findIndex((c) => /^\s*INSERT\s+INTO\s+property\b/i.test(c.sql));
   assert(insertIdx >= 0, "precondition: the roster INSERT executed");
   assert(stats.calls.length > insertIdx + 1, "precondition: a confirmation statement ran after the INSERT");
   assertEqual(propsByCode(db, "BIG-NEW").length, 1, "precondition: the row genuinely landed, so the confirmation had something to find");

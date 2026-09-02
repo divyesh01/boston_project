@@ -292,3 +292,20 @@ wrapper, no runtime monkey-patch that overrides protected logic.
 > precedent -- the file remains protected.
 
 ---
+
+# 16. WORKER CREDENTIAL LIFECYCLE (2026-09-02)
+
+The Cloudflare Worker now owns the complete server credential lifecycle:
+
+- User creation validates normalized username/email/password input, derives a versioned PBKDF2+pepper credential before any write, and commits the user plus property grants atomically.
+- A generated temporary password is returned once with `Cache-Control: no-store`; a caller-supplied password is never echoed.
+- Missing pepper fails closed with controlled 503 and zero writes. Duplicate login identities return controlled 409.
+- Own-password change proves the current password, revokes every other session and all pending MFA password-proof challenges, and keeps only the initiating session.
+- Admin reset/set cannot target the caller itself, revokes every target session and MFA challenge, clears lockout state, and enforces owner-role hierarchy.
+- Session issuance is conditional on the exact credential that was verified. A concurrent reset/change after verification therefore cannot mint a stale-password session.
+- A forced-change session may only log out or change its own password; the restriction is enforced by the Worker, not trusted to the browser.
+- Last-active-owner mutation uses a database predicate at the write boundary, preventing concurrent demotions/deletions from leaving an account ownerless.
+
+The authoritative regression is `scripts/probe-worker-credential-lifecycle.mjs`; it uses the production DDL and exercises creation, login, change/reset/set, MFA-proof revocation, lock recovery, role hierarchy, session races, and owner concurrency.
+
+---

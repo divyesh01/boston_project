@@ -32,7 +32,7 @@ seedUser(db, { id: "gm-1", accountId: "ACCOUNT_BOSTON", email: "gm@hotel.test", 
 seedUser(db, { id: "manager-1", accountId: "ACCOUNT_BOSTON", email: "manager@hotel.test", role: "manager", mode: "specific", grants: ["P_A"] });
 seedUser(db, { id: "desk-1", accountId: "ACCOUNT_BOSTON", email: "desk@hotel.test", role: "front_desk", mode: "specific", grants: ["P_A"] });
 
-db.prepare("INSERT INTO account (id, name) VALUES (?,?)").run("ACCOUNT_OTHER", "Other Hotel Group");
+db.prepare("INSERT INTO account (id, name, created_date) VALUES (?,?,?)").run("ACCOUNT_OTHER", "Other Hotel Group", "2026-01-01");
 db.prepare("INSERT INTO property (id, account_id, code, name) VALUES (?,?,?,?)")
   .run("P_OTHER", "ACCOUNT_OTHER", "RRI-BOS", "Other Account Boston");
 db.prepare("INSERT INTO property_id_map (account_id, local_numeric_id, code, server_id) VALUES (?,?,?,?)")

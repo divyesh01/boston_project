@@ -11,12 +11,16 @@ const define = (table, columns, options = {}) => Object.freeze({
   columns: Object.freeze(columns.split(",")),
   scopeColumn: options.scopeColumn || "property_id",
   roster: !!options.roster,
+  // The human-meaningful key a caller names a record by. Declared ONLY on roster
+  // contracts, because the conflict pre-check that uses it scopes by `account_id`
+  // and only roster tables carry that column.
+  businessKey: options.businessKey || null,
 });
 
 // SQL identifiers never come from the request. This registry is the complete
 // public D1 entity surface and is intentionally explicit.
 export const ENTITY_CONTRACT = Object.freeze({
-  Property: define("property", "id,code,name,rooms,address,city,state,phone,active,created_date", { roster: true, scopeColumn: "id" }),
+  Property: define("property", "id,code,name,rooms,address,city,state,phone,active,created_date", { roster: true, scopeColumn: "id", businessKey: "code" }),
   TransactionLine: define("transaction_line", "id,property_id,date,time,username,transaction_code,transaction_type,charge_category,sub_charge_type,outlet_name,ledger_side,payment_method,account_class,employee_label,folio_number,confirmation_number,room_number,guest_name,guest_first_name,guest_last_name,card_last4,amount,quantity,adults,remarks,import_id,file_hash,dedupe_key,created_date"),
   OccupancyDay: define("occupancy_day", "id,property_id,property_name,report_type,import_id,source_file,date,day_of_week,room_revenue,other_room_revenue,total_revenue,total_rooms,rooms_sold,rooms_sold_without_comp,down_rooms,vacant_rooms,clean_rooms,dirty_rooms,stayover_rooms,same_day_bookings,comp_rooms,house_rooms,zero_rate_rooms,day_use_rooms,no_shows,cancellations,total_guests,adr,occupancy,revpar,created_date"),
   SourceDay: define("source_day", "id,property_id,property_name,report_type,import_id,source_file,date,day_of_week,code,source,net_revenue,stays,adr,occupancy_contribution,revpar_contribution,created_date"),
@@ -43,7 +47,8 @@ export const ENTITY_CONTRACT = Object.freeze({
   ChannelMap: define("channel_map", "id,property_id,channel_name,local_room_id,remote_room_id"),
 });
 
-const errorResponse = (error, status = 400) => Response.json({ error }, { status });
+const errorResponse = (error, status = 400, details = null) =>
+  Response.json({ error, ...(details || {}) }, { status });
 
 function contractFor(entityName) {
   const contract = ENTITY_CONTRACT[entityName];
@@ -52,10 +57,70 @@ function contractFor(entityName) {
 }
 
 class EntityRequestError extends Error {
-  constructor(message, status = 400) {
+  constructor(message, status = 400, details = null) {
     super(message);
     this.status = status;
+    // Optional machine-readable body fields merged into the JSON response, so a
+    // 409 can carry the colliding value the UI must show.
+    this.details = details;
   }
+}
+
+// A write rejected by the database is a FACT about the request, not a server
+// malfunction, and the constraint KIND determines the class:
+//   UNIQUE      -> 409, the row conflicts with a record that already exists;
+//   NOT NULL / CHECK / FOREIGN KEY -> 422, the payload itself is unprocessable.
+// Matching is on the constraint kind only. The values are deliberately NOT parsed
+// out of the driver message: the message text is not a stable contract, and it
+// names the constraint's COLUMNS (never the offending values), so parsing it would
+// leak schema detail while still not telling the caller anything actionable.
+// D1 prefixes the SQLite text with `D1_ERROR:`; node:sqlite does not. Both are
+// matched by searching, not anchoring.
+const WRITE_ERROR_CLASSES = Object.freeze([
+  { pattern: /\b(UNIQUE constraint failed|PRIMARY KEY must be unique)\b/i, status: 409, text: "conflicts with an existing record" },
+  { pattern: /\bNOT NULL constraint failed\b/i, status: 422, text: "a required field is missing" },
+  { pattern: /\bCHECK constraint failed\b/i, status: 422, text: "a field value is not allowed" },
+  { pattern: /\bFOREIGN KEY constraint failed\b/i, status: 422, text: "a referenced record does not exist" },
+]);
+
+/** Depth bound for the cause walk below: a cycle must not hang the isolate. */
+const WRITE_ERROR_CAUSE_DEPTH = 5;
+
+/**
+ * Every message in the failure's cause chain, outermost first.
+ *
+ * A driver is not obliged to put the SQLite text on the OUTERMOST error. D1 has
+ * shipped batch rejections whose own `.message` is only a generic wrapper
+ * (`D1_ERROR: ...`) with the real `UNIQUE constraint failed: ...` text on `.cause`.
+ * Reading `.message` alone therefore mis-reports a constraint violation as an
+ * opaque 500 — the exact defect this module exists to prevent — so the chain is
+ * searched, not just its head. Depth-bounded because `cause` can be cyclic.
+ */
+function errorMessageChain(error) {
+  const out = [];
+  let current = error;
+  for (let depth = 0; current != null && depth < WRITE_ERROR_CAUSE_DEPTH; depth += 1) {
+    out.push(String((typeof current === "object" && current.message) || current));
+    current = typeof current === "object" ? current.cause : null;
+  }
+  return out;
+}
+
+/**
+ * Translate a driver write failure into a truthful client status, or return null
+ * when the failure is NOT a constraint violation — those must keep propagating to
+ * the router's catch-all, which answers a generic 500 and leaks no SQL.
+ *
+ * Widening the search to the cause chain cannot mis-class a non-constraint
+ * failure: a SQLite constraint message anywhere in the chain means a constraint
+ * WAS violated, whatever wrapper the driver put around it.
+ */
+function classifyWriteError(error) {
+  const messages = errorMessageChain(error);
+  for (const { pattern, status, text } of WRITE_ERROR_CLASSES) {
+    if (messages.some((message) => pattern.test(message))) return new EntityRequestError(text, status);
+  }
+  return null;
 }
 
 function permissions(scope) {
@@ -219,6 +284,62 @@ async function queryEntity(request, env, scope, contract) {
   return Response.json({ items: rows.map(decodeRow), total: Number(count?.total || 0), hasMore: skip + rows.length < Number(count?.total || 0), nextCursor: skip + rows.length });
 }
 
+/**
+ * REPORTING AID FOR ROSTER BUSINESS-KEY CONFLICTS — NOT THE UNIQUENESS BOUNDARY.
+ *
+ * A caller names a hotel by its `code`, so a rejection is only actionable if it
+ * says WHICH code collided. The database cannot supply that: its message names the
+ * constraint's columns, never the offending values. So the value has to come from
+ * a read, and this is that read — ONE batched statement, and only for roster
+ * contracts (the import path adds zero queries).
+ *
+ * It resolves two cases the caller cannot distinguish otherwise:
+ *   - a key already held by a DIFFERENT record in this account, and
+ *   - two rows of ONE request claiming the same key, which no pre-existing row
+ *     could reveal.
+ *
+ * A row whose computed id already exists is the SAME record re-submitted; that is
+ * the idempotent path and must NOT be reported as a conflict.
+ *
+ * The uniqueness guarantee remains `UNIQUE (account_id, code)`: this read is not
+ * serialized with the write, so a code taken in between is still caught by the
+ * index and answered 409 (without a named value) by classifyWriteError.
+ */
+async function assertNoBusinessKeyConflict(env, contract, scope, prepared) {
+  if (!contract.roster || !contract.businessKey) return;
+  const field = contract.businessKey;
+  const keyed = prepared.filter((item) => item.row[field] != null);
+  if (keyed.length === 0) return;
+
+  const claimedBy = new Map();
+  const collisions = new Set();
+  for (const item of keyed) {
+    const value = String(item.row[field]);
+    if (!claimedBy.has(value)) claimedBy.set(value, item.id);
+    else if (claimedBy.get(value) !== item.id) collisions.add(value);
+  }
+
+  const values = [...claimedBy.keys()];
+  const existing = await queryAll(
+    env,
+    `SELECT id, ${field} AS conflict_value FROM ${contract.table} WHERE account_id = ? AND ${field} IN (${values.map(() => "?").join(",")})`,
+    [scope.accountId, ...values],
+  );
+  for (const row of existing) {
+    const value = String(row.conflict_value);
+    if (claimedBy.get(value) !== row.id) collisions.add(value);
+  }
+
+  if (collisions.size > 0) {
+    const values2 = [...collisions];
+    throw new EntityRequestError(
+      `${field} already in use: ${values2.join(", ")}`,
+      409,
+      { conflict: { entity: contract.table, field, values: values2 } },
+    );
+  }
+}
+
 async function createRows(env, scope, entityName, contract, rows) {
   if (!mayMutate(scope, contract)) throw new EntityRequestError("forbidden", 403);
   if (!Array.isArray(rows) || rows.length === 0 || rows.length > MAX_BULK_ROWS) throw new EntityRequestError(`rows must contain 1-${MAX_BULK_ROWS} records`);
@@ -248,10 +369,31 @@ async function createRows(env, scope, entityName, contract, rows) {
     const row = { ...data, id };
     if (contract.columns.includes("created_date")) row.created_date = createdDate;
     const columns = ["id", ...(contract.roster ? ["account_id"] : []), ...Object.keys(row).filter((field) => field !== "id" && field !== "account_id")];
-    const statement = env.DB.prepare(`INSERT OR IGNORE INTO ${contract.table} (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")})`).bind(...columns.map((field) => field === "account_id" ? scope.accountId : row[field]));
-    prepared.push({ id, writeKey, statement });
+    // ON CONFLICT(id) DO NOTHING suppresses EXACTLY ONE conflict: a re-submission
+    // of the same server-derived id, which stableId() makes deterministic for an
+    // import row and which is therefore genuinely idempotent. `id` is the PRIMARY
+    // KEY of every entity table, so it is a valid conflict target.
+    //
+    // It must NEVER be widened back to `INSERT OR IGNORE`. OR IGNORE suppresses
+    // every constraint — a duplicate business key, a missing NOT NULL column, a
+    // dangling foreign key — as `changes: 0` with no error, which destroys the only
+    // authoritative signal about what happened. The outcome then has to be guessed
+    // from a post-hoc read, which cannot tell an idempotent re-submission from a
+    // lost write, and every cause collapsed into one misleading 500.
+    const statement = env.DB.prepare(`INSERT INTO ${contract.table} (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")}) ON CONFLICT(id) DO NOTHING`).bind(...columns.map((field) => field === "account_id" ? scope.accountId : row[field]));
+    prepared.push({ id, writeKey, row, statement });
   }
-  await env.DB.batch(prepared.map((item) => item.statement));
+  // Runs BEFORE the batch so a named conflict costs no write at all.
+  await assertNoBusinessKeyConflict(env, contract, scope, prepared);
+  try {
+    // One atomic transaction: a constraint violation anywhere rolls the whole
+    // request back, so a rejected bulk create leaves no partially committed rows.
+    await env.DB.batch(prepared.map((item) => item.statement));
+  } catch (error) {
+    const classified = classifyWriteError(error);
+    if (classified) throw classified;
+    throw error;
+  }
   const created = [];
   for (const item of prepared) {
     const row = await confirmWritten(env, contract, item.id, item.writeKey);
@@ -329,7 +471,7 @@ export async function handleEntityRequest(request, env, scope, pathParts) {
     return errorResponse("method not allowed", 405);
   } catch (error) {
     if (error instanceof ScopeError) return errorResponse("forbidden", 403);
-    if (error instanceof EntityRequestError) return errorResponse(error.message, error.status);
+    if (error instanceof EntityRequestError) return errorResponse(error.message, error.status, error.details);
     throw error;
   }
 }

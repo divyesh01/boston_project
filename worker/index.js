@@ -70,6 +70,7 @@ import { permissionsForSession } from "./session-permissions.js";
  * @typedef {Object} Principal
  * @property {string} subject         Stable user id (Access `sub`).
  * @property {string} email          Verified email from the Access token.
+ * @property {string} [sessionId]    D1 app-session id; absent for Access compatibility callers.
  */
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
@@ -269,6 +270,16 @@ async function handleRequest(request, env, _ctx) {
   }
 
   const parts = url.pathname.split("/").filter(Boolean);
+  if (scoped.scope.user.must_change_password === 1) {
+    const ownPasswordChange = request.method === "POST"
+      && parts[1] === "users"
+      && parts[2] === String(scoped.scope.user.id)
+      && parts[3] === "password"
+      && parts[4] === "change";
+    if (!ownPasswordChange) {
+      return jsonResponse({ error: "password change required", code: "password_change_required" }, 403);
+    }
+  }
   const dataApiEnabled = env.ENABLE_D1_DATA_API === "true";
   const isBusinessDataRoute = url.pathname === "/api/import"
     || url.pathname === "/api/properties"

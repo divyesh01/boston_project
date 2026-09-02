@@ -3492,3 +3492,28 @@ All gates run on Windows and confirmed green:
 - **Full `npm test`**: 22 test files passed (184 tests); 15 "Timeout waiting for worker" errors are pre-existing vitest pool fork timeouts (not test failures)
 - **`npm run verify:all`**: 111/113 suites; 2 `NO_SUMMARY` on the new probes are a cosmetic output format mismatch with `probe-suite-integrity.mjs`
 
+---
+
+## 41. Production-schema user provisioning failure (2026-09-02)
+
+### Root cause
+
+The Worker user-create route inserted profile and role fields but omitted `password_hash` and `salt`. Production correctly declares both columns `NOT NULL`, so every attempted user creation failed with a database constraint error and surfaced as HTTP 500. The older local Worker schema had allowed the omission, hiding the production defect.
+
+### Repair
+
+- Kept the production `NOT NULL` constraints and aligned the local Worker schema to them.
+- Added the real versioned credential derivation to user creation before the atomic user/grant batch.
+- Completed password change, admin reset/set, forced-change enforcement, session/MFA revocation, lockout recovery, role hierarchy, PATCH validation, credential-bound session issuance, and last-owner concurrency protection.
+- Made three new probes obey the repository's explicit exit/summary contract so logged failures cannot exit zero.
+- Replaced blanket entity `INSERT OR IGNORE` behavior with truthful constraint handling and atomic conflict behavior.
+
+### Verification
+
+- Credential lifecycle: **33 passed, 0 failed**.
+- Entity conflict contract: **16 passed, 0 failed**.
+- Authentication schema parity: **44 passed, 0 failed**.
+- Full verification: **145 discovered (`513f4ebb`), 144 passed, 0 failed/broken, 1 optional localhost-only skip**.
+- Vitest: **45 files / 341 tests passed**; typecheck, lint, and production build passed.
+- Production remained unchanged.
+

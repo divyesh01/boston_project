@@ -7,12 +7,12 @@ These files are imported the most across the codebase. Editing them has a massiv
 
 ```mermaid
 graph TD
-  utils[utils<br/>(50 imports)]
+  utils[utils<br/>(54 imports)]
   hotel[hotel<br/>(46 imports)]
   base44Client[base44Client<br/>(42 imports)]
   Card[Card<br/>(39 imports)]
+  decimal[decimal<br/>(34 imports)]
   useGlobalFilters[useGlobalFilters<br/>(29 imports)]
-  decimal[decimal<br/>(26 imports)]
   securityUtils[securityUtils<br/>(26 imports)]
   useHotelData[useHotelData<br/>(25 imports)]
   status[status<br/>(24 imports)]
@@ -21,23 +21,23 @@ graph TD
   input[input<br/>(12 imports)]
   usetoast[use-toast<br/>(12 imports)]
   AuthContext[AuthContext<br/>(11 imports)]
-  localDb[localDb<br/>(10 imports)]
   label[label<br/>(10 imports)]
+  localDb[localDb<br/>(9 imports)]
   payrollCalc[payrollCalc<br/>(9 imports)]
+  calculationService[calculationService<br/>(9 imports)]
+  settingsStore[settingsStore<br/>(9 imports)]
   commissionRates[commissionRates<br/>(8 imports)]
-  paymentNorm[paymentNorm<br/>(8 imports)]
-  realtime[realtime<br/>(7 imports)]
 ```
 
 ### Top Danger Zones
 | File Base Name | Import Count | Danger Level |
 |----------------|--------------|--------------|
-| utils | 50 | [CRITICAL] |
+| utils | 54 | [CRITICAL] |
 | hotel | 46 | [CRITICAL] |
 | base44Client | 42 | [CRITICAL] |
 | Card | 39 | [CRITICAL] |
+| decimal | 34 | [CRITICAL] |
 | useGlobalFilters | 29 | [CRITICAL] |
-| decimal | 26 | [CRITICAL] |
 | securityUtils | 26 | [CRITICAL] |
 | useHotelData | 25 | [CRITICAL] |
 | status | 24 | [CRITICAL] |
@@ -46,9 +46,9 @@ graph TD
 | input | 12 | [HIGH] |
 | use-toast | 12 | [HIGH] |
 | AuthContext | 11 | [HIGH] |
-| localDb | 10 | [HIGH] |
 | label | 10 | [HIGH] |
+| localDb | 9 | [HIGH] |
 | payrollCalc | 9 | [HIGH] |
+| calculationService | 9 | [HIGH] |
+| settingsStore | 9 | [HIGH] |
 | commissionRates | 8 | [HIGH] |
-| paymentNorm | 8 | [HIGH] |
-| realtime | 7 | [HIGH] |

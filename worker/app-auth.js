@@ -3,7 +3,14 @@
 // is returned, and it is returned solely as an HttpOnly cookie.
 
 import { queryAll, queryFirst } from "./db.js";
-import { credentialPepper, isSupportedCredential, PBKDF2_ITERATIONS, verifyCredential } from "./password-credential.js";
+import {
+  createCredentialForEnv,
+  credentialPepper,
+  isSupportedCredential,
+  PBKDF2_ITERATIONS,
+  verifyCredentialForEnv,
+} from "./password-credential.js";
+import { verifyTotp } from "./totp.js";
 
 const COOKIE_NAME = "__Host-rri_session";
 const MFA_COOKIE_NAME = "__Host-rri_mfa";
@@ -36,15 +43,6 @@ async function sha256(value) {
   return hex(await crypto.subtle.digest("SHA-256", encoder.encode(value)));
 }
 
-function equalText(left, right) {
-  const a = encoder.encode(String(left));
-  const b = encoder.encode(String(right));
-  let difference = a.length ^ b.length;
-  const length = Math.max(a.length, b.length);
-  for (let i = 0; i < length; i += 1) difference |= (a[i] || 0) ^ (b[i] || 0);
-  return difference === 0;
-}
-
 function parseNamedCookie(request, name) {
   const header = request.headers.get("cookie") || "";
   for (const part of header.split(";")) {
@@ -74,46 +72,6 @@ function sameOriginMutation(request) {
   if (request.headers.get("X-Requested-With") !== "XMLHttpRequest") return false;
   const origin = request.headers.get("origin");
   return !origin || origin === new URL(request.url).origin;
-}
-
-function base32Bytes(value) {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  const clean = String(value || "").toUpperCase().replace(/[^A-Z2-7]/g, "");
-  let bits = "";
-  for (const char of clean) {
-    const index = alphabet.indexOf(char);
-    if (index < 0) return new Uint8Array();
-    bits += index.toString(2).padStart(5, "0");
-  }
-  const out = [];
-  for (let i = 0; i + 8 <= bits.length; i += 8) out.push(Number.parseInt(bits.slice(i, i + 8), 2));
-  return new Uint8Array(out);
-}
-
-async function totpAt(secret, counter) {
-  const keyBytes = base32Bytes(secret);
-  if (!keyBytes.length) return "";
-  const counterBytes = new Uint8Array(8);
-  let remaining = BigInt(counter);
-  for (let i = 7; i >= 0; i -= 1) {
-    counterBytes[i] = Number(remaining & 255n);
-    remaining >>= 8n;
-  }
-  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
-  const digest = new Uint8Array(await crypto.subtle.sign("HMAC", key, counterBytes));
-  const offset = digest[digest.length - 1] & 15;
-  const binary = (((digest[offset] & 127) << 24) | (digest[offset + 1] << 16) | (digest[offset + 2] << 8) | digest[offset + 3]) >>> 0;
-  const number = binary % 1_000_000;
-  return String(number).padStart(6, "0");
-}
-
-async function verifyTotp(secret, token, nowMs) {
-  if (!/^\d{6}$/.test(String(token || ""))) return null;
-  const counter = Math.floor(nowMs / 30_000);
-  for (const candidate of [counter - 1, counter, counter + 1]) {
-    if (equalText(await totpAt(secret, candidate), token)) return candidate;
-  }
-  return null;
 }
 
 async function recordFailure(env, user, now) {
@@ -171,9 +129,15 @@ async function login(request, env) {
   // Unknown and disabled accounts still perform one full PBKDF2 derivation so
   // response timing does not become an account-enumeration oracle.
   const stored = String(user?.password_hash || "");
-  const supportedCredential = isSupportedCredential(stored);
+  const supportedCredential = isSupportedCredential(stored, env);
   const eligible = !!user && user.is_active !== 0 && user.is_locked !== 1 && lockedUntil <= now.getTime();
-  const credentialMatches = challenge ? supportedCredential : await verifyCredential(password, stored, pepper);
+  // The MFA-challenge branch has already proven the password step; it holds a
+  // single-use server-side challenge row instead of the plaintext, so there is
+  // nothing to derive and nothing to upgrade.
+  const verification = challenge
+    ? { ok: supportedCredential, needsUpgrade: false }
+    : await verifyCredentialForEnv(password, stored, env);
+  const credentialMatches = verification.ok;
   if (!eligible || !credentialMatches) {
     if (eligible) await recordFailure(env, user, now);
     return json({ error: "Invalid email/username or password." }, 401);
@@ -209,20 +173,57 @@ async function login(request, env) {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Upgrade-on-login
+  // ---------------------------------------------------------------------------
+  // The plaintext is in hand and proven correct exactly once per successful sign
+  // in, which is the only moment a stored credential can be re-derived at newer
+  // parameters without asking its owner for anything. Rotating PASSWORD_PEPPER_V1
+  // or raising the iteration count therefore drains the old population as people
+  // sign in, instead of locking every one of them out at once.
+  //
+  // The UPDATE is a compare-and-swap on the credential we just verified. A
+  // password change or a concurrent login that already upgraded the row changes
+  // password_hash, the WHERE no longer matches, and this write does nothing
+  // rather than overwriting the newer credential with one derived from a password
+  // that is no longer current.
+  //
+  // A failure here NEVER fails the sign-in: the caller authenticated correctly
+  // against what was stored, and re-deriving is an optimisation of the record,
+  // not part of the authentication decision.
+  if (verification.needsUpgrade && password) {
+    try {
+      const upgraded = await createCredentialForEnv(password, env);
+      const upgradedResult = await env.DB.prepare(
+        "UPDATE user SET password_hash=?,salt=?,updated_date=? WHERE id=? AND password_hash=?",
+      ).bind(upgraded.encoded, upgraded.salt, nowIso, user.id, stored).run();
+      if (Number(upgradedResult?.meta?.changes ?? upgradedResult?.changes ?? 0) === 1) {
+        user.password_hash = upgraded.encoded;
+      }
+    } catch {
+      /* keep the existing credential; the next sign-in will try again */
+    }
+  }
+
   const remember = body?.remember === true;
   const token = randomToken();
   const tokenHash = await sha256(token);
   const expiresAt = new Date(now.getTime() + (remember ? REMEMBER_SESSION_MS : SESSION_MS)).toISOString();
-  const reset = await env.DB.prepare(
-    "UPDATE user SET failed_login_count=0,locked_until=NULL,last_login=?,updated_date=? WHERE id=? AND (is_active IS NULL OR is_active<>0) AND COALESCE(is_locked,0)=0 AND (locked_until IS NULL OR locked_until<=?)",
-  ).bind(nowIso, nowIso, user.id, nowIso).run();
-  const resetChanged = Number(reset?.meta?.changes ?? reset?.changes ?? 0);
-  if (resetChanged !== 1) return json({ error: "Invalid email/username or password." }, 401);
-  await env.DB.batch([
+  const expectedCredential = String(user.password_hash || stored);
+  const sessionId = crypto.randomUUID();
+  const results = await env.DB.batch([
     env.DB.prepare("DELETE FROM app_session WHERE expires_at<=?").bind(now.toISOString()),
-    env.DB.prepare("INSERT INTO app_session (id,user_id,token_hash,created_at,expires_at,last_seen_at,remember) VALUES (?,?,?,?,?,?,?)")
-      .bind(crypto.randomUUID(), user.id, tokenHash, now.toISOString(), expiresAt, now.toISOString(), remember ? 1 : 0),
+    env.DB.prepare(
+      "UPDATE user SET failed_login_count=0,locked_until=NULL,last_login=?,updated_date=? WHERE id=? AND password_hash=? AND (is_active IS NULL OR is_active<>0) AND COALESCE(is_locked,0)=0 AND (locked_until IS NULL OR locked_until<=?)",
+    ).bind(nowIso, nowIso, user.id, expectedCredential, nowIso),
+    env.DB.prepare(
+      "INSERT INTO app_session (id,user_id,token_hash,created_at,expires_at,last_seen_at,remember) SELECT ?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM user WHERE id=? AND password_hash=? AND (is_active IS NULL OR is_active<>0) AND COALESCE(is_locked,0)=0 AND (locked_until IS NULL OR locked_until<=?))",
+    ).bind(sessionId, user.id, tokenHash, nowIso, expiresAt, nowIso, remember ? 1 : 0, user.id, expectedCredential, nowIso),
   ]);
+  const inserted = results?.[2];
+  if (Number(inserted?.meta?.changes ?? inserted?.changes ?? 0) !== 1) {
+    return json({ error: "Invalid email/username or password." }, 401);
+  }
   return json({ authenticated: true }, 200, { "set-cookie": sessionCookie(token, remember), "cache-control": "no-store" });
 }
 
@@ -233,6 +234,9 @@ async function logout(request, env) {
   return json({ success: true }, 200, { "set-cookie": expiredCookie(), "cache-control": "no-store" });
 }
 
+/**
+ * @returns {Promise<{ ok: false } | { ok: true, principal: import("./index.js").Principal }>}
+ */
 export async function authenticateAppSession(request, env) {
   const token = parseCookie(request);
   if (!token) return { ok: false };
@@ -253,7 +257,14 @@ export async function authenticateAppSession(request, env) {
   await env.DB.prepare(
     "UPDATE app_session SET last_seen_at=?,expires_at=CASE WHEN remember=0 THEN ? ELSE expires_at END WHERE id=?",
   ).bind(now, slidingExpiry, row.session_id).run();
-  return { ok: true, principal: { subject: String(row.id), email: String(row.email) } };
+  return {
+    ok: true,
+    principal: {
+      subject: String(row.id),
+      email: String(row.email),
+      sessionId: String(row.session_id),
+    },
+  };
 }
 
 export async function handleAppAuthRequest(request, env, pathname) {

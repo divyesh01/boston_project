@@ -15,6 +15,17 @@
 | [INDEX] | `docs/brain/BRAIN_INDEX.md` | Historical file catalog; use `git ls-files` for the live list. |
 | [MAP] | `docs/brain/BRAIN_DEPENDENCIES.md`| See what breaks if you edit a file (Auto-Generated). |
 
+## CURRENT VERIFICATION BASELINE (2026-09-02)
+
+- `npm run verify:all -- --list`: **145 suites**, fingerprint **`513f4ebb`**.
+- Full sweep on Windows after `npm ci`: **144 PASS, 0 FAIL, 0 BROKEN, 1 SKIP**. The only skip was the optional live-dev-server exposure probe because no localhost server was running.
+- Worker credential lifecycle: **33/33 PASS** against the production-exact authentication DDL.
+- Worker/production authentication schema parity: **44/44 PASS**.
+- Vitest: **45 files, 341 tests PASS**. Typecheck, lint, and production build pass.
+- Production was not changed by this prerequisite work. D1 business-data storage remains disabled.
+
+This measured baseline supersedes older suite counts and fingerprints retained later in this historical document.
+
 ## SYSTEM ARCHITECTURE
 ```mermaid
 graph TD

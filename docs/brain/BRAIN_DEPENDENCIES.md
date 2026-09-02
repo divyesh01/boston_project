@@ -9,9 +9,9 @@ These files are imported the most across the codebase. Editing them has a massiv
 graph TD
   utils[utils<br/>(54 imports)]
   hotel[hotel<br/>(46 imports)]
-  base44Client[base44Client<br/>(42 imports)]
-  Card[Card<br/>(39 imports)]
-  decimal[decimal<br/>(34 imports)]
+  base44Client[base44Client<br/>(43 imports)]
+  Card[Card<br/>(40 imports)]
+  decimal[decimal<br/>(36 imports)]
   useGlobalFilters[useGlobalFilters<br/>(29 imports)]
   securityUtils[securityUtils<br/>(26 imports)]
   useHotelData[useHotelData<br/>(25 imports)]
@@ -20,9 +20,9 @@ graph TD
   KpiCard[KpiCard<br/>(13 imports)]
   input[input<br/>(12 imports)]
   usetoast[use-toast<br/>(12 imports)]
+  localDb[localDb<br/>(11 imports)]
   AuthContext[AuthContext<br/>(11 imports)]
   label[label<br/>(10 imports)]
-  localDb[localDb<br/>(9 imports)]
   payrollCalc[payrollCalc<br/>(9 imports)]
   calculationService[calculationService<br/>(9 imports)]
   settingsStore[settingsStore<br/>(9 imports)]
@@ -34,9 +34,9 @@ graph TD
 |----------------|--------------|--------------|
 | utils | 54 | [CRITICAL] |
 | hotel | 46 | [CRITICAL] |
-| base44Client | 42 | [CRITICAL] |
-| Card | 39 | [CRITICAL] |
-| decimal | 34 | [CRITICAL] |
+| base44Client | 43 | [CRITICAL] |
+| Card | 40 | [CRITICAL] |
+| decimal | 36 | [CRITICAL] |
 | useGlobalFilters | 29 | [CRITICAL] |
 | securityUtils | 26 | [CRITICAL] |
 | useHotelData | 25 | [CRITICAL] |
@@ -45,9 +45,9 @@ graph TD
 | KpiCard | 13 | [HIGH] |
 | input | 12 | [HIGH] |
 | use-toast | 12 | [HIGH] |
+| localDb | 11 | [HIGH] |
 | AuthContext | 11 | [HIGH] |
 | label | 10 | [HIGH] |
-| localDb | 9 | [HIGH] |
 | payrollCalc | 9 | [HIGH] |
 | calculationService | 9 | [HIGH] |
 | settingsStore | 9 | [HIGH] |

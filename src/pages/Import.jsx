@@ -18,6 +18,7 @@ import { rebuildDailyAggregates } from "@/lib/dailyAggregates";
 import { queryClientInstance } from "@/lib/query-client";
 import { toCents, formatCents } from "@/lib/decimal";
 import { inspectUploadFile } from "@/lib/uploadGuard";
+import BusinessMigrationCard from "@/components/BusinessMigrationCard";
 
 // Per-import undo. Deletes exactly the rows one import created, via the
 // rollback ledger — unlike "Clear all imported data", which wipes every table.
@@ -706,6 +707,8 @@ export default function Import() {
           Excel or CSV. Select a property first, then batch-import reports. Zero-revenue duplicates are filtered automatically.
         </p>
       </header>
+
+      <BusinessMigrationCard />
 
       {readFailed && (
         <ErrorState

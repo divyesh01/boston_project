@@ -33,6 +33,8 @@ import Dexie from 'dexie';
  *   DailyFinancialAggregate: import('dexie').Table<any, number>;
  *   LocalSession: import('dexie').Table<any, number>;
  *   IdSequence: import('dexie').Table<any, string>;
+ *   BusinessSyncState: import('dexie').Table<any, string>;
+ *   BusinessSyncOutbox: import('dexie').Table<any, string>;
  * }} */
 // @ts-ignore — augment the non-generic Dexie interface with the app's tables.
 const localDb = new Dexie('RedRoofIntelligence');
@@ -293,6 +295,19 @@ localDb.version(22).stores({
 // property_id, so an id must be unique across the whole account, not per hotel.
 localDb.version(23).stores({
   IdSequence: 'prefix, last_seq, updated_date',
+});
+
+// v24 — authoritative server-sync checkpoint. Business rows remain in their
+// existing stores as an offline cache; this records the immutable D1 generation
+// and monotonic change-feed revision represented by that cache.
+localDb.version(24).stores({
+  BusinessSyncState: 'key, generation_id, revision, updated_at',
+});
+
+// v25 — durable mutation identities. A response lost after the Worker commits
+// is retried with the same mutation_id instead of creating a second write.
+localDb.version(25).stores({
+  BusinessSyncOutbox: 'mutation_id, created_at, entity, operation',
 });
 
 // Guard: a table whose name collides with a Dexie instance property is created

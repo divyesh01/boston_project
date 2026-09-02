@@ -25,6 +25,7 @@ import { parseChunk, importChunk } from "./import.js";
 import { queryAll } from "./db.js";
 import { handleEntityRequest } from "./entities.js";
 import { handleUsersRequest } from "./users.js";
+import { handleBusinessSyncRequest } from "./business-sync.js";
 import { appSessionCookiePresent, authenticateAppSession, handleAppAuthRequest, sameOriginMutation } from "./app-auth.js";
 import { permissionsForSession } from "./session-permissions.js";
 
@@ -37,6 +38,7 @@ import { permissionsForSession } from "./session-permissions.js";
  * @property {string}     [ACCESS_TEAM_DOMAIN] Cloudflare Access team domain, e.g. "acme.cloudflareaccess.com".
  * @property {string}     [ACCESS_CERTS_URL]   TEST-ONLY override for the JWKS certs URL (synthetic JWKS).
  * @property {string}     [ENABLE_D1_DATA_API] Must be exactly "true" before any business-data endpoint is reachable.
+ * @property {string}     [ENABLE_BUSINESS_SYNC_API] Independent kill switch for staged cross-browser sync.
  * @property {typeof fetch} [FETCH]            TEST-ONLY injectable fetch for the JWKS request.
  */
 
@@ -281,6 +283,11 @@ async function handleRequest(request, env, _ctx) {
     }
   }
   const dataApiEnabled = env.ENABLE_D1_DATA_API === "true";
+  const syncApiEnabled = env.ENABLE_BUSINESS_SYNC_API === "true";
+  if (parts[1] === "business-sync") {
+    if (!syncApiEnabled) return jsonResponse({ error: "business-data sync is disabled" }, 404);
+    return handleBusinessSyncRequest(request, env, scoped.scope, url, parts);
+  }
   const isBusinessDataRoute = url.pathname === "/api/import"
     || url.pathname === "/api/properties"
     || url.pathname === "/api/transactions"

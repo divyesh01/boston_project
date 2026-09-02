@@ -1,4 +1,5 @@
 import localDb from '@/api/localDb';
+import { BUSINESS_ENTITIES, createBusinessSyncClient } from '@/api/businessSync';
 import { answerQuestion } from '@/lib/aiEngine';
 import { toCents, fromCents } from '@/lib/decimal';
 import { reconcileTimecards } from '@/lib/timecardCalc';
@@ -121,13 +122,14 @@ const realClient = createClient({
 // separate, explicit opt-in. Never infer one mode from the other.
 const USE_SERVER_AUTH = import.meta.env?.VITE_USE_SERVER_AUTH === 'true';
 const USE_D1_API = import.meta.env?.VITE_USE_D1_API === 'true';
+const USE_SERVER_DATA_SYNC = import.meta.env?.VITE_USE_SERVER_DATA_SYNC === 'true';
 const D1_ENTITY_NAMES = new Set(['Property', 'TransactionLine', 'OccupancyDay', 'SourceDay', 'GrossRevenueDay', 'PaymentDay', 'ClerkShiftRecord', 'Expense', 'PayrollRun', 'Staff', 'TimecardPunch', 'UploadedReport', 'HotelMetric', 'AnomalyAlert', 'Room', 'RoomStay', 'HousekeepingTask', 'WeatherSnapshot', 'Review', 'AdjustmentRefund', 'DailyFinancialAggregate', 'ScanResult', 'Reservation', 'RoomType', 'ChannelMap']);
 
 async function d1Request(path, options = {}) {
   const response = await fetch(`/api/${path}`, { credentials: 'same-origin', headers: { 'content-type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', ...(options.headers || {}) }, ...options });
   let body = null;
   try { body = await response.json(); } catch {}
-  if (!response.ok) { const error = new Error(body?.error || `D1 API request failed (${response.status})`); /** @type {any} */ (error).status = response.status; throw error; }
+  if (!response.ok) { const error = new Error(body?.error || `D1 API request failed (${response.status})`); /** @type {any} */ (error).status = response.status; /** @type {any} */ (error).body = body; throw error; }
   return body;
 }
 
@@ -163,6 +165,9 @@ function notifyRecalculation(tableName, changeType, record) {
 // ─── Transaction Support ───
 export async function runInTransaction(operations) {
   const ops = Array.isArray(operations) ? operations : [operations];
+  if (USE_SERVER_DATA_SYNC) {
+    throw new Error('Authoritative business sync requires a server-atomic batch for this workflow; partial sequential writes are blocked.');
+  }
   if (USE_D1_API) {
     const results = [];
     for (const op of ops) results.push(await op());
@@ -676,7 +681,7 @@ async function getUserPropertyAccess() {
 }
 
 // ─── Create an entity proxy for a Dexie table with property isolation ───
-function createEntityProxy(tableName) {
+function createLocalEntityProxy(tableName) {
   if (USE_D1_API && D1_ENTITY_NAMES.has(tableName)) return createServerEntityProxy(tableName);
   const table = localDb[tableName];
 
@@ -1018,6 +1023,20 @@ function createEntityProxy(tableName) {
       return rows.filter(r => matchesFilter(r, filteredQuery)).length;
     },
   };
+}
+
+const businessSyncClient = createBusinessSyncClient({
+  request: d1Request,
+  notify: notifyRecalculation,
+  publish: publishChange,
+});
+
+function createEntityProxy(tableName) {
+  const localProxy = createLocalEntityProxy(tableName);
+  if (USE_SERVER_DATA_SYNC && BUSINESS_ENTITIES.includes(tableName)) {
+    return businessSyncClient.wrapEntity(tableName, localProxy);
+  }
+  return localProxy;
 }
 
 // ─── Build the entities proxy ───
@@ -2576,7 +2595,10 @@ const db = {
   functions,
   users,
   audit,
+  businessData: businessSyncClient.api,
 };
+
+export const businessData = businessSyncClient.api;
 
 export const base44 = db;
 export { db };

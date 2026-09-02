@@ -131,6 +131,15 @@ export async function reserveEmployeeId(name, existingStaff = []) {
   const taken = toIdSet(existingStaff);
   const liveFloor = highestSuffix(taken, prefix);
 
+  if (import.meta.env?.VITE_USE_SERVER_DATA_SYNC === "true") {
+    const { businessData } = await import("@/api/base44Client");
+    const reserved = await businessData.reserveIdSequence(prefix, liveFloor);
+    const sequence = Number(reserved?.sequence);
+    if (!Number.isSafeInteger(sequence) || sequence <= liveFloor) throw new Error("Server returned an invalid employee-id reservation.");
+    await localDb.IdSequence.put({ prefix, last_seq: sequence, updated_date: new Date().toISOString() });
+    return formatId(prefix, sequence);
+  }
+
   const seq = await localDb.transaction("rw", localDb.IdSequence, async () => {
     const row = await localDb.IdSequence.get(prefix);
     const stored = Number(row?.last_seq) || 0;

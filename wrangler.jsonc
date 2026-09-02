@@ -36,7 +36,8 @@
   ],
   "vars": {
     "ENVIRONMENT": "production",
-    "ENABLE_D1_DATA_API": "false"
+    "ENABLE_D1_DATA_API": "false",
+    "ENABLE_BUSINESS_SYNC_API": "false"
   },
   "secrets": {
     "required": ["PASSWORD_PEPPER_V1"]

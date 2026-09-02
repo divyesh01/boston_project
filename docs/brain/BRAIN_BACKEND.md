@@ -266,6 +266,40 @@ node scripts/probe-cors-config.mjs        # 35/0, standalone — no loader neede
   `623b3ee9-6815-43fb-a70c-1c1cdea0a2c8`; the earlier authentication rollout
   passed the 22-check live smoke.
 
+### Cross-browser business-data sync checkpoint (2026-09-02, disabled)
+
+- `VITE_USE_SERVER_DATA_SYNC` and the independent Worker kill switch
+  `ENABLE_BUSINESS_SYNC_API` must both be explicitly enabled before the new
+  authoritative path is reachable. The committed production Worker setting is
+  still `ENABLE_BUSINESS_SYNC_API=false`; `ENABLE_D1_DATA_API` also remains
+  false. This checkpoint does not change production or the current browser-local
+  source of truth.
+- The disabled implementation stages complete 25-entity IndexedDB snapshots in
+  immutable account-scoped D1 generations, preserves numeric versus string ids,
+  verifies chunk hashes/counts, and exposes data only through an atomic active
+  generation pointer. Clean browsers rebuild IndexedDB as a cache from a fixed
+  snapshot revision plus a monotonic change feed.
+- Online single-record writes are server-first, mutation-idempotent, guarded by
+  the previous row hash, property scoped, and retained in a durable browser
+  outbox across ambiguous response loss. Offline business writes remain blocked.
+  Property deletion forces a full cache rebuild. Employee-id sequences are
+  reserved by account on the server when sync mode is active.
+- Active-generation rollback restores the previous property roster in the same
+  D1 batch as the pointer swap. Replacement-only properties are deactivated,
+  not deleted, because deleting them would cascade authorization grants.
+- **Release blocker:** `runInTransaction` deliberately fails closed in server
+  sync mode. Report import, manual-entry save, and payroll bulk posting still
+  require a hidden staging-transaction protocol. A safe protocol must capture
+  both active generation and account revision, reject commit after any
+  interleaved single-record write, revalidate live property scope at commit,
+  preserve idempotent ordered chunks, and retain server-side rollback metadata.
+  Do not enable or deploy business sync until this blocker has deterministic
+  concurrency and crash-recovery coverage.
+- Current deterministic evidence: Worker sync probe 13/13, real router probe
+  4/4, Vitest 46 files / 348 tests, and `verify:all` 146 PASS / 0 FAIL / 1
+  environment SKIP. These results verify the disabled checkpoint, not release
+  readiness.
+
 ### Build & Deploy
 | File | What It Does | If You Edit This... |
 |------|-------------|-------------------|
@@ -330,6 +364,7 @@ can only be verified against the dashboard by eye, since nothing in the repo can
 | `.env.production` | `VITE_USE_SERVER_AUTH=true` + `VITE_USE_D1_API=false` | Current production: same-origin Worker authentication with browser-local business storage | This committed file contains public build flags only. Never add a password, token, pepper, or other secret |
 | `PASSWORD_PEPPER_V1` | Cloudflare Worker secret (not a file) | Post-hash HMAC pepper for versioned owner credentials | Missing/short values make authentication return controlled 503; never place this value in source, logs, chat, or `.env.production` |
 | `ENABLE_D1_DATA_API` | `false` in `wrangler.jsonc` | Runtime kill switch for Worker business-data endpoints | Do not enable during the auth-only rollout; existing hotel data remains in IndexedDB |
+| `ENABLE_BUSINESS_SYNC_API` | `false` in `wrangler.jsonc` | Independent kill switch for the staged cross-browser snapshot/feed/mutation API | Keep false until the server-atomic transaction blocker and clean-browser acceptance gates pass |
 | `VITE_STANDALONE_LOCAL` | `true` in the standalone shape only | The SECOND flag `src/main.jsx` requires. A PROD build with `VITE_USE_LOCAL_AUTH=true` and this one absent, `false` or empty still refuses to boot, so a stray build cannot ship the untrusted auth path by accident. | Setting this on a build that can be reached anonymously = SECURITY DISASTER. Browser-side login and MFA are bypassable by anyone who loads the page; the upstream identity proxy (e.g. Cloudflare Access) is then the ONLY real boundary |
 | `VITE_WEBSOCKET_ENDPOINT` | unset, or a `ws://` / `wss://` URL | Realtime CRDT sync (`src/crdt.jsx`). Only a ws/wss URL enables it; **any** other value (`disabled`, `off`, an `https://` URL, whitespace) resolves to unset and is warned about, so a hosting dashboard that refuses an empty value can still express "off". | Before 2026-08-23 any non-empty value reached `new WebsocketProvider()` and started a backoff loop that retried for as long as the tab stayed open |
 

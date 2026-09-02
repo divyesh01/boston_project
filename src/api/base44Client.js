@@ -166,7 +166,7 @@ function notifyRecalculation(tableName, changeType, record) {
 export async function runInTransaction(operations) {
   const ops = Array.isArray(operations) ? operations : [operations];
   if (USE_SERVER_DATA_SYNC) {
-    throw new Error('Authoritative business sync requires a server-atomic batch for this workflow; partial sequential writes are blocked.');
+    return businessSyncClient.api.runTransaction(ops);
   }
   if (USE_D1_API) {
     const results = [];
@@ -411,6 +411,7 @@ export async function clearImportSessions() {
 
 // Add record IDs to the rollback ledger (ImportRecordIds table)
 export async function addImportRecordIds(importId, entity, recordIds, propertyId = '') {
+  if (USE_SERVER_DATA_SYNC && businessSyncClient.api.deferImportRecordIds(importId, entity, recordIds, propertyId)) return;
   try {
     await localDb.ImportRecordIds.add({
       import_id: importId,
@@ -800,7 +801,43 @@ function createLocalEntityProxy(tableName) {
     return [...variants];
   }
 
+  async function prepareCreateData(data) {
+    const prepared = { ...data };
+    const propertyAccess = await getUserPropertyAccess();
+    if (isScoped && propertyAccess !== ALL_PROPERTIES) {
+      throwIfRosterEditDenied(propertyAccess);
+      const allowed = allowedIds(propertyAccess);
+      if (prepared.property_id) {
+        if (!allowed.includes(prepared.property_id)) {
+          throw new Error('Access denied: Cannot create records for unauthorized property');
+        }
+      } else if (allowed.length === 1) {
+        prepared.property_id = allowed[0];
+      } else {
+        throw new Error('Access denied: a property must be specified for this record');
+      }
+    }
+    return prepared;
+  }
+
+  async function prepareUpdateData(record, data) {
+    const prepared = { ...data };
+    if (isScoped) {
+      const propertyAccess = await getUserPropertyAccess();
+      throwIfRosterEditDenied(propertyAccess);
+      if (!inScope(propertyAccess, record[SCOPE_FIELD])) {
+        throw new Error('Access denied: Cannot update records for unauthorized property');
+      }
+      if (prepared.property_id && !inScope(propertyAccess, prepared.property_id)) {
+        throw new Error('Access denied: Cannot move record to unauthorized property');
+      }
+    }
+    return prepared;
+  }
+
   return {
+    prepareTransactionCreate: prepareCreateData,
+    prepareTransactionUpdate: prepareUpdateData,
     async filter(query = {}, sortField, limit) {
       const propertyAccess = await getUserPropertyAccess();
       const filteredQuery = isScoped ? applyScope({ ...query }, propertyAccess) : query;
@@ -859,26 +896,9 @@ function createLocalEntityProxy(tableName) {
     },
 
     async create(data) {
-      const propertyAccess = await getUserPropertyAccess();
-      if (isScoped && propertyAccess !== ALL_PROPERTIES) {
-        throwIfRosterEditDenied(propertyAccess);
-        const allowed = allowedIds(propertyAccess);
-        if (data.property_id) {
-          if (!allowed.includes(data.property_id)) {
-            throw new Error('Access denied: Cannot create records for unauthorized property');
-          }
-        } else if (allowed.length === 1) {
-          // Unambiguous: a single-property account gets its own property.
-          data.property_id = allowed[0];
-        } else {
-          // Writing an unscoped row into a scoped table used to be allowed. The
-          // row then belonged to no property, which means every scoped read
-          // misses it — data that is silently invisible instead of loudly refused.
-          throw new Error('Access denied: a property must be specified for this record');
-        }
-      }
+      const prepared = await prepareCreateData(data);
       const now = new Date().toISOString();
-      const record = { ...data, created_date: now, updated_date: now };
+      const record = { ...prepared, created_date: now, updated_date: now };
       const newId = await table.add(record);
       const createdRecord = { ...record, id: newId };
       notifyRecalculation(tableName, 'create', createdRecord);
@@ -889,21 +909,14 @@ function createLocalEntityProxy(tableName) {
     async update(id, data) {
       throwIfProtected();
       const numId = Number(id) || id;
+      let record = null;
       if (isScoped) {
-        const record = await table.get(numId);
+        record = await table.get(numId);
         if (!record) throw new Error('Record not found');
-        const propertyAccess = await getUserPropertyAccess();
-        throwIfRosterEditDenied(propertyAccess);
-        if (!inScope(propertyAccess, record[SCOPE_FIELD])) {
-          throw new Error('Access denied: Cannot update records for unauthorized property');
-        }
-        // Prevent moving a row to a property the caller may not touch.
-        if (data.property_id && !inScope(propertyAccess, data.property_id)) {
-          throw new Error('Access denied: Cannot move record to unauthorized property');
-        }
       }
+      const prepared = await prepareUpdateData(record || await table.get(numId), data);
       const now = new Date().toISOString();
-      await table.update(numId, { ...data, updated_date: now });
+      await table.update(numId, { ...prepared, updated_date: now });
       const updatedRecord = await table.get(numId);
       notifyRecalculation(tableName, 'update', updatedRecord);
       publishChange(tableName, 'update', updatedRecord);
@@ -1029,6 +1042,8 @@ const businessSyncClient = createBusinessSyncClient({
   request: d1Request,
   notify: notifyRecalculation,
   publish: publishChange,
+  prepareCreate: async (entity, data) => createLocalEntityProxy(entity).prepareTransactionCreate(data),
+  prepareUpdate: async (entity, previous, data) => createLocalEntityProxy(entity).prepareTransactionUpdate(previous, data),
 });
 
 function createEntityProxy(tableName) {

@@ -287,18 +287,76 @@ node scripts/probe-cors-config.mjs        # 35/0, standalone — no loader neede
 - Active-generation rollback restores the previous property roster in the same
   D1 batch as the pointer swap. Replacement-only properties are deactivated,
   not deleted, because deleting them would cascade authorization grants.
-- **Release blocker:** `runInTransaction` deliberately fails closed in server
-  sync mode. Report import, manual-entry save, and payroll bulk posting still
-  require a hidden staging-transaction protocol. A safe protocol must capture
-  both active generation and account revision, reject commit after any
-  interleaved single-record write, revalidate live property scope at commit,
-  preserve idempotent ordered chunks, and retain server-side rollback metadata.
-  Do not enable or deploy business sync until this blocker has deterministic
-  concurrency and crash-recovery coverage.
-- Current deterministic evidence: Worker sync probe 13/13, real router probe
-  4/4, Vitest 46 files / 348 tests, and `verify:all` 146 PASS / 0 FAIL / 1
-  environment SKIP. These results verify the disabled checkpoint, not release
-  readiness.
+- The `runInTransaction` release blocker is resolved locally for report import,
+  manual-entry save, and payroll bulk posting. The client captures mutations in
+  a read-your-writes overlay without changing business IndexedDB tables, then
+  sends idempotent 13-operation chunks through explicit
+  `start`/`chunk`/`commit`/`abort`/`status` endpoints. Import rollback ids are
+  durably deferred until the authoritative commit is confirmed and hydrated.
+- Each transaction clones the active immutable generation, records the active
+  generation and account revision, and atomically swaps the pointer only after
+  live authorization, property scope, revision, pointer, expiry, and pending
+  state all pass inside the D1 batch. Abort, expiry, and conflict paths remove
+  staging rows, targets, chunk receipts, and mutation guards; ambiguous responses
+  retain the browser outbox until status proves commit or a pending attempt is
+  explicitly aborted. Concurrent start/chunk/commit retries are idempotent.
+- Every destructive staging cleanup batch — abort, the expiry sweep, and the
+  commit conflict rollback — carries a `${tx_id}:cleanup` guard row that requires
+  the transaction to still be `pending` (and, for the sweep, still expired) at
+  batch-execution time. The pre-batch status read is a check-then-act window: a
+  commit that wins that race publishes the staging generation as the active
+  dataset, so an unguarded cleanup would delete the live dataset's records and
+  property map and still return success. The `CHECK (ok = 1)` column turns a lost
+  race into a rolled-back batch, and abort then reports `transaction_not_pending`
+  instead of destroying authoritative data. Cleanup must never widen to
+  unconditional deletes on a generation id that a concurrent commit can activate.
+- `activeTransaction` in `src/api/businessSync.js` is module-scoped by design.
+  The browser has no async context propagation, so a UI write issued while a
+  transaction callback awaits is captured into that open transaction instead of
+  racing it. The alternative — letting the concurrent write reach the server
+  first — bumps the account revision and makes the whole staged import fail the
+  commit CAS, losing far more work than it protects. Callers must not start a
+  transaction around long-lived interactive flows.
+- `ensureFresh` in `src/api/businessSync.js` coalesces concurrent readers onto a
+  single in-flight pull. Every wrapped read (`filter`, `list`, `paginate`,
+  `count`, `get`) awaits it first, so its contract is that it resolves only once
+  the local cache is authoritative. A time-only throttle broke that contract: it
+  armed `lastPullAt` before the snapshot download finished, so a second widget
+  mounting in the same tick took the early return and rendered the pre-hydration
+  cache — empty on a clean browser — while the server held the data. That is
+  exactly the upload-once cross-browser case this subsystem exists to serve.
+  Waiters now join the shared `pullPromise`, and the throttle is armed only after
+  `hydrate()` resolves. `hydrate()` resolves for a completed swap, for an offline
+  fall back to a usable prior cache, and for an inactive dataset, and throws only
+  when no usable cache exists, so a failed cold pull stays immediately retryable
+  instead of throttling the next reader into a silent empty result. No `await`
+  may be introduced between the `pullPromise` check and its assignment; that
+  reopens the double-pull race the join closes.
+- Treating a 404 from `transaction/status` as "never started" is safe because the
+  worker never deletes `business_staging_transaction` rows — every terminal state
+  is an `UPDATE` to `committed`, `aborted`, `expired`, or `conflict`. A committed
+  transaction can therefore never answer 404, so recovery dropping an outbox
+  entry on 404 cannot discard a committed write. Any future change that deletes
+  staging transaction rows would turn that recovery branch into silent data loss.
+- Current deterministic evidence: Worker sync probe 27/27 (the seven added checks
+  cover the abort race, the expiry-sweep race, later-chunk property scope,
+  commit-after-abort, staging invisibility to snapshot and feed, selective
+  expiry, and full cross-account denial), real router/auth/kill-switch probe
+  4/4, `src/api/businessSync.test.js` 21/21, full Vitest 46 files / 362 tests,
+  credential scan 15/15, `verify:v3` PASS, lint 0 errors, `npm run typecheck`
+  0 errors, production build PASS, and `verify:all` 147 suites / 146 PASS /
+  0 FAIL / 1 environment SKIP (`probe-config-exposure.mjs` needs a running Vite
+  server that mounts the Base44 serverless functions; it is an honest environment
+  skip, not a pass). Note that a bare `tsc --noEmit` is not the typecheck gate:
+  with no project argument it prints usage and exits 1, so use
+  `npm run typecheck`, which runs `tsc -p ./jsconfig.json`. Two invariants were
+  mutation-tested. Removing the abort guard reproduces `abort must fail closed
+  once the commit won, got 200`, and removing only the sweep guard fails the
+  sweep test while the abort test still passes. Replacing `ensureFresh`'s
+  `await pullPromise` join with a bare `return` reproduces the empty concurrent
+  read (`expected [] to deeply equal [ { id: 9, … } ]`), so neither check is
+  vacuous. Business sync remains disabled and undeployed; this evidence verifies
+  the local release candidate, not production readiness.
 
 ### Build & Deploy
 | File | What It Does | If You Edit This... |

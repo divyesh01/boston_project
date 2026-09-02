@@ -88,6 +88,17 @@ async function upload(generationId, payload, index) {
   return { response, body: await response.json() };
 }
 
+async function transactionChunkHash(operations) {
+  return hash(canonicalJson(operations.map((operation) => ({
+    entity: operation.entity,
+    operation: operation.operation,
+    record_key: operation.record_key,
+    property_key: operation.property_key,
+    row: operation.row || null,
+    base_row_hash: operation.base_row_hash ?? null,
+  }))));
+}
+
 const payload = await buildPayload();
 let abortedGeneration;
 
@@ -117,6 +128,9 @@ await run.check("complete migration activates atomically", async () => {
   for (let index = 0; index < fresh.chunks.length; index += 1) {
     const result = await upload(generation, fresh, index);
     assertEqual(result.response.status, 200);
+    const replay = await upload(generation, fresh, index);
+    assertEqual(replay.response.status, 200);
+    assertEqual(replay.body.replayed, true);
   }
   const activate = await call("migration/activate", { method: "POST", body: { generation_id: generation } });
   const result = await activate.json();
@@ -127,7 +141,7 @@ await run.check("complete migration activates atomically", async () => {
   owner.propertyIds = db.prepare("SELECT id FROM property WHERE account_id='A_1' ORDER BY id").all().map((row) => row.id);
 });
 
-await run.check("replaying the migration and every chunk is idempotent", async () => {
+await run.check("replaying migration start after activation is idempotent", async () => {
   const started = await call("migration/start", { method: "POST", body: { manifest: payload.manifest, manifest_hash: payload.manifest_hash } });
   const result = await started.json();
   assertEqual(started.status, 200);
@@ -252,6 +266,370 @@ await run.check("an activated replacement can roll back to the prior generation"
   const restored = db.prepare("SELECT name,rooms FROM property WHERE account_id='A_1' AND code='NUM-7'").get();
   assertEqual(restored.name, "Numeric Seven");
   assertEqual(restored.rooms, 10);
+});
+
+await run.check("staged transaction preserves unchanged rows and accepts ordered idempotent chunks", async () => {
+  const txId = "transaction_lifecycle_0001";
+  const operations = Array.from({ length: 14 }, (_, index) => ({
+    entity: "Expense",
+    operation: "upsert",
+    record_key: typedRecordKey(100 + index),
+    property_key: typedRecordKey(7),
+    row: { id: 100 + index, property_id: 7, expense_name: `Transaction ${index}`, amount: index + 0.25 },
+  }));
+  const chunks = [operations.slice(0, 13), operations.slice(13)];
+  const hashes = await Promise.all(chunks.map(transactionChunkHash));
+  const requestHash = await hash(canonicalJson(operations));
+  const before = db.prepare("SELECT row_hash FROM business_record WHERE account_id='A_1' AND generation_id=? AND entity_name='Expense' AND record_key=?").get(generation, typedRecordKey(2));
+  const started = await call("transaction/start", { method: "POST", body: { tx_id: txId, request_hash: requestHash, expected_chunks: 2, operation_count: 14 } });
+  assertEqual(started.status, 201);
+  const gap = await call("transaction/chunk", { method: "POST", body: { tx_id: txId, chunk_index: 1, chunk_hash: hashes[1], operations: chunks[1] } });
+  assertEqual(gap.status, 409);
+  const first = await call("transaction/chunk", { method: "POST", body: { tx_id: txId, chunk_index: 0, chunk_hash: hashes[0], operations: chunks[0] } });
+  assertEqual(first.status, 200);
+  const replay = await call("transaction/chunk", { method: "POST", body: { tx_id: txId, chunk_index: 0, chunk_hash: hashes[0], operations: chunks[0] } });
+  assertEqual(replay.status, 200);
+  assertEqual((await replay.json()).replayed, true);
+  const second = await call("transaction/chunk", { method: "POST", body: { tx_id: txId, chunk_index: 1, chunk_hash: hashes[1], operations: chunks[1] } });
+  assertEqual(second.status, 200);
+  const committed = await call("transaction/commit", { method: "POST", body: { tx_id: txId } });
+  assertEqual(committed.status, 200);
+  const committedBody = await committed.json();
+  const commitReplay = await call("transaction/commit", { method: "POST", body: { tx_id: txId } });
+  assertEqual(commitReplay.status, 200);
+  assertEqual((await commitReplay.json()).replayed, true);
+  const status = await (await call(`transaction/status?tx_id=${txId}`)).json();
+  assertEqual(status.status, "committed");
+  assertEqual(status.received_operations, 14);
+  const unchanged = db.prepare("SELECT row_hash FROM business_record WHERE account_id='A_1' AND generation_id=? AND entity_name='Expense' AND record_key=?").get(committedBody.active_generation_id, typedRecordKey(2));
+  assertEqual(unchanged.row_hash, before.row_hash);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_1' AND generation_id=? AND entity_name='Expense' AND record_key LIKE 'n:1%'").get(committedBody.active_generation_id).n) >= 14, true);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_staging_target WHERE account_id='A_1' AND tx_id=?").get(txId).n), 0);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_mutation_guard WHERE account_id='A_1' AND request_hash=?").get(requestHash).n), 0);
+});
+
+await run.check("concurrent transaction start replay converges on one generation", async () => {
+  const txId = "transaction_start_race_0006";
+  const requestHash = await hash("concurrent transaction start");
+  const [left, right] = await Promise.all([
+    call("transaction/start", { method: "POST", body: { tx_id: txId, request_hash: requestHash, expected_chunks: 1, operation_count: 1 } }),
+    call("transaction/start", { method: "POST", body: { tx_id: txId, request_hash: requestHash, expected_chunks: 1, operation_count: 1 } }),
+  ]);
+  const [leftBody, rightBody] = await Promise.all([left.json(), right.json()]);
+  assert([200, 201].includes(left.status), "first concurrent start failed");
+  assert([200, 201].includes(right.status), "second concurrent start failed");
+  assertEqual(leftBody.generation_id, rightBody.generation_id);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_staging_transaction WHERE account_id='A_1' AND tx_id=?").get(txId).n), 1);
+  assertEqual((await call("transaction/abort", { method: "POST", body: { tx_id: txId } })).status, 200);
+});
+
+await run.check("staged transaction enforces property scope and supports abort cleanup", async () => {
+  const txId = "transaction_abort_0002";
+  const operation = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(300), property_key: typedRecordKey("7"), row: { id: 300, property_id: "7", amount: 3 } };
+  const requestHash = await hash(canonicalJson([operation]));
+  const started = await call("transaction/start", { method: "POST", body: { tx_id: txId, request_hash: requestHash, expected_chunks: 1, operation_count: 1 } });
+  const startedBody = await started.json();
+  const maps = db.prepare("SELECT property_key,server_property_id FROM business_property_map WHERE account_id='A_1' AND generation_id=?").all(startedBody.generation_id);
+  const numeric = maps.find((row) => row.property_key === typedRecordKey(7));
+  const denied = await call("transaction/chunk", { method: "POST", scope: scopeSpecific([numeric.server_property_id]), body: { tx_id: txId, chunk_index: 0, chunk_hash: await transactionChunkHash([operation]), operations: [operation] } });
+  assertEqual(denied.status, 403);
+  const accepted = await call("transaction/chunk", { method: "POST", body: { tx_id: txId, chunk_index: 0, chunk_hash: await transactionChunkHash([operation]), operations: [operation] } });
+  assertEqual(accepted.status, 200);
+  const aborted = await call("transaction/abort", { method: "POST", body: { tx_id: txId } });
+  assertEqual(aborted.status, 200);
+  const abortedReplay = await call("transaction/abort", { method: "POST", body: { tx_id: txId } });
+  assertEqual(abortedReplay.status, 200);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_1' AND generation_id=?").get(startedBody.generation_id).n), 0);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_migration_chunk WHERE account_id='A_1' AND generation_id=?").get(startedBody.generation_id).n), 0);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_staging_target WHERE account_id='A_1' AND tx_id=?").get(txId).n), 0);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_mutation_guard WHERE account_id='A_1' AND request_hash=?").get(requestHash).n), 0);
+});
+
+await run.check("staged transaction rejects a stale revision and records the conflict", async () => {
+  const txId = "transaction_conflict_0003";
+  const operation = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(400), property_key: typedRecordKey(7), row: { id: 400, property_id: 7, amount: 4 } };
+  const started = await call("transaction/start", { method: "POST", body: { tx_id: txId, request_hash: await hash(canonicalJson([operation])), expected_chunks: 1, operation_count: 1 } });
+  assertEqual(started.status, 201);
+  const chunk = await call("transaction/chunk", { method: "POST", body: { tx_id: txId, chunk_index: 0, chunk_hash: await transactionChunkHash([operation]), operations: [operation] } });
+  assertEqual(chunk.status, 200);
+  const concurrent = await call("mutate", { method: "POST", body: { mutation_id: "mutation_tx_conflict_010", entity: "Expense", operation: "upsert", record_key: typedRecordKey(401), property_key: typedRecordKey(7), row: { id: 401, property_id: 7, amount: 4.01 } } });
+  assertEqual(concurrent.status, 200);
+  const commit = await call("transaction/commit", { method: "POST", body: { tx_id: txId } });
+  assertEqual(commit.status, 409);
+  const status = await (await call(`transaction/status?tx_id=${txId}`)).json();
+  assertEqual(status.status, "conflict");
+  const replay = await call("transaction/commit", { method: "POST", body: { tx_id: txId } });
+  const replayBody = await replay.json();
+  assertEqual(replay.status, 409);
+  assertEqual(replayBody.code, "sync_conflict");
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_1' AND generation_id=?").get(status.staging_generation_id).n), 0);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_migration_chunk WHERE account_id='A_1' AND generation_id=?").get(status.staging_generation_id).n), 0);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_staging_target WHERE account_id='A_1' AND tx_id=?").get(txId).n), 0);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_mutation_guard WHERE account_id='A_1' AND request_hash=?").get(await hash(canonicalJson([operation]))).n), 0);
+});
+
+await run.check("expired staged transaction is cleaned on the next start", async () => {
+  const expiredTxId = "transaction_expired_0004";
+  const operation = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(500), property_key: typedRecordKey(7), row: { id: 500, property_id: 7, amount: 5 } };
+  const started = await call("transaction/start", { method: "POST", body: { tx_id: expiredTxId, request_hash: await hash(canonicalJson([operation])), expected_chunks: 1, operation_count: 1 } });
+  const startedBody = await started.json();
+  const chunk = await call("transaction/chunk", { method: "POST", body: { tx_id: expiredTxId, chunk_index: 0, chunk_hash: await transactionChunkHash([operation]), operations: [operation] } });
+  assertEqual(chunk.status, 200);
+  db.prepare("UPDATE business_staging_transaction SET expires_at='2000-01-01T00:00:00.000Z' WHERE account_id='A_1' AND tx_id=?").run(expiredTxId);
+  const nextTxId = "transaction_cleanup_0005";
+  const next = await call("transaction/start", { method: "POST", body: { tx_id: nextTxId, request_hash: await hash("cleanup transaction"), expected_chunks: 1, operation_count: 1 } });
+  assertEqual(next.status, 201);
+  assertEqual(db.prepare("SELECT status FROM business_staging_transaction WHERE account_id='A_1' AND tx_id=?").get(expiredTxId).status, "expired");
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_1' AND generation_id=?").get(startedBody.generation_id).n), 0);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_migration_chunk WHERE account_id='A_1' AND generation_id=?").get(startedBody.generation_id).n), 0);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_staging_target WHERE account_id='A_1' AND tx_id=?").get(expiredTxId).n), 0);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_mutation_guard WHERE account_id='A_1' AND request_hash=?").get(await hash(canonicalJson([operation]))).n), 0);
+  const cleanup = await call("transaction/abort", { method: "POST", body: { tx_id: nextTxId } });
+  assertEqual(cleanup.status, 200);
+});
+
+await run.check("commit cannot activate a staging generation aborted during the commit race", async () => {
+  const txId = "transaction_commit_race_0007";
+  const operation = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(600), property_key: typedRecordKey(7), row: { id: 600, property_id: 7, amount: 6 } };
+  const requestHash = await hash(canonicalJson([operation]));
+  const started = await call("transaction/start", { method: "POST", body: { tx_id: txId, request_hash: requestHash, expected_chunks: 1, operation_count: 1 } });
+  const startedBody = await started.json();
+  assertEqual((await call("transaction/chunk", { method: "POST", body: { tx_id: txId, chunk_index: 0, chunk_hash: await transactionChunkHash([operation]), operations: [operation] } })).status, 200);
+  const pointerBefore = db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id;
+  const originalBatch = env.DB.batch.bind(env.DB);
+  let intercepted = false;
+  env.DB.batch = async (statements) => {
+    if (!intercepted && statements.some((statement) => String(statement._sql).includes("SET status='committed'"))) {
+      intercepted = true;
+      db.prepare("DELETE FROM business_record WHERE account_id='A_1' AND generation_id=?").run(startedBody.generation_id);
+      db.prepare("DELETE FROM business_property_map WHERE account_id='A_1' AND generation_id=?").run(startedBody.generation_id);
+      db.prepare("DELETE FROM business_migration_chunk WHERE account_id='A_1' AND generation_id=?").run(startedBody.generation_id);
+      db.prepare("DELETE FROM business_staging_target WHERE account_id='A_1' AND tx_id=?").run(txId);
+      db.prepare("UPDATE business_dataset SET status='aborted' WHERE account_id='A_1' AND generation_id=?").run(startedBody.generation_id);
+      db.prepare("UPDATE business_staging_transaction SET status='aborted' WHERE account_id='A_1' AND tx_id=?").run(txId);
+    }
+    return originalBatch(statements);
+  };
+  try {
+    const commit = await call("transaction/commit", { method: "POST", body: { tx_id: txId } });
+    assertEqual(commit.status, 409);
+  } finally {
+    env.DB.batch = originalBatch;
+  }
+  assertEqual(db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id, pointerBefore);
+});
+
+await run.check("chunk cannot write after expiry wins the upload race", async () => {
+  const txId = "transaction_chunk_race_0008";
+  const operation = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(700), property_key: typedRecordKey(7), row: { id: 700, property_id: 7, amount: 7 } };
+  const requestHash = await hash(canonicalJson([operation]));
+  const started = await call("transaction/start", { method: "POST", body: { tx_id: txId, request_hash: requestHash, expected_chunks: 1, operation_count: 1 } });
+  const startedBody = await started.json();
+  const originalBatch = env.DB.batch.bind(env.DB);
+  let intercepted = false;
+  env.DB.batch = async (statements) => {
+    if (!intercepted && statements.some((statement) => String(statement._sql).includes("INSERT INTO business_migration_chunk"))) {
+      intercepted = true;
+      db.prepare("DELETE FROM business_record WHERE account_id='A_1' AND generation_id=?").run(startedBody.generation_id);
+      db.prepare("DELETE FROM business_property_map WHERE account_id='A_1' AND generation_id=?").run(startedBody.generation_id);
+      db.prepare("UPDATE business_dataset SET status='aborted' WHERE account_id='A_1' AND generation_id=?").run(startedBody.generation_id);
+      db.prepare("UPDATE business_staging_transaction SET status='expired' WHERE account_id='A_1' AND tx_id=?").run(txId);
+    }
+    return originalBatch(statements);
+  };
+  try {
+    const chunk = await call("transaction/chunk", { method: "POST", body: { tx_id: txId, chunk_index: 0, chunk_hash: await transactionChunkHash([operation]), operations: [operation] } });
+    assertEqual(chunk.status, 409);
+  } finally {
+    env.DB.batch = originalBatch;
+  }
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_1' AND generation_id=?").get(startedBody.generation_id).n), 0);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_migration_chunk WHERE account_id='A_1' AND generation_id=?").get(startedBody.generation_id).n), 0);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_staging_target WHERE account_id='A_1' AND tx_id=?").get(txId).n), 0);
+});
+
+await run.check("abort cannot destroy a dataset activated during the abort race", async () => {
+  const txId = "transaction_abort_after_commit_0009";
+  const operation = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(800), property_key: typedRecordKey(7), row: { id: 800, property_id: 7, amount: 8 } };
+  const requestHash = await hash(canonicalJson([operation]));
+  const started = await call("transaction/start", { method: "POST", body: { tx_id: txId, request_hash: requestHash, expected_chunks: 1, operation_count: 1 } });
+  const startedBody = await started.json();
+  assertEqual((await call("transaction/chunk", { method: "POST", body: { tx_id: txId, chunk_index: 0, chunk_hash: await transactionChunkHash([operation]), operations: [operation] } })).status, 200);
+  const originalBatch = env.DB.batch.bind(env.DB);
+  let intercepted = false;
+  let commitStatus = 0;
+  env.DB.batch = async (statements) => {
+    if (!intercepted && statements.some((statement) => String(statement._sql).includes("UPDATE business_staging_transaction SET status='aborted'"))) {
+      intercepted = true;
+      commitStatus = (await call("transaction/commit", { method: "POST", body: { tx_id: txId } })).status;
+    }
+    return originalBatch(statements);
+  };
+  let abortStatus = 0;
+  try {
+    abortStatus = (await call("transaction/abort", { method: "POST", body: { tx_id: txId } })).status;
+  } finally {
+    env.DB.batch = originalBatch;
+  }
+  assert(intercepted, "the abort cleanup batch was never intercepted");
+  assertEqual(commitStatus, 200, "the injected concurrent commit must win");
+  assert(abortStatus >= 400, `abort must fail closed once the commit won, got ${abortStatus}`);
+  const pointer = db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id;
+  assertEqual(pointer, startedBody.generation_id, "the committed generation must stay active");
+  assertEqual(db.prepare("SELECT status FROM business_staging_transaction WHERE account_id='A_1' AND tx_id=?").get(txId).status, "committed");
+  assert(Number(db.prepare("SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_1' AND generation_id=?").get(pointer).n) > 0, "the losing abort destroyed the active dataset");
+});
+
+await run.check("expiry sweep cannot destroy a dataset committed during the sweep race", async () => {
+  const txId = "transaction_expire_after_commit_0010";
+  const operation = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(810), property_key: typedRecordKey(7), row: { id: 810, property_id: 7, amount: 8.1 } };
+  const requestHash = await hash(canonicalJson([operation]));
+  const started = await call("transaction/start", { method: "POST", body: { tx_id: txId, request_hash: requestHash, expected_chunks: 1, operation_count: 1 } });
+  const startedBody = await started.json();
+  assertEqual((await call("transaction/chunk", { method: "POST", body: { tx_id: txId, chunk_index: 0, chunk_hash: await transactionChunkHash([operation]), operations: [operation] } })).status, 200);
+  db.prepare("UPDATE business_staging_transaction SET expires_at='2000-01-01T00:00:00.000Z' WHERE account_id='A_1' AND tx_id=?").run(txId);
+  const originalBatch = env.DB.batch.bind(env.DB);
+  let intercepted = false;
+  let commitStatus = 0;
+  let commitBody = "";
+  env.DB.batch = async (statements) => {
+    if (!intercepted && statements.some((statement) => String(statement._sql).includes("UPDATE business_staging_transaction SET status='expired'"))) {
+      intercepted = true;
+      db.prepare("UPDATE business_staging_transaction SET expires_at='2999-01-01T00:00:00.000Z' WHERE account_id='A_1' AND tx_id=?").run(txId);
+      const injected = await call("transaction/commit", { method: "POST", body: { tx_id: txId } });
+      commitStatus = injected.status;
+      commitBody = JSON.stringify(await injected.json());
+    }
+    return originalBatch(statements);
+  };
+  try {
+    assertEqual((await call("transaction/start", { method: "POST", body: { tx_id: "transaction_sweep_driver_0010", request_hash: await hash("sweep driver"), expected_chunks: 1, operation_count: 1 } })).status, 201);
+  } finally {
+    env.DB.batch = originalBatch;
+  }
+  assert(intercepted, "the expiry cleanup batch was never intercepted");
+  assertEqual(commitStatus, 200, `the injected concurrent commit must win (body: ${commitBody})`);
+  assertEqual(db.prepare("SELECT status FROM business_staging_transaction WHERE account_id='A_1' AND tx_id=?").get(txId).status, "committed", "the committed transaction must not be downgraded to expired");
+  assert(Number(db.prepare("SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_1' AND generation_id=?").get(startedBody.generation_id).n) > 0, "the losing expiry sweep destroyed the committed dataset");
+  assertEqual((await call("transaction/abort", { method: "POST", body: { tx_id: "transaction_sweep_driver_0010" } })).status, 200);
+});
+
+await run.check("property scope is enforced on a later chunk, not only the first", async () => {
+  const txId = "transaction_late_chunk_scope_0011";
+  const allowed = [];
+  for (let index = 0; index < 13; index += 1) {
+    allowed.push({ entity: "Expense", operation: "upsert", record_key: typedRecordKey(1000 + index), property_key: typedRecordKey(7), row: { id: 1000 + index, property_id: 7, amount: 1 + index } });
+  }
+  const smuggled = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(1099), property_key: typedRecordKey("7"), row: { id: 1099, property_id: "7", amount: 10.99 } };
+  const requestHash = await hash(canonicalJson([...allowed, smuggled]));
+  const started = await call("transaction/start", { method: "POST", body: { tx_id: txId, request_hash: requestHash, expected_chunks: 2, operation_count: 14 } });
+  const startedBody = await started.json();
+  assertEqual(started.status, 201);
+  const maps = db.prepare("SELECT property_key,server_property_id FROM business_property_map WHERE account_id='A_1' AND generation_id=?").all(startedBody.generation_id);
+  const numeric = maps.find((row) => row.property_key === typedRecordKey(7));
+  // A property-restricted scope that still clears the mutation ROLE gate, so the
+  // assertions below prove the PROPERTY gate rather than the role gate.
+  const scoped = {
+    user: { id: "mgr", account_id: "A_1", email: "mgr@test.local", role: "manager", property_access_mode: "specific", permissions: { manual_entry: true } },
+    accountId: "A_1",
+    all: false,
+    propertyIds: [numeric.server_property_id],
+  };
+  const first = await call("transaction/chunk", { method: "POST", scope: scoped, body: { tx_id: txId, chunk_index: 0, chunk_hash: await transactionChunkHash(allowed), operations: allowed } });
+  assertEqual(first.status, 200, "the in-scope first chunk must be accepted");
+  const later = await call("transaction/chunk", { method: "POST", scope: scoped, body: { tx_id: txId, chunk_index: 1, chunk_hash: await transactionChunkHash([smuggled]), operations: [smuggled] } });
+  assertEqual(later.status, 403, "an out-of-scope property smuggled into a later chunk must be denied");
+  assertEqual(Number(db.prepare("SELECT next_chunk_index AS n FROM business_staging_transaction WHERE account_id='A_1' AND tx_id=?").get(txId).n), 1);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_staging_target WHERE account_id='A_1' AND tx_id=? AND server_property_id<>?").get(txId, numeric.server_property_id).n), 0, "no out-of-scope target may be staged");
+  assertEqual((await call("transaction/abort", { method: "POST", body: { tx_id: txId } })).status, 200);
+});
+
+await run.check("commit cannot activate a transaction that was already aborted", async () => {
+  const txId = "transaction_commit_after_abort_0012";
+  const operation = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(1100), property_key: typedRecordKey(7), row: { id: 1100, property_id: 7, amount: 11 } };
+  const requestHash = await hash(canonicalJson([operation]));
+  const started = await call("transaction/start", { method: "POST", body: { tx_id: txId, request_hash: requestHash, expected_chunks: 1, operation_count: 1 } });
+  const startedBody = await started.json();
+  assertEqual((await call("transaction/chunk", { method: "POST", body: { tx_id: txId, chunk_index: 0, chunk_hash: await transactionChunkHash([operation]), operations: [operation] } })).status, 200);
+  const pointerBefore = db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id;
+  const revisionBefore = Number(db.prepare("SELECT revision FROM business_sync_state WHERE account_id='A_1'").get().revision);
+  assertEqual((await call("transaction/abort", { method: "POST", body: { tx_id: txId } })).status, 200);
+  const late = await call("transaction/commit", { method: "POST", body: { tx_id: txId } });
+  assertEqual(late.status, 409, "a commit after abort must be refused");
+  assertEqual(db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id, pointerBefore, "the aborted generation must never become active");
+  assert(startedBody.generation_id !== pointerBefore, "the staging generation must differ from the active generation");
+  assertEqual(Number(db.prepare("SELECT revision FROM business_sync_state WHERE account_id='A_1'").get().revision), revisionBefore);
+  assertEqual(db.prepare("SELECT status FROM business_staging_transaction WHERE account_id='A_1' AND tx_id=?").get(txId).status, "aborted");
+});
+
+await run.check("a pending staging generation is invisible to snapshot and feed", async () => {
+  const txId = "transaction_pending_visibility_0013";
+  const operation = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(1200), property_key: typedRecordKey(7), row: { id: 1200, property_id: 7, amount: 12 } };
+  const requestHash = await hash(canonicalJson([operation]));
+  const activeBefore = db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id;
+  const started = await call("transaction/start", { method: "POST", body: { tx_id: txId, request_hash: requestHash, expected_chunks: 1, operation_count: 1 } });
+  const startedBody = await started.json();
+  assertEqual((await call("transaction/chunk", { method: "POST", body: { tx_id: txId, chunk_index: 0, chunk_hash: await transactionChunkHash([operation]), operations: [operation] } })).status, 200);
+  assert(Number(db.prepare("SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_1' AND generation_id=? AND record_key=?").get(startedBody.generation_id, typedRecordKey(1200)).n) === 1, "the staged row must exist in the staging generation");
+  const snap = await (await call("snapshot?entity=Expense&limit=200")).json();
+  assertEqual(snap.generation_id, activeBefore, "snapshot must read the active generation, never the staging generation");
+  assertEqual(snap.items.filter((item) => item.record_key === typedRecordKey(1200)).length, 0, "an uncommitted staged row must not appear in a snapshot");
+  const changes = await (await call("feed?since=0&limit=200")).json();
+  assertEqual(changes.active_generation_id, activeBefore, "feed must report the active generation");
+  assertEqual(changes.items.filter((item) => item.record_key === typedRecordKey(1200)).length, 0, "an uncommitted staged row must not appear in the feed");
+  assertEqual((await call("transaction/abort", { method: "POST", body: { tx_id: txId } })).status, 200);
+});
+
+await run.check("expiry sweep destroys only the expired transaction and spares a live one", async () => {
+  const liveTxId = "transaction_sweep_survivor_0014";
+  const staleTxId = "transaction_sweep_victim_0014";
+  const liveOp = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(1300), property_key: typedRecordKey(7), row: { id: 1300, property_id: 7, amount: 13 } };
+  const staleOp = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(1301), property_key: typedRecordKey(7), row: { id: 1301, property_id: 7, amount: 13.01 } };
+  const live = await (await call("transaction/start", { method: "POST", body: { tx_id: liveTxId, request_hash: await hash(canonicalJson([liveOp])), expected_chunks: 1, operation_count: 1 } })).json();
+  assertEqual((await call("transaction/chunk", { method: "POST", body: { tx_id: liveTxId, chunk_index: 0, chunk_hash: await transactionChunkHash([liveOp]), operations: [liveOp] } })).status, 200);
+  const stale = await (await call("transaction/start", { method: "POST", body: { tx_id: staleTxId, request_hash: await hash(canonicalJson([staleOp])), expected_chunks: 1, operation_count: 1 } })).json();
+  assertEqual((await call("transaction/chunk", { method: "POST", body: { tx_id: staleTxId, chunk_index: 0, chunk_hash: await transactionChunkHash([staleOp]), operations: [staleOp] } })).status, 200);
+  db.prepare("UPDATE business_staging_transaction SET expires_at='2000-01-01T00:00:00.000Z' WHERE account_id='A_1' AND tx_id=?").run(staleTxId);
+  const driverTxId = "transaction_sweep_driver_0014";
+  assertEqual((await call("transaction/start", { method: "POST", body: { tx_id: driverTxId, request_hash: await hash("sweep driver 0014"), expected_chunks: 1, operation_count: 1 } })).status, 201);
+  assertEqual(db.prepare("SELECT status FROM business_staging_transaction WHERE account_id='A_1' AND tx_id=?").get(staleTxId).status, "expired");
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_1' AND generation_id=?").get(stale.generation_id).n), 0, "the expired staging generation must be cleaned");
+  assertEqual(db.prepare("SELECT status FROM business_staging_transaction WHERE account_id='A_1' AND tx_id=?").get(liveTxId).status, "pending", "the live transaction must survive the sweep");
+  assert(Number(db.prepare("SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_1' AND generation_id=?").get(live.generation_id).n) > 0, "the sweep destroyed a live transaction's staged rows");
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_staging_target WHERE account_id='A_1' AND tx_id=?").get(liveTxId).n), 1, "the sweep destroyed a live transaction's staged targets");
+  assertEqual((await call("transaction/abort", { method: "POST", body: { tx_id: liveTxId } })).status, 200);
+  assertEqual((await call("transaction/abort", { method: "POST", body: { tx_id: driverTxId } })).status, 200);
+});
+
+await run.check("a second account cannot read, mutate, abort, or commit the first account's transaction", async () => {
+  db.prepare("INSERT INTO account (id,name,created_date) VALUES (?,?,?)").run("A_2", "Other Tenant", "2026-01-01");
+  seedUser(db, { id: "intruder", email: "intruder@other.local", role: "owner", mode: "all", accountId: "A_2" });
+  const intruder = { user: { id: "intruder", account_id: "A_2", email: "intruder@other.local", role: "owner", property_access_mode: "all" }, accountId: "A_2", all: true, propertyIds: [] };
+  const txId = "transaction_cross_account_0015";
+  const operation = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(1400), property_key: typedRecordKey(7), row: { id: 1400, property_id: 7, amount: 14 } };
+  const started = await (await call("transaction/start", { method: "POST", body: { tx_id: txId, request_hash: await hash(canonicalJson([operation])), expected_chunks: 1, operation_count: 1 } })).json();
+  assertEqual((await call("transaction/chunk", { method: "POST", body: { tx_id: txId, chunk_index: 0, chunk_hash: await transactionChunkHash([operation]), operations: [operation] } })).status, 200);
+  const activeA = db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id;
+  const recordsA = Number(db.prepare("SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_1' AND generation_id=?").get(activeA).n);
+  assertEqual((await call(`transaction/status?tx_id=${txId}`, { scope: intruder })).status, 404, "cross-account transaction status must not resolve");
+  assertEqual((await call("transaction/chunk", { method: "POST", scope: intruder, body: { tx_id: txId, chunk_index: 1, chunk_hash: await transactionChunkHash([operation]), operations: [operation] } })).status, 404, "cross-account chunk upload must not resolve");
+  assertEqual((await call("transaction/abort", { method: "POST", scope: intruder, body: { tx_id: txId } })).status, 404, "cross-account abort must not resolve");
+  assertEqual((await call("transaction/commit", { method: "POST", scope: intruder, body: { tx_id: txId } })).status, 404, "cross-account commit must not resolve");
+  const foreignSnapshot = await call("snapshot?entity=Expense&limit=200", { scope: intruder });
+  assertEqual(foreignSnapshot.status, 404, "a foreign account must not receive a snapshot of another tenant's dataset");
+  const foreignFeed = await call("feed?since=0&limit=200", { scope: intruder });
+  assertEqual(foreignFeed.status, 200);
+  const foreignFeedBody = await foreignFeed.json();
+  assertEqual(foreignFeedBody.items.length, 0, "a foreign account must receive zero change rows");
+  assertEqual(foreignFeedBody.active_generation_id, null, "a foreign account must not learn another tenant's generation id");
+  const foreignMutate = await call("mutate", { method: "POST", scope: intruder, body: { mutation_id: "mutation_cross_account_0015", entity: "Expense", operation: "upsert", record_key: typedRecordKey(1400), property_key: typedRecordKey(7), row: { id: 1400, property_id: 7, amount: 99.99 } } });
+  assert(foreignMutate.status >= 400, `a foreign account must not mutate another tenant's records, got ${foreignMutate.status}`);
+  assertEqual((await call("migration/rollback", { method: "POST", scope: intruder, body: { generation_id: started.generation_id } })).status, 404, "cross-account rollback must not resolve");
+  assertEqual(db.prepare("SELECT status FROM business_staging_transaction WHERE account_id='A_1' AND tx_id=?").get(txId).status, "pending", "the victim transaction must remain pending");
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_1' AND generation_id=?").get(activeA).n), recordsA, "the victim account's active dataset must be untouched");
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_2'").get().n), 0, "the intruder account must hold no business records");
+  assertEqual(db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id, activeA);
+  assertEqual((await call("transaction/abort", { method: "POST", body: { tx_id: txId } })).status, 200);
 });
 
 run.done();

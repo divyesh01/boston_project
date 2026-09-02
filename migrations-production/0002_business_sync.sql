@@ -96,6 +96,7 @@ CREATE TABLE business_mutation_guard (
   created_at TEXT NOT NULL,
   PRIMARY KEY (account_id, mutation_id)
 );
+CREATE INDEX idx_business_mutation_guard_request ON business_mutation_guard (account_id, request_hash);
 
 CREATE TABLE business_id_sequence (
   account_id TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
@@ -104,3 +105,37 @@ CREATE TABLE business_id_sequence (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (account_id, prefix)
 );
+
+CREATE TABLE business_staging_transaction (
+  account_id TEXT NOT NULL,
+  tx_id TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  base_generation_id TEXT NOT NULL,
+  base_revision INTEGER NOT NULL,
+  staging_generation_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending','committed','aborted','expired','conflict')),
+  expected_chunks INTEGER NOT NULL,
+  next_chunk_index INTEGER NOT NULL DEFAULT 0,
+  operation_count INTEGER NOT NULL,
+  created_by TEXT NOT NULL REFERENCES user(id),
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  committed_at TEXT,
+  PRIMARY KEY (account_id, tx_id),
+  UNIQUE (account_id, staging_generation_id),
+  FOREIGN KEY (account_id, base_generation_id) REFERENCES business_dataset(account_id, generation_id),
+  FOREIGN KEY (account_id, staging_generation_id) REFERENCES business_dataset(account_id, generation_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_business_staging_transaction_lookup ON business_staging_transaction (account_id, status, expires_at);
+
+CREATE TABLE business_staging_target (
+  account_id TEXT NOT NULL,
+  tx_id TEXT NOT NULL,
+  entity_name TEXT NOT NULL,
+  record_key TEXT NOT NULL,
+  server_property_id TEXT NOT NULL,
+  operation TEXT NOT NULL CHECK (operation IN ('upsert','delete')),
+  PRIMARY KEY (account_id, tx_id, entity_name, record_key),
+  FOREIGN KEY (account_id, tx_id) REFERENCES business_staging_transaction(account_id, tx_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_business_staging_target_lookup ON business_staging_target (account_id, tx_id, server_property_id);

@@ -266,15 +266,37 @@ node scripts/probe-cors-config.mjs        # 35/0, standalone — no loader neede
   `623b3ee9-6815-43fb-a70c-1c1cdea0a2c8`; the earlier authentication rollout
   passed the 22-check live smoke.
 
-### Cross-browser business-data sync checkpoint (2026-09-02, disabled)
+### Cross-browser business-data sync rollout (2026-09-02, enabled)
 
-- `VITE_USE_SERVER_DATA_SYNC` and the independent Worker kill switch
-  `ENABLE_BUSINESS_SYNC_API` must both be explicitly enabled before the new
-  authoritative path is reachable. The committed production Worker setting is
-  still `ENABLE_BUSINESS_SYNC_API=false`; `ENABLE_D1_DATA_API` also remains
-  false. This checkpoint does not change production or the current browser-local
-  source of truth.
-- The disabled implementation stages complete 25-entity IndexedDB snapshots in
+- `VITE_USE_SERVER_DATA_SYNC` (build time, `.env.production`) and the independent
+  Worker kill switch `ENABLE_BUSINESS_SYNC_API` (`wrangler.jsonc`) are both
+  `true` as of this rollout. They must move together: a client with sync on
+  against a Worker with the API off receives `404 {"error":"business-data sync is
+  disabled"}`, which carries no `no_active_dataset` code, so `requestOptional`
+  rethrows instead of falling back to the cache. `ENABLE_D1_DATA_API` remains
+  `false` — the legacy per-request entity API is a different path and is not
+  needed by this one.
+- Production D1 `boston-project-production-auth` has `0002_business_sync.sql`
+  applied (Observed 2026-09-02: `d1_migrations` = `0001_auth_schema.sql`,
+  `0002_business_sync.sql`; 11 `business_*` tables; 7 `idx_business*` indexes;
+  users 1, accounts 1, properties 0, grants 0, sessions 2 — all unchanged across
+  the migration). Schema migration is not dataset activation: `business_dataset`,
+  `business_dataset_pointer`, `business_record` and `business_sync_state` were
+  all left at zero rows, so the account has no active generation.
+- Enabling the flags cannot clear a browser's existing data. The only
+  `.clear()` in `src/api/businessSync.js` is inside `hydrate()`'s snapshot path
+  (line 310) and is unreachable while `fetchSnapshot()` returns `null`, which is
+  exactly what happens when the server answers `404 no_active_dataset` (line
+  305 returns first). `applyFeed` never clears; it only requests a rebuild.
+- An active-but-empty generation — the one state that would clear a cache and
+  write nothing back — cannot be created. `startMigration` rejects a manifest
+  whose entity totals are `<= 0` (422) and `activateMigration` refuses a
+  generation with no property roster (422), with a chunk count/hash that does not
+  match the manifest (409), with a total record count that does not reconcile
+  (409), with any per-entity count that does not reconcile (409), or with an
+  orphaned `property_key` reference (422). The pointer swap, the roster upsert and
+  the previous-generation retirement all run in one `env.DB.batch()`.
+- The implementation stages complete 25-entity IndexedDB snapshots in
   immutable account-scoped D1 generations, preserves numeric versus string ids,
   verifies chunk hashes/counts, and exposes data only through an atomic active
   generation pointer. Clean browsers rebuild IndexedDB as a cache from a fixed
@@ -419,14 +441,14 @@ can only be verified against the dashboard by eye, since nothing in the repo can
 | `.env.example` | **committed template** | The only place the required variable names are written down, each annotated with the file:line that reads it. `.gitignore` has an explicit `!.env.example` negation so `.env.*` cannot swallow it. | Deleting it leaves a new deploy nothing to copy |
 | `.env.local` | `VITE_USE_LOCAL_AUTH=false` | Default: use real serverless auth | Loaded by Vite in **every** mode including `vite build` — never put `true` here |
 | `.env.development` | `VITE_USE_LOCAL_AUTH=true` | Dev: use local IndexedDB auth shim | - |
-| `.env.production` | `VITE_USE_SERVER_AUTH=true` + `VITE_USE_D1_API=false` | Current production: same-origin Worker authentication with browser-local business storage | This committed file contains public build flags only. Never add a password, token, pepper, or other secret |
+| `.env.production` | `VITE_USE_SERVER_AUTH=true` + `VITE_USE_D1_API=false` + `VITE_USE_SERVER_DATA_SYNC=true` | Current production: same-origin Worker authentication, legacy entity API off, business data authoritative in D1 with IndexedDB as a cache | This committed file contains public build flags only. Never add a password, token, pepper, or other secret. `VITE_USE_SERVER_DATA_SYNC` is baked in at build time — changing it needs a rebuild AND a deploy, in step with `ENABLE_BUSINESS_SYNC_API` |
 | `PASSWORD_PEPPER_V1` | Cloudflare Worker secret (not a file) | Post-hash HMAC pepper for versioned owner credentials | Missing/short values make authentication return controlled 503; never place this value in source, logs, chat, or `.env.production` |
-| `ENABLE_D1_DATA_API` | `false` in `wrangler.jsonc` | Runtime kill switch for Worker business-data endpoints | Do not enable during the auth-only rollout; existing hotel data remains in IndexedDB |
-| `ENABLE_BUSINESS_SYNC_API` | `false` in `wrangler.jsonc` | Independent kill switch for the staged cross-browser snapshot/feed/mutation API | Keep false until the server-atomic transaction blocker and clean-browser acceptance gates pass |
+| `ENABLE_D1_DATA_API` | `false` in `wrangler.jsonc` | Runtime kill switch for Worker business-data endpoints | Not part of the cross-browser sync path; leave false. `/api/entities`, `/api/import`, `/api/properties` and `/api/transactions` stay 404 |
+| `ENABLE_BUSINESS_SYNC_API` | `true` in `wrangler.jsonc` | Independent kill switch for the staged cross-browser snapshot/feed/mutation API | Enabled for the 2026-09-02 rollout. Setting it back to `false` does not delete data, but it strands a sync-enabled client on 404s with no `no_active_dataset` code — flip it together with the client flag and redeploy |
 | `VITE_STANDALONE_LOCAL` | `true` in the standalone shape only | The SECOND flag `src/main.jsx` requires. A PROD build with `VITE_USE_LOCAL_AUTH=true` and this one absent, `false` or empty still refuses to boot, so a stray build cannot ship the untrusted auth path by accident. | Setting this on a build that can be reached anonymously = SECURITY DISASTER. Browser-side login and MFA are bypassable by anyone who loads the page; the upstream identity proxy (e.g. Cloudflare Access) is then the ONLY real boundary |
 | `VITE_WEBSOCKET_ENDPOINT` | unset, or a `ws://` / `wss://` URL | Realtime CRDT sync (`src/crdt.jsx`). Only a ws/wss URL enables it; **any** other value (`disabled`, `off`, an `https://` URL, whitespace) resolves to unset and is warned about, so a hosting dashboard that refuses an empty value can still express "off". | Before 2026-08-23 any non-empty value reached `new WebsocketProvider()` and started a backoff loop that retried for as long as the tab stayed open |
 
-Gate: `scripts/probe-standalone-deploy.mjs` (49/0) evaluates the boot condition and the
+Gate: `scripts/probe-standalone-deploy.mjs` (61/0) evaluates the boot condition and the
 endpoint resolution **extracted verbatim from `src/main.jsx` and `src/crdt.jsx`** against a
 table of environments. Reimplementing either rule inside the probe would only prove the
 probe agrees with itself, and would keep passing after the real guard was deleted. Sections

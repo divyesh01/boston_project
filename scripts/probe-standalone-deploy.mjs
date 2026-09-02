@@ -330,6 +330,12 @@ const ENV_PROD_ALLOWED = [
   'VITE_STANDALONE_LOCAL',
   'VITE_USE_SERVER_AUTH',
   'VITE_USE_D1_API',
+  // Public build-time mode switch for the staged cross-browser business sync.
+  // Vite folds it into the bundle exactly like the four above, so it carries no
+  // secrecy value and belongs in the repo rather than in a dashboard field that
+  // has to stay correct by hand. Added to the ALLOWLIST deliberately — the point
+  // of the list is that a new key needs a decision, not that no key may be added.
+  'VITE_USE_SERVER_DATA_SYNC',
 ];
 
 check(`${ENV_PROD} exists`, existsSync(path.join(ROOT, ENV_PROD)),

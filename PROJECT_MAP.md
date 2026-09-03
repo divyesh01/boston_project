@@ -88,6 +88,14 @@ Read the header comment in `public/_headers` before touching either.
   Prefer citing the **symbol**; keep line numbers for things a probe pins.
 - Never `--no-verify`, force-push, or rewrite history.
 
+## Before you decompose a large file
+
+Read `TECH_DEBT.md`. It ranks the repository's oversized modules by *danger*, not line
+count, and each row records the safe module boundary, the real risk, and the proof
+obligation that must be satisfied first. Two of the three largest files are listed in
+`PROTECTED_FILES.md` and cannot be split without owner authorization. Two more sit on the
+live cross-browser rollout path and are explicitly deferred until that rollout is verified.
+
 ## Keeping this file honest
 
 This map is hand-maintained. When you add, move, or delete a module, update the row

@@ -87,6 +87,12 @@ const AS_JSON = flag("json");
 const EXCLUDE = new Map([
   ["verify-all.mjs", "this runner"],
   ["verify-brain.mjs", "documentation gate, not a behaviour suite — run via npm run brain:verify"],
+  ["verify-repo-map.mjs", "documentation gate, not a behaviour suite — run via npm run map:verify"],
+  // Mutation harness for the gate above. It rewrites all four routing documents in
+  // place and restores them; a suite killed by --timeout mid-mutation would leave a
+  // tracked doc modified, so it is run deliberately (npm run map:mutate), never inside
+  // an automated sweep.
+  ["probe-repo-map-gate.mjs", "mutates tracked docs in place — run via npm run map:mutate"],
   // Library, not a suite: it exports a fixture builder for other probes to import
   // and has no assertions of its own.
   ["probe-auth-hardening-world.mjs", "fixture library imported by other probes"],

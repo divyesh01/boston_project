@@ -21,6 +21,8 @@
     "preview": "vite preview",
     "brain:map": "node scripts/generate-brain-map.mjs",
     "brain:verify": "node scripts/verify-brain.mjs",
+    "map:verify": "node scripts/verify-repo-map.mjs",
+    "map:mutate": "node scripts/probe-repo-map-gate.mjs",
     "audit:gate": "node scripts/audit-gate.mjs",
     "verify:all": "node scripts/verify-all.mjs",
     "verify:v3": "node scripts/verify-divyesh-v3.mjs"

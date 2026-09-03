@@ -38,30 +38,27 @@ Note: `ProtectedRoutes` (plural, declared locally in `src/App.jsx`) and
 
 ## Where do I go to change…
 
+**[`docs/AI_REPO_GUIDE.md`](docs/AI_REPO_GUIDE.md) answers this.** It maps ten
+subsystems — HotelKey import, Revenue/KPIs, Transactions, Property isolation, Business
+sync, Auth, IndexedDB, Payroll, Payments/refunds, Deployment — to the 3–5 files you
+read, the suite that proves the change, the exact gate command, and the files you must
+not edit. `npm run map:verify` fails the commit when any of that stops being true, so
+it is the one place worth trusting first.
+
+This file keeps only what the routing layer has no column for.
+
 | To change | Go to | Notes |
 |---|---|---|
-| **HotelKey report parsing** | `src/lib/reportParsers.js`, `src/lib/universalParser.js` | Regression fixture: `src/lib/hotelKeyRegression.test.js`. |
-| **CSV / XLSX import** | `src/lib/csvParser.js`, `src/pages/Import.jsx` | Large files are parsed off the main thread — `csvParser.js` spawns `src/lib/parser.worker.js` as a Web Worker. Validation gate: `src/lib/importValidation.js`. Undo path: `src/lib/importReset.js`. Manual rows: `src/lib/manualEntryImport.js` → `src/lib/manualEntrySave.js`. |
-| **Transaction normalization** | `src/lib/transactionNorm.js` | Also owns dedup keys. Payment-shape normalization is separate: `src/lib/paymentNorm.js`. |
-| **Deduplication** | `src/lib/transactionNorm.js`, `src/lib/reportParsers.js` | Re-importing the same report must not double-count. |
-| **Daily aggregates** | `src/lib/dailyAggregates.js` | Feeds Statistics and Dashboard. |
-| **Revenue calculations** | `src/lib/RevenueReconciliation.js`, `src/lib/financialReconciliation.js` | Thresholds: `src/lib/revenueThresholds.js`. |
-| **Money math (always)** | `src/lib/decimal.js` | Defines `sumCents`. Integer cents only — no float `+`/`-` on dollars. |
-| **Property isolation (server)** | `worker/scope.js` | Builds the `property_id IN (…)` constraint. Enforcement helpers: `scopedRecordClause` in `worker/business-sync.js`, `scopedWhere` in `worker/entities.js`. |
-| **Permissions / roles (client)** | `src/lib/permissions.js` | **Protected file.** |
+| **Off-thread parsing** | `src/lib/csvParser.js` | Large files are parsed off the main thread: it spawns `src/lib/parser.worker.js` as a Web Worker. Manual rows take a different path: `src/lib/manualEntryImport.js` → `src/lib/manualEntrySave.js`. |
+| **Revenue thresholds** | `src/lib/revenueThresholds.js` | The tolerance band the reconciliation in `src/lib/RevenueReconciliation.js` compares against. |
 | **D1 persistence / schema** | `worker/schema.sql`, `migrations-production/` | Production table names are **singular**: `user`, `account`, `property`, `app_session`. Querying `users` fails. |
-| **Browser cache (IndexedDB)** | `src/api/localDb.js` | The cache, not the source of truth, once server sync is on. |
-| **Business sync (client)** | `src/api/businessSync.js` | Staged upload, chunking, snapshot hydrate. |
-| **Business sync (server)** | `worker/business-sync.js` | Migration start / chunk upload / activate / rollback, and its gates. |
 | **Migration UI** | `src/components/BusinessMigrationCard.jsx` | Rendered from `src/pages/Import.jsx`; the route is **`/upload`**, gated by the `import_reports` permission. |
-| **Authentication (server)** | `worker/app-auth.js` | Sessions live in D1 `app_session`; the browser gets only the `__Host-rri_session` HttpOnly cookie. |
-| **Password hashing** | `worker/password-credential.js` | `PBKDF2_ITERATIONS` is the single source of truth for iteration count. |
-| **Auth state (client)** | `src/lib/AuthContext.jsx` | **Protected file.** |
-| **Payroll** | `src/lib/payrollCalc.js`, `src/pages/Payroll.jsx` | |
-| **Payments / refunds** | `src/lib/paymentNorm.js`, `src/lib/refundClassification.js`, `src/pages/Payments.jsx` | Audit filters: `src/lib/refundAuditFilters.js`. |
-| **Dashboard KPIs** | `src/pages/Dashboard.jsx` + `src/components/dashboard/` | 13 KPI components; each owns one card. |
+| **Session cookie** | `worker/app-auth.js` | The browser gets only `__Host-rri_session`, HttpOnly. Session state itself lives in D1 `app_session`. |
+| **Dashboard KPIs** | `src/pages/Dashboard.jsx`, `src/components/dashboard/` | 13 KPI components; each owns one card. |
 | **Tests / probes** | `scripts/` | See the convention below — the filename decides whether it runs. |
-| **Deployment** | `wrangler.jsonc`, `public/_headers`, `vercel.json` | See "Two hosting configs" below. |
+
+Every backticked path in the table above is machine-checked (`map:verify` check C9), so
+a row that points at a deleted file fails the commit that deleted it.
 
 ## The scripts/ naming convention is load-bearing
 
@@ -77,7 +74,9 @@ Typecheck is `npm run typecheck` (`tsc -p ./jsconfig.json`), not a bare `tsc --n
 
 `public/_headers` (Cloudflare, the live host) and `vercel.json` (unused platform)
 carry the **same** security headers on purpose. `scripts/probe-deploy-config.mjs`
-asserts they are byte-equal, so editing one without the other fails the suite.
+compares them **header by header** — not as whole files — and also asserts
+`public/_headers` is non-empty, uses LF endings, and is pinned to LF by
+`.gitattributes`. Editing one without the other fails the suite.
 Read the header comment in `public/_headers` before touching either.
 
 ## Pre-commit gates you will meet
@@ -86,6 +85,12 @@ Read the header comment in `public/_headers` before touching either.
   requires a `BRAIN`/`docs/brain/` edit in the **same** commit, and any
   `file.ext:NNN` citation you add must be within that file's real line count.
   Prefer citing the **symbol**; keep line numbers for things a probe pins.
+- `scripts/verify-repo-map.mjs` — the routing layer must still match the tree:
+  `docs/AI_REPO_GUIDE.md`, `docs/TEST_MATRIX.md`, `docs/MODULE_CONTRACTS.md` and the
+  table in this file. Run it with `npm run map:verify`; prove it can still fail with
+  `npm run map:mutate`.
+- Neither runs inside `npm run verify:all` — they are documentation gates, and both
+  carry an `EXCLUDE` entry there saying so.
 - Never `--no-verify`, force-push, or rewrite history.
 
 ## Before you decompose a large file
@@ -98,6 +103,9 @@ live cross-browser rollout path and are explicitly deferred until that rollout i
 
 ## Keeping this file honest
 
-This map is hand-maintained. When you add, move, or delete a module, update the row
-here in the same commit. If you find a row that no longer matches the tree, correct
-it rather than working around it — a wrong map costs every later agent a full scan.
+The diagram and the prose here are hand-maintained and **not** machine-checked — only
+the table above is (check C9). When you add, move, or delete a module, update this file
+in the same commit as the code move. If you find a line that no longer matches the tree,
+correct it rather than working around it — a wrong map costs every later agent a full
+scan. For anything the ten areas cover, change
+[`docs/AI_REPO_GUIDE.md`](docs/AI_REPO_GUIDE.md) instead; that is where the gate looks.

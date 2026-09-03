@@ -3551,3 +3551,216 @@ The Worker user-create route inserted profile and role fields but omitted `passw
 - Vitest: **45 files / 341 tests passed**; typecheck, lint, and production build passed.
 - Production remained unchanged.
 
+---
+
+## 42. The AI routing layer and its anti-rot gate (2026-09-03)
+
+A fresh agent session could not answer *"I need to fix X — which 3–5 files do I read,
+which tests prove it, and which files must I not touch?"* without scanning the tree.
+`PROJECT_MAP.md` answered *where things are*; nothing answered *what proves a change is
+safe*, and nothing stopped either answer from going stale.
+
+Four artifacts now answer it, and one gate keeps them true:
+
+| File | Holds | Verified by |
+|---|---|---|
+| `docs/AI_REPO_GUIDE.md` | the canonical table: 10 areas × Read first / Proves it / Gate / Never touch | C1, C2, C2b, C3, C4, C6, C7, C8 |
+| `docs/TEST_MATRIX.md` | area → suite → kind → exact command | C1, C3, C4, C6, C7 |
+| `docs/MODULE_CONTRACTS.md` | module → invariant → risk → area | C1, C2, C5, C6, C7 |
+| `PROJECT_MAP.md` | diagram, routing, D1 schema, hosting — and a 7-row residual table | C9 |
+| `scripts/verify-repo-map.mjs` | the gate itself | `scripts/probe-repo-map-gate.mjs` |
+
+### 42.1 One canonical table, keyed by Area string
+
+`docs/AI_REPO_GUIDE.md` owns the ten Area names. The other two documents key off the
+same strings with **non-overlapping columns**, so no fact is stated twice and the gate
+can cross-check them: C6 fails when an area is missing from any document, C7 fails when
+two areas claim the same *Read first* file, C8 fails when a *Proves it* suite does not
+import anything from its own area's *Read first* list.
+
+The tables are located by their **exact header row** — case- and emphasis-insensitive,
+order-sensitive, requiring a `|---|` delimiter immediately after. No HTML markers, no
+generated JSON, no read-only files: the Markdown stays the source of truth and stays
+hand-editable, and the prose tables around it (`Kinds`, `Risk levels`, `Where else to
+look`) are ignored because their headers do not match a schema.
+
+### 42.2 The twelve checks
+
+| Check | Fails when |
+|---|---|
+| C0 | a document, a required table, or a header row is missing or malformed |
+| C1 | a cited path no longer exists |
+| C2 | a cited `file#symbol` is no longer an export of that file |
+| C2b | a citation uses `file.ext:NNN` instead of `file#symbol` |
+| C3 | a *Proves it* / *Suite* entry is not a test or probe file |
+| C4 | a Gate/Command does not resolve to a real script or npm script |
+| C5 | a module in `PROTECTED_FILES.md` is not labelled `PROTECTED`, or a file not in it claims to be |
+| C6 | an area is missing, a cell is empty, or *Read first* names more than five files |
+| C7 | two areas claim the same file, or a row is duplicated |
+| C8 | a named proof imports nothing from the module it claims to prove |
+| C9 | `PROJECT_MAP.md`'s residual table cites a path that is gone |
+
+C2 reads the export surface, not the definition — which is why
+`worker/password-credential.js#PBKDF2_ITERATIONS` is **not** citable (module-private
+there) while `worker/app-auth.js#PBKDF2_ITERATIONS` is (re-exported), and why
+`src/api/localDb.js` is cited as `#default` (it has `export default localDb` and no
+named export). `scopedRecordClause` and `scopedWhere` are unexported for the same
+reason and are described in prose instead of cited.
+
+### 42.3 Two narrowings inside C9 are load-bearing
+
+`PROJECT_MAP.md` has no fixed schema, so C9 scans every line starting with `|` and every
+backticked token in it. Two filters keep it honest, and both exist because the document
+deliberately contains text that must *not* resolve:
+
+- **Table rows only.** The prose names `test-thing.mjs` on purpose — it is the example of
+  a hyphenated filename that `verify-all.mjs` silently never runs. A whole-file scan
+  would fail the gate on the very sentence warning about the trap.
+- **Token must contain `/` or a known extension.** `__Host-rri_session` matches the
+  extension-less config-file shape (it starts with `_`, like `public/_headers`), and
+  `users` is cited precisely *because* querying it fails against the singular production
+  tables. Neither is a path.
+
+### 42.4 The pre-commit hook now runs two gates, and one masked the other
+
+`.git/hooks/pre-commit` was 40 bytes: `#!/bin/sh` + `node scripts/verify-brain.mjs`.
+Appending a second line to it is the obvious wiring and is **wrong**. `sh` has no
+`set -e` here, and a hook's exit status is its *last* command's status, so a passing map
+gate would have reported success while the brain gate was failing.
+
+Measured, not reasoned (Observed 2026-09-03) — `scripts/verify-repo-map.mjs` staged
+alone, which is exactly the state that trips the brain gate's anti-rot arm:
+
+```text
+node scripts/verify-brain.mjs      exit=1   [ANTI-ROT ENFORCEMENT] Commit aborted.
+node scripts/verify-repo-map.mjs   exit=0   PASSED: repo-map — … 182 references resolved
+plain two-command sequence         exit=0   <-- brain FAILED, commit would proceed
+status-collecting hook             exit=1   <-- brain failure not masked
+```
+
+The hook as installed. **`.git/hooks/` is untracked, so this cannot be committed** —
+this block is the record. Re-create it byte-for-byte on a fresh clone:
+
+```sh
+#!/bin/sh
+status=0
+node scripts/verify-brain.mjs || status=1
+node scripts/verify-repo-map.mjs || status=1
+exit $status
+```
+
+`set -e` was rejected rather than forgotten: it would exit at the first failing gate and
+hide the second class of drift, so one commit could only ever learn about one problem.
+There is still **no `.husky` directory**, `core.hooksPath` is unset, and `pre-commit`
+remains the only non-sample hook.
+
+### 42.5 Two sweep contracts a new `scripts/` file inherits silently
+
+`scripts/verify-all.mjs` discovers suites by name — `.mjs`, starting `probe-`/`verify-`/
+`test_`, not starting `_`. Both new scripts match, so both would have auto-wired
+themselves into every sweep. Each got an `EXCLUDE` entry stating a fact about the file,
+never "it fails":
+
+- `verify-repo-map.mjs` — a documentation gate, not a behaviour suite. It runs on every
+  commit via the hook and on demand via `npm run map:verify`; inside the sweep it would
+  duplicate that work.
+- `probe-repo-map-gate.mjs` — it **rewrites the four routing documents in place** and
+  restores them. A run killed by the sweep's per-suite `--timeout` would leave a tracked
+  document mutated on disk. Run it deliberately: `npm run map:mutate`.
+
+Discovery therefore moved 148 → 150 while `not run` moved 2 → 4. The runtime list
+fingerprint changed with it (`--list` reports `list b5008211 (150 discovered)`); nothing
+stores that hash, so no anchor needed updating.
+
+**That EXCLUDE list is not the only contract, and this cost a red sweep.**
+`scripts/probe-suite-integrity.mjs` keeps its *own* `NOT_A_SUITE` set (4 entries) and
+audits everything else statically: real assertions · a non-zero exit path · a **summary
+line whose printed text opens with the PASS or FAIL token** (or a
+`${cond ? … : …}` ternary resolving to one). An `EXCLUDE` entry in `verify-all.mjs`
+exempts a file from being *run*; it exempts nothing from being *audited*. Both new
+scripts were `VALID` on assertions and exit path and `NO_SUMMARY` on the third, so
+`npm run verify:all` reported `probe-suite-integrity.mjs — FAILED: 148 passed, 3 failed`.
+
+Two fixes existed. Adding both files to `NOT_A_SUITE` would have matched how
+`verify-brain.mjs` is handled — and would have removed a check to silence it. Emitting a
+compliant verdict line removes nothing and adds information, so that is what was done:
+`verify-repo-map.mjs` now prints `PASSED: repo-map — …` / `FAILED: repo-map — …`, and
+`probe-repo-map-gate.mjs` closes with a ternary verdict line carrying the kill count, the
+restore result and the post-restore exit code. `verify-all.mjs`'s own rule — *a suite must
+never be excluded merely because it is failing* — decided it.
+
+Two second-order reasons the emit fix is the better one, both properties of
+`probe-suite-integrity.mjs` itself: its `--cross-check` mode **executes** every suite it
+flags `NO_SUMMARY` to hunt static false positives, and `probe-repo-map-gate.mjs` is
+precisely the file that must never be executed incidentally — it rewrites tracked
+documents. A compliant file is never flagged, so it is never cross-check-executed. And
+the ternary form was chosen over an unconditional pass token because a file that prints
+the pass token regardless of outcome satisfies the auditor while telling a sweep nothing.
+
+One violation is left and it is **not** this workstream's: `probe-hotelkey-mutations.mjs`,
+committed at `0e310f1`, byte-identical to HEAD here (`git diff HEAD --stat` empty), and so
+already `NO_SUMMARY` before the routing layer existed. It is reported rather than absorbed
+— greening an unrelated red suite inside this commit would mix two concerns and hide when
+the gap appeared.
+
+### 42.6 A gate that cannot fail is decoration
+
+`scripts/probe-repo-map-gate.mjs` mutates one document at a time to reproduce all
+fourteen failure modes, asserts the gate exits 1 with the expected check id, restores the
+file, then asserts every document is byte-identical to how it started and the gate is
+green again. A mutation whose anchor text has moved is reported `SETUP-FAIL` and is
+**not** counted as a kill — otherwise the harness would quietly weaken as the docs
+evolve.
+
+It earned itself on day one: `C2b line citation SURVIVED`. `looksLikePath()` rejected
+`src/pages/Payroll.jsx:153` before the C2b branch could ever see it, so the exact
+citation style the gate exists to ban was unchecked. That shipped green until the harness
+said otherwise; the fix was a `|:\d+` suffix arm in `looksLikePath()`.
+
+### 42.7 Three claims in `PROJECT_MAP.md` were false, and the gate found two of them
+
+The old 22-row table became a pointer plus seven rows carrying only facts the ten areas
+have no column for. Shrinking it removed two wrong claims by construction:
+
+| Claim as written | What the source says |
+|---|---|
+| `src/lib/hotelKeyRegression.test.js` is HotelKey regression coverage | it imports `financialReconciliation`, `yieldOptimizer`, `fraudScoringEngine` and touches no parser — C8's first kill |
+| `worker/password-credential.js` is the single source of truth for `PBKDF2_ITERATIONS` | module-private there; the export surface is `worker/app-auth.js` |
+| `probe-deploy-config.mjs` asserts `public/_headers` and `vercel.json` are byte-equal | it compares them **header by header**, and separately asserts `.gitattributes` pins `public/_headers` to LF |
+
+Both surviving facts are now stated where they are true: the test-file misattribution is
+recorded in `docs/TEST_MATRIX.md`'s omissions list, the iteration-count ownership in
+`docs/MODULE_CONTRACTS.md`. Nothing was deleted for looking ugly.
+
+And C9 immediately failed on the replacement table's own first draft — the Off-thread
+parsing row said "`csvParser.js` spawns …" with a bare filename, so the gate reported
+`` `csvParser.js` does not exist ``. Second time in this workstream the gate caught a
+defect in the very commit that introduced it.
+
+### 42.8 Verification (Observed 2026-09-03)
+
+```text
+npm run map:verify   PASSED: repo-map — 10 areas, 26 matrix rows, 35 contracts,
+                     182 references resolved, 0 problems
+npm run map:mutate   PASSED: 14/14 mutations killed, 0 survived, restore
+                     byte-identical, post-restore exit=0
+probe-suite-integrity  150 of 151 compliant; the 1 violator is committed at 0e310f1
+verify-all --list    150 suite(s) — list b5008211 (150 discovered), not run (4)
+pre-commit hook      exit=1 when either gate fails (both directions measured)
+```
+
+Every command in `docs/TEST_MATRIX.md` was executed before it was written down, which is
+how the `--import ./scripts/_loader-boot.mjs` column got right: `probe-decimal-integration.mjs`
+contains zero `@/` tokens and still fails under bare `node`, because a *transitive* import
+uses the alias. `alias=0` does not mean bare-runnable, so the matrix records the form that
+actually ran rather than a reconstructed one.
+
+### 42.9 Deliberately left alone
+
+- **The diagram and prose in `PROJECT_MAP.md`** stay hand-maintained. Only its table is
+  machine-checked; a gate over free prose would either be trivial or wrong.
+- **`npm run verify:all` wiring** — see 42.5. Adding either gate would duplicate hook
+  work and risk leaving a mutated tracked document behind.
+- **`scripts/verify-brain.mjs`** was not touched. The two gates stay separate: one owns
+  BRAIN citation integrity, the other owns routing accuracy.
+

@@ -300,9 +300,13 @@ node scripts/probe-cors-config.mjs        # 35/0, standalone — no loader neede
   retirement all run in one `env.DB.batch()`.
 - **A business record with no property is account-global, not orphaned**
   (2026-09-03). The typed-key encoder spells that exactly one way: `s:0:`, from
-  `typedRecordKey("")`. The length prefix makes it unforgeable — every non-empty
+  `typedRecordKey("")`. No *other* id can reach that spelling — every non-empty
   string id yields `s:<len>:` with `len > 0`, and a numeric id `0` yields `n:0`,
-  which is a *real* property id. `""` is an omitted field, never global. Such a
+  which is a *real* property id. The sentinel is nonetheless IN-BAND, because a
+  `Property` whose own id is `""` encodes to `s:0:` as well; that collision is
+  refused, not prevented by the format, and the three refusals are enumerated in
+  `BRAIN_SECURITY.md` §18. An empty `property_key` on the wire — the field absent,
+  not the string `s:0:` — is an omitted field, never global. Such a
   record activates with `server_property_id` left SQL NULL and gets no
   `business_property_map` row and no sentinel roster row; activation's
   property-key `UPDATE` is keyed by a mapped key, so it never touches it. This is

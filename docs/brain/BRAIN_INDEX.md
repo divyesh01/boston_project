@@ -1,7 +1,7 @@
-# 🗃️ 20. APPENDIX: 476 FILES — REGENERATED FROM `git ls-files` (2026-08-25)
+# 🗃️ 20. APPENDIX: 537 FILES — REGENERATED FROM `git ls-files` (2026-08-25, counts corrected 2026-09-03)
 
 > [!NOTE]
-> The catalog below is **regenerated from `git ls-files`** and current as of 2026-08-25: **42 + 149 + 285 = 476** tracked paths under `base44/`, `scripts/` and `src/`. Because it is built from `git ls-files`, both a *hit* and a *miss* are reliable at generation time — but **nothing gates this file against the tree**, so it will drift again the moment a file is added or removed; regenerate it when accuracy matters. `base44/.app.jsonc` is intentionally **git-ignored** and is therefore excluded, as is everything outside these three trees (`git ls-files` reports 1325 tracked repo-wide; the rest is config, workflows, docs, public assets and lockfiles). The two code fences bounding this block were previously mangled (a tab where `text` belonged; a literal `n` in place of the closing newline) and are corrected in this regeneration.
+> The catalog below is **regenerated from `git ls-files`** and was current as of 2026-08-25. Because it is built from `git ls-files`, both a *hit* and a *miss* are reliable at generation time — but **nothing gates this file against the tree**, so it drifts the moment a file is added or removed. It had drifted: the header previously read **42 + 149 + 285 = 476** tracked paths under `base44/`, `scripts/` and `src/`, and claimed 1325 tracked repo-wide. Re-measured 2026-09-03 against the index: **43 + 189 + 305 = 537**, and **1081** tracked repo-wide. Treat every count in this appendix as a snapshot, not a gate. `base44/.app.jsonc` is intentionally **git-ignored** and is therefore excluded, as is everything outside these three trees (config, workflows, docs, public assets and lockfiles). The two code fences bounding this block were previously mangled (a tab where `text` belonged; a literal `n` in place of the closing newline) and are corrected in this regeneration.
 
 <details>
 <summary><strong>Click to expand the full file catalog</strong></summary>
@@ -165,14 +165,11 @@ scripts\probe-weather.mjs
 scripts\probe-welcome-email.mjs
 scripts\probe-ws-server.mjs
 scripts\probe-yield-advisor.mjs
-scripts\repro-import-atomicity.mjs
 scripts\resolve-alias.mjs
 scripts\resolve-base44.mjs
 scripts\stubs\base44-runtime.mjs
 scripts\stubs\base44-sdk.mjs
 scripts\test-parser.mjs
-scripts\test-throttle-standalone.mjs
-scripts\test-throttle.mjs
 scripts\test_anomaly_detector.mjs
 scripts\test_auditlog_immutability.mjs
 scripts\test_bulletproof_auth.mjs

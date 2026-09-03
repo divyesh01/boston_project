@@ -167,7 +167,7 @@ These are the files in `src/lib/` -- the brains of the app. Grouped by what they
 | `transactionAnalytics.js` | Transaction pattern analysis, employee performance | Transaction insights wrong. |
 | `aiEngine.js` | AI prompt builder + intent parser + date resolver | AI Assistant answers wrong. |
 | `aiInsights.js` | AI-generated dashboard insight cards | AI insight cards break. |
-| `agenticAI.js` | Agentic AI orchestration + scheduling proposals | AI workflows break. |
+| `agenticAI.js` | **Unwired scaffold.** Zero importers anywhere — `git grep agenticAI` finds it in no code file, only in this doc and `BRAIN_INDEX.md`. 18 lines, one exported function, and a mojibake character in its own header comment | Nothing breaks. Deletion proposed. *Corrected 2026-09-03: this row previously read "Agentic AI orchestration + scheduling proposals / AI workflows break", which would stop a reader from removing dead code.* |
 | `ownerIntelligence.js` | Owner-specific business intelligence metrics | Owner reports wrong. |
 | `forecasting.js` | Multi-model revenue prediction (1/7/30/90 day) | Forecasting page breaks. |
 | `revenueThresholds.js` | Revenue alert thresholds | Revenue alerts stop firing. |
@@ -209,7 +209,7 @@ These are the files in `src/lib/` -- the brains of the app. Grouped by what they
 | `sound.js` | Notification sounds (Web Audio) | Alert sounds stop. |
 | `donutLabelLayout.js` | Pie chart label positioning algorithm | Donut chart labels overlap. |
 | `useCountUp.jsx` | Number count-up animation for KPI cards | KPI animations break. |
-| `ui-utils.js` | UI helper functions | Various UI glitches. |
+| `ui-utils.js` | **Unwired scaffold.** 134 lines of UI helpers with zero importers in `src/`, and no `scripts/` or `tests/` file reads it as a fixture | Nothing breaks. *Corrected 2026-09-03: previously "UI helper functions / Various UI glitches", which implied live consumers that do not exist.* |
 | `utils.js` | General utility functions | Many things break subtly. |
 | `employeeId.js` | Employee ID generation | Employee IDs wrong. |
 | `uploadRetention.js` | Manages uploaded file cleanup | Old uploads never cleaned up. |
@@ -266,20 +266,30 @@ These are the files in `src/lib/` -- the brains of the app. Grouped by what they
 | `AuthLayout.jsx` | Layout for login/setup pages |
 | `CommandMenu.jsx` | Cmd+K keyboard search palette |
 | `AIAssistant.jsx` | Slide-out AI chatbot panel |
-| `propertyMap.jsx` | Leaflet-based interactive property map |
+| `propertyMap.jsx` | Leaflet-based interactive property map — **UNWIRED (2026-09-03): zero importers.** It is the only consumer of the declared `leaflet`, `react-leaflet` and `@types/leaflet` dependencies, so those three exist solely for a component nothing renders. `vite.config.js` records the same finding in its `manualChunks` comment. |
 
 ### Modals & Dialogs
 | Component | What It Does |
 |-----------|-------------|
 | `MFASetup.jsx` | MFA enrollment wizard with TOTP QR code |
-| `MFARecoveryModal.jsx` | MFA backup recovery code display |
+| `MFARecoveryModal.jsx` | MFA backup recovery code display — **UNWIRED (2026-09-03): zero importers** |
 | `PasswordConfirmDialog.jsx` | Step-up password re-verification for sensitive actions |
-| `HousekeepingSettingsModal.jsx` | Housekeeping configuration |
+| `HousekeepingSettingsModal.jsx` | Housekeeping configuration — **UNWIRED (2026-09-03): zero importers** |
 | `TaxConfigModal.jsx` | Tax rule management |
-| `AnomalySignoffModal.jsx` | Anomaly triage sign-off |
-| `PricingOverrideButton.jsx` | Manual price override trigger |
-| `ReconciliationExportButton.jsx` | Reconciliation report export trigger |
-| `UserNotRegisteredError.jsx` | Error display for unregistered users |
+| `AnomalySignoffModal.jsx` | Anomaly triage sign-off — **UNWIRED (2026-09-03): zero importers** |
+| `PricingOverrideButton.jsx` | Manual price override trigger — **UNWIRED (2026-09-03): zero importers** |
+| `ReconciliationExportButton.jsx` | Reconciliation report export trigger — **UNWIRED (2026-09-03): zero importers** |
+| `UserNotRegisteredError.jsx` | Error display for unregistered users — **UNWIRED (2026-09-03): zero importers** |
+
+**UNWIRED means:** no file under `src/` imports it, and no file under `scripts/` or
+`tests/` reads it as a source-text fixture or dynamic import. Verified 2026-09-03 by
+import-graph scan of all `src/**/*.{js,jsx}` plus a filename-as-string sweep across
+`scripts/`, `tests/`, and every config file. These are staged components that were
+never connected to a route or parent — they are candidates for removal, not evidence
+of a broken feature. Removing one changes no behavior; delete the row here in the
+same commit. Do **not** assume the reverse: `ProtectedRoute.jsx`, `alertEngine.js`
+and `crdtSync.js` also have zero `src/` importers yet are load-bearing, because
+probes read them by path.
 
 ### Finance & Comparison
 | Component | What It Does |
@@ -297,7 +307,7 @@ These are the files in `src/lib/` -- the brains of the app. Grouped by what they
 |-----------|-------------|
 | `Card.jsx` | Executive-styled card container |
 | `KpiCard.jsx` | KPI metric display with count-up animation |
-| `RangePicker.jsx` | Date range picker |
+| `RangePicker.jsx` | Date range picker — **UNWIRED (2026-09-03): zero importers.** The date range in use comes from `GlobalControlBar.jsx`. The four `scripts/` hits on this filename are comments and one string literal, not a fixture read. |
 | `StatusBadge.jsx` | Status indicator badge |
 
 ---

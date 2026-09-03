@@ -116,6 +116,40 @@
 > they are absent from the damaged-file list. That was luck -- the regenerated content
 > happened to match -- not evidence that those two writes are safe.
 
+### Two more one-shot codemods live in `scripts/`, and one corrupts on re-run
+
+Added 2026-09-03. The table above covers the repo **root**. Two files of the same class
+sit in `scripts/`, where the `probe-`/`verify-`/`test_` naming convention means no gate
+ever executes them, so nothing warns you:
+
+| Script | What happens if you run it |
+|--------|---------------------------|
+| `scripts/update-csrf.mjs` | Proven no-op: its pre-migration pattern `csrf_token=([^;]+)` no longer occurs anywhere under `base44/functions/`, and the 10 migrated files already carry `__Host-csrf_token=([^;]+)`. Unlike its sibling it has **no `existsSync` guard**, so it throws on the first renamed function directory instead of skipping. |
+| `scripts/update-test-csrf.mjs` | **Corrupts on re-run.** It applies `content.replace(/csrf_token=/g, '__Host-csrf_token=')` with no idempotence guard, and its three targets already carry the migrated token. Re-running rewrites them to `__Host-__Host-csrf_token=`. Measured 2026-09-03: `__Host-__Host-` occurs nowhere in the tree today, and a single re-run would create six such sites across `probe-auth-hardening.mjs` (4), `probe-welcome-email.mjs` (1) and `probe-audit-chain.mjs` (1). |
+
+Both are retained under the same rationale as the root scripts — a record of how the
+`__Host-` cookie migration was applied — not because they are safe to run.
+
+### Files deleted 2026-09-03 (repository-hygiene pass)
+
+Five artifacts were removed after reachability was proven, not assumed. Each had **zero**
+readers outside the delete set itself, no gate reference, and no retention rationale on
+record:
+
+| Removed | Why it was safe |
+|---|---|
+| `STEP_PLAN.md` | One corrupted line of un-interpolated PowerShell `` `n `` escapes. Its "PROTECTED FILES" list duplicated `PROTECTED_FILES.md`, which is authoritative. Zero readers. |
+| `all_files.txt` | Generated file listing. Its only two readers were `fix_brain.py` and `fix_brain3.py` — both in the DO-NOT-RUN table above, so removing their input makes them *less* dangerous, not more. |
+| `scripts/repro-import-atomicity.mjs` | Two comment lines, no executable code. Superseded by `scripts/verify-import-rollback.mjs`, which is discovered and does the work. |
+| `scripts/test-throttle.mjs` | Never discovered (`test-` is not `test_`), and `vitest.config.js` declares no `test.include`, so vitest's default glob never collected it either. It monkey-patched `functions.invoke` on the real **protected** `src/api/base44Client.js`, and its `runTest()` was never awaited — an async rejection would have been unhandled rather than failing. |
+| `scripts/test-throttle-standalone.mjs` | Defined its own `THROTTLE_MS`, `functions.invoke` and `auth.touchSession` locally and imported nothing from `src/`, so it only ever tested its own twenty lines. The real invariant is asserted by `scripts/probe-idle-polling.mjs`, which checks that `THROTTLE_MS` appears in the shipped `touchSession()`. |
+
+Everything else surveyed in that pass was **reported, not deleted**, consistent with the
+standing convention recorded further down this document for `app-params.js`,
+`upgrade_system*.cjs` and `src/components/ui/empty-state.jsx`. In particular the root
+codemods stay: the `[!CAUTION]` block above states their retention purpose, and deleting
+them would reverse a decision this document already recorded.
+
 
 ### What went wrong on 2026-08-19 (known problem #13)
 

@@ -39,7 +39,14 @@ This document serves as the final verification checklist before marking Red Roof
 - [x] Sessions use cryptographically secure random tokens (256-bit)
 - [x] Session expiration: 30 min idle / 30 days remember-me
 - [x] Session rotation on privilege change
-- [x] Secure storage with AES-GCM encryption in localStorage
+- [x] **Sessions are stored server-side in D1 `app_session`, and the table holds
+      only `token_hash` (SHA-256 of the token), never the token itself. The browser
+      receives one opaque `__Host-rri_session` HttpOnly cookie.** Source:
+      `worker/app-auth.js` (`COOKIE_NAME`, the `app_session` INSERT, and the
+      `sha256(token)` lookups). *Corrected 2026-09-03: this row previously read
+      "Secure storage with AES-GCM encryption in localStorage", which described the
+      retired client-side base44 session model and would send a reader looking for
+      session state in the browser.*
 - [x] Session invalidation on logout, password change, lockout
 - [x] Concurrent session limits (optional: implement server-side)
 
@@ -48,10 +55,28 @@ This document serves as the final verification checklist before marking Red Roof
 ## 3. Authentication & Authorization ✅
 
 ### 3.1 Password Security
-- [x] PBKDF2-HMAC-SHA256 with 150,000 iterations
-- [x] Per-user random salt (16 bytes)
+
+> **CORRECTED 2026-09-03 against source.** Three `[x]` items in this section
+> asserted values the code does not have. The source of truth is
+> `worker/password-credential.js` (constants `PBKDF2_ITERATIONS`, `SALT_BYTES`)
+> and `worker/app-auth.js` (constants `LOCK_AFTER_FAILURES`, `LOCK_MS`,
+> `COOKIE_NAME`). Read those constants — do not trust this list — and if you
+> change one, correct the row here in the same commit.
+
+- [x] PBKDF2-HMAC-SHA256, **100,000 iterations** when minting a new credential
+      (`PBKDF2_ITERATIONS`). Verification accepts 100,000–1,000,000
+      (`MIN_SUPPORTED_ITERATIONS`/`MAX_SUPPORTED_ITERATIONS`), so credentials
+      minted at a higher count still verify. **This checklist previously claimed
+      150,000 and `PRODUCTION_READINESS_REPORT.md` claims an upgrade to 300,000;
+      neither figure is in the Worker.** Whether 100,000 is the intended floor is
+      an open owner decision, not a settled item.
+- [x] Server-side pepper in the derivation input, versioned
+      (`PEPPER_VERSION`, `MAX_PEPPER_VERSION`) — omitted from earlier versions of
+      this checklist, which understated the scheme.
+- [x] Per-user random salt, **32 bytes** (`SALT_BYTES`) — previously listed as 16.
 - [x] Minimum 8 chars, uppercase, lowercase, digit
-- [x] Account lockout after 5 failed attempts
+- [x] Account lockout after 5 failed attempts (`LOCK_AFTER_FAILURES`), 15-minute
+      lock (`LOCK_MS`)
 - [x] No password hints or recovery via email (admin-only reset)
 
 ### 3.2 Role-Based Access Control (RBAC)

@@ -596,6 +596,19 @@ Every row below was re-run at the end of the work, after the last code edit, on 
 
 That is **1,054 individual assertions green across 26 suites**, 0 failed. (`verify-actioncenter.mjs` contributes none to that count — it prints a scenario verdict rather than a total — so the real number is higher.) Two scripts in `scripts/` fail at `HEAD` for reasons that predate this work and are unrelated to it: `probe-adjustments.mjs` imports an export that no longer exists, and `test-parser.mjs` hard-codes an absolute path from another machine. Neither is part of the regression set.
 
+> **Corrected 2026-09-03 against source.** The `test-parser.mjs` half of that sentence is
+> wrong about the reason. Its hard-coded path is not "from another machine" — it points at
+> the owner's local Antigravity chat-upload cache under `~/.gemini/antigravity/brain/`, and
+> the script was Observed running to completion on this machine on 2026-09-03, printing
+> `Adjustments: 408 / Refunds: 777 / Deduped exactly: 933`. What actually makes it
+> unrunnable anywhere else is that its input lives in a transient per-session AI upload
+> directory outside the repository, so it can never run in CI or on a second machine and
+> will break here as soon as that cache is cleared. It is also never discovered by
+> `scripts/verify-all.mjs`, whose convention requires `probe-`, `verify-` or `test_` —
+> `test-parser` matches none of them. Retained, not deleted: it is real parser-behaviour
+> scratch code, and the standing convention in `docs/brain/BRAIN_TROUBLESHOOTING.md` is to
+> report unwired code rather than remove it.
+
 The commands above are the regression set. When something in this app changes, run them; `npm run lint` and `npm run typecheck` should be run as two separate commands rather than chained, because together they take long enough to hit a tool timeout.
 
 ### What this review did NOT cover

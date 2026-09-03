@@ -1,0 +1,11 @@
+Date,Time,Confirmation Number,Guest Name,Room Number,Folio Number,Transaction Code,Transaction Description,Last 4 Digits,Transaction Type,Charge Type Category,Sub Charge Type name,Outlet Name,Amount,Username,Remarks,POS Check Number,Tax Invoice Number,Company Name
+2026-02-14,09:15 AM,RRI0000030,Currency And Separator,130,F0000030,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,"$1,250.00",ada.lovelace@example.com,,,,
+2026-02-14,09:16 AM,RRI0000031,Accounting Parens,131,F0000031,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,($75.50),ada.lovelace@example.com,,,,
+2026-02-14,09:17 AM,RRI0000032,Minus After Currency,132,F0000032,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,$-40.25,ada.lovelace@example.com,,,,
+2026-02-14,09:18 AM,RRI0000033,Trailing Minus,133,F0000033,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,12.75-,ada.lovelace@example.com,,,,
+2026-02-14,09:19 AM,RRI0000034,Not A Number,134,F0000034,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,N/A,ada.lovelace@example.com,,,,
+2026-02-14,09:20 AM,RRI0000035,Empty Amount Cell,135,F0000035,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,,ada.lovelace@example.com,,,,
+2026-02-14,09:21 AM,RRI0000036,Word Infinity,136,F0000036,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,Infinity,ada.lovelace@example.com,,,,
+2026-02-14,09:22 AM,RRI0000037,Overflow Exponent,137,F0000037,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,1e999,ada.lovelace@example.com,,,,
+2026-02-14,09:23 AM,RRI0000038,Partly Numeric,138,F0000038,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,12abc,ada.lovelace@example.com,,,,
+,,,,,,,,,,,,,1133.50,,,,,

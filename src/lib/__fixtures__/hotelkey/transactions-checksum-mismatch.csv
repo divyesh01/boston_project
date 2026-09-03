@@ -1,0 +1,4 @@
+Date,Time,Confirmation Number,Guest Name,Room Number,Folio Number,Transaction Code,Transaction Description,Last 4 Digits,Transaction Type,Charge Type Category,Sub Charge Type name,Outlet Name,Amount,Username,Remarks,POS Check Number,Tax Invoice Number,Company Name
+2026-02-14,09:15 AM,RRI0000040,Truncated Download,140,F0000040,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,200.00,ada.lovelace@example.com,,,,
+2026-02-14,09:16 AM,RRI0000041,Truncated Download,141,F0000041,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,100.00,ada.lovelace@example.com,,,,
+,,,,,,,,,,,,,350.00,,,,,

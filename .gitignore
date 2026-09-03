@@ -67,6 +67,12 @@ __pycache__/
 # Real business data — never commit (HotelKey/PMS exports)
 scripts/data/*.csv
 *.csv
+# Exception: the synthetic HotelKey regression corpus. These are hand-authored
+# fixtures with invented guests/confirmations and round test amounts — no real
+# PMS export ever lands here, and the parser suite is worthless if git refuses
+# to track them (that transient-file dependency is the exact defect this corpus
+# replaces). The blanket *.csv rule above stays in force everywhere else.
+!src/lib/__fixtures__/**/*.csv
 export-report.json
 user_inputs.json
 acceptance-report.json

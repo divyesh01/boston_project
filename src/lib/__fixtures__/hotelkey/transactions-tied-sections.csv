@@ -1,0 +1,9 @@
+Date,Time,Confirmation Number,Guest Name,Room Number,Folio Number,Transaction Code,Transaction Description,Last 4 Digits,Transaction Type,Charge Type Category,Sub Charge Type name,Outlet Name,Amount,Username,Remarks,POS Check Number,Tax Invoice Number,Company Name
+2026-02-14,09:15 AM,RRI0000201,"Sample, Grace",201,F0000201,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,100.00,grace.hopper@example.com,,,,
+2026-02-14,09:15 AM,RRI0000201,"Sample, Grace",201,F0000201,TAX,Occupancy Tax,,CHARGE,Tax,State Tax,Front Desk,15.00,grace.hopper@example.com,,,,
+,,,,,,,,,,,,,115.00,,,,,
+
+Date,Time,Confirmation Number,Guest Name,Room Number,Folio Number,Transaction Code,Transaction Description,Last 4 Digits,Transaction Type,Charge Type Category,Sub Charge Type name,Outlet Name,Amount,Username,Remarks,POS Check Number,Tax Invoice Number,Company Name
+2026-02-15,10:30 AM,RRI0000202,"Sample, Alan",202,F0000202,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,900.00,alan.turing@example.com,,,,
+2026-02-15,10:30 AM,RRI0000202,"Sample, Alan",202,F0000202,TAX,Occupancy Tax,,CHARGE,Tax,State Tax,Front Desk,135.00,alan.turing@example.com,,,,
+,,,,,,,,,,,,,1035.00,,,,,

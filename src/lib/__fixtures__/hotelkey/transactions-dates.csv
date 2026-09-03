@@ -1,0 +1,8 @@
+Date,Time,Confirmation Number,Guest Name,Room Number,Folio Number,Transaction Code,Transaction Description,Last 4 Digits,Transaction Type,Charge Type Category,Sub Charge Type name,Outlet Name,Amount,Username,Remarks,POS Check Number,Tax Invoice Number,Company Name
+2026-02-14,09:15 AM,RRI0000010,Iso Dash,110,F0000010,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,10.00,ada.lovelace@example.com,,,,
+15-Feb-26,09:15 AM,RRI0000011,Day Mon Yy,111,F0000011,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,20.00,ada.lovelace@example.com,,,,
+2/16/2026,09:15 AM,RRI0000012,Us Slash,112,F0000012,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,30.00,ada.lovelace@example.com,,,,
+"Feb 17, 2026",09:15 AM,RRI0000013,Mon Day Yyyy,113,F0000013,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,40.00,ada.lovelace@example.com,,,,
+"Wed, Feb 18, 2026",09:15 AM,RRI0000014,Weekday Prefix,114,F0000014,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,50.00,ada.lovelace@example.com,,,,
+not-a-date,09:15 AM,RRI0000015,Unreadable Date,115,F0000015,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,99.00,ada.lovelace@example.com,,,,
+,,,,,,,,,,,,,150.00,,,,,

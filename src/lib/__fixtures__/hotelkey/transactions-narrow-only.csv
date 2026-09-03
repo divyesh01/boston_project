@@ -1,0 +1,5 @@
+Date,Time,Confirmation Number,Guest Name,Room Number,Folio Number,Transaction Code,Transaction Description,Last 4 Digits,Transaction Type,Charge Type Category,Sub Charge Type name,Outlet Name,Amount,Username,Remarks,POS Check Number,Tax Invoice Number,Company Name
+2026-02-14,09:15 AM,RRI0000001,"Sample, Ada",101,F0000001,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,250.00,ada.lovelace@example.com,,,,
+2026-02-14,09:15 AM,RRI0000001,"Sample, Ada",101,F0000001,TAX,Occupancy Tax,,CHARGE,Tax,State Tax,Front Desk,37.50,ada.lovelace@example.com,,,,
+2026-02-14,06:42 PM,RRI0000001,"Sample, Ada",101,F0000001,FPCC,Credit Card Settlement,1111,REFUND,,,Front Desk,287.50,hkcrsuser,,,,
+,,,,,,,,,,,,,575.00,,,,,

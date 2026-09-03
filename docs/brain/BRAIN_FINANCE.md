@@ -393,3 +393,144 @@ totals from `net_revenue` in the component.
 > parser rather than by reading the mapping table.
 
 ---
+
+## 12.10 The HotelKey parser regression net — ADDED 2026-09-03
+
+`src/lib/reportParsers.js` is 1,937 lines and could not safely be split, because nothing
+committed to this repo proved its behaviour. Two things looked like coverage and were not:
+`src/lib/hotelKeyRegression.test.js` imports `financialReconciliation`, `yieldOptimizer`
+and `fraudScoringEngine` and **touches no parser at all** — never cite it as parser
+coverage — and `scripts/test-parser.mjs`, the only test that ran a real export end to end,
+read a file from a transient upload directory that is not in the repo. Delete the upload,
+lose the test.
+
+The net that replaces it is committed and self-contained:
+
+| Path | What it is |
+|---|---|
+| `src/lib/__fixtures__/hotelkey/*.csv` | 10 hand-authored exports. Invented guests, invented confirmation numbers, round amounts. No PMS data. |
+| `src/lib/__fixtures__/hotelkey/README.md` | What each fixture pins, how to add one, and how to read a mutation verdict. |
+| `src/lib/hotelKeyParserFixtures.test.js` | 21 tests — `scanReport` only, no database. |
+| `src/lib/hotelKeyImportFixtures.test.js` | 30 tests — `scanReport` → `importReport` → Dexie, through `fake-indexeddb` with a real authenticated owner. |
+| `scripts/probe-hotelkey-mutations.mjs` | Reintroduces 11 real defects one at a time and asserts the suites FAIL. |
+
+Fixtures reach the parser through `meta.csvText`, which `getRowsArray` honours ahead of any
+fetch, so no file, network or upload directory is involved. The `Worker` global is replaced
+by an in-process shim that calls `parser.worker.js`'s real `self.onmessage`; the shim throws
+`HOTELKEY_WORKER_SHIM_UNARMED` rather than silently passing if that handler is ever absent.
+
+**The `*.csv` blanket ignore rule nearly made this invisible.** `.gitignore` refused all ten
+fixtures, so the suites would have passed locally and the corpus would never have been
+committed — the exact transient-file failure it exists to remove. There is now one narrow
+negation, `!src/lib/__fixtures__/**/*.csv`; `scripts/data/*.csv` and every other CSV in the
+tree stay ignored. Verify with `git check-ignore -v <path>`.
+
+### What the mutation harness proves
+
+A suite that cannot tell the correct parser from a plausibly broken one is decoration.
+Each mutation is applied by exact string replacement and reverted with `git checkout --`;
+the harness refuses to start unless its target files are clean and re-checks at the end.
+**11 of 11 killed** (Observed 2026-09-03). The harness also prints the names of the tests
+that failed, because a mutation filed under one behaviour but killed only by an unrelated
+assertion is an incidental kill, not proof of that behaviour.
+
+| # | Defect reintroduced | Killed by |
+|---|---|---|
+| M1 | `addMeta` stops stamping `property_id` (`reportParsers.js:313`) | property-assignment + isolation tests |
+| M2 | dedupe keys assigned **before** the property stamp (`:1826`) | stored-key equality |
+| M3 | file-hash guard drops its `property_id` filter (`:1841`) | cross-property isolation |
+| M4 | occurrence index removed from the key (`transactionNorm.js:167`) | 3 byte-identical postings |
+| M5 | property gate accepts whitespace (`:1476`) | 9-case fail-closed table |
+| M6 | validation gate disabled (`:1487`) | per-layer blocked-import table |
+| M7 | equal-width section tie-break reversed (`:859`) | tied-sections fixture |
+| M8 | a repeated mid-grid header treated as a header | repeated-header fixture |
+| M9 | trailer rows no longer absorbed (`transactionNorm.js:196`) | revenue + checksum |
+| M10 | unparseable money coerced silently (`importValidation.js:96`) | coercion log |
+| M11 | ledger-side classifier loses its refund branch (`transactionNorm.js:225`) | charge/payment split |
+
+M7 initially **SURVIVED**. Reversing the tie-break was equivalent on the corpus because no
+fixture had two row-bearing sections of the same width — a hole in the net, not a passing
+grade. `transactions-tied-sections.csv` closed it.
+
+M11 did not exist in the first run. An adversarial review pointed out that the revenue
+assertions read `ledger_side` — a field production assigns in one line — and that no
+mutation touched that line. The suite's own comment calls it "the single most expensive
+contract in the file", so the most expensive contract was also the least proven. Collapsing
+the refund branch makes every row a charge and doubles revenue from $287.50 to $575.00 while
+every row count stays correct, which is exactly the regression the fixture was built to
+catch.
+
+### Four behaviours pinned as hazards, deliberately not changed
+
+1. **A same-width repeated grid is silently dropped.** Section selection uses a strict `>`
+   (`reportParsers.js:859`), so on a width tie the first grid wins and the second one's rows
+   never reach `rowsToImport`. In `transactions-tied-sections.csv` that discards $1,035.00,
+   and because the checksum reconciles against the winning section's own trailer the scan
+   reports `matches: true`. **A balanced checksum is not evidence that the whole file was
+   read.**
+2. **Re-encoding a file defeats the file-level already-imported guard.** `fileHash` is taken
+   over the raw text, so a CRLF or BOM variant of an imported file gets a new identity. The
+   row-level `dedupe_key` still stops the duplicate rows; the cheap guard just stops helping.
+   Note also that `generateFileHash` truncates SHA-256 to 32 hex chars
+   (`universalParser.js:559`), keeping 128 of 256 bits.
+3. **A whitespace-padded `propertyId` is stamped verbatim.** The persist gate rejects on
+   `propertyId.trim() === ""` (`reportParsers.js:1476`) but never assigns the trimmed value,
+   so `" P-BOS-001 "` passes the gate and every row lands under a property id that no normal
+   query matches. Pinned by *"accepts an id that only needs trimming to be non-empty"*, which
+   asserts the rows are invisible under the clean id and present under the padded one. Two
+   callers disagreeing about whitespace would silently split one hotel's ledger in two.
+4. **The occurrence index is counted per batch, not against history.** `assignDedupeKeys`
+   starts a fresh `Map` on every call (`transactionNorm.js:180`), so identical postings are
+   numbered 0,1,2… within one file. Idempotence therefore depends on the same file replaying
+   the same occurrences in the same order. Two *different* exports that each contain exactly
+   one of two byte-identical postings both produce occurrence 0, and the second import loses
+   its row to the row-level guard. No fixture covers that split; a HotelKey export covering a
+   date normally carries every posting on it, which is why the design is acceptable rather
+   than correct.
+
+Hazards 1–3 are pinned by assertions, so changing any of them is a visible decision rather
+than a regression. Hazard 4 is documented only — no fixture covers the split-export case, and
+this note is the record of that gap. None was repaired here: the brief was to build the net
+before touching the parser.
+
+### The adversarial review, and what it changed
+
+The net was reviewed by an independent model (Antigravity `gemini-3.8-flash-high`,
+`--effort high`, read-only, workspace scoped to `src/lib` and `scripts`) asked to find where
+the net fails to bite rather than to approve it. Four of its findings were accepted and are
+fixed in this commit:
+
+1. **The most expensive contract had no mutation.** → M11 above.
+2. **One vacuous test.** *"blocks before the persist path"* ended each call with
+   `.catch(() => {})` and then asserted both tables were empty. Any unrelated early crash
+   would have satisfied it — empty tables because nothing ran. It now asserts
+   `code: "IMPORT_VALIDATION_BLOCKED"` on each rejection.
+3. **Two false pins.** Two comments claimed a reversed stamp order would cause *cross-property*
+   data loss through the row-level guard. It would not: `existingTxnDedupeKeys` scopes its read
+   to one property (`reportParsers.js:1449`), so the property component of the key is
+   defence-in-depth, not the isolating mechanism. Both comments now say what the assertions
+   actually prove.
+4. **One wrong verb.** A comment said `mapTransactionRow` "floors" `amount`; the code defaults
+   a null `amount` to 0 (`transactionNorm.js:219`) and floors nothing.
+
+Rejected with reason: it called M7 an incidental kill on the grounds that 34 columns still
+beat 19 under a reversed scan — true for `transactions-stacked-sections.csv`, but the tie
+fixture exists precisely because reversal is otherwise unobservable, so the tie-break is the
+behaviour under test rather than a side effect. It also read the revenue assertions as
+filtering with test-local logic; `ledger_side` is assigned by production
+(`transactionNorm.js:225`), which is what made M11 the right response instead of rewriting the
+tests. Its claim that a padded `propertyId` is uncovered missed the test eight lines below the
+gate it cited — hazard 3 above.
+
+### Running it
+
+```bash
+npx vitest run src/lib/hotelKeyParserFixtures.test.js src/lib/hotelKeyImportFixtures.test.js
+node scripts/probe-hotelkey-mutations.mjs
+```
+
+The suites are the gate; the harness is the proof the gate bites. Run the harness after any
+edit to `reportParsers.js`, `transactionNorm.js` or `importValidation.js` — a `STALE` verdict
+means an anchor moved and that mutation checked nothing.
+
+---

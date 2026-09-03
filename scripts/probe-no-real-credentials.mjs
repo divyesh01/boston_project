@@ -195,6 +195,10 @@ const ALLOWED_TEST_FIXTURES = new Map([
   ['Probe-Password-9!', 'probe-property-isolation.mjs harness sign-in'],
   ['Sentinel-Probe-Password-1!', 'property-access sentinel sign-in fixture'],
   ['Manager-Probe-Password-1!', 'property-id normalization sign-in fixture'],
+  // The business-sync isolation probe seeds four users across two accounts and
+  // signs each one in over the real Worker route, so it needs a strength-valid
+  // literal. Self-describing name, used only against an in-memory D1.
+  ['Isolation-Probe-9!', 'probe-business-sync-isolation.mjs cross-account/cross-property sign-ins'],
   // The welcome-email probe asserts this string is ABSENT from the sent mail, so
   // the literal is the thing under test, not a usable credential.
   ['MySuperSecretPassword123!', 'probe-welcome-email.mjs negative assertion — must NOT appear in the email body'],

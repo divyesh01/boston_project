@@ -738,7 +738,24 @@ async function mutate(request, env, scope) {
   const generationId = String(pointer.active_generation_id);
   const recordKey = String(body.record_key || "");
   const propertyKey = String(body.property_key || "");
+  // Authorization is decided BEFORE any existence-revealing conflict check
+  // below, so a caller cannot use "record already exists" as an oracle for a
+  // property, or a roster row, they were never granted. The roster is
+  // authorized by scope.all alone; scope.all is account-wide, so the stored
+  // row's property adds nothing there.
+  let mappedServerPropertyId = null;
+  if (entity === "Property") {
+    if (!scope.all) throw new SyncRequestError("only all-property accounts can change the roster", 403);
+  } else {
+    const mapping = await queryFirst(env, "SELECT server_property_id FROM business_property_map WHERE account_id=? AND generation_id=? AND property_key=?", [scope.accountId, generationId, propertyKey]);
+    if (!mapping) throw new SyncRequestError("property mapping not found", 422);
+    mappedServerPropertyId = String(mapping.server_property_id);
+    assertPropertyInScope(scope, mappedServerPropertyId);
+  }
   const current = await queryFirst(env, "SELECT row_hash,property_key,server_property_id,row_json FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=?", [scope.accountId, generationId, entity, recordKey]);
+  // Keyed off the branch that resolved the mapping, so the two predicates
+  // cannot drift apart if the dispatch below is ever edited.
+  if (current && mappedServerPropertyId !== null) assertPropertyInScope(scope, String(current.server_property_id));
   const isCreate = operation === 'upsert' && body.base_row_hash == null;
   if (operation === 'delete' && body.base_row_hash == null) throw new SyncRequestError("delete requires base_row_hash", 422);
   if (isCreate && current) throw new SyncRequestError("record already exists", 409, { code: "sync_conflict" });
@@ -790,9 +807,7 @@ async function mutate(request, env, scope) {
       statements.push(env.DB.prepare("INSERT INTO business_record (account_id,generation_id,entity_name,record_key,property_key,server_property_id,row_json,row_hash,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id,generation_id,entity_name,record_key) DO UPDATE SET property_key=excluded.property_key,server_property_id=excluded.server_property_id,row_json=excluded.row_json,row_hash=excluded.row_hash,updated_at=excluded.updated_at").bind(scope.accountId, generationId, entity, recordKey, recordKey, serverPropertyId, rowJson, rowHash, now));
     }
   } else {
-    const mapping = await queryFirst(env, "SELECT server_property_id FROM business_property_map WHERE account_id=? AND generation_id=? AND property_key=?", [scope.accountId, generationId, propertyKey]);
-    if (!mapping) throw new SyncRequestError("property mapping not found", 422);
-    serverPropertyId = String(mapping.server_property_id);
+    serverPropertyId = mappedServerPropertyId;
     assertPropertyInScope(scope, serverPropertyId);
     if (current) {
       assertPropertyInScope(scope, String(current.server_property_id));

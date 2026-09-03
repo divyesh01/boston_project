@@ -309,3 +309,37 @@ The Cloudflare Worker now owns the complete server credential lifecycle:
 The authoritative regression is `scripts/probe-worker-credential-lifecycle.mjs`; it uses the production DDL and exercises creation, login, change/reset/set, MFA-proof revocation, lock recovery, role hierarchy, session races, and owner concurrency.
 
 ---
+
+# 17. BUSINESS-SYNC AUTHORIZATION ORDERING (2026-09-02)
+
+`POST /api/business-sync/mutate` decided authorization *after* the
+existence-revealing conflict checks. The stored record was loaded with no
+property filter, so `record already exists` / `record changed on another device`
+answered "does this record key exist?" for records the caller was never granted.
+Three variants of the same defect class:
+
+- a `record_key` under a mapped property outside the caller's scope returned 409 when it existed and 403 when it did not;
+- `entity = "Property"` returned 409 for an existing roster row and 403 (`only all-property accounts can change the roster`) for a missing one, before the role gate ran;
+- an unmapped `property_key` returned 409 for an existing key and 422 (`property mapping not found`) for a missing one.
+
+All three authorization decisions are now hoisted above the record load:
+
+- the roster is authorized by `scope.all` alone — `scope.all` is account-wide, so the stored row's property adds nothing there;
+- every other entity resolves `business_property_map` first, then asserts the **declared** property is in scope;
+- after the record loads, the **stored** row's `server_property_id` is asserted in scope, keyed off the branch that resolved the mapping so the two predicates cannot drift apart if the dispatch below is edited.
+
+Recorded residuals — known, not silently patched:
+
+- `business_record`'s primary key is `(account_id, generation_id, entity_name, record_key)` with no property component, so a *taken* key still answers 403 where a *fresh* key answers 200. Closing it needs a key-namespace migration.
+- `uploadTransactionChunk`'s absent-row guard has the same shape (409 vs 200). Scoping that guard would let its `ON CONFLICT` re-home a foreign row, so it is deliberately untouched here.
+- The `mutation_id` replay early-return answers before property authorization; mutation ids are `web_${crypto.randomUUID()}` and the 200 arm additionally requires reproducing the exact canonical body.
+- `assertPropertyInScope` embeds the server property id in its message — a pre-existing enumeration channel, unchanged by this work.
+
+The authoritative regression is `scripts/probe-business-sync-isolation.mjs` (39
+checks over the production DDL). It was proven failing-first and
+mutation-tested: reverting the fix fails 4 checks; removing only the stored-row
+assertion fails exactly the one arm that names a foreign record through an
+**in-scope** property, which is the only arm a mapping-only half-fix cannot
+satisfy.
+
+---

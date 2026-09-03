@@ -294,8 +294,41 @@ node scripts/probe-cors-config.mjs        # 35/0, standalone — no loader neede
   generation with no property roster (422), with a chunk count/hash that does not
   match the manifest (409), with a total record count that does not reconcile
   (409), with any per-entity count that does not reconcile (409), or with an
-  orphaned `property_key` reference (422). The pointer swap, the roster upsert and
-  the previous-generation retirement all run in one `env.DB.batch()`.
+  orphaned `property_key` reference (422) — one that names an *absent* property,
+  which is not the same as the account-global key that names *no* property (see
+  the next bullet). The pointer swap, the roster upsert and the previous-generation
+  retirement all run in one `env.DB.batch()`.
+- **A business record with no property is account-global, not orphaned**
+  (2026-09-03). The typed-key encoder spells that exactly one way: `s:0:`, from
+  `typedRecordKey("")`. The length prefix makes it unforgeable — every non-empty
+  string id yields `s:<len>:` with `len > 0`, and a numeric id `0` yields `n:0`,
+  which is a *real* property id. `""` is an omitted field, never global. Such a
+  record activates with `server_property_id` left SQL NULL and gets no
+  `business_property_map` row and no sentinel roster row; activation's
+  property-key `UPDATE` is keyed by a mapped key, so it never touches it. This is
+  the write half of a read path that already handled NULL: `scopedRecordClause`
+  emits `1=1` for `scope.all` and `server_property_id IN (…)` for a restricted
+  caller, which SQL NULL never matches. `property_key` is covered by three hashes
+  (the migration chunk hash, the transaction chunk hash and the `mutate` request
+  hash), so it is **never normalized server-side** — only compared against one
+  named constant, at all four sites that resolve a key to a server property id.
+  Observed 2026-09-03: production's single staged generation holds 16 such rows,
+  14 `PayrollRun` and 2 `Staff`, produced by posting historical payroll while the
+  global property filter is `all`. No `TransactionLine`, `GrossRevenueDay`,
+  `OccupancyDay` or `PaymentDay` row is property-less, so the cent-exact revenue
+  reconciliation is untouched by this contract.
+- `business_staging_target.server_property_id` is `NOT NULL`, so the staged
+  transaction path cannot store NULL there and binds the sentinel
+  `__account_global__` in that one insert. `business_record` and `business_change`
+  keep a real NULL. The sentinel never persists — staging targets are deleted on
+  commit and on abort — and it grants nothing: the commit-time scope guard admits
+  it only through its two unrestricted arms, and both the SQL guard and its JS
+  fallback state that explicitly rather than relying on the fact that no
+  `user_property_access` row can name it. Chosen over a live DDL migration because
+  that table has no foreign key to `property` and the sentinel's lifetime is one
+  transaction. A chunk whose operations are *all* global leaves the property-key
+  list empty, and `property_key IN ()` is a SQLite syntax error, so that lookup is
+  skipped rather than built.
 - The implementation stages complete 25-entity IndexedDB snapshots in
   immutable account-scoped D1 generations, preserves numeric versus string ids,
   verifies chunk hashes/counts, and exposes data only through an atomic active
@@ -482,6 +515,21 @@ Auth-specific evidence:
   versioned owner, zero legacy owners, and zero residual sessions, challenges,
   or smoke users.
 - `probe-property-id-type.mjs`: 29/29 numeric/string cascade and isolation.
+
+`probe-worker-auth-remote.mjs` has an environmental failure mode that looks like a
+credential regression and is not one. Before it asserts anything it creates a real
+temporary D1 with `wrangler d1 create`, and Cloudflare intermittently refuses that
+one call with HTTP 401 `Authentication error [code: 10000]`. Observed 2026-09-03:
+the refusal arrived while the OAuth token was valid — `d1 (write)` in scope, expiry
+an hour out, and `GET /d1/database`, `/user`, `/accounts` and `/memberships` all
+returning 200 in the same process 0.2s later. A differential over this machine's 30
+`d1 create` invocations found 28 successes, and on 2026-09-01 the byte-identical
+command failed at 09:23:32 and succeeded at 09:23:59 — 27 seconds later, same token,
+same flags, no repository change. Re-running the suite unchanged returned 8 passed,
+0 failed. Because the throw happens before the first `check()`, the suite prints no
+PASS/FAIL/SKIP summary and exits 1, so `verify-all` reports FAIL for a run that
+asserted nothing; it does not implement the `SKIP:`-and-exit-0 convention that seven
+other suites use for an unavailable environment. Retry it before believing it.
 
 Measured, not estimated. The heading here previously read "106 Files", which matched
 nothing countable. Re-counted 2026-08-22; the 2026-08-20 set (117 / 95 / 73 / 71 / 34)

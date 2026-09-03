@@ -69,6 +69,30 @@ export function typedRecordKey(value) {
   throw new SyncRequestError("record id must be a safe integer or string", 422);
 }
 
+/**
+ * The typed-key encoder spells "this record has no property" exactly one way:
+ * typedRecordKey("") === "s:0:". The length prefix makes that unforgeable — every
+ * non-empty string id yields "s:<len>:" with len > 0, and a numeric id 0 yields
+ * "n:0", which is a REAL property id and must never be conflated with this.
+ *
+ * property_key is covered by the migration chunk hash, the transaction chunk hash
+ * and the mutate request hash, so it is never normalized server-side. It is only
+ * compared against this constant, at every site that resolves a property_key to a
+ * server_property_id, so the rule cannot drift between them.
+ */
+const GLOBAL_PROPERTY_KEY = "s:0:";
+function isGlobalPropertyKey(key) { return key === GLOBAL_PROPERTY_KEY; }
+
+/**
+ * business_staging_target.server_property_id is NOT NULL, so a staged
+ * account-global target cannot store SQL NULL there. This value stands in for it,
+ * and ONLY there — business_record and business_change keep a real NULL. The
+ * commit-time scope guard treats it as unrestricted-only (see the `<>` clause in
+ * commitTransaction), so it grants nothing on its own, and rows in that table are
+ * deleted on commit and on abort, so it never persists.
+ */
+const GLOBAL_STAGING_TARGET_ID = "__account_global__";
+
 async function readBody(request) {
   try { return await request.json(); }
   catch { throw new SyncRequestError("invalid JSON body"); }
@@ -175,6 +199,13 @@ async function uploadChunk(request, env, scope) {
     if ("account_id" in item.row || "server_property_id" in item.row) throw new SyncRequestError("server scope fields are not accepted", 403);
     const recordKey = typedRecordKey(item.row.id);
     if (item.record_key !== recordKey) throw new SyncRequestError("typed record key mismatch", 422);
+    // The sentinel is IN-BAND: a Property whose id is "" encodes to the very key
+    // that means "belongs to no property", so the roster must RESERVE it. Keyed on
+    // the ENTITY and the RECORD key, never on propertyKey alone — a non-Property
+    // row whose property_key is the sentinel is a legitimate account-global record.
+    if (item.entity === "Property" && isGlobalPropertyKey(recordKey)) {
+      throw new SyncRequestError("a staged Property record may not be keyed by the account-global property key", 422);
+    }
     const propertyKey = item.entity === "Property" ? recordKey : typedRecordKey(item.row.property_id);
     if (item.property_key !== propertyKey) throw new SyncRequestError("typed property key mismatch", 422);
     const rowJson = canonicalJson(item.row);
@@ -257,8 +288,23 @@ async function activateMigration(request, env, scope) {
     const existing = existingByCode.get(code.toLowerCase());
     mappings.set(item.record_key, { serverId: existing?.id || await deterministicPropertyId(scope.accountId, code), code, row, exists: !!existing });
   }
+  // Second line of defence for a generation ALREADY staged before the admission
+  // gate in uploadChunk shipped. It must refuse HERE, above the orphan scan and
+  // the mapping loop: that loop would mint a property for the sentinel, make the
+  // in-band collision durable in business_property_map, and re-home every
+  // genuinely account-global record in the generation onto it.
+  if (mappings.has(GLOBAL_PROPERTY_KEY)) {
+    throw new SyncRequestError("the staged property roster may not contain a record keyed by the account-global property key", 422);
+  }
   const referenced = await queryAll(env, "SELECT DISTINCT property_key FROM business_record WHERE account_id=? AND generation_id=?", [scope.accountId, generationId]);
   for (const item of referenced) {
+    const key = item.property_key === null ? "" : String(item.property_key);
+    // Naming NO property is not the same as naming an ABSENT one. An
+    // account-global record is carried through with server_property_id left NULL,
+    // and that holds by RESERVATION, not by omission: the gate above keeps the
+    // sentinel out of `mappings`, so the UPDATE below is always keyed by some
+    // other property_key and no business_property_map row can ever claim it.
+    if (isGlobalPropertyKey(key)) continue;
     if (!mappings.has(item.property_key)) throw new SyncRequestError(`orphaned property reference: ${item.property_key}`, 422);
   }
 
@@ -458,10 +504,21 @@ async function uploadTransactionChunk(request, env, scope) {
     if (!['upsert', 'delete'].includes(op.operation)) throw new SyncRequestError("invalid transaction operation", 422);
     const propertyKey = String(op.property_key || "");
     if (!propertyKey) throw new SyncRequestError("property_key is required", 422);
+    if (isGlobalPropertyKey(propertyKey)) {
+      // Authorized here, before the mapping lookup, so a restricted caller gets an
+      // authorization refusal rather than a diagnostic revealing how the server
+      // models global records.
+      if (!scope.all) throw new SyncRequestError("only all-property accounts are permitted to change account-global records", 403);
+      continue;
+    }
     propertyKeys.add(propertyKey);
   }
+  // A chunk whose operations are ALL global leaves this list empty, and
+  // `property_key IN ()` is a SQLite syntax error, so the lookup is skipped.
   const propertyKeyList = [...propertyKeys];
-  const mappings = await queryAll(env, `SELECT property_key,server_property_id FROM business_property_map WHERE account_id=? AND generation_id=? AND property_key IN (${propertyKeyList.map(() => "?").join(",")})`, [scope.accountId, stagingGenerationId, ...propertyKeyList]);
+  const mappings = propertyKeyList.length === 0
+    ? []
+    : await queryAll(env, `SELECT property_key,server_property_id FROM business_property_map WHERE account_id=? AND generation_id=? AND property_key IN (${propertyKeyList.map(() => "?").join(",")})`, [scope.accountId, stagingGenerationId, ...propertyKeyList]);
   const propertyMap = new Map(mappings.map((row) => [row.property_key, String(row.server_property_id)]));
   const normalized = [];
   const targets = new Set();
@@ -471,9 +528,16 @@ async function uploadTransactionChunk(request, env, scope) {
     const target = `${op.entity}:${recordKey}`;
     if (targets.has(target)) throw new SyncRequestError("duplicate target in chunk", 422);
     targets.add(target);
-    const serverPropertyId = propertyMap.get(propertyKey);
-    if (!serverPropertyId) throw new SyncRequestError("property mapping not found", 422);
-    assertPropertyInScope(scope, serverPropertyId);
+    // A global op resolves to NULL and skips assertPropertyInScope, which is pure
+    // array membership and throws for null even when scope.all is true. It was
+    // already authorized by scope.all in the loop above.
+    const isGlobal = isGlobalPropertyKey(propertyKey);
+    let serverPropertyId = null;
+    if (!isGlobal) {
+      serverPropertyId = propertyMap.get(propertyKey) || null;
+      if (!serverPropertyId) throw new SyncRequestError("property mapping not found", 422);
+      assertPropertyInScope(scope, serverPropertyId);
+    }
     let rowJson = null;
     let rowHash = null;
     if (op.operation === 'upsert') {
@@ -487,7 +551,7 @@ async function uploadTransactionChunk(request, env, scope) {
     } else if (op.base_row_hash == null) {
       throw new SyncRequestError("delete requires base_row_hash", 422);
     }
-    normalized.push({ entity: op.entity, operation: op.operation, recordKey, propertyKey, serverPropertyId, rowJson, rowHash, baseRowHash: op.base_row_hash ?? null, row: rowJson ? JSON.parse(rowJson) : null });
+    normalized.push({ entity: op.entity, operation: op.operation, recordKey, propertyKey, serverPropertyId, isGlobal, rowJson, rowHash, baseRowHash: op.base_row_hash ?? null, row: rowJson ? JSON.parse(rowJson) : null });
   }
   const computedHash = await sha256(canonicalJson(normalized.map((op) => ({ entity: op.entity, operation: op.operation, record_key: op.recordKey, property_key: op.propertyKey, row: op.row, base_row_hash: op.baseRowHash }))));
   if (computedHash !== chunkHash) throw new SyncRequestError("chunk hash mismatch", 422);
@@ -497,11 +561,13 @@ async function uploadTransactionChunk(request, env, scope) {
     env.DB.prepare("INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN EXISTS (SELECT 1 FROM business_staging_transaction WHERE account_id=? AND tx_id=? AND status='pending' AND expires_at>? AND next_chunk_index=?) THEN 1 ELSE 0 END,?").bind(scope.accountId, pendingGuardId, String(tx.request_hash), scope.accountId, txId, now, nextChunkIndex, now),
   ];
   for (const [index, op] of normalized.entries()) {
-    statements.push(env.DB.prepare("INSERT INTO business_staging_target (account_id,tx_id,entity_name,record_key,server_property_id,operation) VALUES (?,?,?,?,?,?)").bind(scope.accountId, txId, op.entity, op.recordKey, op.serverPropertyId, op.operation));
+    // business_staging_target.server_property_id is NOT NULL — the sentinel stands
+    // in for NULL HERE ONLY. business_record (below) keeps a real NULL.
+    statements.push(env.DB.prepare("INSERT INTO business_staging_target (account_id,tx_id,entity_name,record_key,server_property_id,operation) VALUES (?,?,?,?,?,?)").bind(scope.accountId, txId, op.entity, op.recordKey, op.isGlobal ? GLOBAL_STAGING_TARGET_ID : op.serverPropertyId, op.operation));
     const guardId = await sha256(`${txId}:${chunkIndex}:${index}:${tx.request_hash}`);
     statements.push(op.operation === 'upsert' && op.baseRowHash == null
       ? absentGuard(env, scope, stagingGenerationId, op.entity, op.recordKey, guardId, String(tx.request_hash), now)
-      : presentGuard(env, scope, stagingGenerationId, op.entity, op.recordKey, String(op.baseRowHash), op.serverPropertyId, guardId, String(tx.request_hash), now));
+      : presentGuard(env, scope, stagingGenerationId, op.entity, op.recordKey, String(op.baseRowHash), op.serverPropertyId, guardId, String(tx.request_hash), now, op.isGlobal));
     statements.push(op.operation === 'delete'
       ? env.DB.prepare("DELETE FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=?").bind(scope.accountId, stagingGenerationId, op.entity, op.recordKey)
       : env.DB.prepare("INSERT INTO business_record (account_id,generation_id,entity_name,record_key,property_key,server_property_id,row_json,row_hash,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id,generation_id,entity_name,record_key) DO UPDATE SET property_key=excluded.property_key,server_property_id=excluded.server_property_id,row_json=excluded.row_json,row_hash=excluded.row_hash,updated_at=excluded.updated_at").bind(scope.accountId, stagingGenerationId, op.entity, op.recordKey, op.propertyKey, op.serverPropertyId, op.rowJson, op.rowHash, now));
@@ -579,7 +645,10 @@ async function commitTransaction(request, env, scope) {
   const userId = String(scope.user.id);
   const statements = [
     env.DB.prepare("INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN EXISTS (SELECT 1 FROM user u WHERE u.account_id=? AND u.id=? AND u.is_active=1 AND u.is_locked=0 AND (lower(u.role) IN ('owner','admin') OR (lower(u.role) IN ('gm','manager') AND json_valid(u.permissions) AND (json_extract(u.permissions,'$.import_reports')=1 OR json_extract(u.permissions,'$.manual_entry')=1 OR json_extract(u.permissions,'$.manage_operations')=1)))) THEN 1 ELSE 0 END,?").bind(scope.accountId, `${txId}:auth`, requestHash, scope.accountId, userId, now),
-    env.DB.prepare("INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN NOT EXISTS (SELECT 1 FROM (SELECT DISTINCT server_property_id FROM business_staging_target WHERE account_id=? AND tx_id=?) t WHERE NOT EXISTS (SELECT 1 FROM user u WHERE u.account_id=? AND u.id=? AND u.is_active=1 AND u.is_locked=0 AND (lower(u.role) IN ('owner','admin','gm') OR u.property_access_mode='all' OR EXISTS (SELECT 1 FROM user_property_access upa WHERE upa.account_id=u.account_id AND upa.user_id=u.id AND upa.property_id=t.server_property_id)))) THEN 1 ELSE 0 END,?").bind(scope.accountId, `${txId}:scope`, requestHash, scope.accountId, txId, scope.accountId, userId, now),
+    // An account-global target carries the staging sentinel, which no grant can
+    // name: it is satisfiable only by the two unrestricted arms (role
+    // owner/admin/gm, or property_access_mode='all'), which is exactly scope.all.
+    env.DB.prepare("INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN NOT EXISTS (SELECT 1 FROM (SELECT DISTINCT server_property_id FROM business_staging_target WHERE account_id=? AND tx_id=?) t WHERE NOT EXISTS (SELECT 1 FROM user u WHERE u.account_id=? AND u.id=? AND u.is_active=1 AND u.is_locked=0 AND (lower(u.role) IN ('owner','admin','gm') OR u.property_access_mode='all' OR (t.server_property_id <> ? AND EXISTS (SELECT 1 FROM user_property_access upa WHERE upa.account_id=u.account_id AND upa.user_id=u.id AND upa.property_id=t.server_property_id))))) THEN 1 ELSE 0 END,?").bind(scope.accountId, `${txId}:scope`, requestHash, scope.accountId, txId, scope.accountId, userId, GLOBAL_STAGING_TARGET_ID, now),
     env.DB.prepare("INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN EXISTS (SELECT 1 FROM business_dataset_pointer p JOIN business_sync_state s ON s.account_id=p.account_id WHERE p.account_id=? AND p.active_generation_id=? AND s.revision=?) THEN 1 ELSE 0 END,?").bind(scope.accountId, `${txId}:cas`, requestHash, scope.accountId, tx.base_generation_id, tx.base_revision, now),
     env.DB.prepare("INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN EXISTS (SELECT 1 FROM business_staging_transaction WHERE account_id=? AND tx_id=? AND status='pending' AND expires_at>?) THEN 1 ELSE 0 END,?").bind(scope.accountId, `${txId}:pending`, requestHash, scope.accountId, txId, now, now),
     env.DB.prepare("UPDATE business_dataset SET status='retired' WHERE account_id=? AND generation_id=? AND status='active'").bind(scope.accountId, tx.base_generation_id),
@@ -611,7 +680,9 @@ async function commitTransaction(request, env, scope) {
       const targets = await queryAll(env, "SELECT DISTINCT server_property_id FROM business_staging_target WHERE account_id=? AND tx_id=?", [scope.accountId, txId]);
       const grants = await queryAll(env, "SELECT property_id FROM user_property_access WHERE account_id=? AND user_id=?", [scope.accountId, userId]);
       const allowed = new Set(grants.map((row) => String(row.property_id)));
-      if (targets.some((row) => !allowed.has(String(row.server_property_id)))) throw new SyncRequestError("property access was revoked during transaction", 403, { code: "auth_scope_revoked" });
+      // Same explicit rule as the SQL guard: the staging sentinel is never a
+      // granted property, so a restricted caller can never satisfy a global target.
+      if (targets.some((row) => String(row.server_property_id) === GLOBAL_STAGING_TARGET_ID || !allowed.has(String(row.server_property_id)))) throw new SyncRequestError("property access was revoked during transaction", 403, { code: "auth_scope_revoked" });
     }
     const live = await queryFirst(env, "SELECT p.active_generation_id,s.revision FROM business_dataset_pointer p JOIN business_sync_state s ON s.account_id=p.account_id WHERE p.account_id=?", [scope.accountId]);
     if (String(live?.active_generation_id) !== String(tx.base_generation_id) || Number(live?.revision) !== Number(tx.base_revision)) {
@@ -712,10 +783,14 @@ function absentGuard(env, scope, generationId, entity, recordKey, mutationId, re
   ).bind(scope.accountId, mutationId, requestHash, scope.accountId, generationId, entity, recordKey, now);
 }
 
-function presentGuard(env, scope, generationId, entity, recordKey, rowHash, serverPropertyId, mutationId, requestHash, now) {
+function presentGuard(env, scope, generationId, entity, recordKey, rowHash, serverPropertyId, mutationId, requestHash, now, requireGlobal = false) {
+  // A global target is matched as `server_property_id IS NULL`, not through the
+  // `? IS NULL` escape: that escape drops the property check entirely, which
+  // would let a global upsert re-home a property-owned row inside the batch.
+  const globalFlag = requireGlobal ? 1 : 0;
   return env.DB.prepare(
-    "INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN EXISTS (SELECT 1 FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=? AND row_hash=? AND (? IS NULL OR server_property_id=?)) THEN 1 ELSE 0 END,?",
-  ).bind(scope.accountId, mutationId, requestHash, scope.accountId, generationId, entity, recordKey, rowHash, serverPropertyId, serverPropertyId, now);
+    "INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN EXISTS (SELECT 1 FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=? AND row_hash=? AND ((?=1 AND server_property_id IS NULL) OR (?=0 AND (? IS NULL OR server_property_id=?)))) THEN 1 ELSE 0 END,?",
+  ).bind(scope.accountId, mutationId, requestHash, scope.accountId, generationId, entity, recordKey, rowHash, globalFlag, globalFlag, serverPropertyId, serverPropertyId, now);
 }
 
 async function mutate(request, env, scope) {
@@ -742,11 +817,32 @@ async function mutate(request, env, scope) {
   // below, so a caller cannot use "record already exists" as an oracle for a
   // property, or a roster row, they were never granted. The roster is
   // authorized by scope.all alone; scope.all is account-wide, so the stored
-  // row's property adds nothing there.
+  // row's property adds nothing there. An account-global record is authorized
+  // the same way, and for the same reason.
   let mappedServerPropertyId = null;
+  let isGlobalRecord = false;
   if (entity === "Property") {
     if (!scope.all) throw new SyncRequestError("only all-property accounts can change the roster", 403);
+    // Reserved HERE, in the authorization ladder, so it lands above the `current`
+    // load below: a refusal for a malformed key must never become an existence
+    // oracle for a sentinel record. One reservation at this boundary covers both
+    // the upsert arm (which would mint the poisoned business_property_map row) and
+    // the delete arm (which would resolve that row onto a REAL property and delete
+    // it, cascading its access grants).
+    if (isGlobalPropertyKey(recordKey)) {
+      throw new SyncRequestError("a roster Property record may not be keyed by the account-global property key", 422);
+    }
+  } else if (isGlobalPropertyKey(propertyKey)) {
+    // An account-global record is authorized by scope.all ALONE, decided HERE —
+    // above the `current` load below — so this branch is not an existence oracle.
+    // assertPropertyInScope is deliberately NOT called: it is pure array
+    // membership and throws for null even when scope.all is true.
+    if (!scope.all) throw new SyncRequestError("only all-property accounts are permitted to change account-global records", 403);
+    isGlobalRecord = true;
   } else {
+    // `String(body.property_key || "")` coerces a MISSING key to "", which is an
+    // omitted field, not a global record — "" !== GLOBAL_PROPERTY_KEY.
+    if (!propertyKey) throw new SyncRequestError("property_key is required", 422);
     const mapping = await queryFirst(env, "SELECT server_property_id FROM business_property_map WHERE account_id=? AND generation_id=? AND property_key=?", [scope.accountId, generationId, propertyKey]);
     if (!mapping) throw new SyncRequestError("property mapping not found", 422);
     mappedServerPropertyId = String(mapping.server_property_id);
@@ -754,8 +850,17 @@ async function mutate(request, env, scope) {
   }
   const current = await queryFirst(env, "SELECT row_hash,property_key,server_property_id,row_json FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=?", [scope.accountId, generationId, entity, recordKey]);
   // Keyed off the branch that resolved the mapping, so the two predicates
-  // cannot drift apart if the dispatch below is ever edited.
-  if (current && mappedServerPropertyId !== null) assertPropertyInScope(scope, String(current.server_property_id));
+  // cannot drift apart if the dispatch below is ever edited. The global branch
+  // leaves mappedServerPropertyId null and therefore skips this assert, which is
+  // sound ONLY because that branch already required scope.all above. Null-safe on
+  // the STORED id for the same reason as the dispatch below: String(null) would
+  // report the artifact `property null is outside caller scope` instead of the
+  // real reason, and a stored global row is unrestricted-only.
+  if (current && mappedServerPropertyId !== null) {
+    const currentPropertyId = current.server_property_id === null ? null : String(current.server_property_id);
+    if (currentPropertyId !== null) assertPropertyInScope(scope, currentPropertyId);
+    else if (!scope.all) throw new SyncRequestError("record belongs to another property", 403);
+  }
   const isCreate = operation === 'upsert' && body.base_row_hash == null;
   if (operation === 'delete' && body.base_row_hash == null) throw new SyncRequestError("delete requires base_row_hash", 422);
   if (isCreate && current) throw new SyncRequestError("record already exists", 409, { code: "sync_conflict" });
@@ -807,17 +912,23 @@ async function mutate(request, env, scope) {
       statements.push(env.DB.prepare("INSERT INTO business_record (account_id,generation_id,entity_name,record_key,property_key,server_property_id,row_json,row_hash,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id,generation_id,entity_name,record_key) DO UPDATE SET property_key=excluded.property_key,server_property_id=excluded.server_property_id,row_json=excluded.row_json,row_hash=excluded.row_hash,updated_at=excluded.updated_at").bind(scope.accountId, generationId, entity, recordKey, recordKey, serverPropertyId, rowJson, rowHash, now));
     }
   } else {
-    serverPropertyId = mappedServerPropertyId;
-    assertPropertyInScope(scope, serverPropertyId);
+    serverPropertyId = mappedServerPropertyId;                 // null for an account-global record
+    if (!isGlobalRecord) assertPropertyInScope(scope, serverPropertyId);
     if (current) {
-      assertPropertyInScope(scope, String(current.server_property_id));
-      if (String(current.server_property_id) !== serverPropertyId || String(current.property_key) !== propertyKey) {
+      const currentPropertyId = current.server_property_id === null ? null : String(current.server_property_id);
+      if (currentPropertyId !== null) assertPropertyInScope(scope, currentPropertyId);
+      else if (!scope.all) throw new SyncRequestError("record belongs to another property", 403);
+      // Null-safe on the id, strict on the key. This is what forbids re-homing in
+      // BOTH directions through the `ON CONFLICT ... DO UPDATE SET
+      // server_property_id=excluded.server_property_id` statements below, and what
+      // stops a delete carrying no property_key from matching a stored "s:0:" row.
+      if (currentPropertyId !== serverPropertyId || String(current.property_key) !== propertyKey) {
         throw new SyncRequestError("record belongs to another property", 403);
       }
     }
     if (operation === "delete") {
       if (!current) throw new SyncRequestError("record not found", 404);
-      statements.push(presentGuard(env, scope, generationId, entity, recordKey, String(body.base_row_hash), serverPropertyId, mutationId, requestHash, now));
+      statements.push(presentGuard(env, scope, generationId, entity, recordKey, String(body.base_row_hash), serverPropertyId, mutationId, requestHash, now, isGlobalRecord));
       statements.push(env.DB.prepare("DELETE FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=?").bind(scope.accountId, generationId, entity, recordKey));
     } else {
       const row = body.row;
@@ -827,7 +938,7 @@ async function mutate(request, env, scope) {
       rowHash = await sha256(rowJson);
       statements.push(isCreate
         ? absentGuard(env, scope, generationId, entity, recordKey, mutationId, requestHash, now)
-        : presentGuard(env, scope, generationId, entity, recordKey, String(body.base_row_hash), serverPropertyId, mutationId, requestHash, now));
+        : presentGuard(env, scope, generationId, entity, recordKey, String(body.base_row_hash), serverPropertyId, mutationId, requestHash, now, isGlobalRecord));
       statements.push(env.DB.prepare("INSERT INTO business_record (account_id,generation_id,entity_name,record_key,property_key,server_property_id,row_json,row_hash,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id,generation_id,entity_name,record_key) DO UPDATE SET property_key=excluded.property_key,server_property_id=excluded.server_property_id,row_json=excluded.row_json,row_hash=excluded.row_hash,updated_at=excluded.updated_at").bind(scope.accountId, generationId, entity, recordKey, propertyKey, serverPropertyId, rowJson, rowHash, now));
     }
   }

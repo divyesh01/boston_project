@@ -14,6 +14,7 @@ every module and symbol below still exists and that `PROTECTED` matches
 | `src/lib/universalParser.js#parseHotelReport` | Report type detection is content-driven; an unrecognised report fails loudly rather than parsing as another type. | HIGH | HotelKey import |
 | `src/lib/importValidation.js#validateImport` | Structure, types, constraints and semantics all run before persistence; a `null` amount stays distinguishable from `0`. | HIGH | HotelKey import |
 | `src/lib/csvParser.js#parseAmount` | `"$-50.00"` parses as a refund, never as a `+50` charge; unparseable input returns `null`, not `0`. | HIGH | HotelKey import |
+| `src/lib/reportGrid.js#detectReportType` | The header checks are order-dependent: adjustments/refunds is tested before the transactions signature and that before the flat-table types, because their headers overlap. Reordering them misroutes a whole report into the wrong scanner. | HIGH | HotelKey import |
 | `src/lib/decimal.js#sumCents` | All money is integer cents. No float `+`/`-` on dollars anywhere downstream. | HIGH | Revenue/KPIs |
 | `src/lib/RevenueReconciliation.js#revenueReconciliation` | Revenue paths are ranked by a fixed precedence; a disagreement between paths is surfaced, never averaged away. | HIGH | Revenue/KPIs |
 | `src/lib/financialReconciliation.js#enforceFinancialInvariant` | Transaction charges and Statistics YTD reconcile to the exact cent, or the invariant throws. | HIGH | Revenue/KPIs |

@@ -350,9 +350,9 @@ the real `scanReport("occupancy", …, { csvText })` over
 
 > [!CAUTION]
 > **The Occupancy Summary's column literally headed "Total Revenue" is a ROOM total.**
-> `reportParsers.js:160` maps it to `total_revenue_with_misc` deliberately, to keep the
-> misleading name out of the codebase. Reading it as "total revenue" does **not** produce
-> an obvious $0 — it produces a plausible-looking figure that understates the
+> `reportParsers.js`'s `COLUMN_MAP` maps it to `total_revenue_with_misc` deliberately, to
+> keep the misleading name out of the codebase. Reading it as "total revenue" does **not**
+> produce an obvious $0 — it produces a plausible-looking figure that understates the
 > $1,020,598.17 ledger by exactly the $9,339.50 ancillary income. A wrong number that
 > looks right is more dangerous than a zero, because nobody investigates it.
 
@@ -396,8 +396,9 @@ totals from `net_revenue` in the component.
 
 ## 12.10 The HotelKey parser regression net — ADDED 2026-09-03
 
-`src/lib/reportParsers.js` is 1,937 lines and could not safely be split, because nothing
-committed to this repo proved its behaviour. Two things looked like coverage and were not:
+`src/lib/reportParsers.js` was 1,937 lines and could not safely be split, because nothing
+committed to this repo proved its behaviour. (It is 1,839 lines as of extraction 1 — see
+12.11.) Two things looked like coverage and were not:
 `src/lib/hotelKeyRegression.test.js` imports `financialReconciliation`, `yieldOptimizer`
 and `fraudScoringEngine` and **touches no parser at all** — never cite it as parser
 coverage — and `scripts/test-parser.mjs`, the only test that ran a real export end to end,
@@ -436,13 +437,13 @@ assertion is an incidental kill, not proof of that behaviour.
 
 | # | Defect reintroduced | Killed by |
 |---|---|---|
-| M1 | `addMeta` stops stamping `property_id` (`reportParsers.js:313`) | property-assignment + isolation tests |
-| M2 | dedupe keys assigned **before** the property stamp (`:1826`) | stored-key equality |
-| M3 | file-hash guard drops its `property_id` filter (`:1841`) | cross-property isolation |
+| M1 | `addMeta` stops stamping `property_id` (`reportParsers.js#addMeta`) | property-assignment + isolation tests |
+| M2 | dedupe keys assigned **before** the property stamp (`#doImport`) | stored-key equality |
+| M3 | file-hash guard drops its `property_id` filter (`#doImport`) | cross-property isolation |
 | M4 | occurrence index removed from the key (`transactionNorm.js:167`) | 3 byte-identical postings |
-| M5 | property gate accepts whitespace (`:1476`) | 9-case fail-closed table |
-| M6 | validation gate disabled (`:1487`) | per-layer blocked-import table |
-| M7 | equal-width section tie-break reversed (`:859`) | tied-sections fixture |
+| M5 | property gate accepts whitespace (`#importReport`) | 9-case fail-closed table |
+| M6 | validation gate disabled (`#importReport`) | per-layer blocked-import table |
+| M7 | equal-width section tie-break reversed (`#scanTransactions`) | tied-sections fixture |
 | M8 | a repeated mid-grid header treated as a header | repeated-header fixture |
 | M9 | trailer rows no longer absorbed (`transactionNorm.js:196`) | revenue + checksum |
 | M10 | unparseable money coerced silently (`importValidation.js:96`) | coercion log |
@@ -463,21 +464,21 @@ catch.
 ### Four behaviours pinned as hazards, deliberately not changed
 
 1. **A same-width repeated grid is silently dropped.** Section selection uses a strict `>`
-   (`reportParsers.js:859`), so on a width tie the first grid wins and the second one's rows
-   never reach `rowsToImport`. In `transactions-tied-sections.csv` that discards $1,035.00,
-   and because the checksum reconciles against the winning section's own trailer the scan
-   reports `matches: true`. **A balanced checksum is not evidence that the whole file was
-   read.**
+   (`reportParsers.js#scanTransactions`), so on a width tie the first grid wins and the
+   second one's rows never reach `rowsToImport`. In `transactions-tied-sections.csv` that
+   discards $1,035.00, and because the checksum reconciles against the winning section's own
+   trailer the scan reports `matches: true`. **A balanced checksum is not evidence that the
+   whole file was read.**
 2. **Re-encoding a file defeats the file-level already-imported guard.** `fileHash` is taken
    over the raw text, so a CRLF or BOM variant of an imported file gets a new identity. The
    row-level `dedupe_key` still stops the duplicate rows; the cheap guard just stops helping.
    Note also that `generateFileHash` truncates SHA-256 to 32 hex chars
    (`universalParser.js:559`), keeping 128 of 256 bits.
 3. **A whitespace-padded `propertyId` is stamped verbatim.** The persist gate rejects on
-   `propertyId.trim() === ""` (`reportParsers.js:1476`) but never assigns the trimmed value,
-   so `" P-BOS-001 "` passes the gate and every row lands under a property id that no normal
-   query matches. Pinned by *"accepts an id that only needs trimming to be non-empty"*, which
-   asserts the rows are invisible under the clean id and present under the padded one. Two
+   `propertyId.trim() === ""` (`reportParsers.js#importReport`) but never assigns the trimmed
+   value, so `" P-BOS-001 "` passes the gate and every row lands under a property id that no
+   normal query matches. Pinned by *"accepts an id that only needs trimming to be non-empty"*,
+   which asserts the rows are invisible under the clean id and present under the padded one. Two
    callers disagreeing about whitespace would silently split one hotel's ledger in two.
 4. **The occurrence index is counted per batch, not against history.** `assignDedupeKeys`
    starts a fresh `Map` on every call (`transactionNorm.js:180`), so identical postings are
@@ -507,9 +508,9 @@ fixed in this commit:
    `code: "IMPORT_VALIDATION_BLOCKED"` on each rejection.
 3. **Two false pins.** Two comments claimed a reversed stamp order would cause *cross-property*
    data loss through the row-level guard. It would not: `existingTxnDedupeKeys` scopes its read
-   to one property (`reportParsers.js:1449`), so the property component of the key is
-   defence-in-depth, not the isolating mechanism. Both comments now say what the assertions
-   actually prove.
+   to one property (`reportParsers.js#existingTxnDedupeKeys`), so the property component of
+   the key is defence-in-depth, not the isolating mechanism. Both comments now say what the
+   assertions actually prove.
 4. **One wrong verb.** A comment said `mapTransactionRow` "floors" `amount`; the code defaults
    a null `amount` to 0 (`transactionNorm.js:219`) and floors nothing.
 
@@ -532,5 +533,45 @@ node scripts/probe-hotelkey-mutations.mjs
 The suites are the gate; the harness is the proof the gate bites. Run the harness after any
 edit to `reportParsers.js`, `transactionNorm.js` or `importValidation.js` — a `STALE` verdict
 means an anchor moved and that mutation checked nothing.
+
+---
+
+## 12.11 Decomposing the parser without editing the net — ADDED 2026-09-04
+
+12.10's net exists so `reportParsers.js` can be split. The first extraction proved the
+constraint that governs the rest: **the net pins the parser's source text, so what may move
+is decided by the anchors, not by what looks tidiest.** Seven of the eleven mutations are
+exact strings inside that file, and a moved anchor scores `STALE` — which the harness counts
+as *not killed*, because a mutation that cannot be applied has proved nothing. Six probes
+additionally assert against the file as text. An extraction that disturbs either would have
+to edit the safety net in the same commit as the code it guards, which inverts the proof
+order and is not allowed.
+
+**Extraction 1 (2026-09-04).** `src/lib/reportGrid.js` (NEW) takes `detectReportType`,
+`dedupByKey` and `withLazyObjects` — no report-specific logic, no database, no money math —
+and `reportParsers.js` imports them back. 1,937 → 1,839 lines, `1 99` numstat, zero modified
+lines. Equivalence was measured against `git show HEAD:` rather than asserted: 28 checks, 0
+failures, covering all 8 single-line anchors, the M3 and M7 multi-line anchors, byte-identity
+of the three moved blocks, CRLF purity, and both symbols that had to stay behind.
+
+**One trap worth keeping.** `git show HEAD:<path>` returns the LF-normalised blob while the
+working copy of every `src/` file here is CRLF, so a byte comparison between the two must
+normalise to a common LF basis first — otherwise `split("\r\n")` yields one element, the
+extracted slice is `""`, and `includes("")` reports a vacuous PASS on every block. Assert
+CRLF purity separately, against the raw bytes.
+
+**`mapRow` cannot move.** Its `COLUMN_MAP` is pinned inside `reportParsers.js` by the
+source-text assertions in `probe-mtd-growth.mjs` and `probe-monthly-calendar.mjs`.
+
+**Line-number citations in 12.10 were replaced by symbol citations** because extraction 1
+shifted all eight of them — `:859` → 761, `:1476` → 1378, `:1826` → 1728 and so on. This is
+tracker #58's undetectable class: still in range, so the citation gate stays green while the
+reader lands on unrelated code. Five more extractions will shift them again, so the numbers
+were removed rather than corrected. Line numbers for `transactionNorm.js` and
+`importValidation.js` are kept — those files did not move.
+
+Remaining order, one family per commit, each through the same chain: transaction scanner →
+daily/revenue scanner → adjustments/refunds → the remaining report-specific scanners →
+`reportImport.js`. `TECH_DEBT.md` section 3 carries the register.
 
 ---

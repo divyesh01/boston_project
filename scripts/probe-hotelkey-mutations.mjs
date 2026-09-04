@@ -21,6 +21,12 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 const PARSERS = "src/lib/reportParsers.js";
 const TXN_NORM = "src/lib/transactionNorm.js";
+// Destination of the transaction-scanner extraction (splitTransactionSections,
+// hashTransactionFile, scanTransactions). Listed as a candidate for M7 and M8
+// BEFORE the code moves: the anchor is resolved across the candidate list, so the
+// net follows the family across the move instead of reporting STALE the moment it
+// lands. Does not exist yet, and a candidate that does not exist is inert.
+const TXN_DEST = "src/lib/parsers/transactions.js";
 const SCAN_SUITE = "src/lib/hotelKeyParserFixtures.test.js";
 const IMPORT_SUITE = "src/lib/hotelKeyImportFixtures.test.js";
 
@@ -28,7 +34,9 @@ const IMPORT_SUITE = "src/lib/hotelKeyImportFixtures.test.js";
  * @typedef {object} Mutation
  * @property {string} id
  * @property {string} behaviour  one of the seven behaviours the net must protect
- * @property {string} file
+ * @property {string[]} where    candidate files; `find` must occur exactly once
+ *                               across all of them that exist, and the one file
+ *                               holding that occurrence is the one mutated
  * @property {string} find       exact source text, must occur exactly once
  * @property {string} replace
  * @property {string[]} suites
@@ -39,7 +47,7 @@ const MUTATIONS = [
   {
     id: "M1",
     behaviour: "property assignment",
-    file: PARSERS,
+    where: [PARSERS],
     find: '    property_id: meta.propertyId || "",',
     replace: '    property_id: "",',
     suites: [IMPORT_SUITE],
@@ -47,7 +55,7 @@ const MUTATIONS = [
   {
     id: "M2",
     behaviour: "property assignment (stamp-before-key ordering)",
-    file: PARSERS,
+    where: [PARSERS],
     find: "    const rows = assignDedupeKeys((scanResult.rowsToImport || []).map((r) => addMetaFn(r)));",
     replace: "    const rows = assignDedupeKeys(scanResult.rowsToImport || []).map((r) => addMetaFn(r));",
     suites: [IMPORT_SUITE],
@@ -55,7 +63,7 @@ const MUTATIONS = [
   {
     id: "M3",
     behaviour: "property isolation (file-hash guard scope)",
-    file: PARSERS,
+    where: [PARSERS],
     find: "      const priorFile = await db.entities.TransactionLine.filter({\n        file_hash: fileHash,\n        property_id: restMeta.propertyId || \"\",\n      });",
     replace: "      const priorFile = await db.entities.TransactionLine.filter({\n        file_hash: fileHash,\n      });",
     suites: [IMPORT_SUITE],
@@ -63,7 +71,7 @@ const MUTATIONS = [
   {
     id: "M4",
     behaviour: "dedupe (occurrence index)",
-    file: TXN_NORM,
+    where: [TXN_NORM],
     find: "    occurrence,\n  ].join(\"|\");",
     replace: "  ].join(\"|\");",
     suites: [SCAN_SUITE, IMPORT_SUITE],
@@ -71,7 +79,7 @@ const MUTATIONS = [
   {
     id: "M5",
     behaviour: "property gate (whitespace is not a property)",
-    file: PARSERS,
+    where: [PARSERS],
     find: '  if (typeof propertyId !== "string" || propertyId.trim() === "") {',
     replace: '  if (typeof propertyId !== "string" || propertyId === "") {',
     suites: [IMPORT_SUITE],
@@ -79,7 +87,7 @@ const MUTATIONS = [
   {
     id: "M6",
     behaviour: "validation gate",
-    file: PARSERS,
+    where: [PARSERS],
     find: "  if (validation && !validation.ok && !forceImport) {",
     replace: "  if (false && validation && !validation.ok && !forceImport) {",
     suites: [IMPORT_SUITE],
@@ -87,7 +95,8 @@ const MUTATIONS = [
   {
     id: "M7",
     behaviour: "stacked sections (widest section with rows wins)",
-    file: PARSERS,
+    // Anchor lives in scanTransactions, which extraction 2 moves to TXN_DEST.
+    where: [PARSERS, TXN_DEST],
     find: "  let best = null;\n  for (const s of sections) {",
     replace: "  let best = null;\n  for (const s of sections.slice().reverse()) {",
     suites: [SCAN_SUITE],
@@ -95,7 +104,8 @@ const MUTATIONS = [
   {
     id: "M8",
     behaviour: "repeated headers (a second header row is data, not a header)",
-    file: PARSERS,
+    // Anchor lives in splitTransactionSections, which moves to TXN_DEST too.
+    where: [PARSERS, TXN_DEST],
     find: "    if (current.headers) current.rows.push(row);",
     replace: "    if (current.headers) { if (!looksLikeHeader) current.rows.push(row); }",
     suites: [SCAN_SUITE],
@@ -103,7 +113,7 @@ const MUTATIONS = [
   {
     id: "M9",
     behaviour: "revenue + dates (trailer absorption)",
-    file: TXN_NORM,
+    where: [TXN_NORM],
     find: "export function isTrailerRow(mapped) {",
     replace: "export function isTrailerRow(mapped) {\n  return false;\n  // eslint-disable-next-line no-unreachable",
     suites: [SCAN_SUITE],
@@ -111,7 +121,7 @@ const MUTATIONS = [
   {
     id: "M10",
     behaviour: "malformed money (unparseable is not silently zero-clean)",
-    file: "src/lib/importValidation.js",
+    where: ["src/lib/importValidation.js"],
     find: '    coercions.push({ field, raw: text, kind: "unparseable" });',
     replace: "    return;",
     suites: [SCAN_SUITE],
@@ -126,7 +136,7 @@ const MUTATIONS = [
     // doubles from 287.50 to 575.00 while every row count stays correct.
     id: "M11",
     behaviour: "revenue (the refund branch of the ledger-side classifier)",
-    file: TXN_NORM,
+    where: [TXN_NORM],
     find: '  out.ledger_side = type === "REFUND" ? LEDGER_SIDE_PAYMENT : LEDGER_SIDE_CHARGE;',
     replace: "  out.ledger_side = LEDGER_SIDE_CHARGE;",
     suites: [SCAN_SUITE],
@@ -140,6 +150,11 @@ function git(args) {
 
 /** @param {string[]} files */
 function assertClean(files, when) {
+  // MEASURED: `git status --porcelain --` with an EMPTY pathspec list is not a
+  // no-op, it reports the WHOLE tree — an untracked scratch file anywhere would
+  // abort a run that touches no production file at all. The set is empty only when
+  // nothing resolved, i.e. nothing will be written, so there is nothing to protect.
+  if (!files.length) return;
   const dirty = git(["status", "--porcelain", "--", ...files]).trim();
   if (dirty) {
     console.error(`\nABORT: ${when} these files are not clean:\n${dirty}`);
@@ -151,6 +166,48 @@ function assertClean(files, when) {
     console.error(`FAILED: ${when.replace(/,$/, "")} the files this harness mutates were not clean`);
     process.exit(2);
   }
+}
+
+/**
+ * Resolve one mutation's anchor to exactly ONE file on disk.
+ *
+ * The candidate list is EXPLICIT, never a directory scan: a harness whose reach is
+ * a function of what happens to be on disk absorbs the very event it exists to
+ * detect. Each candidate is checked in its own line ending, because the anchors are
+ * authored with \n while this repo is checked out with CRLF (core.autocrlf=true) —
+ * and two candidates can disagree, so one globally-derived EOL would silently miss.
+ *
+ * @param {Mutation} m
+ * @returns {{path:string, eol:string}|{stale:string}}
+ */
+function resolveAnchor(m) {
+  /** @type {{path:string, eol:string, hits:number}[]} */
+  const found = [];
+  for (const cand of m.where) {
+    let text;
+    try {
+      text = readFileSync(cand, "utf8");
+    } catch (e) {
+      // A destination that does not exist YET is inert, not an error: that is what
+      // lets the net be extended before the code moves into it.
+      if (e.code === "ENOENT") continue;
+      throw e;
+    }
+    const eol = text.includes("\r\n") ? "\r\n" : "\n";
+    const find = m.find.split("\n").join(eol);
+    found.push({ path: cand, eol, hits: text.split(find).length - 1 });
+  }
+
+  const total = found.reduce((n, c) => n + c.hits, 0);
+  if (total === 0) {
+    return { stale: `anchor absent from all candidates (${m.where.join(", ")}) — the source moved` };
+  }
+  if (total > 1) {
+    const spread = found.filter((c) => c.hits > 0).map((c) => `${c.path} x${c.hits}`).join(", ");
+    return { stale: `anchor found ${total}x across candidates (${spread}) (expected exactly 1) — ambiguous` };
+  }
+  const hit = found.find((c) => c.hits === 1);
+  return { path: hit.path, eol: hit.eol };
 }
 
 /** @param {string[]} suites */
@@ -198,7 +255,30 @@ if (!selected.length) {
   process.exit(2);
 }
 
-const touched = [...new Set(MUTATIONS.map((m) => m.file))];
+/** @type {{id:string, behaviour:string, verdict:string, detail:string, names:string[]}[]} */
+const results = [];
+
+// Resolve every selected anchor BEFORE anything else runs. Two reasons for the
+// order: the clean check can only reserve files once it knows which ones will
+// actually be written, and a stale net is worth reporting without first spending a
+// minute on a baseline that cannot change the verdict.
+/** @type {{m:Mutation, path:string, eol:string}[]} */
+const plan = [];
+for (const m of selected) {
+  const r = resolveAnchor(m);
+  if ("stale" in r) {
+    // Contributes no path to the clean check and is never written or reverted.
+    results.push({ id: m.id, behaviour: m.behaviour, verdict: "STALE", detail: r.stale });
+    console.log(`${m.id} ${"STALE".padEnd(8)} ${r.stale}`);
+    continue;
+  }
+  plan.push({ m, path: r.path, eol: r.eol });
+}
+
+// Only the files this run will really write. Built from `plan`, not from
+// MUTATIONS: reserving all eleven files' worth of cleanliness under --only made a
+// single-mutation run abort over an unrelated edit it was never going to touch.
+const touched = [...new Set(plan.map((p) => p.path))];
 assertClean(touched, "before starting,");
 
 // The unmutated baseline has to be green, or every "killed" below is meaningless.
@@ -214,35 +294,20 @@ if (baseline.code !== 0) {
 const baseTests = /Tests\s+(\d+) passed/.exec(baseline.out)?.[1] ?? "?";
 console.log(`green (${baseTests} tests)\n`);
 
-/** @type {{id:string, behaviour:string, verdict:string, detail:string, names:string[]}[]} */
-const results = [];
-
-for (const m of selected) {
-  const before = readFileSync(m.file, "utf8");
-  // Anchors are authored with \n, but this repo is checked out with CRLF on
-  // Windows. Re-express both sides in the file's own line ending or every
-  // multi-line anchor silently misses and reports STALE.
-  const eol = before.includes("\r\n") ? "\r\n" : "\n";
+for (const { m, path: target, eol } of plan) {
+  const before = readFileSync(target, "utf8");
+  // `eol` comes from the resolve pass, which detected it on the file that actually
+  // holds the anchor. Re-deriving it here from where[0] would be wrong the moment
+  // the anchor resolves in a later candidate.
   const find = m.find.split("\n").join(eol);
   const replace = m.replace.split("\n").join(eol);
-  const hits = before.split(find).length - 1;
-  if (hits !== 1) {
-    results.push({
-      id: m.id,
-      behaviour: m.behaviour,
-      verdict: "STALE",
-      detail: `anchor found ${hits}x in ${m.file} (expected 1) — the source moved`,
-    });
-    console.log(`${m.id} ${"STALE".padEnd(8)} anchor not unique in ${m.file}`);
-    continue;
-  }
 
-  writeFileSync(m.file, before.replace(find, replace));
-  process.stdout.write(`${m.id} running ... `);
+  writeFileSync(target, before.replace(find, replace));
+  process.stdout.write(`${m.id} ${target} running ... `);
   const run = runSuites(m.suites);
-  git(["checkout", "--", m.file]);
+  git(["checkout", "--", target]);
 
-  const after = readFileSync(m.file, "utf8");
+  const after = readFileSync(target, "utf8");
   const restored = after === before;
   // Anchor on vitest's "Tests" summary line. A bare /(\d+) failed/ matches the
   // "Test Files" line first and reports a FILE count as a test count.
@@ -250,8 +315,8 @@ for (const m of selected) {
   const names = [...run.out.matchAll(/^\s*(?:×|✕|FAIL)\s+(.+?)\s*$/gm)].map((x) => x[1]);
   const verdict = !restored ? "RESIDUE" : run.code !== 0 ? "KILLED" : "SURVIVED";
   const detail = !restored
-    ? `revert did not restore ${m.file} (${before.length} -> ${after.length} bytes;` +
-      ` git porcelain: ${JSON.stringify(git(["status", "--porcelain", "--", m.file]).trim())})`
+    ? `revert did not restore ${target} (${before.length} -> ${after.length} bytes;` +
+      ` git porcelain: ${JSON.stringify(git(["status", "--porcelain", "--", target]).trim())})`
     : run.code !== 0
       ? `${failed?.[1] ?? "?"} test(s) failed — the net caught it`
       : "suites still passed — THE NET HAS A HOLE HERE";
@@ -263,6 +328,18 @@ for (const m of selected) {
 }
 
 assertClean(touched, "after finishing,");
+
+// Pin the denominator. Every selected mutation must have produced exactly one
+// verdict — one STALE from the resolve pass or one from the loop. A future edit
+// that `continue`s without pushing a result would shrink the divisor below instead
+// of failing, which silently converts a mutation that never ran into a passing run.
+if (results.length !== selected.length) {
+  const missing = selected.filter((m) => !results.some((r) => r.id === m.id)).map((m) => m.id);
+  console.error(`\nABORT: ${results.length} verdict(s) for ${selected.length} selected mutation(s)` +
+    `${missing.length ? ` — no verdict for ${missing.join(", ")}` : ""}.`);
+  console.error(`FAILED: ${results.length}/${selected.length} selected mutations produced a verdict — the harness dropped one`);
+  process.exit(2);
+}
 
 console.log("\n─── mutation report ───");
 for (const r of results) {

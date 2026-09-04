@@ -4021,4 +4021,151 @@ inside the sweep while reporting a number that looked like coverage.
 - **The `node:` truncation** was not chased into Vite's externalisation path. The causal
   variable is proven and the fix is verified; the error string's exact shape is cosmetic.
 
+## 44. The mutation net was nailed to a path, and the parser is about to move (2026-09-04)
+
+§43 made `probe-hotelkey-mutations.mjs` produce real results inside `verify:all`. This is the
+defect that would have thrown those results away one commit later.
+
+Each mutation carried **one hardcoded path**: a `file` field naming the single source to
+rewrite. Seven of the eleven anchors name `src/lib/reportParsers.js`, and **two of those seven
+sit inside the function family the parser decomposition moves out of it first** — `M7`'s
+`let best = null;` loop is inside `scanTransactions`, `M8`'s `if (current.headers)` line is
+inside `splitTransactionSections`. Move that family to `src/lib/parsers/transactions.js` and
+the anchors are still present in the repository, still guarding the same two behaviours, and
+the harness reports:
+
+```text
+M7 STALE    anchor not found in src/lib/reportParsers.js — the source moved
+M8 STALE    anchor not found in src/lib/reportParsers.js — the source moved
+FAILED: 9/11 mutations killed, 2 not killed
+```
+
+Exit 1. **The failure is indistinguishable from a real regression** — same exit code, same
+"not killed" wording, in the one commit where the net is the only thing standing between a
+1,839-line parser refactor and a silent revenue defect. The predictable outcomes are both
+bad: either the extraction commit is blocked by an alarm nobody can attribute, or the two
+mutations get quietly re-pointed in the same commit that moves the code they check, which
+means the net is edited by the change it is supposed to be independent of.
+
+**A net that cannot survive the move it exists to guard is not a net.** So it was extended
+BEFORE the code moved, in its own commit, with the production sources untouched — the order
+matters more than the diff: proof first, then the change it proves.
+
+### 44.1 The contract that replaced the path
+
+`file: string` became `where: string[]`, and the mutated file is now **resolved, not
+declared**: `resolveAnchor` reads every candidate that exists, counts occurrences of the
+anchor in each, and requires **exactly one hit across the whole set**. Zero hits is `STALE`
+("the source moved"). More than one is `STALE` ("ambiguous"), with the per-candidate spread
+printed. A candidate that does not exist yet is **inert** — `ENOENT` is skipped, not thrown —
+which is the property that lets `M7` and `M8` list the destination module before a single line
+of production code has moved into it.
+
+Four decisions inside that are load-bearing:
+
+**The candidate list is explicit, never a directory scan.** A `readdir` over `src/lib/parsers/`
+would make the harness's reach a function of whatever happens to be on disk — including
+untracked and ignored files — and would therefore absorb the exact event it exists to detect.
+An explicit list fails loudly when reality disagrees with it.
+
+**Line endings are detected per candidate, and that is not defensive padding.** The anchors are
+authored with `\n`; this repo is `core.autocrlf=true` with `* text=auto`, so working copies are
+CRLF while blobs are LF. One globally-derived EOL would be wrong for any candidate that
+disagrees with the one it was derived from — and the provoked check below **measured** that
+exact miss: with an LF scratch file holding `M8`'s anchor alongside the CRLF
+`reportParsers.js`, a single EOL finds **1** hit, reports `KILLED`, and hides the ambiguity
+completely. Per-candidate detection finds 2 and refuses.
+
+**The clean-tree reservation is built from what will actually be written.** `assertClean`
+refuses to start when a file it is about to rewrite is dirty, because it reverts with
+`git checkout --`. Reserving all eleven mutations' files made `--only M3` abort over an
+unrelated edit to a file that run was never going to touch, so the set is now derived from the
+resolve pass. Two consequences fall out: a `STALE` mutation contributes no path (it is never
+written and never reverted), and the set can be **empty** — at which point `assertClean`
+returns early, because `git status --porcelain --` with an empty pathspec is **not** a no-op.
+It reports the whole tree, so without that guard an untracked scratch file anywhere would abort
+a run that touches no production file at all. Measured, not reasoned.
+
+**The denominator is pinned.** Every selected mutation must produce exactly one verdict — one
+`STALE` from the resolve pass or one from the mutation loop — and the run aborts naming the
+missing ids otherwise. Without it, a future edit that `continue`s past a mutation without
+recording a verdict shrinks the divisor instead of failing, which silently converts a mutation
+that never ran into a passing run. That is the same failure shape as §43's: a number that looks
+like coverage while nothing was measured.
+
+### 44.2 The money guard was extended the same way, ahead of the code
+
+`probe-float-money.mjs`'s `PIPELINE` list gained `src/lib/parsers/transactions.js` before the
+file exists. This is inert by construction, not by luck: `PIPELINE` is consulted exactly once,
+as a membership test while iterating files **found on disk**, and the probe never asserts that
+a `PIPELINE` entry has a file behind it. So the entry matches nothing today and starts
+enforcing the no-`parseFloat`-on-money rule the moment the module lands — instead of the module
+arriving unguarded and someone having to remember this list. Suite count is unchanged at 28,
+which is the proof that the entry is inert.
+
+### 44.3 Verification (Observed 2026-09-04)
+
+A green mutation run proves nothing on its own — the whole point of this change is the failure
+paths, so each one was **provoked** and its output read. The harness was backed up outside the
+repo first and restored from that backup after every provocation, because `git checkout --`
+would have destroyed the uncommitted work under test.
+
+```text
+steady state          PASSED: 11/11 mutations killed, 0 not killed — exit 0
+                      M7 src/lib/reportParsers.js running ... KILLED
+                      M8 src/lib/reportParsers.js running ... KILLED
+                      git status --porcelain -- src/  empty afterwards
+zero hits (M7)        M7 STALE  anchor absent from all candidates (src/lib/reportParsers.js,
+                      src/lib/parsers/transactions.js) — the source moved
+                      FAILED: 0/1 mutations killed, 1 not killed — exit 1
+ambiguous (M8)        M8 STALE  anchor found 2x across candidates
+                      (src/lib/reportParsers.js x1, scripts/_tmp-ambiguity-probe.mjs x1)
+                      (expected exactly 1) — ambiguous — exit 1
+non-first candidate   where: [reportGrid.js, reportParsers.js, transactions.js]
+                      M7 src/lib/reportParsers.js running ... KILLED — exit 0, src/ clean
+absent candidate      the steady-state run IS this check: transactions.js does not exist
+```
+
+Two of those provocations paid for themselves twice. The **zero-hits** run printed its `STALE`
+line *before* `baseline (no mutation) ... green (51 tests)`, which proves the resolve pass runs
+ahead of the baseline gate — a stale net is reported without first spending 90 seconds on a
+baseline that cannot change the verdict — and incidentally pins the HotelKey fixture baseline at
+51 tests. The **ambiguous** run's untracked scratch file did *not* trip `assertClean`, which is
+the empty-pathspec guard and the "STALE contributes no path" rule both firing at once. The
+**non-first candidate** run is the one that proves the write, the `git checkout --` revert and
+the `RESIDUE` byte-comparison all key off the *resolved* path rather than `where[0]`; it came
+back `KILLED` with no residue and a clean `src/`.
+
+Repository gates, all Observed:
+
+```text
+npm run verify:all      150 suite(s): 148 passed, 0 failed, 0 broken, 0 timed out,
+                        0 bad exit code, 2 skipped, 0 diagnostic — exit 0
+                        list b5008211 (150 discovered) — every discovered suite ran
+  probe-hotelkey-mutations.mjs  PASS 89.7s — PASSED: 11/11 mutations killed, 0 not killed
+  probe-float-money.mjs         PASS  0.3s — 28 passed, 0 failed (unchanged: entry is inert)
+  probe-suite-integrity.mjs     PASS  0.2s — 151 passed, 0 failed (no discovery drift)
+npm run lint            0 errors        npm run typecheck   0 errors
+```
+
+The two skips are the same two structural ones as §43 and neither is this change's:
+`probe-build-chunks.mjs` (`dist/` older than 18 of its 321 inputs) and
+`probe-config-exposure.mjs` (no dev server at `localhost:5173`). A skip verified nothing.
+
+Discovery is unchanged at 150 because this commit **modifies** two existing `scripts/` suites
+and adds none — which is why the sharding fingerprint is still comparable to §43's run.
+
+### 44.4 Deliberately left alone
+
+- **No production file was touched.** `src/` is byte-identical to HEAD in this commit. The
+  extraction it prepares for is a separate commit, and keeping them apart is the only way the
+  net's green can be read as evidence about the move rather than about itself.
+- **The `[reportParsers]` prefix in `hashTransactionFile`'s `console.warn`** will move verbatim
+  with the function, naming a module it no longer lives in. That is on purpose: warn text is
+  observable output, and the extraction's contract is zero behaviour change. Normalising the
+  prefix is a later cosmetic pass with its own diff.
+- **The nine mutations whose anchors are not moving** were converted to `where: [FILE]` — a
+  one-element list — rather than left on a second code path. One resolver, one contract; a
+  harness with two ways to find a file grows a bug in the one that is exercised less.
+
 

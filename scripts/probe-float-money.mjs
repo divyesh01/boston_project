@@ -166,6 +166,13 @@ ok(persistedFloat.length === 0, "no float-dollar rounded value is written to the
 // is only legal if its argument was sanitized first.
 const PIPELINE = [
   "src/lib/reportParsers.js",
+  // Destination of the transaction-scanner extraction out of reportParsers.js.
+  // Listed before the file exists on purpose: PIPELINE is consulted once, while
+  // iterating files found on disk, so an entry with no file behind it matches
+  // nothing and is inert — and the parseFloat rule starts guarding the new module
+  // the moment it lands, instead of the module arriving unguarded and someone
+  // having to remember this list.
+  "src/lib/parsers/transactions.js",
   "src/lib/manualEntryImport.js",
   "src/lib/transactionNorm.js",
   "src/lib/paymentNorm.js",

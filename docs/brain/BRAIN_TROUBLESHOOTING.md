@@ -3701,11 +3701,13 @@ documents. A compliant file is never flagged, so it is never cross-check-execute
 the ternary form was chosen over an unconditional pass token because a file that prints
 the pass token regardless of outcome satisfies the auditor while telling a sweep nothing.
 
-One violation is left and it is **not** this workstream's: `probe-hotelkey-mutations.mjs`,
+One violation was left and it was **not** this workstream's: `probe-hotelkey-mutations.mjs`,
 committed at `0e310f1`, byte-identical to HEAD here (`git diff HEAD --stat` empty), and so
-already `NO_SUMMARY` before the routing layer existed. It is reported rather than absorbed
-— greening an unrelated red suite inside this commit would mix two concerns and hide when
-the gap appeared.
+already `NO_SUMMARY` before the routing layer existed. It was reported rather than absorbed
+— greening an unrelated red suite inside this commit would have mixed two concerns and hidden
+when the gap appeared. It was fixed in its own commit; see **§43**, which also establishes
+that the `NO_SUMMARY` rating was only *one* of two independent defects in that one file, and
+that fixing it could not have made the sweep green on its own.
 
 ### 42.6 A gate that cannot fail is decoration
 
@@ -3762,6 +3764,7 @@ npm run map:verify   PASSED: repo-map — 10 areas, 26 matrix rows, 35 contracts
 npm run map:mutate   PASSED: 17/17 mutations killed, 0 survived, restore
                      byte-identical, post-restore exit=0
 probe-suite-integrity  150 of 151 compliant; the 1 violator is committed at 0e310f1
+                     (that violator was fixed later the same day — §43 measures 151 of 151)
 verify-all --list    150 suite(s) — list b5008211 (150 discovered), not run (4)
 pre-commit hook      exit=1 when either gate fails (both directions measured)
 ```
@@ -3887,5 +3890,135 @@ lower than the false-failure it would cause:
 - **The word "seventeen" in `docs/AI_REPO_GUIDE.md` is unchecked prose.** No check reads a
   mutation count, so that number can only be kept true by hand. It was already wrong once
   ("fourteen"), caught by a reviewer rather than a gate.
+
+## 43. `verify:all`'s last red suite was two defects, not one (2026-09-03)
+
+`scripts/probe-hotelkey-mutations.mjs` printed `11/11 mutations killed` from a shell and
+failed inside `npm run verify:all`. §42.5 recorded one cause — a `NO_SUMMARY` output-format
+violation — and that reading was incomplete. **Two independent defects had landed on one
+file, and neither fix relieves the other's symptom:** the summary line only ever governed
+what `probe-suite-integrity.mjs` *rated* the file, while the sweep failure happened inside a
+nested Vitest that never got as far as printing a verdict.
+
+### 43.1 Defect A — a test runner was inheriting `NODE_ENV=production`
+
+`verify-all.mjs`'s `runSuite()` spawns every suite with `NODE_ENV: 'production'` (the only
+decision in that file carrying no rationale comment). The probe's `runSuites()` passed no
+`env` at all, so `spawnSync` forwarded the inherited production value into a nested
+`npx vitest`. Under `vitest.config.js`'s global `environment: "jsdom"` **plus** production,
+Vite resolved both fixture suites through its **`(client)`** environment and externalised the
+Node builtins they use to read the corpus off disk: eleven `(client)` warnings for `node:fs`,
+`node:path`, `node:url` and `node:crypto` — imported by `hotelKeyParserFixtures.test.js`,
+`hotelKeyImportFixtures.test.js` and `src/test-setup.js` — then
+`Error: No such built-in module: node:`, both suites FAIL, and the harness aborted on its own
+green-baseline precondition with `ABORT: the suites must pass before mutation results mean
+anything.` **Zero mutations ran.** The visible symptom was a red mutation harness; the first
+wrong decision was a sweep-wide production env being handed to a child whose entire job is to
+run tests.
+
+### 43.2 One variable, isolated by measurement before anything was edited (Observed)
+
+The same command — `npx vitest run src/lib/hotelKeyParserFixtures.test.js
+src/lib/hotelKeyImportFixtures.test.js --reporter=dot` — five times, changing only the
+environment:
+
+| Environment added | exit | `(client)` externalisations | result |
+|---|---|---|---|
+| `FOO=bar` (control) | 0 | 0 | `Tests 51 passed (51)` |
+| `NODE_ENV=production` | 1 | 11 | `No such built-in module: node:` |
+| `VITE_SKIP_DEP_SCAN=1 VITE_TEST=1 VITE_USE_LOCAL_AUTH=true` | 0 | 0 | 51 passed |
+| all four together | 1 | 11 | both suites FAIL |
+| `NODE_ENV=test` | 0 | 0 | 51 passed |
+
+Row 3 clears the three `VITE_*` vars the sweep also injects — they are not implicated. Row 5
+is the fix, confirmed as a hypothesis before a line was changed. Why the thrown specifier
+truncates to a bare `node:` with an empty rest is **Unknown** and was not invented.
+
+### 43.3 Which layer owns the fix, and why it is not `verify-all.mjs`
+
+Two layers could have been changed, and blast radius decided it:
+
+| | Layer A: stop `verify-all.mjs` injecting production | Layer B: pin the vitest child's env in the probe |
+|---|---|---|
+| Files touched | 1 | 1 |
+| Suites whose environment changes | ~150 | 1 child process |
+| Risk | any suite that asserts production behaviour silently changes meaning | none outside this harness |
+| Correct under an arbitrary parent env? | no — only fixes today's caller | yes |
+
+`probe-hotelkey-mutations.mjs` is the **only** file in `scripts/` that spawns vitest
+(measured by grep across `scripts/*.mjs`), so Layer B's blast radius is exactly one nested
+child, and the probe's own process stays in production mode as the sweep intends. An
+independent adversarial review (Gemini, `gemini-3.8-flash-high --effort high`, read-only,
+scoped to two files) returned the same layer, the same value, and the same edit.
+
+**`NODE_ENV=test` rather than `delete env.NODE_ENV`**, for two reasons. Vitest sets
+`NODE_ENV=test` for itself *only when nothing else has already set it*, so setting it
+explicitly states the intent rather than relying on that fallback. And on Windows
+environment-variable names are case-insensitive while a spread copy of `process.env` is an
+ordinary JS object that is not — so deleting one spelling can leave a differently-cased
+duplicate behind (**Inferred**; not measured here).
+
+### 43.4 Defect B — the summary contract, and the two abort paths that had no verdict
+
+`probe-suite-integrity.mjs` requires a printed line whose text *opens* with the PASS/FAIL
+token (or a `${cond ? "PASSED" : "FAILED"}` ternary resolving to one). The harness printed
+`11/11 mutations killed` — the numbers without the token — so it audited `NO_SUMMARY` on
+`hasAssertions=YES, hasExitPath=YES`, and `verify-all.mjs`'s one-line report fell back to
+whatever the file happened to print last. The fix is the sibling harness's form, for the
+sibling harness's reason: a ternary, so one line is honest for both outcomes, because a file
+that prints the pass token unconditionally satisfies the auditor and tells a sweep nothing.
+
+Two **abort** paths also printed no token, and an abort is the outcome most in need of one:
+`assertClean()` (the harness refuses to start when the sources it mutates are dirty) and the
+green-baseline precondition — exactly the path Defect A was taking. Both now print a
+`FAILED:` line, so the sweep never has to infer a verdict from the tail of a git-porcelain
+dump or a vitest stack trace. The wording is `N not killed`, not `N survived`, because the
+non-`KILLED` bucket also holds `STALE` (an anchor that no longer matches the source) and
+`RESIDUE` (a revert that did not restore the file), and neither of those is a surviving
+mutant.
+
+Checked against the runtime classifier as well as the static one: `_verdict.mjs` derives a
+failure count from `/\bFAIL(?:ED)?[:\s]+(\d+)\b/i`, and `PASSED: 11/11 mutations killed, 0
+not killed` cannot match it (the word carries no `F`), so the pass line cannot be read as a
+`lyingExitCode`; the `FAILED:` form with exit 1 classifies as `FAIL`.
+
+### 43.5 Verification (Observed 2026-09-03)
+
+```text
+probe-hotelkey-mutations (standalone)   11/11 killed, exit 0, worktree clean after
+                                        PASSED: 11/11 mutations killed, 0 not killed
+probe-hotelkey-mutations (in verify:all) PASS 95.2s — PASSED: 11/11 mutations killed
+probe-suite-integrity                   151 of 151 compliant, contract violators: 0
+npm run verify:all                      150 suite(s): 148 passed, 0 failed, 0 broken,
+                                        0 timed out, 0 bad exit code, 2 skipped,
+                                        0 diagnostic — exit 0
+npm run lint                            0 errors        npm run typecheck   0 errors
+npm run verify:v3                       PASS 3.0.0      npm run map:verify  0 problems
+npm run map:mutate                      17/17 killed, restore byte-identical, exit 0
+```
+
+The two skips are the same two structural ones as before and neither is this fix's:
+`probe-build-chunks.mjs` (`dist/` older than 17 of its 320 inputs) and
+`probe-config-exposure.mjs` (no dev server at `localhost:5173`). A skip verified nothing —
+the sweep says so in its own summary and that wording was not softened.
+
+**The kill list is the load-bearing evidence, not the count.** The `95.2s` in-sweep run is
+eleven real mutations reintroduced into `src/lib/reportParsers.js`, `transactionNorm.js` and
+`importValidation.js` one at a time, each reverted from git, with the tree asserted clean
+afterwards — including `M11`, the `ledger_side` refund branch, whose collapse doubles revenue
+from 287.50 to 575.00 while every row count stays correct. That is the net the parser
+decomposition will be run against; before this fix it produced **zero** mutation results
+inside the sweep while reporting a number that looked like coverage.
+
+### 43.6 Deliberately left alone
+
+- **`verify-all.mjs`'s `NODE_ENV: 'production'`** stays. It is the sweep's deliberate stance
+  and ~150 suites now depend on it; §43.3 is why the fix went in the child instead. Its
+  missing rationale comment is noted, not written — that file is not this commit's subject.
+- **`vitest.config.js`** was not touched. Adding a `@vitest-environment node` docblock to the
+  two fixture suites, or a per-file environment override, would change what the fixtures test
+  under *every* caller to fix one caller's env.
+- **The `node:` truncation** was not chased into Vite's externalisation path. The causal
+  variable is proven and the fix is verified; the error string's exact shape is cosmetic.
 
 

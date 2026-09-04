@@ -145,6 +145,10 @@ function assertClean(files, when) {
     console.error(`\nABORT: ${when} these files are not clean:\n${dirty}`);
     console.error("This harness rewrites production sources and reverts them from git.");
     console.error("Commit or stash your changes to them first.");
+    // Same summary contract as the verdict line at the end of this file: an abort is
+    // a FAILED outcome, and verify-all.mjs must not have to infer that from the tail
+    // of a git-porcelain dump.
+    console.error(`FAILED: ${when.replace(/,$/, "")} the files this harness mutates were not clean`);
     process.exit(2);
   }
 }
@@ -154,7 +158,33 @@ function runSuites(suites) {
   const r = spawnSync(
     process.platform === "win32" ? "npx.cmd" : "npx",
     ["vitest", "run", ...suites, "--reporter=dot"],
-    { encoding: "utf8", shell: process.platform === "win32" },
+    {
+      encoding: "utf8",
+      shell: process.platform === "win32",
+      // NODE_ENV is PINNED for the child, not inherited, and that is the whole
+      // reason this harness used to be green standalone and red inside the sweep.
+      //
+      // MEASURED 2026-09-03. This exact command exits 0 with 51/51 from a shell.
+      // Add NODE_ENV=production to the environment and nothing else, and it exits
+      // 1: eleven `(client)` warnings that node:fs / node:path / node:url /
+      // node:crypto "have been externalized for browser compatibility" — imported
+      // by both fixture suites and by src/test-setup.js — then
+      // `Error: No such built-in module: node:`, and both suites FAIL. Under
+      // jsdom + production Vite resolves these files through its browser
+      // environment, where the Node builtins the fixtures use to read the corpus
+      // off disk become throwing stubs. The three VITE_* vars the sweep also sets
+      // are harmless: measured 0 externalizations and 51/51 with all three and no
+      // NODE_ENV.
+      //
+      // verify-all.mjs's runSuite() spawns every suite with NODE_ENV:'production',
+      // so the probe inherited it and forwarded it here, and its own green-baseline
+      // precondition then failed before a single mutation ran.
+      //
+      // Set rather than deleted: vitest sets NODE_ENV=test itself only when nothing
+      // else has, and on Windows env names are case-insensitive while a spread copy
+      // of process.env is not — deleting one spelling can leave another behind.
+      env: { ...process.env, NODE_ENV: "test" },
+    },
   );
   return { code: r.status, out: `${r.stdout || ""}${r.stderr || ""}` };
 }
@@ -178,6 +208,7 @@ if (baseline.code !== 0) {
   console.error("FAILED\n");
   console.error(baseline.out.split("\n").slice(-30).join("\n"));
   console.error("\nABORT: the suites must pass before mutation results mean anything.");
+  console.error(`FAILED: baseline suites red (exit ${baseline.code}) — 0 mutations run`);
   process.exit(2);
 }
 const baseTests = /Tests\s+(\d+) passed/.exec(baseline.out)?.[1] ?? "?";
@@ -238,9 +269,24 @@ for (const r of results) {
   console.log(`${r.id.padEnd(4)} ${r.verdict.padEnd(9)} ${r.behaviour}`);
 }
 const bad = results.filter((r) => r.verdict !== "KILLED");
-console.log(`\n${results.length - bad.length}/${results.length} mutations killed`);
+const killed = results.length - bad.length;
+console.log(`\n${killed}/${results.length} mutations killed`);
 if (bad.length) {
   console.log(`NOT KILLED: ${bad.map((r) => `${r.id} (${r.verdict})`).join(", ")}`);
-  process.exit(1);
+} else {
+  console.log("Every mutation was caught and every mutated file was restored from git.");
 }
-console.log("Every mutation was caught and every mutated file was restored from git.");
+
+// Verdict line for the summary contract in scripts/probe-suite-integrity.mjs: the
+// printed line must open with the PASS / FAIL token. Written as a ternary so one
+// line is honest for both outcomes — a suite that prints the pass token
+// unconditionally satisfies the auditor and tells a sweep nothing. Without it this
+// file audited as NO_SUMMARY (hasAssertions=YES, hasExitPath=YES): the count line
+// above carries the numbers but not the token, so verify-all.mjs's one-line report
+// fell back to whatever this file printed last.
+//
+// "not killed", not "survived": bad also holds STALE (a mutation anchor that no
+// longer matches the source) and RESIDUE (a revert that did not restore the file),
+// and neither of those is a surviving mutant.
+console.log(`${bad.length ? "FAILED" : "PASSED"}: ${killed}/${results.length} mutations killed, ${bad.length} not killed`);
+process.exit(bad.length ? 1 : 0);

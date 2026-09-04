@@ -3588,14 +3588,15 @@ look`) are ignored because their headers do not match a schema.
 
 | Check | Fails when |
 |---|---|
-| C0 | a document, a required table, or a header row is missing or malformed |
+| C0 | a document, a required table, or a header row is missing or malformed, or a blank line splits a table so the rows below it are read by nothing |
 | C1 | a cited path no longer exists |
 | C2 | a cited `file#symbol` is no longer an export of that file |
-| C2b | a citation uses `file.ext:NNN` instead of `file#symbol` |
+| C2b | a citation uses `file.ext:NNN` or `file.ext:NNN-MMM` instead of `file#symbol` |
 | C3 | a *Proves it* / *Suite* entry is not a test or probe file |
 | C4 | a Gate/Command does not resolve to a real script or npm script |
 | C5 | a module in `PROTECTED_FILES.md` is not labelled `PROTECTED`, or a file not in it claims to be |
 | C6 | an area is missing, a cell is empty, or *Read first* names more than five files |
+| C6-shape | a table row has the wrong number of cells for its header |
 | C7 | two areas claim the same file, or a row is duplicated |
 | C8 | a named proof imports nothing from the module it claims to prove |
 | C9 | `PROJECT_MAP.md`'s residual table cites a path that is gone |
@@ -3665,8 +3666,11 @@ never "it fails":
   commit via the hook and on demand via `npm run map:verify`; inside the sweep it would
   duplicate that work.
 - `probe-repo-map-gate.mjs` — it **rewrites the four routing documents in place** and
-  restores them. A run killed by the sweep's per-suite `--timeout` would leave a tracked
-  document mutated on disk. Run it deliberately: `npm run map:mutate`.
+  restores them. A `finally` plus SIGINT/SIGTERM handlers now restore whatever is in
+  flight, but the sweep enforces its per-suite `--timeout` with `child.kill("SIGKILL")`,
+  which **no handler can catch** — so the EXCLUDE entry is still what keeps a killed
+  sweep from leaving a deliberately-broken routing document on disk. Run it deliberately:
+  `npm run map:mutate`.
 
 Discovery therefore moved 148 → 150 while `not run` moved 2 → 4. The runtime list
 fingerprint changed with it (`--list` reports `list b5008211 (150 discovered)`); nothing
@@ -3705,12 +3709,25 @@ the gap appeared.
 
 ### 42.6 A gate that cannot fail is decoration
 
-`scripts/probe-repo-map-gate.mjs` mutates one document at a time to reproduce all
-fourteen failure modes, asserts the gate exits 1 with the expected check id, restores the
-file, then asserts every document is byte-identical to how it started and the gate is
-green again. A mutation whose anchor text has moved is reported `SETUP-FAIL` and is
-**not** counted as a kill — otherwise the harness would quietly weaken as the docs
-evolve.
+`scripts/probe-repo-map-gate.mjs` mutates one document at a time to reproduce seventeen
+failure modes — at least one per check id except `C6-shape` — asserts the gate exits 1
+**with that exact check id**, restores the file, then asserts every document is
+byte-identical to how it started and the gate is green again. A mutation whose anchor
+text has moved is reported `SETUP-FAIL` and is **not** counted as a kill — otherwise the
+harness would quietly weaken as the docs evolve. `SETUP-FAIL` is loud, not silent: it
+prints, it skips the kill increment, and `killed === MUTATIONS.length` then fails, so the
+harness exits 1.
+
+The id-anchored assertion is the load-bearing part and is easy to mistake for a plain
+exit-code check:
+
+```js
+const caught = r.code === 1 && new RegExp(`^${want} `, "m").test(r.out);
+```
+
+A mutation killed by some *other* check does not satisfy it. Any review claiming "this
+mutation would also be caught by a different check, so its proof is bogus" has misread
+that line.
 
 It earned itself on day one: `C2b line citation SURVIVED`. `looksLikePath()` rejected
 `src/pages/Payroll.jsx:153` before the C2b branch could ever see it, so the exact
@@ -3742,7 +3759,7 @@ defect in the very commit that introduced it.
 ```text
 npm run map:verify   PASSED: repo-map — 10 areas, 26 matrix rows, 35 contracts,
                      182 references resolved, 0 problems
-npm run map:mutate   PASSED: 14/14 mutations killed, 0 survived, restore
+npm run map:mutate   PASSED: 17/17 mutations killed, 0 survived, restore
                      byte-identical, post-restore exit=0
 probe-suite-integrity  150 of 151 compliant; the 1 violator is committed at 0e310f1
 verify-all --list    150 suite(s) — list b5008211 (150 discovered), not run (4)
@@ -3763,4 +3780,112 @@ actually ran rather than a reconstructed one.
   work and risk leaving a mutated tracked document behind.
 - **`scripts/verify-brain.mjs`** was not touched. The two gates stay separate: one owns
   BRAIN citation integrity, the other owns routing accuracy.
+
+### 42.10 Day two: three more silent bypasses, all in the same blind spot
+
+An independent adversarial review of the gate (Gemini, `gemini-3.8-flash-high --effort
+high`, read-only tools) returned 14 findings. Adjudicated against source: **10 real, 3
+refuted, 1 a deliberate design decision already recorded above.** Three of the real ones
+were promoted to mutations and **all three SURVIVED at exit=0 with the gate printing
+nothing at all** before the fix — the worst failure shape a gate can have, because green
+is indistinguishable from clean.
+
+| Hole | The stale edit that shipped green |
+|---|---|
+| C2b | `src/pages/Payroll.jsx:153-160` — the **range** form of the citation style day one had already fixed in its bare `:153` form |
+| C2 | a `#symbol` that exists only inside a JSDoc example — `scripts/probe-settings-persistence.mjs` quotes ` *     export function getXConfig() {` and exports neither name |
+| C0 | one blank line inside a table — every row below the gap is still a table to a reader and invisible to every check |
+
+**`looksLikePath()` is the recurring blind-spot class, and it will be again.** It
+gate-keeps token *shape*, and anything it rejects is skipped before any check sees it — so
+a hole there is not a wrong verdict, it is *no verdict*. Day one's `:153` and day two's
+`:153-160` are the same bug twice. Three sites carried the identical suffix group; all
+three were widened to `(-\d+)?`, including the `named` extension test inside
+`checkProjectMap`, where a slash-less `Payroll.jsx:153-160` in a residual row would
+otherwise be skipped before the C9 branch. When adding a check, ask what
+`looksLikePath()` throws away first.
+
+C2 now scans comment-stripped source, using the same two-step `stripComments` form as
+`probe-suite-integrity.mjs`, re-declared rather than imported because that module runs a
+mode and calls `process.exit()` on import. It inherits one measured limitation: a `//`
+inside a string literal *not* preceded by `:` truncates the rest of that physical line.
+The `[^\\:]` guard is what protects `https://…`. Observed: no cited symbol is affected
+(182/182 still resolve). Not Run: any sweep of files the map does not cite.
+
+C0's fix is a **post-loop orphan detector**, not a change to the row loop — the loop
+still ends at the first non-`|` line. An orphaned data row is told apart from a
+legitimately separate next table by the `|---|` delimiter row a GitHub header must carry:
+a header has one, a stranded data row does not.
+
+**One real finding was fixed in the message, not the predicate.** C6's text claimed the
+contract is 3–5 while only `> 5` fails. Tightening it to a floor of 3 would have failed
+the map *today* — Payroll legitimately has two read-files (`payrollCalc.js#buildPayrollRunRecord`,
+`Payroll.jsx`) — and would push toward padding a document to satisfy a gate, which is
+backwards. The predicate is byte-identical; the message and the guide's "Reading the
+columns" bullet now state the ceiling that actually fails.
+
+**Three findings were verified wrong and must not be "fixed" by a later session.**
+
+- *"MUT-10 / MUT-4 are also killed by a different check, so their proof is bogus."*
+  Refuted by the id-anchored `caught` regex in 42.6 — a kill by another id is not a kill.
+- *"SETUP-FAIL is silent."* It prints, skips the increment, and forces exit 1.
+- *"C9 should scan prose, not just table rows."* That narrowing is deliberate and is
+  documented in 42.3: the prose names `test-thing.mjs` on purpose, and the rows name
+  `__Host-rri_session` and `users` on purpose.
+
+### 42.11 The restore net, and the assertion that is the only thing guarding it
+
+The harness rewrites four tracked documents in place. A throw, an EPERM/EBUSY, or a
+Ctrl-C between its two writes left a deliberately-broken doc on disk where a careless
+`git commit -a` would commit it. Fixed with shared `inFlight` state (registered *before*
+the write), a `finally`, and SIGINT/SIGTERM handlers that restore what is pending and
+exit `128+signo`.
+
+**The most plausible *incomplete* fix passes everything except one assertion.** A
+`try/finally` whose restore round-trips through a string and re-encodes still reports
+`17/17 mutations killed` and `post-restore gate: EXIT=0` — and `restore byte-identical:
+NO` → exit 1. A reviewer gating on kill count alone would pass a corrupted worktree. That
+is why the harness holds `originalBytes` (a `Buffer`) alongside `originalText`, and why
+the final assertion re-reads bytes and compares sha256.
+
+**`git diff` cannot see the resulting damage; `git status --short` can (Observed).** With
+all four docs left CRLF, `git diff`, `--numstat` and `--stat` printed nothing while
+`git status --short` listed all four as ` M`. The tell is Git's *"LF will be replaced by
+CRLF the next time Git touches it"* warning. `git status --short` is therefore the
+required post-run check.
+
+Correcting a premise stated earlier in this workstream: the four routing docs and the
+harness are **pure LF on disk** and the HEAD blob is LF. `core.autocrlf=true` with
+`* text=auto` means only a *fresh checkout* materialises CRLF. Byte-exact restore is what
+makes the harness EOL-agnostic across both shapes.
+
+**Real OS signal delivery is Not Run on this host, for three measured reasons** — handler
+*logic* is Observed via `process.emit`, delivery is not:
+
+1. `process.kill(child.pid, "SIGINT")` killed the child `exit code=1 signal=null` with the
+   handler never running — Windows `uv_kill` is `TerminateProcess`.
+2. MSYS2 `kill -INT <winpid>` → `kill: 27848: No such process`.
+3. The PowerShell `FreeConsole`/`AttachConsole`/`SetConsoleCtrlHandler`/
+   `GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0)` route returned `True` on every call and
+   delivered nothing (ConPTY: `GetConsoleWindow()=0`, `GetConsoleProcessList` = 5 pids).
+   The proof was **deliberately stopped there**: group 0 targets every process on the
+   console, and that list contained the agent session's own processes.
+
+**Accepted limits, documented rather than fixed** — each is a narrowing whose cost is
+lower than the false-failure it would cause:
+
+- **C8 is existence, not coverage.** One proof reaching one *Read first* file satisfies a
+  five-file area.
+- **`suiteCovers`'s basename match** counts any quoted string equal to a bare basename,
+  including a `describe("decimal.js", …)` title.
+- **`looksLikePath`'s extension allowlist** is `js|jsx|mjs|json|jsonc|sql|md|csv|css|html`
+  — no `.ts/.tsx/.yml/.yaml/.sh/.toml/.txt`. Adding one of those file types to a map row
+  means widening this first.
+- **C4 cannot validate wrangler offline.** `/^npx wrangler /` resolves true for
+  `npx wrangler invalid-target`.
+- **C7 ignores intra-area duplicates** — the same file twice in one *Read first* cell.
+- **The word "seventeen" in `docs/AI_REPO_GUIDE.md` is unchecked prose.** No check reads a
+  mutation count, so that number can only be kept true by hand. It was already wrong once
+  ("fourteen"), caught by a reviewer rather than a gate.
+
 

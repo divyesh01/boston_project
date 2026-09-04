@@ -22,8 +22,9 @@ symbol, test or command in it no longer exists — see "The contract" at the bot
 
 ## Reading the columns
 
-- **Read first** — 3–5 files, nothing more. If your change needs a sixth, you are in
-  two areas; do them as two changes.
+- **Read first** — at most 5 files; the gate rejects a sixth. If your change needs
+  one, you are in two areas — do them as two changes. Fewer is fine when the area
+  really is that small.
 - **Proves it** — a suite that actually imports something from *Read first*. The gate
   checks that link, so you cannot cite a test that never touches the module.
 - **Gate** — the exact command. `verify-*`/`probe-*` scripts that import `@/…`
@@ -72,10 +73,12 @@ fix the row in the **same** commit. Cite a `#symbol`, never a line number; symbo
 survive edits and line numbers rot within a day.
 
 A gate that cannot fail is decoration, so this one is mutation-tested: `npm run
-map:mutate` rewrites one document at a time to reproduce all fourteen failure modes,
-asserts each is caught, restores every file byte-identically, and re-runs the gate
-green. It is deliberately outside `npm run verify:all` — it writes to tracked files,
-so a run killed mid-mutation would leave a document modified.
+map:mutate` rewrites one document at a time to reproduce seventeen failure modes — at
+least one per check id except `C6-shape` — asserts each is caught by that exact id,
+restores every file byte-identically, and re-runs the gate green. A `finally` plus
+SIGINT/SIGTERM handlers restore whatever is in flight, so a throw or a Ctrl-C cannot
+leave a broken document behind. It stays outside `npm run verify:all` because that
+sweep enforces its per-suite timeout with `SIGKILL`, which no handler can catch.
 
 ```bash
 npm run map:mutate

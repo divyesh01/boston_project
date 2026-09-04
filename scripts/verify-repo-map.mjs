@@ -86,13 +86,24 @@ function tablesWithHeader(text, cols) {
     if (head.length !== want.length || head.some((h, k) => h !== want[k])) continue;
     // A GitHub table requires a --- delimiter row immediately after the header.
     if (!/^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1] ?? "")) continue;
-    for (let j = i + 2; j < lines.length && lines[j].trim().startsWith("|"); j += 1) {
+    let j = i + 2;
+    for (; j < lines.length && lines[j].trim().startsWith("|"); j += 1) {
       const cells = splitRow(lines[j]);
       if (cells.length !== want.length) {
         fail("C6-shape", `${cols[0]} table row ${j + 1} has ${cells.length} cells, expected ${want.length}`);
         continue;
       }
       rows.push({ cells, line: j + 1 });
+    }
+    // C0 — one blank line inside a table ends it here, so every row below the gap is
+    // parsed by nothing and verified by nothing: still a table to a reader, invisible
+    // to this gate. An orphaned row is told apart from a legitimately separate next
+    // table by the delimiter row a GitHub header must carry — a header has one, a
+    // stranded data row does not.
+    let k = j;
+    while (k < lines.length && lines[k].trim() === "") k += 1;
+    if (k < lines.length && lines[k].trim().startsWith("|") && !/^\s*\|[\s:|-]+\|\s*$/.test(lines[k + 1] ?? "")) {
+      fail("C0", `${cols[0]} table is split by a blank line — line ${k + 1} is an orphaned data row that no check reads`);
     }
     i += 1;
   }
@@ -130,9 +141,14 @@ function splitRef(token) {
  * that, `src/pages/Payroll.jsx:153` looked like prose, was skipped entirely, and
  * the very citation style this gate exists to ban went unchecked — proven by a
  * mutation that survived until this arm was added.
+ *
+ * `:NNN-MMM` is the surviving variant of that same blind spot: the bare `:153` form
+ * was admitted here while `src/pages/Payroll.jsx:153-160` still read as prose, so the
+ * banned style walked straight past C2b and C9 in its range form. A second mutation
+ * survived until the suffix accepted the range too.
  */
 const looksLikePath = (t) =>
-  /^[\w.@][\w./@-]*\.(js|jsx|mjs|json|jsonc|sql|md|csv|css|html)(#.+|:\d+)?$/.test(t) ||
+  /^[\w.@][\w./@-]*\.(js|jsx|mjs|json|jsonc|sql|md|csv|css|html)(#.+|:\d+(-\d+)?)?$/.test(t) ||
   /\/$/.test(t) ||
   /(^|\/)_[\w.-]+$/.test(t) ||
   /^\.[\w-]+$/.test(t);
@@ -148,14 +164,31 @@ function readRepo(p) {
 const pathExists = (p) => (p.endsWith("/") ? existsSync(abs(p)) : readRepo(p) !== null);
 
 /**
+ * Line and block comments removed. Same two-step form as the `stripComments` in
+ * scripts/probe-suite-integrity.mjs, re-declared here rather than imported because
+ * that module's body runs a mode and calls process.exit() on import.
+ *
+ * The `[^\\:]` guard is what keeps a `https://…` string literal from swallowing the
+ * rest of its own line; `^` still allows a comment that starts the line.
+ */
+const stripComments = (src) =>
+  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^\\:])\/\/.*$/gm, "$1");
+
+/**
  * Is `symbol` exported from `file`? Covers the export forms this repo actually
  * uses: `export function f`, `export const f`, `export class C`,
  * `export { a, b as c }`, `export default`, and `const X = ...; export { X }`.
  * Also accepts a plain top-level declaration re-exported later in the file.
  */
 function exportsSymbol(file, symbol) {
-  const src = readRepo(file);
-  if (src === null) return false;
+  const raw = readRepo(file);
+  if (raw === null) return false;
+  // Comments first: a commented-out export is not an export, and neither is one
+  // written inside a JSDoc example. scripts/probe-settings-persistence.mjs quotes the
+  // two settings shapes as ` *     export function getXConfig() {` and exports neither
+  // name, yet a raw-text scan resolved `#getXConfig` against it — the map could cite a
+  // symbol that exists only in prose and the gate stayed green.
+  const src = stripComments(raw);
   if (symbol === "default") return /\bexport\s+default\b/.test(src);
   const s = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const direct = new RegExp(
@@ -265,7 +298,8 @@ function checkRefs(where, cell, opts = {}) {
     if (!looksLikePath(token)) continue;
     const { file, symbol } = splitRef(token);
     checked += 1;
-    if (/:\d+$/.test(file)) {
+    // Both citation shapes looksLikePath now admits: `:153` and the `:153-160` range.
+    if (/:\d+(-\d+)?$/.test(file)) {
       fail("C2b", `${where}: \`${token}\` cites a line number — cite \`file#symbol\` instead`);
       continue;
     }
@@ -307,7 +341,10 @@ for (const { cells, line } of guideRows) {
   const gate = ticks(gateCell)[0] ?? "";
 
   if (read.length === 0) fail("C6", `${at}: "${area}" names no file to read`);
-  if (read.length > 5) fail("C6", `${at}: "${area}" lists ${read.length} files to read — the contract is 3-5`);
+  // The guide asks for 3–5; only the ceiling is enforced here. A floor of 3 would make
+  // the gate demand padding for a legitimately two-file area (Payroll), so the message
+  // states the ceiling that actually fails rather than a range that does not.
+  if (read.length > 5) fail("C6", `${at}: "${area}" lists ${read.length} files to read — at most 5`);
   if (proves.length === 0) fail("C6", `${at}: "${area}" names no test that proves it`);
   if (!gate) fail("C6", `${at}: "${area}" names no verification gate`);
   else if (!commandResolves(gate, pkg.scripts)) fail("C4", `${at}: gate \`${gate}\` does not resolve to a runnable script`);
@@ -454,11 +491,11 @@ function checkProjectMap() {
     if (!lines[i].trim().startsWith("|")) continue;
     for (const token of ticks(lines[i])) {
       if (!looksLikePath(token)) continue;
-      const named = /\.(js|jsx|mjs|json|jsonc|sql|md|csv|css|html)(#.+|:\d+)?$/.test(token);
+      const named = /\.(js|jsx|mjs|json|jsonc|sql|md|csv|css|html)(#.+|:\d+(-\d+)?)?$/.test(token);
       if (!token.includes("/") && !named) continue;
       const { file, symbol } = splitRef(token);
       checked += 1;
-      if (/:\d+$/.test(file)) {
+      if (/:\d+(-\d+)?$/.test(file)) {
         fail("C9", `${PROJECT_MAP}:${i + 1}: \`${token}\` cites a line number — cite \`file#symbol\` instead`);
       } else if (!pathExists(file)) {
         fail("C9", `${PROJECT_MAP}:${i + 1}: \`${file}\` does not exist`);

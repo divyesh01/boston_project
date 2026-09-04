@@ -554,6 +554,15 @@ lines. Equivalence was measured against `git show HEAD:` rather than asserted: 2
 failures, covering all 8 single-line anchors, the M3 and M7 multi-line anchors, byte-identity
 of the three moved blocks, CRLF purity, and both symbols that had to stay behind.
 
+**"Verbatim" has one exact exception, and every extraction will hit it.** All three functions
+were module-**private** in `reportParsers.js` (`function dedupByKey(…)`), and a moved function
+must be exported to be importable, so each declaration line gained the `export ` keyword.
+Measured: the blocks are byte-identical after stripping that one prefix, and identical in
+length (9 / 10 / 71 lines). So the honest claim is *byte-identical apart from the `export`
+the move requires* — not literal byte-identity. An extraction gate should normalise that
+prefix explicitly rather than let it pass as noise, because a gate that tolerates one
+unexplained difference tolerates the next one too.
+
 **One trap worth keeping.** `git show HEAD:<path>` returns the LF-normalised blob while the
 working copy of every `src/` file here is CRLF, so a byte comparison between the two must
 normalise to a common LF basis first — otherwise `split("\r\n")` yields one element, the

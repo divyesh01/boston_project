@@ -4168,4 +4168,158 @@ and adds none — which is why the sharding fingerprint is still comparable to �
   one-element list — rather than left on a second code path. One resolver, one contract; a
   harness with two ways to find a file grows a bug in the one that is exercised less.
 
+## 45. The transaction ledger left `reportParsers.js`, byte for byte (2026-09-04)
+
+Job #2's second extraction. §44 gave the mutation net a path-independent anchor resolver so
+that this move could happen without editing the harness. This is the move, and the harness
+was not edited.
+
+`src/lib/parsers/transactions.js` (new, 193 lines) now owns the All Transactions family: the
+blank-line section splitter, the file-identity hash, and the scanner that consumes both.
+`reportParsers.js` went from 1,839 lines to 1,665, reaches the scanner through one import,
+and calls it from one place — `reportParsers.js#scanReport`.
+
+### 45.1 The one claim the whole commit rests on
+
+**The moved body is byte-identical to HEAD's, apart from a single `export ` token.**
+Everything downstream — fixtures passing, mutations killing, the sweep going green — is
+evidence *about* that claim only if the claim itself is exact. So it was proved by hash, not
+by reading:
+
+- HEAD `f79676d`'s family slice, joined with LF as the blob stores it, is **173 lines** and
+  hashes to `sha256 224d4c73a4133829909e65fd2f113e1c451034a49a7b6ea597420fa9bc9c5438`.
+- The body on disk, with `export ` removed from the one line that gained it, hashes to the
+  **same value**. One line differs; +7 bytes.
+
+The body was extracted programmatically and never retyped. A move verified by eye is a
+rewrite whose diff nobody read.
+
+`splitTransactionSections` and `hashTransactionFile` stayed module-private, so
+`#scanTransactions` is the new module's only export and the family's internals cannot grow
+new callers by accident.
+
+### 45.2 The net followed the code, with no harness edit
+
+§44's resolver was a prediction. This is the measurement. Both moved anchors now resolve
+across the same candidate list they were given a day earlier:
+
+```text
+M7  "  let best = null;\n  for (const s of sections) {"
+      src/lib/reportParsers.js x0, src/lib/parsers/transactions.js x1   -> 1 hit
+M8  "    if (current.headers) current.rows.push(row);"
+      src/lib/reportParsers.js x0, src/lib/parsers/transactions.js x1   -> 1 hit
+```
+
+Before the move both were `x1 / x0`. `scripts/probe-hotelkey-mutations.mjs` was not opened in
+this commit — deliberately. Editing the net in the same commit as the code it guards would
+make the green unreadable: a harness that was adjusted to match the new layout proves that
+someone adjusted it, not that behaviour held. The anchors are load-bearing text now, which is
+the cost §44 accepted: reformatting either line silently un-guards a real behaviour, and the
+`STALE` verdict is what turns that from a silent hole into a failed sweep.
+
+### 45.3 Import pruning, decided by count and not by eye
+
+The family used 12 bindings, and a 13th — `assignDedupeKeys`, used elsewhere in the file —
+shared one of their import statements. After the move each name's remaining word-boundary
+occurrences in `reportParsers.js`'s body, excluding the import statement itself, were counted,
+and only names at exactly **0** were removed:
+
+| Removed at 0 uses | Kept, with uses |
+|---|---|
+| `generateFileHash`, `TXN_SIGNATURE`, `TXN_COLUMN_MAP`, `mapTransactionRow`, `isTrailerRow`, `toCents`, `fromCents`, `sumCents` | `isIsoDate` 6 · `validateImport` 3 · `makeFinding` 3 · `SEVERITY` 4 · `assignDedupeKeys` 1 |
+
+`import { toCents, fromCents, sumCents } from '@/lib/decimal';` emptied completely and was
+deleted whole; the other two statements lost names and kept their remaining ones. This is the
+one place a "verbatim" move can still change behaviour — an over-eager prune is a
+`ReferenceError` at the first call, and an unused import that lint does not flag is dead
+weight that later reads as a dependency. Counting is cheap, and `npm run typecheck` then
+re-checks that every binding still resolves in whichever file now holds it.
+
+### 45.4 Verification (Observed 2026-09-04)
+
+```text
+byte-identity verifier          37 checks PASS, 0 FAIL — exit 0   (%TEMP%, outside the repo)
+  sha256(HEAD family, LF)       224d4c73...c5438
+  sha256(moved body, -export)   224d4c73...c5438   identical
+  M7 / M8 anchors               reportParsers.js x0, parsers/transactions.js x1  (1 hit each)
+hotelKeyParserFixtures.test.js  2 files, 51 passed (51) — exit 0   (NODE_ENV=test)
++ hotelKeyImportFixtures.test.js
+probe-import-validation.mjs     22 passed, 0 failed — exit 0
+npm run lint                    0 errors        npm run typecheck   0 errors
+npm run map:verify              10 areas, 26 matrix rows, 36 contracts,
+                                185 references resolved, 0 problems — exit 0
+git diff --stat                 1 file changed, 3 insertions(+), 177 deletions(-)
+```
+
+`probe-import-validation.mjs` matters more than its size suggests: it drives the moved scanner
+end to end over a 4,823-row ledger and reconciles parsed `341751.93` against the file's own
+declared `341751.93`. A byte-identical body that no longer reaches its validator would still
+hash correctly.
+
+**`npm run verify:all` runs after the local commit, not before, and that ordering is forced.**
+`probe-hotelkey-mutations.mjs` is itself one of the sweep's suites, and it refuses to start
+while its target files are dirty — with the extraction uncommitted, `src/lib/reportParsers.js`
+is modified and `src/lib/parsers/transactions.js` is untracked, so the harness aborts before
+mutating anything. Nothing is published until the sweep is green, so the sequence needs no
+`--amend` and no force-push: a red sweep gets a new commit. The sweep's own numbers for this
+change are recorded in the follow-up documentation commit rather than asserted here, because a
+result that does not exist yet cannot be written down as if it did.
+
+The 177 deletions account exactly: 174 family lines (the 173-line body plus its trailing blank,
+leaving one blank line at the seam), the old `universalParser` import line, the old
+`transactionNorm` names line, and the whole `decimal` statement. The 3 insertions are the new
+import plus the two rewritten import lines.
+
+### 45.5 The citations this move invalidated, and why they are not fixed here
+
+Moving 174 lines out of a file that other files cite by line number breaks those citations
+arithmetically: a target below the cut is untouched, one inside the cut moved to the new module
+at **−674**, and one below the cut shifts by **−174**. Seven sites in four files are affected,
+each verified by comparing the cited line's text at `f79676d` against the text now at the
+computed position:
+
+| Cites | Was | Is now | Verified by |
+|---|---|---|---|
+| `csvParser.js` (`:38`) → `reportParsers.js:1173` | `adjustedAmount: parseAmount(...)` | `reportParsers.js:999` | same line text <!-- no-cite-check --> |
+| `csvParser.js` (`:89`) → `reportParsers.js:747` | `const text = meta.csvText \|\| …` | `parsers/transactions.js:73` | same line text <!-- no-cite-check --> |
+| `probe-date-validation.mjs` (`:5`, `:77`) → `reportParsers.js:747` | as above | `parsers/transactions.js:73` | same line text <!-- no-cite-check --> |
+| `hotelKeyParserFixtures.test.js` (`:161`) → `reportParsers.js:859-863` | the `debug` block | `parsers/transactions.js:185-189` | same line text <!-- no-cite-check --> |
+| `hotelKeyImportFixtures.test.js` (`:187`, `:407`) → `reportParsers.js:1449` | `// has no ledger and be told …` | `reportParsers.js:1275` | same line text <!-- no-cite-check --> |
+
+They are **deferred to a follow-up commit, on purpose.** This commit's green is only evidence
+about the move if the move is the only thing in its `src/` diff — a comment edit in
+`csvParser.js` riding along would mean the 51 fixtures and 11 mutations were run against a tree
+containing something else, however harmless it looks. The follow-up converts them to symbol
+citations rather than re-numbering them, because the same arithmetic will break again at the
+next extraction: `#hashTransactionFile` cannot drift, `:747` drifts every time.
+
+Two related citations are **out of scope entirely**. `src/api/base44Client.js` cites
+`reportParsers.js:1262`, which at `f79676d` was already a timecard keyword-map line and not the <!-- no-cite-check -->
+anomaly-detail code the comment describes — wrong before this move and still wrong after it,
+in a file `PROTECTED_FILES.md` locks. And `probe-monthly-calendar.mjs`'s `:160` sits below the
+cut, so this move did not touch it.
+
+### 45.6 Deliberately left alone
+
+- **The routing layer was fixed in the same commit, not after it.** §42 built `map:verify` so
+  that a move like this cannot silently misroute the next agent, and the row it protects is the
+  one this move breaks: an agent told to fix HotelKey transaction import would have read
+  `#parseReport` and never reached the scanner. `docs/AI_REPO_GUIDE.md`'s HotelKey row now lists
+  `src/lib/parsers/transactions.js#scanTransactions` as its second entry — five files, which is
+  the cap; the sixth extraction of this family cannot simply be appended there, and that
+  pressure is the intended signal that "HotelKey import" is becoming two areas.
+  `docs/brain/BRAIN_FINANCE.md`'s M7 row and its tie-break hazard were re-pointed at the new
+  module in the same commit.
+- **The `[reportParsers]` prefix in `#hashTransactionFile`'s `console.warn`** moved verbatim and
+  now names a module it no longer lives in, exactly as §44.4 said it would. Warn text is
+  observable output; normalising it is a cosmetic commit with its own diff, not a rider on a
+  zero-behaviour-change move.
+- **No `docs/MODULE_CONTRACTS.md` row was added for the new module.** Its invariants — widest
+  signed section wins, the trailer is a checksum and never data, a balanced checksum is not
+  proof the whole file was read — are recorded in `BRAIN_FINANCE.md` and pinned by fixtures.
+  Writing contract rows one extraction at a time would mean rewriting them five times as the
+  family splits; they get one pass when the split is finished.
+- **`scripts/probe-hotelkey-mutations.mjs` was not opened.** See §45.2: the net proving a move
+  must not be edited by the commit that performs it.
+
 

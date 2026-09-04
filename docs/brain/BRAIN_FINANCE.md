@@ -443,7 +443,7 @@ assertion is an incidental kill, not proof of that behaviour.
 | M4 | occurrence index removed from the key (`transactionNorm.js:167`) | 3 byte-identical postings |
 | M5 | property gate accepts whitespace (`#importReport`) | 9-case fail-closed table |
 | M6 | validation gate disabled (`#importReport`) | per-layer blocked-import table |
-| M7 | equal-width section tie-break reversed (`#scanTransactions`) | tied-sections fixture |
+| M7 | equal-width section tie-break reversed (`parsers/transactions.js#scanTransactions`) | tied-sections fixture |
 | M8 | a repeated mid-grid header treated as a header | repeated-header fixture |
 | M9 | trailer rows no longer absorbed (`transactionNorm.js:196`) | revenue + checksum |
 | M10 | unparseable money coerced silently (`importValidation.js:96`) | coercion log |
@@ -464,7 +464,7 @@ catch.
 ### Four behaviours pinned as hazards, deliberately not changed
 
 1. **A same-width repeated grid is silently dropped.** Section selection uses a strict `>`
-   (`reportParsers.js#scanTransactions`), so on a width tie the first grid wins and the
+   (`parsers/transactions.js#scanTransactions`), so on a width tie the first grid wins and the
    second one's rows never reach `rowsToImport`. In `transactions-tied-sections.csv` that
    discards $1,035.00, and because the checksum reconciles against the winning section's own
    trailer the scan reports `matches: true`. **A balanced checksum is not evidence that the

@@ -4552,4 +4552,222 @@ transient remote authorization failure on a valid token, plus a separately owned
 converts it into FAIL instead of SKIP. Neither half is this commit's, and both are written down
 here instead of being left for the next sweep to rediscover.
 
+## 46. A killed mutation harness left a refund inverted on disk (2026-09-05)
+
+The sweep run immediately after §45.7 was published came back with three failures and one timeout.
+Only one of the four was independent. The other three were the same event:
+
+```text
+150 suite(s): 144 passed, 3 failed, 0 broken, 1 timed out, 0 bad exit code,
+              2 skipped, 0 diagnostic — exit 1
+TIMEOUT 240.0s  probe-hotelkey-mutations.mjs   M11 src/lib/transactionNorm.js running ...
+FAIL     17.7s  verify-transactions.mjs        FAILED: 100 passed, 15 failed
+FAIL     12.7s  verify-coexistence.mjs         FAILED: 22 passed,  1 failed
+FAIL     34.4s  probe-worker-auth-remote.mjs   Authentication error [code: 10000]
+```
+
+`probe-hotelkey-mutations.mjs` mutates production source in place and reverts it afterwards. It was
+killed while mutation **M11** was applied, and the revert never ran. What was left on disk in
+`src/lib/transactionNorm.js`, inside the ledger-side classifier:
+
+```diff
+-  out.ledger_side = type === "REFUND" ? LEDGER_SIDE_PAYMENT : LEDGER_SIDE_CHARGE;
++  out.ledger_side = LEDGER_SIDE_CHARGE;
+```
+
+Every refund became a charge. The harness's own note on M11 states the consequence exactly: revenue
+"silently doubles from 287.50 to 575.00 while every row count stays correct." That is what the next
+two suites in the sweep then measured, and what they correctly reported as broken.
+
+### 46.1 Why the residue is the harness's, and not a real regression
+
+Three independent checks, because "a mutation escaped" and "the money code is broken" look identical
+from a failure list:
+
+1. **Byte-exact match.** The text on disk is M11's declared `replace` string, character for
+   character, at the anchor M11's `find` names. Not similar — identical.
+2. **The tree was clean immediately before the sweep.** `git status --porcelain` was empty at
+   `d4878b8`, which is also the tree the sweep was launched against.
+3. **Restore-and-rerun.** A single scoped `git checkout -- src/lib/transactionNorm.js` moved
+   `verify-transactions.mjs` from `100 passed, 15 failed` to **115 passed, 0 failed** and
+   `verify-coexistence.mjs` from `22 passed, 1 failed` to **23 passed, 0 failed**. Exactly **16**
+   self-inflicted assertion failures, and nothing else changed to produce them.
+
+The mechanism is not subtle once the platform is named. `verify-all.mjs`'s watchdog enforces its
+per-suite cap with `child.kill("SIGKILL")`. On win32 that is `TerminateProcess`: unblockable, so no
+`process.on` handler and no `finally` block in the child ever runs. `probe-hotelkey-mutations.mjs`
+writes the mutant, calls `runSuites`, and reverts on the next statement — with no `try/finally`
+between them. Roughly 95% of the harness's wall clock sits inside that gap. A kill landing there is
+not unlucky; it is the default case.
+
+A quieter corollary, worth stating because it survives this fix: the same gap swallows an ordinary
+exception. Anything that throws between the write and the revert leaves the same residue, with no
+sweep and no timeout involved.
+
+### 46.2 The exclusion rests on the write, not on the clock
+
+`verify-all.mjs`'s `EXCLUDE` map carries its own rule directly above itself: each reason must be "a
+factual statement about the file — not a judgement", and "A suite must never be excluded merely
+because it is failing; that is the one thing this runner exists to surface." That rule makes the
+tempting reason inadmissible. *The harness overran a 240-second budget* is a judgement about a
+default — `--timeout` is overridable per run — and dressing a budget complaint as a fact is exactly
+what the rule forbids.
+
+The admissible reason is a property of the file that holds at **any** budget: it rewrites tracked
+production source in place, and its revert is not reachable from a kill or a throw. A suite that can
+leave the tree modified corrupts every suite scheduled after it. The 16 assertions above are the
+demonstration, not the argument.
+
+The repository had already reached this conclusion once, for the sibling harness. `EXCLUDE`'s
+`probe-repo-map-gate.mjs` entry reads: "a suite killed by --timeout mid-mutation would leave a
+tracked doc modified, so it is run deliberately (npm run map:mutate), never inside an automated
+sweep." The only difference here is depth — that one rewrites four routing documents, this one
+rewrites `reportParsers.js`, `transactionNorm.js`, `importValidation.js` and
+`parsers/transactions.js` under `src/lib/`. Those two are the **only** discovered suites that write
+tracked files in place, so this closes the class rather than patching an instance.
+
+### 46.3 What the exclusion costs, stated plainly
+
+**The suite list moved and its identity moved with it.**
+
+```text
+before   150 suite(s) — list b5008211 (150 discovered)   not run (4)
+after    149 suite(s) — list fa60d625 (149 discovered)   not run (5)
+```
+
+`b5008211` appears nowhere in code — only in this document, in five historical run records that must
+keep saying `b5008211` because that is what those runs measured. `fa60d625` is the identity of every
+sweep from this commit forward.
+
+**The real cost is liveness, and it is not free.** Before this change, exactly one automated thing
+ran the HotelKey mutation net: `npm run verify:all`. There is no CI sweep (`.github/workflows` holds
+only `security.yml`) and the pre-commit hook runs only the two documentation gates. After it, the
+net's sole invoker is a human typing a command — and `verify-all.mjs`'s own opening argument is that
+a suite nobody runs is documentation rather than verification. The exposure is specific: **M11 is the
+only proof that the two fixture suites can detect a collapsed refund branch that doubles revenue
+while every row count stays correct.**
+
+Trading a loud, correctly-red misdiagnosis for a silent decay would be a bad trade, so the obligation
+is named instead of assumed: `npm run mutate:all` runs both mutation harnesses in one command, it is
+recorded in `docs/TEST_MATRIX.md` beside the row it proves, and it is a release-time step. That is
+weaker than a swept gate and is written here as weaker. Restoring it to a sweep requires the harness
+to be crash-safe first — §46.6.
+
+### 46.4 The harness is not slow — it is *occasionally* slow, and that is worse
+
+The timeout is a symptom, and the first reading of that symptom was wrong. Two samples taken while
+diagnosing this incident said the harness had permanently doubled. Three more taken afterwards said it
+had not. Everything measured on this tree, in the order it was measured:
+
+```text
+sweep    >240s  killed mid-M11 — a lower bound, not a measurement
+run A     184s  full, standalone, exit 0, 11/11 killed
+          29s / 30s   --only M11   (2 nested vitest invocations)
+          21s         --only M1    (2 nested vitest invocations)
+run B      98s  full, via npm run hotelkey:mutate, exit 0, 11/11 killed
+run C      93s  full, exit 0, 11/11 killed
+run D      93s  full, exit 0, 11/11 killed
+§43.5    95.2s  in verify:all — 11/11 mutations killed
+§44.3    89.7s  in verify:all — 11/11 mutations killed
+§45.4    90.9s  in verify:all — 11/11 mutations killed
+```
+
+Runs B, C and D land inside the historical band. **Run A and the sweep are the outliers, and they are
+the whole problem.** The full run is 12 nested vitest invocations — one green baseline over both
+fixture suites, then one per mutation — so the normal cost is ~7.8s each, run A's was ~15.3s, and the
+sweep's was worse still. The `--only` samples straddle the same divide: 29–30s was taken inside run
+A's slow window, 21s after it.
+
+**The obvious suspect is disproven, and so is the first diagnosis.** The parser extraction is not the
+cause: §45.4's `90.9s` was measured by the sweep *inside* `39cee50`, after that extraction was
+committed — the section explains why it had to be committed first, since the harness refuses to start
+on dirty targets. All three historical readings also state `11/11 mutations killed`, so the invocation
+count was 12 then too. And the only tracked change since is `d4878b8`, whose diff on the three files
+these suites execute is comment-only. Nothing in the repository moved, in either direction.
+
+So the finding is not a regression to fix but a **tail to respect**: a median around 95s with an
+observed tail of at least 184s standalone and past 240s under the sweep, cause **UNKNOWN** and
+outside tracked source. That is strictly worse than a permanent slowdown would have been. A permanent
+2x could be answered once, by raising `--timeout`. An unpredictable tail cannot be capped safely at
+all — any budget is a coin flip, and the losing side of that flip leaves inverted financial logic on
+disk. Which is why the correction in §46.2 is the write property and not the clock, and why
+`--timeout` is deliberately left where it is.
+
+### 46.5 Verification (Observed 2026-09-05, on this tree)
+
+```text
+npm run verify:all        149 suite(s) — 146 passed, 1 failed, 0 broken,
+                          0 TIMED OUT, 0 bad exit code, 2 skipped,
+                          0 diagnostic — list fa60d625 (149 discovered)
+                          "every discovered suite ran"
+npm run hotelkey:mutate   11/11 killed, 0 not killed, tree clean — 4 runs
+                          (184s, 98s, 93s, 93s), every one exit 0
+HotelKey fixtures         2 files, 51 passed — exit 0 (NODE_ENV=test)
+npm run lint              exit 0        npm run typecheck   exit 0
+verify-repo-map.mjs       exit 0 — 10 areas, 26 matrix rows, 36 contracts,
+                          185 references resolved, 0 problems
+probe-suite-integrity     151 passed — probe-hotelkey-mutations.mjs still
+                          audited YES/YES/YES → VALID
+--filter hotelkey-mutations   "No suites matched", exit 1 — isSuite rejects
+                          the file itself, not merely its printed block
+```
+
+**The load-bearing line is `0 timed out`, paired with `git status --short` showing exactly the five
+intended files afterwards.** The sweep that opened this section reported `1 timed out` and three
+failures, two of which were its own residue being read back by later suites. This one has no kill
+window to lose, and there was nothing to restore.
+
+**149 here and 151 there is not a discrepancy.** `probe-suite-integrity.mjs` keeps its own
+`NOT_A_SUITE` set and never reads `verify-all.mjs`'s `EXCLUDE`: 149 discovered + 5 present `EXCLUDE`
+entries = 154 candidates, minus 3 present `NOT_A_SUITE` = 151 statically audited. The harness is now
+excluded from *execution* and still audited for its summary contract, its exit path and non-vacuous
+assertions — which is exactly the right split, and the reason §46.2's comment forbids "reconciling"
+the two numbers by adding the file to `NOT_A_SUITE`.
+
+**The one failure is not this commit's, and it is not new.** `probe-worker-auth-remote.mjs` threw the
+same `Authentication error [code: 10000]` on the same Cloudflare D1 control-plane POST
+(`/accounts/<id>/d1/database`) that §45.7.1 recorded, making the sequence across four sweeps of this
+tree **red → green → red → red** with no re-edit between any of them. Checked rather than assumed:
+`npx wrangler whoami` exits 0 twice in a row immediately afterwards, on an OAuth token that lists
+`d1 (write)` among its permissions — so this is neither a missing scope nor a dead credential, and
+§45.7.1's "external state / credentials" classification stands. The suite still has no `SKIP:` path,
+so `_verdict.mjs` still scores someone else's outage as FAIL; that repair is filed there and remains
+owed. It is disclosed here rather than repaired, because greening an unrelated red suite to make this
+commit's dashboard look clean is the one thing this runner exists to prevent.
+
+**Both skips are structural and unchanged:** `probe-build-chunks.mjs` (`dist/` older than 20 of its
+322 inputs) and `probe-config-exposure.mjs` (no dev server on 5173).
+
+### 46.6 Deliberately left alone, and the one thing this commit does not fix
+
+**The harness is still not crash-safe, and that is the next commit, not this one.** Exclusion removes
+the sweep's kill window. It does not help a `Ctrl-C` during a 184-second manual run, a throw between
+the write and the revert, or a future re-inclusion in any runner. The fix is not a new design: the
+sibling harness `probe-repo-map-gate.mjs` already solves this identical hazard with an `inFlight` map
+holding the **original bytes**, an entry set *before* the mutating write, a `try/finally` restore, and
+`SIGINT`/`SIGTERM` handlers that restore and exit non-zero. Porting that pattern is strictly better
+than the journal-plus-`git checkout` recovery first drafted for this commit, which an independent
+review rejected on two counts that both hold: recovery at *startup* does nothing for the sweep already
+in progress, and a blind `git checkout` would destroy a developer's intentional post-crash edits.
+Holding original bytes in memory needs no git call, no recovery pass, and no content heuristic.
+
+**`EXCLUDE` has a dead entry, and it is pre-existing.** The map lists
+`probe-auth-hardening-world.mjs`; no such file exists. The file on disk is `probe-auth-hardening.mjs`,
+which therefore runs as an ordinary swept suite despite an exclusion comment describing it as a
+fixture library with no assertions of its own. `--list` filters by existence, which is why the map
+holds six entries and prints five. Filed here rather than corrected, because deciding whether that
+suite should run is a different question from whether this one should.
+
+**`probe-worker-auth-remote.mjs` failed a third time, on unchanged code.** The sequence for that
+suite across three sweeps of the same tree is now **red → green → red**, same `[code: 10000]` on the
+same D1 control-plane POST. That strengthens §45.7.1's external-state classification and makes its
+16%-of-refresh-runs population figure an understatement for this small sample. Its `SKIP:` repair is
+still owed and still unmade, for the reason §45.7.1 gives.
+
+**The fixture README's prose still lists three mutation targets**, omitting
+`src/lib/parsers/transactions.js`, which the harness has named as a candidate since `39cee50`. Its
+consumer table is corrected here (10 → 11 mutations); the prose sentence is left for the pass that
+finishes the parser split, since the target list is still moving.
+
+
 

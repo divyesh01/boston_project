@@ -93,6 +93,35 @@ const EXCLUDE = new Map([
   // tracked doc modified, so it is run deliberately (npm run map:mutate), never inside
   // an automated sweep.
   ["probe-repo-map-gate.mjs", "mutates tracked docs in place — run via npm run map:mutate"],
+  // Mutation harness for the HotelKey regression net. Same write property as the entry
+  // above, one layer deeper: it rewrites TRACKED PRODUCTION SOURCE in place — reportParsers.js,
+  // transactionNorm.js, importValidation.js and parsers/transactions.js under src/lib/ — one
+  // anchor at a time, then puts the file back with `git checkout --`. The write and the revert
+  // are two separate statements with no try/finally and no signal handler between them, so a
+  // run killed by --timeout leaves a tracked SOURCE file modified.
+  //
+  // The exclusion rests on that write property, not on the clock. --timeout is a default and
+  // is overridable, so "too slow" would be a budget judgement — precisely what the rule above
+  // forbids as a reason.
+  //
+  // It happened. A sweep hit its per-suite cap during M11 and killed the child with SIGKILL,
+  // which on win32 is TerminateProcess and cannot be handled, so the revert never ran:
+  // transactionNorm.js was left carrying M11's replacement, which reclassifies refunds as
+  // charges. The 16 assertions that later read it in verify-transactions.mjs and
+  // verify-coexistence.mjs failed against that residue rather than against their own subject.
+  // Restoring the one file returned them to 115/0 and 23/0. A suite that can leave the tree
+  // modified corrupts every suite scheduled after it, and that holds at any budget.
+  //
+  // This closes the class: these two are the only discovered suites that write tracked files
+  // in place, and both are now excluded. Run them deliberately — npm run mutate:all.
+  //
+  // The suite count printed here and the one printed by scripts/probe-suite-integrity.mjs
+  // legitimately differ: that auditor keeps its own NOT_A_SUITE set and does not read this
+  // map. It statically audits probe-hotelkey-mutations.mjs for the summary contract, an exit
+  // path and non-vacuous assertions WITHOUT executing it, which is exactly what should still
+  // happen here. Do not "reconcile" the two numbers by adding this file to NOT_A_SUITE: that
+  // drops the static contract audit too, and silently.
+  ["probe-hotelkey-mutations.mjs", "mutates tracked production source in place — run via npm run hotelkey:mutate"],
   // Library, not a suite: it exports a fixture builder for other probes to import
   // and has no assertions of its own.
   ["probe-auth-hardening-world.mjs", "fixture library imported by other probes"],

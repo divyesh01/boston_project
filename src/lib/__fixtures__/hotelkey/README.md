@@ -18,14 +18,14 @@ exists, and `src/lib/hotelKeyRegression.test.js` — despite the name — import
 | --- | --- | --- |
 | `src/lib/hotelKeyParserFixtures.test.js` | scan / parse | 21 |
 | `src/lib/hotelKeyImportFixtures.test.js` | import / persist / isolation | 30 |
-| `scripts/probe-hotelkey-mutations.mjs` | proves the two suites bite | 10 mutations |
+| `scripts/probe-hotelkey-mutations.mjs` | proves the two suites bite | 11 mutations |
 
 ```bash
 npx vitest run src/lib/hotelKeyParserFixtures.test.js src/lib/hotelKeyImportFixtures.test.js
 ```
 
 ```bash
-node scripts/probe-hotelkey-mutations.mjs
+npm run hotelkey:mutate
 ```
 
 The mutation harness reintroduces one real defect at a time into

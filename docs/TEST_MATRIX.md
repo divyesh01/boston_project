@@ -11,7 +11,7 @@ re-checks that each suite file still exists and each command still resolves.
 |---|---|---|---|
 | HotelKey import | `src/lib/hotelKeyParserFixtures.test.js` | vitest | `npx vitest run src/lib/hotelKeyParserFixtures.test.js` |
 | HotelKey import | `src/lib/hotelKeyImportFixtures.test.js` | vitest | `npx vitest run src/lib/hotelKeyImportFixtures.test.js` |
-| HotelKey import | `scripts/probe-hotelkey-mutations.mjs` | probe | `node scripts/probe-hotelkey-mutations.mjs` |
+| HotelKey import | `scripts/probe-hotelkey-mutations.mjs` | probe | `npm run hotelkey:mutate` |
 | Revenue/KPIs | `scripts/probe-financial-invariant.mjs` | probe | `node --import ./scripts/_loader-boot.mjs scripts/probe-financial-invariant.mjs` |
 | Revenue/KPIs | `scripts/probe-decimal-integration.mjs` | probe | `node --import ./scripts/_loader-boot.mjs scripts/probe-decimal-integration.mjs` |
 | Revenue/KPIs | `scripts/verify-money-kept.mjs` | verify | `node --import ./scripts/_loader-boot.mjs scripts/verify-money-kept.mjs` |
@@ -35,6 +35,10 @@ re-checks that each suite file still exists and each command still resolves.
 | Payments/refunds | `scripts/probe-parse-amount.mjs` | probe | `node scripts/probe-parse-amount.mjs` |
 | Deployment | `scripts/probe-deploy-config.mjs` | probe | `node scripts/probe-deploy-config.mjs` |
 | Deployment | `scripts/verify-all.mjs` | gate | `npm run verify:all` |
+
+The HotelKey mutation row and `scripts/probe-repo-map-gate.mjs` are the only two suites
+`npm run verify:all` excludes for rewriting tracked files in place, and both are run by
+`npm run mutate:all` — so mutation adequacy is a deliberate run here, never a swept one.
 
 ## Kinds
 

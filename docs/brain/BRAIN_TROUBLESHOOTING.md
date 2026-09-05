@@ -4991,5 +4991,118 @@ is **Inferred** from the script text. A console `Ctrl-C` against the real handle
 parent on this platform by F1, so FIX 1's OS-level delivery stays **Inferred**; the handler body is
 Observed via a direct `process.emit`, with the lock genuinely on disk at the time.
 
+## 47. The hotel_statistics snapshot scanner left `reportParsers.js` (2026-09-05)
+
+Job #2's third extraction, and the first one that is a single function. Lines **602-693** —
+`scanHotelStatistics` and nothing else, 92 lines — become `src/lib/parsers/hotelStatistics.js`
+(115 lines with its header and two imports). `reportParsers.js` goes **1,665 → 1,571** lines and
+reaches the scanner through one import, from the one call site inside `#scanReport`.
+
+### 47.1 Why this one is a clean cut
+
+§45's family needed three members because the splitter and the file hash existed only to serve
+the scanner. This one needed a boundary check, and the check came back empty. A token scan of
+the block found its only free identifiers are `parseHotelReport`, `validateImport`,
+`makeFinding`, `SEVERITY` and the globals `crypto`, `String`, `Set`, `Date`. **No constant,
+helper or scanner defined elsewhere in `reportParsers.js` is referenced** — `REPORT_TYPES`,
+`ENTITY`, `mapRow`, `addMeta`, `skipExisting`, `getRowsArray` and the dedupe helpers are all
+untouched by it — so nothing had to be split, duplicated or left behind.
+
+The corollary matters more than the move: **nothing this family uses is shared with another
+scanner**, so no identifier was pinned in place by a second consumer.
+
+### 47.2 The neighbours that did not move
+
+`CLERK_SKIP_LABELS` (the `Set` ending `"GRAND TOTAL", "TOTAL"`) and `DROP_LINE_RE` sit on the
+lines immediately above the family and belong to **`scanClerkReport`**, which referenced them at
+`715`, `727`, `776` and `784` before this diff. They stayed. Adjacency in a 1,665-line file is
+not membership, and the cheapest way to turn a pure move into a behaviour change is to carry a
+neighbour's constant out with it.
+
+### 47.3 Byte identity, and a CRLF fact worth keeping
+
+The moved body differs from HEAD's by exactly one token, checked three ways rather than read:
+
+- `diff` between the pristine slice and the new module's lines 24-115 produces a single hunk,
+  `1c1` — the `export ` keyword, extraction 1's one documented exception (`8cc8d44`).
+- LF-normalised the body is **3578 bytes `sha256=631b8cd156d75526`**; the same 92 lines on disk
+  are CRLF, **3670 bytes `sha256=e4e1bef2d5933f4f`**. The new module was written CRLF to match
+  its sibling `parsers/transactions.js` under `* text=auto`. A digest taken through MSYS `sed`
+  is the LF form and will not match a raw read of the file — the same EOL-filter asymmetry that
+  §46 gave as one of three reasons a byte write beats `git checkout`.
+- An ordered walk accounted for **1666/1666** pristine lines against **1572/1572** on-disk lines,
+  skipped originals spanning exactly `7..694`, zero unexplained mismatches.
+
+The body was spliced programmatically, never retyped, because old lines **612** and **623** are
+two spaces rather than empty and a hand-typed move drops that silently.
+
+Two deliberate one-line deviations from a literal reading of "move the function, prune the
+import". `const _preview` (old line 625) is assigned and **never returned**; it moved verbatim,
+because apparently-unused code does not get deleted without a reachability proof and this diff's
+value is that it contains nothing but the move. And deleting the `parseHotelReport` import alone
+would have left the file's first-ever double blank line between two import groups, so the
+adjacent blank went with it.
+
+Import pruning was decided by count, as in §45.3: `parseHotelReport` had exactly two uses in the
+file — the call at `615` and a comment at `654` — **both inside the moved lines**, so the binding
+is now unused and goes. `validateImport`, `makeFinding` and `SEVERITY` stay; other scanners still
+use them. That one binding is the whole lint exposure, which is what makes `lint 0` a signal here
+rather than a formality.
+
+### 47.4 The net needed no change, and that is a gap rather than a win
+
+All **11** anchors resolve outside the moved lines — M1/M2/M3/M5/M6 in `reportParsers.js`,
+M4/M9/M11 in `transactionNorm.js`, M7/M8 across `reportParsers.js` and
+`parsers/transactions.js`, M10 in `importValidation.js` — so unlike §45 no `where` candidate list
+had to be widened, and `scripts/probe-hotelkey-mutations.mjs` was not opened.
+
+Read honestly, that means **this family is not covered by the mutation harness at all.** Its
+guards are `scripts/probe-import-validation.mjs` (three `hotel_statistics` scans through the
+public `scanReport` path), `scripts/verify-statistics.mjs` and `scripts/verify-coexistence.mjs`.
+The module header says exactly that, in those words, so a later reader does not infer from §45's
+neighbouring prose that the net followed this move too. The 51 HotelKey fixtures contain **zero**
+references to `hotel_statistics` and are not among its guards either.
+
+### 47.5 Verification (Observed 2026-09-05), and why two gates run after the commit
+
+Baseline captured before the edit, so each number below is a comparison and not a first sighting:
+
+```text
+51 HotelKey fixtures       2 files, 51 passed          (baseline 51 passed)
+probe-import-validation    22 passed, 0 failed         (baseline 22 passed)
+verify-statistics          84 passed, 0 failed
+verify-coexistence         23 passed, 0 failed
+npm run lint               exit 0
+npm run typecheck          exit 0
+npm run map:verify         10 areas, 27 matrix rows, 36 contracts,
+                           186 references resolved, 0 problems
+npm run brain:verify       exit 0
+npm run hotelkey:crashsafe 10/10, 0 failed, 0 inconclusive, residue none
+node --check               both files parse clean
+```
+
+**`hotelkey:mutate` and `verify:all` cannot run before this commit exists.** The harness opens
+with a dirty-start guard — the one §46 noted `probe-repo-map-gate.mjs` still lacks — and
+`reportParsers.js` is itself a mutation target, so with the move on disk and uncommitted it
+aborts `FAILED: before starting the files this harness mutates were not clean`. That guard is
+correct and is not weakened to accommodate an ordering preference: it exists precisely because
+residue in tracked source fails unrelated suites (§46.1). So the harness and the sweep run
+against the committed tree, and **the commit is not pushed until both are green** — the same
+commit-then-measure split `39cee50` and `d4878b8` used, for a different reason.
+
+### 47.6 Deliberately left alone
+
+- **The public surface did not widen.** `scanHotelStatistics` was not exported from
+  `reportParsers.js` before this diff and is not exported from it after. The new module exports
+  it because an import needs it to; nothing else.
+- **Line-number citations elsewhere** now point past their target by 94 lines. Not fixed here,
+  for §45.5's reason: this diff contains nothing but the move, and re-numbering would only break
+  again at the next extraction. `verify-brain.mjs` scopes its citation gate to the staged diff's
+  **added** lines, so pre-existing drift does not false-block — including
+  `BRAIN_TROUBLESHOOTING.md`'s own `reportParsers.js:22` for `normalisePunch`, which was already
+  stale before this commit.
+- **The mutation harness's `status === null` → `KILLED` conflation** (§46.6, filed not fixed) is
+  untouched. This extraction does not go near that scoring path.
+
 
 

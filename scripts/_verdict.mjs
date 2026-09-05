@@ -58,8 +58,10 @@ export function classifySuiteRun({ out, code, killed = false }) {
   // "(Use `node --trace-warnings ...` to show where the warning was created)"
   // as its verdict. The runner then shows a warning where the reader looks for
   // a result.
+  const summaryLines = lines.filter((l) => SUMMARY_LINE.test(l));
+
   const summary =
-    lines.filter((l) => SUMMARY_LINE.test(l)).pop()
+    summaryLines[summaryLines.length - 1]
     || lines[lines.length - 1]
     || "(no output)";
 
@@ -71,12 +73,40 @@ export function classifySuiteRun({ out, code, killed = false }) {
   // suites as broken. A runner that cries wolf gets ignored, which costs more
   // than the check saves — so a numeric count wins over the keyword whenever
   // one is present, and the keyword only decides when there is no number.
-  const counted =
-    summary.match(/(\d+)\s*(?:check\(s\)\s*)?failed/i) ||
-    summary.match(/\bFAIL(?:ED)?[:\s]+(\d+)\b/i);
-  const summaryClaimsFailure = counted
-    ? Number(counted[1]) > 0
-    : /^\s*(FAIL|FAILED)\b/i.test(summary);
+  //
+  // ...with one exception, measured 2026-09-05: a line that OPENS with
+  // FAIL/FAILED is the suite's own verdict, and it outranks its own counters. A
+  // pre-flight guard that fails runs zero checks and prints
+  // "FAILED: 0 passed, 0 failed"; the count rule was satisfied by that 0, the
+  // keyword branch was never reached, and the run was classified PASS. The
+  // asymmetry is what keeps "PASS 728   FAIL 0" green: that line opens with
+  // PASS, so only its counters speak for it.
+  const failureCount = (line) => {
+    const m =
+      line.match(/(\d+)\s*(?:check\(s\)\s*)?failed/i) ||
+      line.match(/\bFAIL(?:ED)?[:\s]+(\d+)\b/i);
+    return m ? Number(m[1]) : null;
+  };
+
+  // EVERY summary line is read for a positive count, not just the reported one.
+  // The report is still the LAST one (`summary` above), because that is what a
+  // reader wants to see — but a suite that announces "FAILED: 3 passed, 2
+  // failed" for section 1 and "PASSED: 5 passed, 0 failed" for section 2, then
+  // exits 0, had its section-1 failure discarded by the `.pop()`. Measured
+  // 2026-09-05: every multi-summary suite in scripts/ exits immediately after
+  // printing a failing section summary, so this was latent rather than live —
+  // but that discipline is a convention, not a contract, and this classifier is
+  // what all 149 discovered suites are judged by.
+  //
+  // Only a COUNT is read across lines. Nearly every suite prints indented
+  // "  FAIL  <check name>" progress lines — including the ones that
+  // deliberately demonstrate a rejected input — and those carry no number, so
+  // they stay invisible here. Applying the keyword rule across every line
+  // instead would turn those suites red for doing their job.
+  const summaryClaimsFailure =
+    /^\s*(FAIL|FAILED)\b/i.test(summary)
+    || (failureCount(summary) ?? 0) > 0
+    || summaryLines.some((l) => (failureCount(l) ?? 0) > 0);
 
   // CONSOLE.ASSERT. The summary line alone cannot catch the exact trap named in
   // this runner's header comment. probe-csv-data-loss.mjs asserted with

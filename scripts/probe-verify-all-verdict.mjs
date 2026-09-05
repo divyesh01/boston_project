@@ -158,6 +158,52 @@ summary("no output at all is reported as such",
 status("no output plus exit 0 is still only a pass by exit code",
   { out: "", code: 0 }, "PASS");
 
+console.log("\n8. a zero count must not overrule an explicit FAILED verdict");
+
+// Measured 2026-09-05. `summaryClaimsFailure` consulted the numeric count FIRST and
+// the keyword only when no count was present. That is right for "PASS 728   FAIL 0"
+// (section 2) — but a suite whose pre-flight guard fails runs zero checks and prints
+// "FAILED: 0 passed, 0 failed". The count is 0, so it satisfied the count rule, the
+// keyword branch was never reached, and the run was classified PASS. A line that
+// OPENS with FAIL/FAILED is the suite's own verdict and outranks its counters; a line
+// that opens with PASS is not, which is why "PASS 728   FAIL 0" stays a pass.
+status("REGRESSION: 'FAILED: 0 passed, 0 failed' + exit 0 is a bad exit code, not a pass",
+  { out: "FAILED: 0 passed, 0 failed", code: 0 }, "BAD-EXIT");
+status("a bare 'FAILED' verdict with no counters at all is caught",
+  { out: "checking\nFAILED", code: 0 }, "BAD-EXIT");
+status("...and the same shape with a non-zero exit is an ordinary failure",
+  { out: "FAILED: 0 passed, 0 failed", code: 1 }, "FAIL");
+// The section-2 guard restated from the other side: the count still decides whenever
+// the line does not open with the failing keyword.
+status("REGRESSION: 'PASS 728   FAIL 0' is still a pass under the keyword override",
+  { out: "PASS 728   FAIL 0", code: 0 }, "PASS");
+status("a glyph-prefixed zero-count summary is still a pass",
+  { out: "✓ PASSED: 0 passed, 0 failed", code: 0 }, "PASS");
+
+console.log("\n9. a failure announced before the final summary must not be discarded");
+
+// Measured 2026-09-05. The reported summary is the LAST line matching SUMMARY_LINE
+// (`.pop()`), and the failure test read only that one line. Every multi-summary suite
+// in scripts/ today exits immediately after printing a failing section summary — this
+// was latent, not live — but that discipline is a convention, not a contract, and the
+// classifier is what 149 suites are judged by. A positive failure count anywhere in a
+// summary line now claims failure. Only a COUNT does: an indented "  FAIL  <name>"
+// progress line carries no number and must stay invisible here, or every suite that
+// demonstrates a negative case would turn red.
+status("REGRESSION: a failing section summary before a passing final summary is caught",
+  { out: "=== 1 ===\nFAILED: 3 passed, 2 failed\n=== 2 ===\nPASSED: 5 passed, 0 failed", code: 0 },
+  "BAD-EXIT");
+status("...and is an ordinary failure when the exit code agrees",
+  { out: "FAILED: 3 passed, 2 failed\nPASSED: 5 passed, 0 failed", code: 1 }, "FAIL");
+summary("the LAST summary is still what gets reported, so the display is unchanged",
+  { out: "FAILED: 3 passed, 2 failed\nPASSED: 5 passed, 0 failed", code: 0 },
+  "PASSED: 5 passed, 0 failed");
+status("REGRESSION: countless '  FAIL  <name>' progress lines are not failure claims",
+  { out: "  PASS  a\n  FAIL  b was expected to be rejected\n  PASS  c\nPASSED: 3 passed, 0 failed", code: 0 },
+  "PASS");
+status("an earlier zero-count section summary does not manufacture a failure",
+  { out: "PASSED: 2 passed, 0 failed\nPASSED: 5 passed, 0 failed", code: 0 }, "PASS");
+
 console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 if (failures.length) {
   console.log("\nFailures:");

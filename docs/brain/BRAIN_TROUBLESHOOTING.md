@@ -5376,6 +5376,137 @@ production. It classified that copy correctly as pre-existing drift rather than 
 this move created. It stays untouched — it is a scratch script, not a gate, and correcting it
 is a behaviour change to a file nothing verifies.
 
+## 49. The classifier that judges 149 suites was reporting one failure shape as PASS (2026-09-05)
+
+`scripts/_verdict.mjs` decides the status of every suite `verify:all` runs. Two defects in its
+failure test, one live and one latent, are fixed here; the regression corpus in
+`scripts/probe-verify-all-verdict.mjs` grows **28 → 40** cases. No production file is touched.
+
+### 49.1 The live one: a zero count outranked the suite's own verdict
+
+`summaryClaimsFailure` consulted the numeric count **first** and the keyword only when no
+count was present:
+
+```js
+const counted = summary.match(/(\d+)\s*(?:check\(s\)\s*)?failed/i) || …;
+const summaryClaimsFailure = counted ? Number(counted[1]) > 0 : /^\s*(FAIL|FAILED)\b/i.test(summary);
+```
+
+A suite whose pre-flight guard fails runs zero checks and prints `FAILED: 0 passed, 0 failed`.
+The first regex matched `0 failed`, so `counted` was non-null, `0 > 0` was false, **the keyword
+branch was never reached, and the run was classified PASS.** A suite that announced its own
+failure in words was reported green. That is the exact failure mode the runner's header comment
+says it exists to prevent, in the runner itself.
+
+The fix is deliberately **asymmetric**, and the asymmetry is the whole design: a line that
+*opens* with FAIL/FAILED is the suite's own verdict and outranks its counters, while a line that
+opens with PASS is not, so `PASS 728   FAIL 0` — what `verify-donut-labels` and `verify-motion`
+have printed for months — keeps being read by its counters and stays green.
+
+### 49.2 The latent one, recorded as latent rather than sold as live
+
+`summary` was `lines.filter(SUMMARY_LINE).pop()` and the failure test read **only that one
+line**. A suite printing `FAILED: 3 passed, 2 failed` for section 1 and `PASSED: 5 passed, 0
+failed` for section 2, then exiting 0, had its section-1 failure discarded by the `.pop()`.
+
+Whether that is *live* was measured, not assumed. Suites in `scripts/` printing more than one
+summary-shaped line: `probe-suite-integrity.mjs` 4, `probe-ci-node-version.mjs` 4,
+`test_auditlog_immutability.mjs` 3, and 2 each in 16 others. `probe-ci-node-version.mjs` was
+read at `scripts/probe-ci-node-version.mjs:265` and `:455`: every failing section summary is
+followed immediately by `process.exit(1)`, including a deliberate early bail whose comment says
+*"The range checker itself is wrong. Every later section would be meaningless."* **So nothing
+in the repo is misclassified by this today.** It is hardened anyway, and the code comment says
+`latent rather than live` in those words — that discipline is a convention, not a contract, and
+this classifier is what all 149 discovered suites are judged by.
+
+### 49.3 Only a COUNT crosses lines, and that limit is load-bearing
+
+The cross-line scan reads a numeric failure count from every summary line. It never applies the
+keyword rule across lines, and that restriction is not caution — it is the only thing keeping
+the change from turning healthy suites red. Nearly every suite in this repo prints indented
+`  FAIL  <check name>` progress lines, **including the ones that pass because they demonstrate
+that a bad input is rejected.** The corpus file's own `eq()` helper emits exactly that shape.
+Those lines carry no number, so they stay invisible to the count scan; a keyword scan across
+every line would report a suite as failing for doing its job. `scripts/probe-verify-all-verdict.mjs:201`
+pins that behaviour, so a future "simplification" to a keyword scan turns red instead of
+quietly re-breaking 149 verdicts.
+
+### 49.4 Three clauses, not two, and the case that forced the third
+
+The predicate at `scripts/_verdict.mjs:106` is:
+
+```js
+/^\s*(FAIL|FAILED)\b/i.test(summary)
+|| (failureCount(summary) ?? 0) > 0
+|| summaryLines.some((l) => (failureCount(l) ?? 0) > 0);
+```
+
+The middle clause looks redundant beside the third. It is not. `✓ Probe FAILED: 1 failed` does
+**not** match `SUMMARY_LINE` — it opens with a glyph, and the `passed,\s*\d+\s*failed`
+alternative needs the literal `passed,` — so it reaches the classifier only through the
+`lines[lines.length - 1]` fallback and never enters `summaryLines` at all. A predicate built
+on `summaryLines` alone would have silently broken that existing regression guard. This was
+caught by hand-checking the new predicate against all 28 pre-existing corpus cases *before*
+writing it, which is the only reason the case was found at all.
+
+### 49.5 Failing-first, then green (Observed 2026-09-05)
+
+The 10 new cases were added and run **before** `_verdict.mjs` was touched:
+
+```text
+FAILED: 38 passed, 2 failed   EXIT=1
+  FAIL  REGRESSION: 'FAILED: 0 passed, 0 failed' + exit 0 is a bad exit code, not a pass — expected "BAD-EXIT", got "PASS"
+  FAIL  REGRESSION: a failing section summary before a passing final summary is caught — expected "BAD-EXIT", got "PASS"
+```
+
+Exactly the two intended defects, with the other 8 new guard cases already green — which is
+what proves those 8 are guards and not new behaviour. After the fix: `PASSED: 40 passed, 0
+failed`, EXIT=0, all 28 pre-existing cases intact.
+
+### 49.6 The measurement that actually decided the change was safe
+
+A corpus of 40 synthetic strings proves the classifier does what its author intended. It cannot
+prove the new cross-line clause leaves the **real** suites alone — that clause is the only part
+of the diff able to reclassify a suite that was already green. So `verify:all` was run against
+the modified classifier and compared to the known baseline:
+
+```text
+149 suite(s): 147 passed, 0 failed, 0 broken, 0 timed out, 0 bad exit code, 2 skipped, 0 diagnostic
+list fa60d625 (149 discovered) — every discovered suite ran
+```
+
+Identical to the pre-change baseline, fingerprint included, down to the two structural skips
+(`probe-build-chunks.mjs` stale `dist/`, `probe-config-exposure.mjs` no dev server). **Zero
+suites changed status.** Had one flipped, the leading-keyword override is the half verified by
+hand against every existing case and the cross-line count is the half that would have been
+narrowed or reverted.
+
+### 49.7 Gates (Observed 2026-09-05)
+
+`npm test` 48 files / 413 tests · `lint` 0 · `typecheck` 0 · `verify:v3` PASS
+`sha256:8998c0c8` · `map:verify` 10 areas / 27 matrix rows / 36 contracts / 186 references / 0
+problems · `map:mutate` 17/17 killed, restore byte-identical, post-restore exit 0 ·
+`hotelkey:mutate` 11/11 killed · `hotelkey:crashsafe` 10/10, residue none · `verify:all` as
+above. `git status --porcelain` was checked after each mutation harness for residue outside the
+two intended files: **0 unexpected paths** each time. `src/lib/` was confirmed clean before the
+harnesses ran, since a mutating harness against an already-dirty target proves nothing about
+either.
+
+### 49.8 Two things this commit deliberately does not do
+
+**The `broken` predicate still requires a non-zero exit.** `!killed && code !== 0 && …` means a
+suite that prints `SyntaxError` or `Cannot find module` and *exits 0* is classified PASS. The
+obvious tightening was rejected on evidence: `verify-harness.mjs` was the hypothesised live
+instance and turned out not to be one — `scripts/verify-harness.mjs:74` prints
+`SKIP: vite is unavailable…` and exits 0, so it is already classified SKIP, correctly. With no
+measured live instance, dropping `code !== 0` would misclassify any healthy suite that prints
+those strings while asserting that malformed input is rejected. The hole is recorded as latent;
+it is not repaired blind.
+
+**Nothing about vacuity.** The classifier reads a suite's *output*. A suite whose assertions are
+all tolerance-defeated prints a perfectly honest `PASSED: n passed, 0 failed`, and no verdict
+logic can see through that. That is a different gate's problem.
+
 
 
 

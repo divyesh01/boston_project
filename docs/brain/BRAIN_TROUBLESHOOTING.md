@@ -5090,7 +5090,43 @@ residue in tracked source fails unrelated suites (§46.1). So the harness and th
 against the committed tree, and **the commit is not pushed until both are green** — the same
 commit-then-measure split `39cee50` and `d4878b8` used, for a different reason.
 
-### 47.6 Deliberately left alone
+Measured against the committed tree at `648e88a`, which is what the paragraph above promised:
+
+```text
+npm run hotelkey:mutate    11/11 killed, every mutated file restored byte-for-byte
+                           M1-M11 all KILLED; git status -- src/ empty afterwards
+npm run verify:all         149 suite(s): 147 passed, 0 failed, 0 broken, 0 timed out,
+                           0 bad exit code, 2 skipped, 0 diagnostic — exit 0
+verify-all.mjs --list      149 discovered, list fa60d625 — unchanged from 7c2cd47
+```
+
+The fingerprint is unchanged because this commit adds no suite and removes none: the new module
+is production source, not a probe. The 2 skips are the pre-existing structural pair
+(`probe-build-chunks.mjs`, `dist/` older than 21 of its 323 inputs; `probe-config-exposure.mjs`,
+no dev server on :5173), neither of them this change's.
+
+### 47.6 The sweep went red, then green, on bytes that never changed
+
+Worth recording as a measurement rather than a footnote, because it is the cleanest instance of
+it so far. The **first** `verify:all` against `648e88a` reported `NOT GREEN`, first failing suite
+`probe-worker-auth-remote.mjs`, throwing from its `wrangler(["d1", "create", ...])` call with
+`Authentication error [code: 10000]` from the Cloudflare API. The **second** run, same commit,
+clean worktree, **nothing edited in between**, reported 147 passed / 0 failed / exit 0.
+
+So the verdict flipped with the tree held constant, which makes the cause external by
+construction — a live Cloudflare credential, not this repository's code. The probe's own imports
+close it independently: `node:crypto`, `node:fs/promises`, `node:child_process`, `node:os`,
+`node:path`, `../worker/password-credential.js`, `./_repo-root.mjs`. It has **no path** to
+`reportParsers.js`, to `parsers/hotelStatistics.js`, or to anything else this commit touched.
+
+The defect this exposes is in the probe's failure *handling*, not in its subject, and it is the
+one already filed: a credential failure should print one `SKIP:` line and leave
+`process.exitCode = 0` — a suite that could not authenticate has verified nothing, which is a
+different state from a suite that failed. Wrapping only the `d1 create` call is the fix; turning
+the whole `wrangler()` throw into a skip would hide real worker breakage. Filed, not fixed here:
+this commit is a parser move and does not go near that probe.
+
+### 47.7 Deliberately left alone
 
 - **The public surface did not widen.** `scanHotelStatistics` was not exported from
   `reportParsers.js` before this diff and is not exported from it after. The new module exports

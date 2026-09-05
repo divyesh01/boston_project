@@ -7,9 +7,21 @@
 // suites FAIL. A mutation that survives is reported as SURVIVED — that is a hole
 // in the net, not a success.
 //
-// Every mutation is applied by exact string replacement and reverted from git, so
-// the tree is byte-identical afterwards; the script refuses to start unless the
-// files it mutates are clean, and verifies cleanliness again at the end.
+// Every mutation is applied by exact string replacement and undone by writing back the
+// exact bytes that were read before it, so the tree is byte-identical afterwards; the
+// script refuses to start unless the files it mutates are clean, and verifies cleanliness
+// again at the end.
+//
+// The restore runs in a `finally` and retries once; if a file is still stuck after that the
+// run ABORTS instead of judging the next mutation against the residue. On Windows that
+// `finally` is what actually protects these files: the SIGINT/SIGTERM handlers below also
+// restore whatever is in flight before exiting non-zero, but their measured reach — recorded
+// where they are registered — is narrower than naming the pair implies, so they are not the
+// cover here. That is not hypothetical: a sweep killed this harness during M11 and left
+// src/lib/transactionNorm.js reclassifying every refund as a charge, and 16 assertions in two
+// later suites then failed against the residue instead of against their own subject.
+// scripts/probe-hotelkey-mutation-crashsafe.mjs proves the `finally` is reachable and that
+// the restore does not depend on git.
 //
 //   node scripts/probe-hotelkey-mutations.mjs          # all mutations
 //   node scripts/probe-hotelkey-mutations.mjs --only M3
@@ -17,6 +29,7 @@
 // Exit code 0 only when every mutation was killed and the tree is restored.
 
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 
 const PARSERS = "src/lib/reportParsers.js";
@@ -158,7 +171,7 @@ function assertClean(files, when) {
   const dirty = git(["status", "--porcelain", "--", ...files]).trim();
   if (dirty) {
     console.error(`\nABORT: ${when} these files are not clean:\n${dirty}`);
-    console.error("This harness rewrites production sources and reverts them from git.");
+    console.error("This harness rewrites production sources and puts the exact bytes back.");
     console.error("Commit or stash your changes to them first.");
     // Same summary contract as the verdict line at the end of this file: an abort is
     // a FAILED outcome, and verify-all.mjs must not have to infer that from the tail
@@ -281,6 +294,123 @@ for (const m of selected) {
 const touched = [...new Set(plan.map((p) => p.path))];
 assertClean(touched, "before starting,");
 
+// ── Crash safety ─────────────────────────────────────────────────────────────
+// Read the originals ONCE, as raw bytes, and hand exactly those bytes back on restore.
+// These are TRACKED production sources, so the restore must be byte-for-byte, and a utf8
+// decode/re-encode round trip is not the identity function: any byte that is not valid
+// UTF-8 comes back as U+FFFD. With core.autocrlf=true a file's on-disk line endings are a
+// property of the checkout, never something this harness may re-decide. The decoded copy
+// exists only to locate and apply an anchor.
+const originalBytes = new Map(touched.map((f) => [f, readFileSync(f)]));
+const originalText = new Map([...originalBytes].map(([f, b]) => [f, b.toString("utf8")]));
+// A string is hashed as utf8, which is exactly what writeFileSync writes for a string, so
+// the same helper covers "what I am about to write" and "what is on disk now".
+const sha = (data) => createHash("sha256").update(data).digest("hex");
+
+/**
+ * The one place that knows which sources are mutated on disk right now: path → the exact
+ * original bytes. `withMutation`'s `finally` and the signal handlers both restore from
+ * here, so no code path can mutate a file that another path will not put back.
+ *
+ * An entry is added BEFORE the mutating write (a write that throws part-way through still
+ * needs restoring) and removed only once the original bytes are back on disk, which makes
+ * a second restore a no-op instead of a second write of stale content.
+ */
+const inFlight = new Map();
+
+/** Puts every in-flight source back byte-for-byte. Returns the ones it could not. */
+function restoreAll() {
+  const stuck = [];
+  for (const [file, bytes] of [...inFlight]) {
+    try {
+      writeFileSync(file, bytes);
+      inFlight.delete(file);
+    } catch (err) {
+      // Keep going: one locked file must not strand the others. The entry stays in
+      // `inFlight`, so the immediate second attempt in `withMutation`'s `finally` and the
+      // signal handlers below both retry it — and if it is STILL stuck after that, the
+      // mutation loop aborts rather than measuring the next mutation against the residue.
+      stuck.push(`${file}: ${err.message}`);
+    }
+  }
+  return stuck;
+}
+
+const reportStuck = (stuck) => {
+  if (stuck.length) console.error(`RESTORE FAILED — tracked sources left mutated: ${stuck.join("; ")}`);
+};
+
+/**
+ * Mutates one source, runs its suites, and restores byte-for-byte whatever happens next.
+ *
+ * The restore WRITES THE REMEMBERED BYTES; it deliberately no longer runs
+ * `git checkout -- <path>`, and the difference is not cosmetic:
+ *   1. a byte write needs no .git/index.lock. With a lock held, the checkout's
+ *      execFileSync THROWS — stranding the mutant at the exact moment the harness was
+ *      trying to remove it;
+ *   2. `git checkout -- <path>` restores from the INDEX, which is not the working-tree
+ *      snapshot this harness actually captured;
+ *   3. under core.autocrlf=true a checkout re-applies the EOL filters instead of handing
+ *      back the bytes that were read.
+ *
+ * HK_MUTATE_FAULT is a test-only fault hook. Exactly one value is recognised,
+ * "after-write"; any other value, including an empty one, is ignored. It exists solely so
+ * scripts/probe-hotelkey-mutation-crashsafe.mjs can prove this `finally` is reachable, and
+ * it has to be a throw rather than a signal because MEASURED on win32 a parent calling
+ * child.kill("SIGTERM") or child.kill("SIGINT") terminates this process unconditionally —
+ * neither handler below runs — so a signal-based proof cannot observe a restore here at all.
+ */
+function withMutation(target, mutated, suites) {
+  try {
+    inFlight.set(target, originalBytes.get(target));
+    writeFileSync(target, mutated);
+    if (process.env.HK_MUTATE_FAULT === "after-write") {
+      throw new Error(
+        `HK_MUTATE_FAULT after-write: ${target} rewritten` +
+          ` (${Buffer.byteLength(mutated, "utf8")} bytes, sha256=${sha(mutated)});` +
+          ` pristine sha256=${sha(originalBytes.get(target))}; throwing before the suites run`,
+      );
+    }
+    return runSuites(suites);
+  } finally {
+    // One immediate retry before reporting. On win32 a transient hold from a file indexer
+    // or an AV scanner is a real thing, and a second write costs nothing next to the cost
+    // of leaving a deliberately-broken production source on disk.
+    //
+    // Deliberately NO `process.exit` here: this `finally` can be unwinding an exception
+    // that is still propagating, and exiting from it would swallow that exception's
+    // message — the run would die with a restore complaint and no cause. The abort lives
+    // at the end of the mutation loop instead, after this mutation's verdict is printed.
+    let stuck = restoreAll();
+    if (stuck.length) stuck = restoreAll();
+    reportStuck(stuck);
+  }
+}
+
+// A Ctrl-C, or a SIGTERM from a parent that has given up, used to land between the mutate
+// and the revert and leave a deliberately-broken production source on disk. Registering a
+// listener also suppresses Node's default death, so the exit is explicit and non-zero: the
+// run did not finish, and no caller may read it as green. spawnSync blocks the loop, so a
+// signal that arrives during a suite run is delivered when that child returns — the file is
+// still in `inFlight` at that moment either way.
+//
+// Registered with their reach stated, because a handler nobody can fire is only worth
+// keeping if it is not mistaken for cover. MEASURED on win32 this session: a parent calling
+// child.kill("SIGTERM") or child.kill("SIGINT") terminates this process outright and
+// NEITHER handler runs, and child.kill("SIGKILL") on this process also took down a
+// grandchild it had spawned via spawnSync. So SIGINT here is live for a real console
+// Ctrl-C, SIGTERM is inert on win32 and live on POSIX, and `finally` above is what actually
+// protects these files on Windows.
+for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143]]) {
+  process.on(signal, () => {
+    const pending = inFlight.size;
+    const stuck = restoreAll();
+    console.error(`\n${signal} received — restored ${pending - stuck.length}/${pending} mutated file(s), aborting`);
+    reportStuck(stuck);
+    process.exit(code);
+  });
+}
+
 // The unmutated baseline has to be green, or every "killed" below is meaningless.
 process.stdout.write("baseline (no mutation) ... ");
 const baseline = runSuites([SCAN_SUITE, IMPORT_SUITE]);
@@ -295,27 +425,35 @@ const baseTests = /Tests\s+(\d+) passed/.exec(baseline.out)?.[1] ?? "?";
 console.log(`green (${baseTests} tests)\n`);
 
 for (const { m, path: target, eol } of plan) {
-  const before = readFileSync(target, "utf8");
+  const before = originalText.get(target);
   // `eol` comes from the resolve pass, which detected it on the file that actually
   // holds the anchor. Re-deriving it here from where[0] would be wrong the moment
   // the anchor resolves in a later candidate.
   const find = m.find.split("\n").join(eol);
   const replace = m.replace.split("\n").join(eol);
 
-  writeFileSync(target, before.replace(find, replace));
+  // Printed before the mutating write, so nothing at all sits between that write and the
+  // fault hook's throw. Same stdout as when it sat after the write: nothing else prints
+  // in between, and this line is now on screen whatever the mutation does next.
   process.stdout.write(`${m.id} ${target} running ... `);
-  const run = runSuites(m.suites);
-  git(["checkout", "--", target]);
+  const run = withMutation(target, before.replace(find, replace), m.suites);
 
-  const after = readFileSync(target, "utf8");
-  const restored = after === before;
+  // Re-read from disk as BYTES and compare digests, not decoded text: this is THE
+  // assertion that the restore was byte-for-byte, so comparing anything other than the
+  // real file bytes would be comparing a normalisation of them. It is a different
+  // instrument from the `assertClean` below — this one knows what was read at 00:00, git
+  // knows what is committed — and a RESIDUE verdict needs both.
+  const afterBytes = readFileSync(target);
+  const restored = sha(afterBytes) === sha(originalBytes.get(target));
   // Anchor on vitest's "Tests" summary line. A bare /(\d+) failed/ matches the
   // "Test Files" line first and reports a FILE count as a test count.
   const failed = /^\s*Tests\s+(\d+) failed/m.exec(run.out);
   const names = [...run.out.matchAll(/^\s*(?:×|✕|FAIL)\s+(.+?)\s*$/gm)].map((x) => x[1]);
   const verdict = !restored ? "RESIDUE" : run.code !== 0 ? "KILLED" : "SURVIVED";
   const detail = !restored
-    ? `revert did not restore ${target} (${before.length} -> ${after.length} bytes;` +
+    // Both numbers are real byte counts now that the comparison is over bytes; the
+    // message always said "bytes" while the old string compare counted characters.
+    ? `revert did not restore ${target} (${originalBytes.get(target).length} -> ${afterBytes.length} bytes;` +
       ` git porcelain: ${JSON.stringify(git(["status", "--porcelain", "--", target]).trim())})`
     : run.code !== 0
       ? `${failed?.[1] ?? "?"} test(s) failed — the net caught it`
@@ -325,6 +463,27 @@ for (const { m, path: target, eol } of plan) {
   // Which assertion caught it. A mutation filed under one behaviour but killed
   // only by an unrelated test is an incidental kill, not proof of that behaviour.
   for (const n of names.slice(0, 4)) console.log(`${" ".repeat(13)}↳ ${n}`);
+
+  // A restore that failed twice is where this loop STOPS. Anything after this point would
+  // measure its KILLED/SURVIVED verdict against a tree that still carries THIS mutation —
+  // one layer in from the exact conflation this harness exists to prevent, and the reason
+  // it is checked here rather than left to `assertClean` at the end: by then the wrong
+  // verdicts are already printed and indistinguishable from real ones.
+  //
+  // Placed after the verdict is pushed and printed, so the RESIDUE row is on screen and in
+  // the report data before the exit, and outside `withMutation`'s `finally`, so a
+  // propagating exception has already carried its own message out.
+  if (inFlight.size) {
+    const skipped = selected.length - results.length;
+    console.error(`\nABORT: ${inFlight.size} tracked source(s) are still mutated on disk after two restore attempts:`);
+    for (const f of inFlight.keys()) console.error(`  ${f}`);
+    console.error("Diff each one before restoring it — `git diff -- <file>` — because a blind revert would");
+    console.error("also discard any edit that is genuinely yours.");
+    console.error(`Skipping ${skipped} remaining mutation(s): a verdict measured against this residue would be`);
+    console.error("measuring the residue and not its own subject.");
+    console.error(`FAILED: restore failed after ${m.id} — ${inFlight.size} tracked source(s) left mutated, ${skipped} mutation(s) skipped`);
+    process.exit(2);
+  }
 }
 
 assertClean(touched, "after finishing,");
@@ -351,7 +510,7 @@ console.log(`\n${killed}/${results.length} mutations killed`);
 if (bad.length) {
   console.log(`NOT KILLED: ${bad.map((r) => `${r.id} (${r.verdict})`).join(", ")}`);
 } else {
-  console.log("Every mutation was caught and every mutated file was restored from git.");
+  console.log("Every mutation was caught and every mutated file was restored byte-for-byte.");
 }
 
 // Verdict line for the summary contract in scripts/probe-suite-integrity.mjs: the

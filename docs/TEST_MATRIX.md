@@ -4,14 +4,17 @@ One row per suite. **Area** keys are the ones in
 [`docs/AI_REPO_GUIDE.md`](AI_REPO_GUIDE.md); this table adds the suites that guide's
 *Proves it* column has no room for, and the exact command for each.
 
-Every command below was executed and exited 0 on 2026-09-03. `npm run map:verify`
-re-checks that each suite file still exists and each command still resolves.
+Every command below was executed and exited 0 on 2026-09-03, except `npm run
+hotelkey:crashsafe`, which did not exist then and was executed and exited 0 on 2026-09-05
+(`PASSED: 10/10`, 25 s warm). `npm run map:verify` re-checks that each suite file still
+exists and each command still resolves.
 
 | Area | Suite | Kind | Command |
 |---|---|---|---|
 | HotelKey import | `src/lib/hotelKeyParserFixtures.test.js` | vitest | `npx vitest run src/lib/hotelKeyParserFixtures.test.js` |
 | HotelKey import | `src/lib/hotelKeyImportFixtures.test.js` | vitest | `npx vitest run src/lib/hotelKeyImportFixtures.test.js` |
 | HotelKey import | `scripts/probe-hotelkey-mutations.mjs` | probe | `npm run hotelkey:mutate` |
+| HotelKey import | `scripts/probe-hotelkey-mutation-crashsafe.mjs` | probe | `npm run hotelkey:crashsafe` |
 | Revenue/KPIs | `scripts/probe-financial-invariant.mjs` | probe | `node --import ./scripts/_loader-boot.mjs scripts/probe-financial-invariant.mjs` |
 | Revenue/KPIs | `scripts/probe-decimal-integration.mjs` | probe | `node --import ./scripts/_loader-boot.mjs scripts/probe-decimal-integration.mjs` |
 | Revenue/KPIs | `scripts/verify-money-kept.mjs` | verify | `node --import ./scripts/_loader-boot.mjs scripts/verify-money-kept.mjs` |
@@ -36,9 +39,15 @@ re-checks that each suite file still exists and each command still resolves.
 | Deployment | `scripts/probe-deploy-config.mjs` | probe | `node scripts/probe-deploy-config.mjs` |
 | Deployment | `scripts/verify-all.mjs` | gate | `npm run verify:all` |
 
-The HotelKey mutation row and `scripts/probe-repo-map-gate.mjs` are the only two suites
-`npm run verify:all` excludes for rewriting tracked files in place, and both are run by
-`npm run mutate:all` — so mutation adequacy is a deliberate run here, never a swept one.
+Three suite-shaped scripts write tracked files in place, so `npm run verify:all` excludes all
+three and `npm run mutate:all` runs them in order: `scripts/probe-repo-map-gate.mjs` (rewrites
+the routing docs, and has no row here for the reason given below), then
+`scripts/probe-hotelkey-mutation-crashsafe.mjs` (drives the mutation harness and holds
+`.git/index.lock` while it does), then `scripts/probe-hotelkey-mutations.mjs` (rewrites
+production source under `src/lib/`). Mutation adequacy is a deliberate run, never a swept
+one, and the crash-safety proof is ordered ahead of the harness it proves so a broken restore
+is learned from one `--only M11` run — 25 s measured — instead of after the full 11-mutation
+pass, which measured 96 s on the same day.
 
 ## Kinds
 

@@ -24,7 +24,8 @@
     "map:verify": "node scripts/verify-repo-map.mjs",
     "map:mutate": "node scripts/probe-repo-map-gate.mjs",
     "hotelkey:mutate": "node scripts/probe-hotelkey-mutations.mjs",
-    "mutate:all": "npm run map:mutate && npm run hotelkey:mutate",
+    "hotelkey:crashsafe": "node scripts/probe-hotelkey-mutation-crashsafe.mjs",
+    "mutate:all": "npm run map:mutate && npm run hotelkey:crashsafe && npm run hotelkey:mutate",
     "audit:gate": "node scripts/audit-gate.mjs",
     "verify:all": "node scripts/verify-all.mjs",
     "verify:v3": "node scripts/verify-divyesh-v3.mjs"

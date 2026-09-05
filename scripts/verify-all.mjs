@@ -96,24 +96,34 @@ const EXCLUDE = new Map([
   // Mutation harness for the HotelKey regression net. Same write property as the entry
   // above, one layer deeper: it rewrites TRACKED PRODUCTION SOURCE in place — reportParsers.js,
   // transactionNorm.js, importValidation.js and parsers/transactions.js under src/lib/ — one
-  // anchor at a time, then puts the file back with `git checkout --`. The write and the revert
-  // are two separate statements with no try/finally and no signal handler between them, so a
-  // run killed by --timeout leaves a tracked SOURCE file modified.
+  // anchor at a time, then writes the exact original bytes back.
+  //
+  // That restore is now crash-safe against a throw: the pristine bytes are held in an inFlight
+  // map, the entry is set BEFORE the mutating write, and a try/finally puts them back. It is
+  // still excluded, because a finally is not reachable from the timer below. MEASURED on win32
+  // this session: a parent calling child.kill() — SIGKILL, SIGTERM or SIGINT alike — ends the
+  // child with no process.on(signal) listener, no 'exit' listener and no finally running, and a
+  // SIGKILL of the direct child also took down a grandchild it had spawned via spawnSync (cause
+  // UNKNOWN, and it contradicts the naive "TerminateProcess targets one PID" inference, so do
+  // not reason from that story here). A sweep kill therefore still leaves the mutant on disk.
   //
   // The exclusion rests on that write property, not on the clock. --timeout is a default and
   // is overridable, so "too slow" would be a budget judgement — precisely what the rule above
   // forbids as a reason.
   //
-  // It happened. A sweep hit its per-suite cap during M11 and killed the child with SIGKILL,
-  // which on win32 is TerminateProcess and cannot be handled, so the revert never ran:
-  // transactionNorm.js was left carrying M11's replacement, which reclassifies refunds as
-  // charges. The 16 assertions that later read it in verify-transactions.mjs and
-  // verify-coexistence.mjs failed against that residue rather than against their own subject.
-  // Restoring the one file returned them to 115/0 and 23/0. A suite that can leave the tree
-  // modified corrupts every suite scheduled after it, and that holds at any budget.
+  // It happened. A sweep hit its per-suite cap during M11 and killed the child with SIGKILL, so
+  // the revert never ran: transactionNorm.js was left carrying M11's replacement, which
+  // reclassifies refunds as charges. The 16 assertions that later read it in
+  // verify-transactions.mjs and verify-coexistence.mjs failed against that residue rather than
+  // against their own subject. Restoring the one file returned them to 115/0 and 23/0. A suite
+  // that can leave the tree modified corrupts every suite scheduled after it, and that holds at
+  // any budget.
   //
-  // This closes the class: these two are the only discovered suites that write tracked files
-  // in place, and both are now excluded. Run them deliberately — npm run mutate:all.
+  // Three suite-shaped files under scripts/ write tracked files in place, and all three are
+  // excluded here: the two mutation harnesses, and the crash-safety probe below that drives one
+  // of them. Said that way on purpose — "discovered" is this file's word for the post-EXCLUDE
+  // set, so an excluded suite is by definition not one. Nothing else found so far writes a
+  // tracked file. Run the three deliberately — npm run mutate:all.
   //
   // The suite count printed here and the one printed by scripts/probe-suite-integrity.mjs
   // legitimately differ: that auditor keeps its own NOT_A_SUITE set and does not read this
@@ -122,6 +132,23 @@ const EXCLUDE = new Map([
   // happen here. Do not "reconcile" the two numbers by adding this file to NOT_A_SUITE: that
   // drops the static contract audit too, and silently.
   ["probe-hotelkey-mutations.mjs", "mutates tracked production source in place — run via npm run hotelkey:mutate"],
+  // Crash-safety proof for the harness above. It inherits that harness's write property by
+  // spawning it, so every word of the entry above applies to this file too, and it adds one of
+  // its own: to prove the restore does not shell out to git, it holds <repo>/.git/index.lock for
+  // the duration of a run. While that lock is held, git READERS still work — measured: `git
+  // status --porcelain` exits 0 and reports correctly, which is why the probe's own clean checks
+  // remain meaningful — but every git WRITER needing the index fails, repo-wide and not just in
+  // this process: add, commit, checkout, and a pre-commit hook running in another shell alongside
+  // it. That is the whole point of section B, and it is also its blast radius.
+  //
+  // The lock is created with an exclusive flag and never over an existing one (an already-present
+  // lock is reported INCONCLUSIVE rather than clobbered), and it is released three ways: section
+  // B's own finally, the outer finally, and the probe's SIGINT/SIGTERM handlers — so a console
+  // Ctrl-C, the one interruption no finally reaches, no longer leaves it behind. What survives
+  // none of that is a SIGKILL or a power loss, and the SIGKILL is exactly the kill the timer
+  // below imposes. So this file is excluded for the same reason as the harness it drives: swept,
+  // it can leave both a mutated tracked source and a stale index lock on disk.
+  ["probe-hotelkey-mutation-crashsafe.mjs", "spawns the harness above, and holds .git/index.lock for a whole run — run via npm run hotelkey:crashsafe"],
   // Library, not a suite: it exports a fixture builder for other probes to import
   // and has no assertions of its own.
   ["probe-auth-hardening-world.mjs", "fixture library imported by other probes"],

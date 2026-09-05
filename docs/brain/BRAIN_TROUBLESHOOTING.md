@@ -4754,8 +4754,11 @@ Holding original bytes in memory needs no git call, no recovery pass, and no con
 **`EXCLUDE` has a dead entry, and it is pre-existing.** The map lists
 `probe-auth-hardening-world.mjs`; no such file exists. The file on disk is `probe-auth-hardening.mjs`,
 which therefore runs as an ordinary swept suite despite an exclusion comment describing it as a
-fixture library with no assertions of its own. `--list` filters by existence, which is why the map
-holds six entries and prints five. Filed here rather than corrected, because deciding whether that
+fixture library with no assertions of its own. `--list` filters by existence, so a dead entry is
+held but never printed: six held and five printed at this commit, seven and six once §46.7 adds
+one. Read that as the two counts it is, not as an invariant about the gap — correcting the typo
+would close the gap, and this paragraph deliberately leaves that correction open. Filed here
+rather than corrected, because deciding whether that
 suite should run is a different question from whether this one should.
 
 **`probe-worker-auth-remote.mjs` failed a third time, on unchanged code.** The sequence for that
@@ -4768,6 +4771,225 @@ still owed and still unmade, for the reason §45.7.1 gives.
 `src/lib/parsers/transactions.js`, which the harness has named as a candidate since `39cee50`. Its
 consumer table is corrected here (10 → 11 mutations); the prose sentence is left for the pass that
 finishes the parser split, since the target list is still moving.
+
+## 46.7 The mutation harness is now crash-safe, and what measuring the platform changed
+
+§46.6 named this commit's job: port `probe-repo-map-gate.mjs`'s restore pattern into
+`scripts/probe-hotelkey-mutations.mjs`. That is done, and one measurement taken along the way
+falsified the reasoning behind the plan.
+
+**What the harness did before.** It wrote a mutant into a tracked source file under `src/lib/`, called
+the suite runner, and reverted with `git checkout -- <path>` on the *next statement* — no `try`, no
+`finally`, no signal handler. Roughly 95% of its wall clock sat in that gap, so anything leaving the
+process in that window stranded a deliberately-broken production file. §46.1 records the day it did.
+
+**What it does now.** The pristine bytes of every file the plan will touch are read once, up front, as
+raw `Buffer`s. An `inFlight` map is keyed by file and holds those bytes; the entry is set **before**
+the mutating write, so a write that throws part-way through is still restorable. `withMutation` wraps
+the write and the suite run in a `try` whose `finally` writes the remembered bytes back, and the
+entry is deleted only once they are back on disk, which makes a second restore a no-op rather than a
+second write of stale content. The restore assertion is a sha256 over the real file bytes, not over a
+decoded string.
+
+**A byte write is better than `git checkout` here for three reasons, none of them stylistic.**
+`git checkout -- <path>` needs `.git/index.lock`; with that lock held the restore's own `execFileSync`
+**throws**, stranding the mutant at the exact moment the harness was trying to remove it. It restores
+from the **index**, not from the working-tree snapshot the harness actually captured. And under this
+repo's `core.autocrlf=true` with `* text=auto` it re-applies EOL filters instead of returning the bytes
+that were read. A byte write needs no lock, no subprocess, and no filter.
+
+**MEASURED, and it reversed a decision: on win32 a parent's `child.kill()` is not catchable by the
+child, and it reaches a grandchild.** Two findings, both from throwaway harnesses run this session,
+both with the measured output retained at the time:
+
+- **F1.** A parent calling `child.kill("SIGTERM")` **or** `child.kill("SIGINT")` ended the child with
+  no `process.on(signal)` listener and no `'exit'` listener in the child running. Not only SIGKILL.
+- **F2.** `child.kill("SIGKILL")` on a direct child **also took down a grandchild** that child had
+  spawned via `spawnSync`. Kill at 800 ms → `CHILD_CLOSED code=null signal=SIGKILL`, grandchild marker
+  absent. Positive control, kill moved to 6000 ms → `CHILD_CLOSED code=0 signal=null`, marker present
+  reading `WROTE_AT=3000ms_after_start`. So the negative was not an artifact of the grandchild never
+  having run.
+
+**F2's cause is UNKNOWN and is deliberately not theorised here.** It falsified my own prior inference —
+that because `SIGKILL` on win32 is `TerminateProcess` against one PID, and `verify-all.mjs` uses no
+`taskkill /T`, no job object and no `detached`, a grandchild would survive and complete its own
+restore. That inference is exactly what the measurement disproved, so neither this section nor the code
+comments reason from it.
+
+**F3, the consequence, stated with its real reach.** `try/finally` is the protection that works, and
+what it works against is a **throw**. The `SIGINT` handler is live for a real console `Ctrl-C`, which is
+delivered by the console driver rather than by a parent, and that is the case §46.6 raised: a developer
+interrupting a 184-second manual run. The `SIGTERM` handler is inert on win32 by F1 and live on POSIX.
+Both are registered, and the comment above them says which is which instead of implying the pair covers
+everything.
+
+**No committed claim is falsified, and both exclusions stay.** §46.2 excluded the harness for a write
+property, not for the clock, and that property is unchanged: it still rewrites tracked production source
+in place. By F1 and F2 the sweep's `child.kill("SIGKILL")` still reaches past every `finally` the port
+added, so a swept run can still leave the mutant on disk. Crash-safety and swept-safety are different
+contracts; this commit buys the first and not the second. The `EXCLUDE` comment in
+`scripts/verify-all.mjs` is rewritten to say that, because its old wording described the
+`git checkout` mechanism this commit removed and would otherwise have become rot.
+
+**The proof is a suite, not an assertion in this document.**
+`scripts/probe-hotelkey-mutation-crashsafe.mjs` spawns the harness with `--only M11` and measures the
+tree afterwards. Section A fires a narrowly-gated test-only fault hook (`HK_MUTATE_FAULT=after-write`,
+recognised for that one exact value and nothing else) to throw between the write and the restore.
+Section B uses **no hook at all**: it holds `.git/index.lock` for a whole run, which the throwaway
+measurement showed leaves `git status --porcelain` working while making `git checkout -- <path>` exit
+128. B is what makes the byte write load-bearing rather than stylistic: a `try/finally` that still calls
+`git checkout` inside the `finally` passes every assertion in section A and fails B.
+
+**What these ten assertions do NOT separate, named rather than left for a reader to discover.** The port
+has three load-bearing properties and the probe proves one of them. An adversarial review of this commit
+built two plausible broken variants and both pass all ten:
+
+- **Deleting `restoreAll()` from the signal-handler body.** Nothing here calls it, because nothing here
+  *can*: by F1 a parent-sent `SIGINT`/`SIGTERM` on win32 is not observable by the child, so no probe on
+  this platform can deliver a catchable signal to the harness. That path is **Not Run**, and it is not
+  merely unrun but unreachable by any parent-side test here — only a human `Ctrl-C` at a console
+  exercises it. On POSIX it would be one `kill` away.
+- **Moving `inFlight.set` to after `writeFileSync`.** The ordering exists to survive a `writeFileSync`
+  that throws part-way through, and nothing in this suite produces a partial write, so both orders end
+  every assertion identically. The property is **Inferred** from the write path, not measured.
+
+Stated this way on purpose. "10/10 passed" is the coverage of one property — a throw in the gap, and a
+restore that does not depend on git — not of the section as a whole.
+
+**Failing-first, Observed.** Against the **unmodified** harness the probe reported
+`FAILED: 3/10 crash-safety assertions passed, 7 failed, 0 inconclusive, residue LEFT BY THE HARNESS`,
+exit 1, with `A1 A4 A5 B2 B3 B4 B5` failing and real residue on disk — `9992 bytes
+sha256=cadd7fe8ef8bb77a` against pristine `10034 bytes sha256=25b35c2c6f6af35e`. The probe's own
+`finally` rescued the file and said so. After the port, and again on the exact bytes being committed:
+exit 0, `PASSED: 10/10 crash-safety assertions passed, 0 failed, 0 inconclusive, residue none`, 25 s
+warm end-to-end — section A's harness run 10.7 s, section B's 13.6 s, against the probe's own 300 s cap.
+
+**Non-vacuity is asserted, not assumed.** A2 and A3 both pass for the wrong reason on their own — a
+harness that threw *before* the write, or ignored the env var entirely, also ends with a pristine file.
+A5 therefore compares three digests: the bytes handed to `writeFileSync`, the harness's own idea of
+pristine, and a digest this probe took independently before spawning anything. B2 needs no hook: a
+`KILLED` verdict for M11 cannot print unless the mutant was live on disk while vitest ran.
+
+**The new probe is excluded too, for its own written reason.** It inherits the harness's write property
+by spawning it, and it adds one: it holds `<repo>/.git/index.lock` for a whole run. Re-measured directly
+while a lock was held: `git status --porcelain` exits **0** and reports correctly, so the probe's own
+clean checks stay meaningful, while `git checkout -- <path>` exits **128** with *"Unable to create
+'…/.git/index.lock': File exists."* Every git **writer** needing the index fails that way for as long as
+the lock is held, repo-wide rather than in one process — `add`, `commit`, `checkout`, and a pre-commit
+hook running in another shell alongside it. That is section B's whole mechanism and also its blast
+radius. The lock is created with an exclusive flag and never over an existing one — an already-present
+lock is reported `INCONCLUSIVE`, which counts as not-proven rather than green — and it is released three
+ways: section B's own `finally`, the outer `finally`, and the probe's `SIGINT`/`SIGTERM` handlers, so a
+console `Ctrl-C`, the one interruption no `finally` reaches, no longer strands it. What survives none of
+that is a `SIGKILL` or a power loss, and by F1/F2 the sweep's kill is exactly a `SIGKILL` — which is why
+this file is excluded for the same reason as the harness it drives.
+
+**Wiring, and why the order matters.** `package.json` gains `hotelkey:crashsafe`, and `mutate:all` is
+now `map:mutate && hotelkey:crashsafe && hotelkey:mutate`. The crash-safety proof runs **ahead** of the
+harness it proves, so a broken restore is learned in one `--only M11` run instead of after the full
+mutation pass — §46.5 measured that pass at a median near 95 s with a 184 s tail standalone — and `&&`
+means a failure there stops the chain rather than letting a harness with a broken restore loose on
+tracked source. `docs/TEST_MATRIX.md` gains its row under HotelKey import and its exclusion prose now
+names three suites rather than two.
+
+**The suite fingerprint did not move, and that is the expected result.** Measured: `--list` reports
+**149 discovered, list `fa60d625`** — byte-identical to `7c2cd47`, because the new file went straight
+into `EXCLUDE` and never joined the discovered set. `probe-suite-integrity.mjs` reports **152 passed**,
+up from 151, and both mutation files audit `YES/YES/YES → VALID`. The identity behind the two numbers:
+149 discovered + 7 `EXCLUDE` entries − 1 dead entry = 155 suite-shaped candidates, minus 3 present
+`NOT_A_SUITE` = 152 statically audited. §46.2's warning stands unchanged: do not "reconcile" 149 and 152
+by adding either file to `NOT_A_SUITE`, which would drop the static contract audit silently.
+
+**Filed, not fixed: the harness still reports a killed child as `KILLED`.** Its verdict is
+`!restored ? "RESIDUE" : run.code !== 0 ? "KILLED" : "SURVIVED"`, and `spawnSync` returns
+`status: null` when the child was killed or failed to spawn. `null !== 0` is truthy, so a suite runner
+that never ran a single assertion is scored as a mutation kill — a false green on mutation adequacy.
+That is a different contract from crash safety and is left for its own commit, deliberately, to keep
+this diff to the one property it proves. The crash-safety probe already refuses the same conflation
+about its own subject: A1 requires `code !== null && code !== 0`.
+
+**The port did not arrive correct, and an adversarial review of it found six defects before commit.**
+Recorded because the rest of this section otherwise reads as if the pattern transplanted cleanly, and
+the six are the reason to review a *safety* mechanism harder than the code it protects — each one made
+the proof or the harness less safe than the thing it was guarding.
+
+1. A console `Ctrl-C` during section B exited without releasing `.git/index.lock`, so the one
+   interruption the handlers exist for left behind the exact repo-wide writer block described above. The
+   handler now releases the lock and rescues the pristine bytes, and it records the interruption
+   **before** the rescue, so a mutant caught in flight is attributed to the `Ctrl-C` and not to the
+   harness.
+2. `lockHeld` was set after `closeSync`, leaving a window in which a real on-disk lock existed while the
+   probe believed it held none. It is now set the instant the file exists.
+3. The rescue overwrote the divergent on-disk bytes with pristine — destroying the only copy of the
+   evidence, and of any edit that was genuinely the operator's. It now writes those bytes to a scratch
+   file outside the repository with `flag: "wx"` first, and **refuses to overwrite at all** if that save
+   fails.
+4. A kill the probe itself imposed was scored as a harness failure, letting the probe accuse the harness
+   of something the probe did. A `null` status or any signal now records a kill note, `ETIMEDOUT` is
+   distinguished from a spawn failure, the accusation is suppressed, and the pass gate requires
+   `killNotes.length === 0` — so that run reports `INCONCLUSIVE`, which is neither a green nor a false
+   accusation.
+5. In the harness, a restore that failed twice let the mutation loop continue, so the next mutation was
+   judged against the previous mutant's residue — the precise failure mode §46.1 records, re-entered
+   through the recovery path. The loop now aborts after printing that mutation's verdict row, names each
+   stuck file, tells the operator to `git diff` it before reverting because a blind revert would also
+   discard their own work, and says how many mutations were skipped. The abort deliberately sits at the
+   end of the loop and not in the `finally`: exiting from a `finally` that is unwinding a live exception
+   would swallow that exception's message.
+6. The harness header implied the `SIGINT`/`SIGTERM` pair was the cover on this platform. By F1 it is
+   not. It now says the `finally` is what protects these files here, and points at the measured reach
+   recorded where the handlers are registered.
+
+**Ownership, stated because the surfaces are split on purpose.** All six repairs are on the test and
+probe surface and were authored by the independent tester that owns it. They were then verified against
+source line by line rather than accepted from a report: the assertion count is still **10**, and no
+assertion was weakened in the process — A1 tightened to `code !== null && code !== 0`, and the pass gate
+gained a term rather than losing one. One comment-only edit to the probe's header was made outside that
+ownership as an explicit narrow exception, changing no code, so the file names the same limits this
+section does. Two claims in this section were also wrong when first drafted and were corrected before
+commit: an unmeasured runtime figure, and a sentence saying the proof separated a correct fix from *the*
+plausible incomplete one when it separates one of three variants.
+
+**Two things were deliberately NOT rewritten, and the reason is the same one `7c2cd47` gave for leaving
+`b5008211` in five historical run records.** §46.5's `149 … + 5 present EXCLUDE = 154 … = 151` is what
+that sweep measured, and §43.5's "each reverted from git" is what that harness did on the day of that
+run. Both are run records. Editing them to match today's code would replace observed evidence with a
+reconstruction, so the current numbers and the current mechanism are stated here instead, where a reader
+looking for present behaviour will land. §46.6's structural claim about the map's own size is a different
+case — it describes live code rather than a past run, so it is corrected in place.
+
+**Verification, all Observed on 2026-09-05 on the exact bytes committed here.** The two mutating chains
+were run strictly sequentially, never alongside each other or alongside the sweep, because one rewrites
+tracked docs, one rewrites tracked source, and the third holds the index lock.
+
+```text
+npm run hotelkey:crashsafe   exit 0   PASSED: 10/10, 0 failed, 0 inconclusive, residue none   25s
+npm run map:mutate           exit 0   PASSED: 17/17 killed, restore byte-identical, post-gate 0  3s
+npm run hotelkey:mutate      exit 0   PASSED: 11/11 killed, every mutated file restored         96s
+npm run verify:all           exit 0   149 suites: 147 passed, 0 failed, 0 broken, 0 timed out,
+                                      0 bad exit code, 2 skipped, 0 diagnostic               3m09s
+node scripts/verify-all.mjs --list    149 discovered, list fa60d625 — unchanged from 7c2cd47
+node scripts/probe-suite-integrity.mjs  PASSED: 152 passed, 0 failed
+npm run map:verify           exit 0   10 areas, 27 matrix rows, 36 contracts, 186 refs, 0 problems
+npm run brain:verify         exit 0   silent
+npm run lint                 exit 0   eslint . --quiet
+npm run typecheck            exit 0   tsc -p ./jsconfig.json
+git status --porcelain -- src/        empty, before and after both mutation runs; no .git/index.lock
+```
+
+Three notes a later reader needs. The sweep's totals moved from **148 passed + 2 skipped** to
+**147 passed + 2 skipped** because `7c2cd47` moved the harness out of the discovered set — one fewer
+suite runs, and the one that left was passing. The 2 skips are the pre-existing structural pair
+(`probe-build-chunks.mjs`, stale `dist/`; `probe-config-exposure.mjs`, no dev server on :5173), neither
+touched here. And `npx tsc --noEmit` exits 1 in this repo for want of a root `tsconfig.json`, so the gate
+above is the real one; `jsconfig.json` excludes `scripts/**`, which makes typecheck **Not Applicable** to
+both files in this commit and eslint their gate.
+
+**Not Run, named so the block above is not read as more than it is.** `npm run mutate:all` was exercised
+as its three commands in the chain's exact order rather than as one invocation, so the `&&` wiring itself
+is **Inferred** from the script text. A console `Ctrl-C` against the real handlers is unreachable from a
+parent on this platform by F1, so FIX 1's OS-level delivery stays **Inferred**; the handler body is
+Observed via a direct `process.emit`, with the lock genuinely on disk at the time.
 
 
 

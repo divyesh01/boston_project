@@ -24,7 +24,7 @@
 | 20 | `calculateProfitMetrics` concatenated strings instead of adding numbers | HIGH | FIXED 2026-08-20 | `src/lib/calculationService.js` (coerced `sum()`) | (Uncommitted) |
 | 21 | Daily-aggregate cache stored floats, so the cached path and the live path disagreed by cents | HIGH | FIXED 2026-08-20 | `src/lib/dailyAggregates.js` | (Uncommitted) |
 | 22 | A CSV column literally named `__proto__` silently dropped every row of the import | HIGH | FIXED 2026-08-20 | `src/lib/csvParser.js` (null-prototype row objects) | (Uncommitted) |
-| 23 | `scanAdjustmentsRefunds` matched any header *containing* "total", swallowing real data columns | HIGH | FIXED 2026-08-20 | `src/lib/reportParsers.js` | (Uncommitted) |
+| 23 | `scanAdjustmentsRefunds` matched any header *containing* "total", swallowing real data columns | HIGH | FIXED 2026-08-20 | `src/lib/parsers/adjustmentsRefunds.js` (moved 2026-09-05, §48) | (Uncommitted) |
 | 24 | `audit_list` serverless function: unbounded read, no property scope, no result filter, no ordering guarantee | HIGH | FIXED 2026-08-20 | `base44/functions/audit_list/entry.js` — see BRAIN_SECURITY.md | (Uncommitted) |
 | 25 | CSV export took its columns from `Object.keys(rows[0])`, so any field missing from row 0 vanished from the whole file | HIGH | FIXED 2026-08-20 | `src/lib/exportData.js` (NEW) — explicit column specs | (Uncommitted) |
 | 26 | CSV export had no UTF-8 BOM and LF line endings, so Excel mangled accented names | MEDIUM | FIXED 2026-08-20 | `src/lib/exportData.js` (NEW) | (Uncommitted) |
@@ -5139,6 +5139,164 @@ this commit is a parser move and does not go near that probe.
   stale before this commit.
 - **The mutation harness's `status === null` → `KILLED` conflation** (§46.6, filed not fixed) is
   untouched. This extraction does not go near that scoring path.
+
+## 48. The adjustments/refunds scanner left `reportParsers.js` (2026-09-05)
+
+Job #2's fourth extraction, and the first that needed **no textual change at all**. Lines
+**727-973** — a 17-line comment block and `scanAdjustmentsRefunds`, 247 lines together — become
+`src/lib/parsers/adjustmentsRefunds.js` (270 lines with its header and one import).
+`reportParsers.js` goes **1,571 → 1,325** lines: 248 deleted, 2 added.
+
+### 48.1 Why this is the purest cut so far
+
+§47's moved body differed from HEAD's by exactly one token, the `export ` keyword that is
+extraction 1's documented exception (`8cc8d44`). This family was **already exported** — the moved
+comment block records why, a probe that had never run because the name was module-private — so the
+247 moved lines are byte-identical to HEAD with **zero** deviations and that exception is not even
+invoked here.
+
+The boundary check came back as empty as §47.1's. Every helper the function uses is declared
+inside its own body: `headerIndex`, `TOTAL_LABEL`, `isTotalsLine`, `totalsValue`, `has`, and two
+`cell` accessors. Its only free identifiers are `convertDate`, `isIsoDate`, `parseAmount` and the
+global `String`. Sixteen candidates were checked by name — `mapRow`, `addMeta`, `skipExisting`,
+`getRowsArray`, `dedupePropertyRows`, `recordCreatedIds`, `persistAnomalyAlerts`, `_serial`,
+`COLUMN_MAP`, `NUMERIC_FIELDS`, `_REVENUE_COL`, `REPORT_TYPES`, `ENTITY`, `CLERK_SKIP_LABELS`,
+`DROP_LINE_RE`, `existingTxnDedupeKeys` — and every one is unreferenced, so nothing had to be
+split, duplicated or left behind.
+
+Import pruning was again decided by count (§45.3, §47.3), and this time the count said **prune
+nothing**: all three `csvParser` bindings are used both inside the family and outside it, so no
+binding became unused and the lint exposure of this diff is zero rather than one import.
+
+### 48.2 A re-export, and why the probe was left unmodified
+
+`scripts/probe-adjustments.mjs:28` reaches the scanner through
+`const { scanAdjustmentsRefunds } = await import('../src/lib/reportParsers.js')`. A named
+destructure of a dynamic import fails at runtime once the name is gone, so `reportParsers.js`
+keeps `export { scanAdjustmentsRefunds };` at `src/lib/reportParsers.js:24`, following the
+`export { neutralizeFormula };` precedent one line above it. This is the first extraction whose
+public surface had to be *preserved* rather than merely not widened.
+
+Repointing that probe at the new module would have been a one-line change and a much worse one:
+its 44 assertions would then prove only that an edited probe agrees with moved code. Left
+unmodified, the same 44 passes are evidence **about the move**, because the only thing that
+changed underneath them is where the function lives. That is why the re-export exists instead of a
+probe edit.
+
+### 48.3 The neighbours that did not move, for the third time
+
+`CLERK_SKIP_LABELS` (the `Set` ending `"GRAND TOTAL", "TOTAL"`) and `DROP_LINE_RE` sit immediately
+above this family too, and belong to `scanClerkReport` — which referenced them at `621`, `633`,
+`682` and `690` before this diff. §47.2 said adjacency is not membership; the check was re-run
+rather than inherited, by listing every referencing line and naming the referencing function.
+
+### 48.4 Byte identity, proved twice and not read from a report
+
+- `diff` between HEAD's pristine slice of `727,973` and the new module's lines `24,270` produces
+  **no output**, exit 0, with no tolerance flag; `md5` agrees on both sides
+  (`0702a52692d87bc5779982af4e547316`), 247 lines each.
+- Independently, `reportParsers.js` was **reconstructed** from HEAD — delete `727,974`, insert the
+  import and the re-export — and diffed against the file on disk: empty, exit 0. That is a stronger
+  claim than "the diff reads like a move": it proves the modified file contains *nothing but* the
+  specified deletion and those two added lines.
+
+Both were re-run by the coordinating session against the bytes on disk rather than taken from the
+implementing agent's report, which is the only form in which a byte-identity claim means anything.
+
+The seam is one blank line: `}` closing `scanClerkReport`, one blank, `scanTimecard`'s comment
+block. Deleting `974` with the family is what keeps it one rather than two.
+
+### 48.5 The net needed no change, and this time the reason is structural
+
+All **11** anchors resolve outside the moved lines — M1/M2/M3/M5/M6 in `reportParsers.js`,
+M4/M9/M11 in `transactionNorm.js`, M7/M8 across `reportParsers.js` and `parsers/transactions.js`,
+M10 in `src/lib/importValidation.js:96` — so as in §47.4 no `where` candidate list had to be
+widened.
+
+Worth recording *why* that is safe rather than lucky. `resolveAnchor`
+(`scripts/probe-hotelkey-mutations.mjs:199-223`) resolves each mutation through its `where` field,
+which is an explicit array of literal path constants — never a glob, never a directory walk — so
+creating a module cannot silently add a candidate to anyone's search. It then sums hits across
+candidates and rejects `total > 1` as `ambiguous`. A scan of the moved lines for every one of the
+11 anchor strings returned no match, so this move creates no second copy of any anchor text and
+cannot make one ambiguous. Had an anchor been inside the family, the mechanism for it already
+exists: a candidate that `ENOENT`s is treated as inert, expressly so the net can be widened to a
+destination *before* the code moves into it.
+
+Read honestly, the gap is §47.4's again: **this family is not covered by the mutation harness.**
+The net's only refund-side anchor is M11 on `src/lib/transactionNorm.js:225` — the `ledger_side`
+classification for a `REFUND` — which is a different code path, reached through the transaction
+ledger and not through this scanner. Its real guards are `scripts/probe-adjustments.mjs` (44
+assertions driven against a real CSV fixture) and `scripts/verify-coexistence.mjs`. The 51 HotelKey
+fixtures are a general regression check here and not coverage: `src/lib/__fixtures__/hotelkey/`
+holds ten `transactions-*.csv` and one occupancy file, and **no adjustments or refunds fixture at
+all**.
+
+### 48.6 Two identical helpers, kept; two comments worth not losing
+
+`src/lib/parsers/adjustmentsRefunds.js:190` and `:227` are the same accessor, character for
+character, once for the adjustments table and once for the refunds table. They moved as they were.
+A pure move keeps duplicates verbatim: merging them is an edit this diff cannot prove and it would
+spend the one job the diff has.
+
+The move also carries two comments that are the only record of two money defects. `isTotalsLine`
+exists because a substring `has("total")` test silently erased any row whose guest name or remark
+contained the word — defect **23** in this file's table, which is why that row's Files cell is
+repointed at the new module in this commit rather than left aiming at a file that no longer
+contains the fix. `totalsValue` exists because `parseAmount(row[row.length - 1])` recorded `0` on
+every table whose last column is Username.
+
+### 48.7 Verification (Observed 2026-09-05), baselines captured before the edit
+
+```text
+51 HotelKey fixtures       2 files, 51 passed          (baseline 51 passed)
+refund + regression trio   3 files, 22 passed          (baseline 22 passed)
+probe-adjustments          44 passed, 0 failed         (baseline 44 — probe unmodified)
+probe-import-validation    22 passed, 0 failed         (baseline 22 passed)
+verify-statistics          84 passed, 0 failed         (baseline 84 passed)
+verify-coexistence         23 passed, 0 failed         (baseline 23 passed)
+verify-transactions        115 passed, 0 failed
+npm run lint               exit 0
+npm run typecheck          exit 0
+npm run map:verify         10 areas, 27 matrix rows, 36 contracts,
+                           186 references resolved, 0 problems
+node --check               both files parse clean
+```
+
+Every number is a comparison against a baseline taken on the clean tree at `4cfb436`, not a first
+sighting. `hotelkey:mutate`, `hotelkey:crashsafe` and `verify:all` run **after** the commit for
+§47.5's reason: the harness's dirty-start guard refuses to run while `reportParsers.js` — itself a
+mutation target — is modified, and that guard is not weakened to suit an ordering preference. The
+commit is not pushed until they are green.
+
+### 48.8 The schema question this commit deliberately does not answer
+
+An earlier audit suspected the `AdjustmentRefund` rows this scanner produces do not match the
+columns they are persisted into. The question was asked again as part of this trace and came back
+**`SCHEMA_NOT_IN_SCOPE`**: no entity, table or migration definition for it exists anywhere in
+`src/lib` or `scripts`, which puts it in `src/api/base44Client.js` — **protected** — or in a
+worker/migration path outside the searched subtrees.
+
+It stays open on purpose. This scanner writes `adjustedAmount`, `adjustedTax` and `amount` through
+`parseAmount(...) ?? 0`, plus `summary` keys built as `adj_${label}` and `ref_${label}`; if any of
+those does not land in a column, the correction changes **what money is persisted**. A commit that
+both relocated a file and altered a financial field could not be reviewed as either one. Separate
+commit, failing test first.
+
+### 48.9 Deliberately left alone
+
+- **The two `cell` accessors** (§48.6), and every other apparently-redundant line in the family.
+  Nothing was deleted for looking unused.
+- **Citations elsewhere that this move invalidates.** `TECH_DEBT.md:80` still lists the family
+  among `reportParsers.js`'s scanners and `src/lib/anomalyDetector.js` names it in two comments —
+  comments, not imports, so nothing breaks. Two `.superbrain/explore-reports/` files name its old
+  home and stay wrong on purpose: they are dated snapshots, and `verify-brain.mjs:48` gives the
+  reason for its own skip list — repointing them would falsify the record they exist to keep.
+- **The mutation harness's `status === null` → `KILLED` conflation** (§46.6) and Windows
+  real-signal delivery (§46.7). Filed, untouched, and nowhere near this diff.
+
+
+
 
 
 

@@ -5295,6 +5295,88 @@ commit, failing test first.
 - **The mutation harness's `status === null` → `KILLED` conflation** (§46.6) and Windows
   real-signal delivery (§46.7). Filed, untouched, and nowhere near this diff.
 
+### 48.10 The numbers this commit could not measure until it existed (Observed 2026-09-05)
+
+```text
+hotelkey:mutate        11/11 killed - M1..M11 each under its own semantic label
+                       every mutated file restored byte-for-byte
+                       git status --porcelain -- src/   empty
+hotelkey:crashsafe     10/10 passed, 0 failed, 0 inconclusive, residue none
+                       B4 sha match 25b35c2c6f6af35e
+                       B5 porcelain empty with .git/index.lock held
+verify-all --list      149 suite(s) - list fa60d625 (149 discovered)
+verify:all             147 passed, 0 failed, 0 broken, 0 timed out,
+                       0 bad exit code, 2 skipped, 0 diagnostic, exit 0
+```
+
+The suite fingerprint is unchanged from `4cfb436`, and that is the expected result rather
+than a coincidence: `verify-all.mjs` discovers suites under `scripts/`, so a new file under
+`src/lib/parsers/` cannot alter the list. A fingerprint that *had* moved would have meant the
+move accidentally created a probe.
+
+The two skips were re-confirmed one at a time rather than read off the count.
+`probe-build-chunks.mjs` skips because `dist/` is older than 22 of its 324 inputs — its
+newest input is `src/lib/transactionNorm.js`, not the new module, so that staleness predates
+this commit. `probe-config-exposure.mjs` skips because nothing answers on `:5173`. Both exit
+0, and neither asserts anything about this diff.
+
+### 48.11 The red-to-green flip happened again, on a different commit
+
+Run 1 of `verify:all` against `ad66781` returned **NOT GREEN, exit 1**. First failing suite:
+`probe-worker-auth-remote.mjs`, throwing at `scripts/probe-worker-auth-remote.mjs:39` out of
+its `wrangler(["d1","create",...])` call with Cloudflare `Authentication error [code: 10000]`.
+Run 2, same commit, `git status --porcelain` empty before both runs, produced the green line
+in §48.10.
+
+That is §47.6's pattern for the second recorded time, now on a second commit, which upgrades
+it from an anecdote to a repeating condition. Holding the bytes constant across one red and
+one green run places the cause outside the repository *by construction* — no reasoning about
+the probe's internals is required to reach that conclusion, which is why it is recorded here
+as evidence rather than as a suspicion.
+
+Still not fixed, and deliberately. The repair is a SKIP-path change inside a Cloudflare
+credential probe: wrap only the `d1 create` call so a credential failure prints one `SKIP:`
+line and leaves `process.exitCode = 0`, the way `probe-config-exposure.mjs` already does for
+an unreachable endpoint. That belongs in a commit about that probe. Bundling it into a parser
+move would mean a diff whose two halves could not be reviewed against each other, and it
+would also destroy the property that makes this observation worth anything: the sweep result
+either does or does not depend on the bytes under test.
+
+### 48.12 The independent review, and what checking it actually proved
+
+An adversarial post-hoc inspection ran against the committed bytes through the Antigravity CLI
+on `gemini-3.8-flash-high --effort high`, read-only, `--mode plan`, with `--add-dir` scoped to
+`src/lib` and `scripts` and never to the repository root — root scoping would put
+`.env.local`'s live keys inside the worker's own discovery reach. Twelve blocks: self
+containment, residue, call path, export surface, the zero-change claim, the duplicate helper,
+the neighbours, the mutation anchors, sibling pattern match, behaviour risk, circularity,
+verdict. Its verdict was **`PURE_MOVE_CONFIRMED`**.
+
+The verdict is the least useful thing it produced. Every line number it returned was
+re-derived locally, and the check that mattered is one the reviewer did not know it was
+performing: it placed `CLERK_SKIP_LABELS` at 590, `DROP_LINE_RE` at 601, `scanClerkReport` at
+603, and their four references at 623, 635, 684 and 692. The pre-move trace of those same
+symbols had them at 588, 599, 601, 621, 633, 682 and 690 — **exactly two lines lower, every
+one of them.** Two lines added above the retained region and nothing else shifted anywhere
+inside it. That corroborates the whole-file reconstruction diff of §48.4 from the opposite
+direction, produced by an agent with no access to the previous state and no knowledge that the
+offset was the thing being tested.
+
+Its one substantive observation was correct and was not a defect: the call site passes
+`fullMeta` into a parameter named `meta` (`src/lib/reportParsers.js:457` against
+`src/lib/parsers/adjustmentsRefunds.js:41`). A positional argument whose local name differs
+from the parameter name is not a mismatch, and that call site was never among the moved bytes.
+
+Two further results are worth keeping. It independently reached §48.5's structural conclusion
+about the mutation net — quoting the harness's own "the candidate list is EXPLICIT, never a
+directory scan" and concluding that because no `where` array names the new module, the harness
+never reads it at all. And it found `scripts/test-parser.mjs:4`: an independent, drifted copy
+of `scanAdjustmentsRefunds` that still carries the substring-total bug defect row 23 fixed in
+production. It classified that copy correctly as pre-existing drift rather than as a duplicate
+this move created. It stays untouched — it is a scratch script, not a gate, and correcting it
+is a behaviour change to a file nothing verifies.
+
+
 
 
 

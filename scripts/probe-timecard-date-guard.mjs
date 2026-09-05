@@ -1,13 +1,14 @@
 // Probe (audit finding 3.3 residual): the timecard/timesheet punch parser
 // accepted a malformed shift date.
 //
-// Root cause (before fix): scanTimecard (src/lib/reportParsers.js ~1389) guarded
+// Root cause (before fix): src/lib/reportParsers.js#scanTimecard guarded
 // the punch with a bare truthiness check — `if (!employee || !date || ...)`.
 // convertDate returns the RAW input string when it recognises no format (e.g.
 // "2026.01.01"), and returns a shape-valid but calendar-impossible string for
 // dates like "2026-02-31". Both are truthy, so `!date` let them through and the
 // punch was persisted with a junk shift_date — unlike the transaction ledger
-// (:896) and the flat-table path (:620), which already require isIsoDate(date).
+// (parsers/transactions.js#scanTransactions) and the flat-table path
+// (reportParsers.js#scanReport), which already require isIsoDate(date).
 //
 // Fix: the guard is now `!isIsoDate(date)`, routing a non-ISO / impossible punch
 // date to the same `rejected` path the other two importers use.

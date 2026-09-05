@@ -4261,9 +4261,24 @@ hash correctly.
 while its target files are dirty — with the extraction uncommitted, `src/lib/reportParsers.js`
 is modified and `src/lib/parsers/transactions.js` is untracked, so the harness aborts before
 mutating anything. Nothing is published until the sweep is green, so the sequence needs no
-`--amend` and no force-push: a red sweep gets a new commit. The sweep's own numbers for this
-change are recorded in the follow-up documentation commit rather than asserted here, because a
-result that does not exist yet cannot be written down as if it did.
+`--amend` and no force-push: a red sweep gets a new commit. What the sweep then measured:
+
+```text
+npm run verify:all              150 suite(s): 148 passed, 0 failed, 0 broken, 0 timed out,
+                                0 bad exit code, 2 skipped, 0 diagnostic
+                                list b5008211 (150 discovered)
+probe-hotelkey-mutations.mjs    11/11 mutations killed, 0 not killed — 90.9s
+```
+
+Run 1 of that sweep was **red**, and on nothing this change touches: `probe-worker-auth-remote.mjs`
+died inside a `wrangler` D1 call with a Cloudflare `Authentication error [code: 10000]`. It was
+cleared with evidence rather than a retry — `wrangler whoami` exit 0 with `d1 (write)` in scope,
+`wrangler d1 list` showing no orphaned temp database left behind, and that probe's import graph
+containing neither moved file — after which an isolated re-run went 8/8 and the full sweep went
+green. Both numbers are recorded on purpose. "The remote auth flaked" and "the extraction is
+sound" are different facts, and a report that prints only the second one has quietly decided the
+reader does not need the first. §45.7 records what happened when the same suite went red again
+one commit later, which is why the word "transient" does not appear here.
 
 The 177 deletions account exactly: 174 family lines (the 173-line body plus its trailing blank,
 leaving one blank line at the seam), the old `universalParser` import line, the old
@@ -4291,7 +4306,31 @@ about the move if the move is the only thing in its `src/` diff — a comment ed
 `csvParser.js` riding along would mean the 51 fixtures and 11 mutations were run against a tree
 containing something else, however harmless it looks. The follow-up converts them to symbol
 citations rather than re-numbering them, because the same arithmetic will break again at the
-next extraction: `#hashTransactionFile` cannot drift, `:747` drifts every time.
+next extraction: a symbol cannot drift, `:747` drifts every time.
+
+**The table above is scoped to arithmetic breakage, and the follow-up's scope is a superset of
+it: ten sites in five files.** The extra three were already pointing at the wrong line at
+`f79676d` — this move neither broke nor fixed them, so they have no row here — and repairing a
+citation halfway is worse than leaving it: an agent that finds `#scanTimecard` correct in one
+header and `:512` wrong in the next learns to check none of them. All of
+`scripts/probe-timecard-date-guard.mjs`, absent from the table entirely, is in that category.
+
+**And the prediction this section originally closed with was arithmetically right, which is
+exactly why it named the wrong symbol.** It said `#hashTransactionFile` cannot drift. Follow the
+−674: `parsers/transactions.js:73` really is `const text = meta.csvText || …`, and it really is
+inside `async function hashTransactionFile` (declared `:71`). But the sentence in `csvParser.js`
+that carried the citation says "the call sites that test `r.date` without re-converting it", and
+`hashTransactionFile` never touches `r.date` — it hashes the raw text. The guard the sentence is
+actually about is `parsers/transactions.js:123`, `if (!mapped.date || !isIsoDate(mapped.date))`,
+inside `export async function scanTransactions` (`:81`). So the follow-up cites
+`parsers/transactions.js#scanTransactions`, not `#hashTransactionFile`.
+
+The durable rule, and the reason this is written down rather than quietly corrected: **drift
+arithmetic locates where the old text went, it does not tell you what the sentence was claiming.**
+A citation that was already aimed at the wrong line survives the arithmetic intact — the shift is
+applied faithfully and reproduces the same error at a new address, now with a fresh "verified by
+same line text" beside it. Converting to symbols is only a real fix if the symbol is chosen from
+what the prose asserts. Re-read the sentence, then pick the symbol.
 
 Two related citations are **out of scope entirely**. `src/api/base44Client.js` cites
 `reportParsers.js:1262`, which at `f79676d` was already a timecard keyword-map line and not the <!-- no-cite-check -->
@@ -4321,5 +4360,196 @@ cut, so this move did not touch it.
   family splits; they get one pass when the split is finished.
 - **`scripts/probe-hotelkey-mutations.mjs` was not opened.** See §45.2: the net proving a move
   must not be edited by the commit that performs it.
+
+### 45.7 The follow-up commit, and what a symbol citation actually costs
+
+The commit §45.5 deferred. Ten sites across five files become `file.js#symbol`; three numeric
+citations are deliberately kept. Diff: **5 files, 31 insertions, 17 deletions, and every one of
+those 48 line bodies is a comment or blank** — proven mechanically rather than by eye, by
+extracting the `+` and `-` bodies from `git diff` and asserting each matches `/^\s*\/\//` or is
+empty: `{"plus":31,"minus":17,"nonCommentCount":0,"nonComment":[]}`. `node --check` exits 0 on
+all five. That proof is the whole licence for what follows: 51/51 fixtures, 42/42
+`probe-date-validation.mjs`, and 11/11 mutations killed are evidence about *this* tree only
+because the tree differs from the proven one by comment text alone.
+
+**The three numeric citations that stay, and why keeping them is not laziness.** A line number is
+the right citation when something pins it — when moving the line breaks a test rather than
+silently misleading a reader. Each was re-verified today by reading the cited line:
+
+| Kept citation | Line reads | Why a number, not a symbol |
+|---|---|---|
+| `importValidation.js:87` | `` // `parsed` is the result of parseAmount: null means nothing numeric was found, `` | the claim is about one comment's exact wording, not a function's behaviour |
+| `transactionNorm.js:219` | `if (out.amount == null) out.amount = 0;` | a single statement inside a long function; `#mapTransactionRow` would point at 60 lines |
+| `universalParser.js:559` | `return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);` | the 32-char truncation *is* the fact; the enclosing symbol does not state it |
+
+Enumerated after the edit with the citation gate's own regex: exactly **3** numeric citations
+remain across the five files, one per row above, and **18** `file.js#symbol` citations. The count
+is the assertion — "we converted the stale ones" is not checkable, "three numeric citations
+remain and here is each one's current text" is.
+
+**A comment-only diff is exactly where a line-ending rewrite hides, and the obvious instruments
+do not see it.** This tree is `core.autocrlf=true` with `* text=auto`, so the index stores LF and
+the working file holds CRLF. Rewriting all 350 lines of `csvParser.js` to LF produces the same
+index blob, therefore the same hash, therefore **`git diff --stat` reports nothing** — the file
+looks untouched while every line in the editor changed. And `grep -c $'\r'` **lies** on this
+MSYS grep: it reports 0 on a file that is entirely CRLF, because the pattern is consumed before
+the match. Two instruments do work, and both were run on all five files:
+
+```text
+git ls-files --eol      i/lf  w/crlf  attr/text=auto      (all five)
+byte census (node)      131 / 84 / 350 / 542 / 526 CRLF, 0 bare LF, 0 bare CR
+```
+
+The census counts bytes, not lines: `0x0d` followed by `0x0a` is a CRLF, a lone `0x0d` or `0x0a`
+is a defect. A single bare LF in a CRLF file is the signature of an editor that rewrote one line,
+and it is invisible to every other check in the chain.
+
+**The citation gate has nothing to check in this commit, and that is a property of the fix, not a
+gap.** `verify-brain.mjs`'s second gate matches `<ext>:<digits>` on staged added lines. Converting
+`reportParsers.js:747` to `parsers/transactions.js#scanTransactions` removes the digits, so the
+gate that would have caught the stale number can no longer see the citation at all. It prints `0
+citations` and passes. The three kept numeric citations are the only ones it still guards — which
+is why they were left un-suppressed rather than marked `no-cite-check`: a table of preserved line
+numbers that the gate does not enforce is a table that will rot. Symbol citations buy permanence
+and pay for it in mechanical checkability; `map:verify` (§42), which resolves symbols, is the
+gate that covers the other half.
+
+**Correction to §45.4's mechanism, found by reading the harness instead of assuming.** §45.4 says
+`probe-hotelkey-mutations.mjs` "refuses to start while its target files are dirty", and that is
+true — but *target* is narrower than it sounds, and the difference decides whether verification
+can run before a commit or only after. The harness resolves each mutation's anchor across an
+explicit candidate list, and the clean check reserves only the files a run will really write:
+`const touched = [...new Set(plan.map((p) => p.path))]`, then `git status --porcelain --` with
+**that pathspec**. The candidate set is four files — `reportParsers.js`, `transactionNorm.js`,
+`parsers/transactions.js`, `importValidation.js`. `csvParser.js` appears in no `where:` array, so
+this commit's five dirty files never intersected the reservation, and the full sweep and the
+mutation harness both ran on the uncommitted tree. Verifying before publishing is strictly better
+than verifying after; the constraint in §45.4 applied because that commit's diff *was* two of the
+four targets.
+
+**One finding this commit records and deliberately does not fix: the calendar check never reached
+`aiInsights.js`.** Writing "every call site of the shared `isIsoDate()` guard" into a probe header
+is a claim about the whole repository, so it was checked against the whole repository — and the
+word *shared* turned out to be carrying the sentence. `src/lib/aiInsights.js` imports neither
+`convertDate` nor `isIsoDate`; its only import is `DataScanner`. It defines its own
+`aiInsights.js#convertDate` and `aiInsights.js#isIsoDate`, and the second one reads:
+
+```js
+function isIsoDate(s) {
+  return /^\d{4}-\d{2}-\d{2}/.test(String(s || ''));
+}
+```
+
+That is byte-for-byte the **pre-fix** shared guard. The current
+`csvParser.js#isIsoDate` captures the three fields and returns `isRealCalendarDate(m[1], m[2],
+m[3])`; the private copy still tests shape only, and the private `convertDate` contains no
+`isoOrEmpty` and no `isRealCalendarDate`. So `2026-13-45` is still a date to this module, and its
+date-overlap counter — the loop that decides how many days of an upload already exist — still
+counts it.
+
+Three reasons it is a report, not a rider on this commit. It is a **behaviour change in a module
+with no diff**, and a comment-only commit that also changes what a function returns is no longer
+a comment-only commit, which would void the licence in the first paragraph. Its blast radius is
+the advisory/insight layer rather than a financial write path — nothing persisted is computed from
+it. And the right repair is a contract decision, not an edit: delete the private pair in favour of
+the shared import, or keep the duplication deliberately and say why. Filed with the ownership
+question open rather than answered by whoever happened to notice it.
+
+An almost-correct version of the probe header would have said "reportParsers.js, dataScanner.js
+and universalParser.js" and stopped, because those are the files that `import { isIsoDate }`. The
+grep that finds importers does not find *re-implementers*. Searching for the function's **body**
+— the literal regex `/^\d{4}-\d{2}-\d{2}/` — is what surfaced it, and that is the search worth
+repeating the next time a shared guard is hardened: hunt the pattern, not the symbol.
+
+#### 45.7.1 The same tree swept red, then green — and that pair is the evidence
+
+Two full sweeps ran against this commit's tree with **no file changed between them** — `git status`
+returned the same six paths both times, and the five code files' diff was the same 31 insertions and
+17 deletions. They disagree:
+
+```text
+run 1  150 suite(s): 147 passed, 1 failed, 0 broken, 0 timed out,
+       0 bad exit code, 2 skipped, 0 diagnostic — list b5008211 — NOT GREEN
+       FAILED  probe-worker-auth-remote.mjs
+       Error: Wrangler failed (1): A request to the Cloudflare API
+       (/accounts/8142…/d1/database) failed. Authentication error [code: 10000]
+         at wrangler (scripts/probe-worker-auth-remote.mjs:39)
+         at scripts/probe-worker-auth-remote.mjs:62
+
+run 2  150 suite(s): 148 passed, 0 failed, 0 broken, 0 timed out,
+       0 bad exit code, 2 skipped, 0 diagnostic — list b5008211 — green
+       PASS  29.5s  probe-worker-auth-remote.mjs — 8 passed, 0 failed
+
+both   SKIPPED  probe-build-chunks.mjs — dist/ is older than 20 of its 322 inputs
+                probe-config-exposure.mjs — no server reachable at http://localhost:5173
+```
+
+**The number recorded for this commit is run 2's 148/0/2. The number carrying the information is
+run 1's.** A green sweep on its own would have let this commit claim a clean tree while saying
+nothing about a suite that fails roughly one time in six. Put the three observations together —
+§45.4's run 1 red, this tree's run 1 red, this tree's run 2 passing that same suite 8/8 with nothing
+in the repository having moved — and the conclusion stops being an excuse and becomes a measurement:
+**a defect in the five changed files cannot pass on re-run without a re-edit.** Which is also why
+neither red is deleted from this document now that a green exists.
+
+**Attribution, proven twice and independently.** By hand: `probe-worker-auth-remote.mjs`'s imports
+are five `node:` builtins plus `worker/password-credential.js` (which imports nothing at all) and
+`scripts/_repo-root.mjs` (`node:url`, `node:path`). Closed graph, seven nodes, none of them a file
+this commit touches. Then mechanically, by a transitive-closure walk resolving relative specifiers
+with extension and index fallback: the probe's closure is **3** local modules and `worker/index.js`'s
+— the bundle wrangler actually deploys — is **12**, every one under `worker/`. Set intersection with
+the five modified paths: **empty, both times.** The probe's only repository *data* reads are
+`worker/index.js` and `worker/schema.sql`; everything else it reads it wrote itself into an
+`mkdtemp` directory, and the root `wrangler.jsonc` it also reads matches nothing under `src/`.
+
+A trap worth naming, because it caught the first pass at this proof: the comment-only filter that
+returns `nonCommentCount: 0` is scoped to **the five code files**, not to the whole tree. This very
+document is dirty in the same commit and its changed lines are markdown prose, so a filter run
+tree-wide reports non-comment changes and looks like a contradiction. Scope the assertion to the
+files the assertion is about.
+
+**What the failure does correlate with.** A census of all 529 wrangler logs on this machine
+(2026-08-22 → 2026-09-04) splits them by whether the run performed an OAuth token refresh:
+
+| run kind | runs | 401s | rate |
+|---|---|---|---|
+| refreshed the token first | 37 | 6 | **16%** |
+| did not refresh | 492 | 1 | **0.2%** |
+
+All seven 401s in that whole history hit a D1 control-plane URL. The clinching detail is inside one
+log: the *same* token that took `Unauthorized 401` on `POST …/d1/database` at 15:48:43.309 then
+authenticated `GET /user`, `GET /accounts` and `GET /memberships` — all 200 — within 0.4 s, and
+`wrangler d1 list` reused it against the identical `GET …/d1/database` path eleven minutes later,
+also 200. So the token was valid, correctly scoped, and accepted by the same endpoint minutes on
+either side of the rejection. Refresh fires when the previous wrangler call was more than an hour
+earlier; the failing run followed a 2 h 44 m gap. **9 of the 14 refresh runs still passed**, which is
+why a re-run is *likely* to come back green and is not *guaranteed* to.
+
+Eliminated, each with its own check rather than by assumption: token scope (`wrangler whoami`
+exits 0 and lists `d1 (write)`), quota or account state (`wrangler d1 list` returns two databases
+and answers on the same path), and name collision from an earlier leaked run (neither of those two
+is an `rri-auth-regression-*`).
+
+**The half this repository does own is a harness design gap, not a credential.**
+`scripts/_verdict.mjs:104-105` decides the SKIP verdict as `lines.find((l) => /^SKIP:/i.test(l))`
+**and** `code === 0`. `probe-worker-auth-remote.mjs` has no SKIP path anywhere in it, so an outage
+in someone else's control plane is forced to present as a repository failure. Seven other suites
+already implement the convention — `scripts/probe-config-exposure.mjs:99` is the reference form —
+and `docs/brain/BRAIN_BACKEND.md:533-536` documented the omission before this sweep ever ran,
+ending with "Retry it before believing it." The repair is real and small: wrap **only** the
+`d1 create` call, so an auth-signature failure prints one `SKIP:` line and leaves the exit code 0,
+while every other wrangler failure and all seven assertions keep failing loudly. It is not made
+here, because greening an unrelated red suite inside a documentation commit is the exact move this
+document warns against, and because the assertions themselves are not in doubt.
+
+One latent hazard found while reading that probe, filed rather than fixed: if `d1 create` succeeds
+but the `database_id` regex at `scripts/probe-worker-auth-remote.mjs:63` misses, `databaseId` stays
+`""`, the probe throws, and the `finally` block's delete is skipped — leaking a live D1 database
+under a real account. `wrangler d1 list` shows this has not yet happened.
+
+Classification, from an independent read of the same evidence: **external state / credentials** — a
+transient remote authorization failure on a valid token, plus a separately owned harness gap that
+converts it into FAIL instead of SKIP. Neither half is this commit's, and both are written down
+here instead of being left for the next sweep to rediscover.
 
 

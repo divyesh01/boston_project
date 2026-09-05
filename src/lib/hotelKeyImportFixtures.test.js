@@ -183,9 +183,9 @@ describe("HotelKey persist — property assignment", () => {
     // that order would store keys with an EMPTY leading field instead of the
     // property, which is what the assertion below catches.
     //
-    // It would not cause cross-property data loss: existingTxnDedupeKeys scopes
-    // its read to `{ property_id: propertyId }` (reportParsers.js:1449), so one
-    // property's guard never compares against another's stored keys. The property
+    // It would not cause cross-property data loss: existingTxnDedupeKeys scopes its
+    // read to `{ property_id: propertyId }` (reportParsers.js#existingTxnDedupeKeys),
+    // so one property's guard never compares against another's stored keys. The property
     // component of the key is defence-in-depth, not the isolating mechanism.
     expect(scanned.rowsToImport.every((/** @type {any} */ r) => !r.property_id)).toBe(true);
 
@@ -404,7 +404,8 @@ describe("HotelKey persist — property isolation", () => {
     // …and the keys differ only in the property field. That is a consequence of
     // the stamp order, not the reason the row-level guard leaves Property B
     // alone: the guard's read is already scoped to one property
-    // (reportParsers.js:1449). Both layers have to hold, so both are asserted.
+    // (reportParsers.js#existingTxnDedupeKeys). Both layers have to hold, so both
+    // are asserted.
     expect(rowsA.map((/** @type {any} */ r) => r.dedupe_key.replace(P1, "X")))
       .toEqual(rowsB.map((/** @type {any} */ r) => r.dedupe_key.replace(P2, "X")));
   });

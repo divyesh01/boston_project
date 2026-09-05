@@ -35,8 +35,9 @@ function isRealCalendarDate(year, month, day) {
 }
 
 // "" means "this cell holds no usable date". Callers already treat that as a skip with
-// a reason (reportParsers.js:489 counts it, :1173 rejects the punch, manualEntryImport
-// raises a named warning), so refusing here surfaces loudly instead of silently.
+// a reason (reportParsers.js#scanReport counts it, #scanTimecard rejects the punch,
+// manualEntryImport raises a named warning), so refusing here surfaces loudly instead
+// of silently.
 function isoOrEmpty(year, month, day) {
   const y = String(year);
   const m = String(month).padStart(2, "0");
@@ -86,7 +87,8 @@ export function convertDate(s) {
 
 // Guards a value that is already in ISO shape. This is the last line of defence for
 // rows written before the calendar check existed, and for the call sites that test
-// r.date without re-converting it (reportParsers.js:509, :747).
+// r.date without re-converting it (reportParsers.js#scanReport and
+// parsers/transactions.js#scanTransactions).
 export function isIsoDate(s) {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || ""));
   if (!m) return false;
@@ -99,8 +101,8 @@ export function isIsoDate(s) {
 // The sign is read AFTER the currency symbol and separators are stripped. Reading
 // it off the raw string let a leading "$" hide the sign that followed it, so
 // "$-50.00" and "$(50.00)" both parsed as +50 — an imported refund became a charge
-// of the same size, and reportParsers.js:230 feeds this straight into
-// TransactionLine.amount.
+// of the same size, and transactionNorm.js#mapTransactionRow feeds this straight
+// into TransactionLine.amount.
 export function parseAmount(s) {
   if (s == null) return null;
   const raw = String(s).trim();

@@ -1,11 +1,20 @@
 // Probe: convertDate / isIsoDate accept dates that do not exist.
 //
 // Both functions check the SHAPE of a date and never the calendar. So a cell reading
-// "13/45/2026" is assembled into "2026-13-45", which then satisfies every
-// `isIsoDate()` guard in the codebase (reportParsers.js:490, :509, :747,
-// dataScanner.js:209) because that guard is only /^\d{4}-\d{2}-\d{2}/. The row imports
+// "13/45/2026" is assembled into "2026-13-45", which then satisfies every call site of
+// the SHARED `isIsoDate()` guard — reportParsers.js#scanReport,
+// #scanAdjustmentsRefunds, #scanTimecard and #existingTxnDedupeKeys,
+// parsers/transactions.js#scanTransactions, dataScanner.js#detectInconsistencies and
+// #inferColumnTypes, and universalParser.js#deriveBusinessDate — because that guard is
+// only /^\d{4}-\d{2}-\d{2}/. The row imports
 // with a month that does not exist, and its revenue is filed under a period no report
 // will ever total.
+//
+// "shared" is doing real work in that sentence. aiInsights.js imports neither function
+// and keeps module-private pre-fix copies of both — aiInsights.js#convertDate and
+// #isIsoDate, neither of which carries the calendar check — so its own date-overlap
+// counting still accepts "2026-13-45". Repairing that is a behaviour change in a
+// different module and is deliberately NOT this probe's subject.
 //
 // The same holds for "2026-02-31", "29-Feb-26" (2026 is not a leap year) and
 // "31/01/2026" (a D/M/Y file read as M/D/Y, giving month 31).
@@ -74,7 +83,8 @@ console.log("\n=== 2. Impossible dates are not dressed up as valid ISO ===");
 console.log("\n=== 3. isIsoDate rejects an impossible date already in storage ===");
 {
   // The guard has to catch these on its own: rows written before this fix, and
-  // reportParsers.js:509 / :747 which test r.date without re-converting it.
+  // reportParsers.js#scanReport and parsers/transactions.js#scanTransactions, which
+  // test r.date without re-converting it.
   T("2026-13-45 is not a date", !isIsoDate("2026-13-45"), String(isIsoDate("2026-13-45")));
   T("2026-02-31 is not a date", !isIsoDate("2026-02-31"), String(isIsoDate("2026-02-31")));
   T("2026-31-01 is not a date", !isIsoDate("2026-31-01"), String(isIsoDate("2026-31-01")));

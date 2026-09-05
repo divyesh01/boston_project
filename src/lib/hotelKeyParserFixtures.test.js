@@ -158,8 +158,8 @@ describe("HotelKey transactions — detection and stacked sections", () => {
 
   it("breaks a width tie by keeping the first grid, and drops the second one", async () => {
     // Two grids, same 19 columns, both carrying rows. The winner is chosen with a
-    // strict `>` (reportParsers.js:859-863), so the FIRST of equal-width sections
-    // wins and the second one's rows never reach rowsToImport.
+    // strict `>` (parsers/transactions.js#scanTransactions), so the FIRST of
+    // equal-width sections wins and the second one's rows never reach rowsToImport.
     //
     // This pins that tie-break, and it also pins the consequence: section 2's
     // 900.00 + 135.00 are silently discarded, and the checksum reconciles against

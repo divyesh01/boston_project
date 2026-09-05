@@ -35,6 +35,87 @@ export function stripComments(src) {
     .replace(/(^|[^\\:])\/\/.*$/gm, '$1');
 }
 
+/** A non-zero exit, in either of the two idioms this repo's suites use. */
+const EXIT_NONZERO = /\bprocess\.exit\s*\(\s*[1-9]|\bprocess\.exitCode\s*=\s*[1-9]/m;
+
+/**
+ * Every statement governed by an `if (...)` in `src` — its body, and any `else` body
+ * attached to it — returned as source substrings.
+ *
+ * WHY A SCANNER AND NOT A REGEX. This exists so `hasAssertions` can ask whether a
+ * non-zero exit belongs to a conditional, rather than merely whether both appear
+ * somewhere in the same file. Every character-class spelling of that question is wrong
+ * on code this repository actually contains, and both spellings were tried and rejected
+ * against real fixtures before this was written:
+ *
+ *   `if\s*\([^)]*\)`      breaks on a call inside the condition. `[^)]*` stops at the `)`
+ *                         closing `startsWith("__Host-")`, so conditional-exit-assertion.mjs
+ *                         stops matching and a genuine assertion reads as none.
+ *   `\{[^{}]*process\.exit` breaks on a nested block. nested-block-exit.mjs puts a
+ *                         `for (...) { ... }` between the condition and the exit.
+ *
+ * A bounded character window (`[\s\S]{0,400}?`) reopens the same hole in fuzzier form:
+ * it re-admits an exit that merely happens to sit near an unrelated `if`.
+ *
+ * KNOWN LIMIT, stated rather than hidden: `stripComments` removes comments, not string
+ * literals, so a string containing an unbalanced `(`, `)`, `{` or `}` can skew the scan
+ * for the rest of the file. Blanking string literals is not available as a fix — the
+ * summary patterns above match on string CONTENTS (`console.log("PASSED: ...")`), so
+ * blanking them would make every suite in the repository read hasSummary=false.
+ * scripts/_fixtures-suite-integrity/assert-in-string.mjs pins that trade.
+ */
+export function conditionalBodies(src) {
+  const bodies = [];
+  const skipSpace = (i) => {
+    let j = i;
+    while (j < src.length && /\s/.test(src[j])) j += 1;
+    return j;
+  };
+  // The index of the delimiter closing the one at `i`, or -1 if it never closes.
+  const balanced = (i, open, close) => {
+    let depth = 0;
+    for (let j = i; j < src.length; j += 1) {
+      if (src[j] === open) depth += 1;
+      else if (src[j] === close) {
+        depth -= 1;
+        if (depth === 0) return j;
+      }
+    }
+    return -1;
+  };
+  // The statement beginning at `i`: a braced block, or everything up to its `;` for the
+  // brace-less `if (bad) process.exit(1);` form.
+  const statement = (i) => {
+    const start = skipSpace(i);
+    if (src[start] === '{') {
+      const close = balanced(start, '{', '}');
+      const end = close < 0 ? src.length : close + 1;
+      return { text: src.slice(start, end), end };
+    }
+    const semi = src.indexOf(';', start);
+    const end = semi < 0 ? Math.min(src.length, start + 200) : semi + 1;
+    return { text: src.slice(start, end), end };
+  };
+
+  const re = /\bif\s*\(/g;
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    const condEnd = balanced(m.index + m[0].length - 1, '(', ')');
+    if (condEnd < 0) continue;
+    const body = statement(condEnd + 1);
+    bodies.push(body.text);
+    // An `else` body is a conditional failure path too: `if (ok) {...} else process.exit(1)`
+    // fails on exactly the inputs the condition rejects. `else if` is skipped because this
+    // loop reaches that `if (` on its own and reads its real body.
+    const after = skipSpace(body.end);
+    if (src.startsWith('else', after) && !/\w/.test(src[after + 4] ?? '')) {
+      const rest = skipSpace(after + 4);
+      if (!src.startsWith('if', rest)) bodies.push(statement(rest).text);
+    }
+  }
+  return bodies;
+}
+
 export function classifySuite(filePath, rawContent) {
   const noComments = stripComments(rawContent);
 
@@ -93,6 +174,26 @@ export function classifySuite(filePath, rawContent) {
   // (probe-csrf-host-prefix, probe-csvParser-data-loss). All five were mutated and all
   // five exited 1, so all five were false NO_ASSERTIONS/UNCLASSIFIED verdicts.
   //
+  // MEASURED 2026-09-05, and the reason alternative 4 now scans instead of testing two
+  // independent existence patterns. It used to read:
+  //
+  //   /\bif\s*\(/.test(src) && /process\.exit\(\s*[1-9]|process\.exitCode\s*=\s*[1-9]/.test(src)
+  //
+  // — an `if` ANYWHERE and a non-zero exit ANYWHERE, with no relationship required
+  // between them. A file with an argv convenience check and an uncalled `bail()` helper
+  // satisfies both while nothing in it can ever fail; with a summary line it scored VALID,
+  // the auditor's strongest verdict. That false green is pinned by
+  // _fixtures-suite-integrity/unrelated-if-and-exit.mjs, and the fix is to require the
+  // exit to sit inside the conditional's own body (see conditionalBodies above).
+  //
+  // The tightening is free, measured over the whole corpus on the same date: across the
+  // 153 discovered suites it produces 0 verdict flips, because every one of them is
+  // already matched by alternatives 1-3 — not one suite depends on alternative 4 at all.
+  // The five suites the 2026-08-23 note names all match alternative 2 today (`pass++` /
+  // `pass += 1`), so the loose form was buying nothing while carrying its evasion. The
+  // capability stays anyway: a conditional exit is the most primitive real assertion
+  // there is, and a future suite may legitimately assert only that way.
+  //
   // KNOWN IMPRECISION, accepted deliberately: the conditional-exit alternative cannot
   // distinguish a check of the SUBJECT from an environment pre-flight guard such as
   // `if (!existsSync(fixture)) process.exit(1)`, so a suite whose only conditional exit
@@ -100,12 +201,13 @@ export function classifySuite(filePath, rawContent) {
   // anything here fail the run", not "does it verify the right thing" — no static
   // pattern can answer the second. The `DIAGNOSTIC: no assertions` marker and
   // verify-all's DIAGNOSTIC bucket (scripts/_verdict.mjs) are what cover the rest.
+  // _fixtures-suite-integrity/preflight-guard-only.mjs pins it as a tested contract so it
+  // stays a decision instead of drifting into an unexamined bug.
   const hasAssertions = (
     /\b(?:assert(?:\.[a-zA-Z0-9_]+)?\s*\(|console\.assert\s*\(|expect\s*\(|check\s*\(|T\s*\(|test\s*\(|it\s*\()/m.test(noComments) ||
     /\b(?:passed|failed|pass|fail)\s*(?:\+\+|\+=\s*\d+)/m.test(noComments) ||
     /if\s*\([^)]*\)\s*\{[^}]*(?:failed\+\+|fail\+\+|throw\s+new\s+Error)/m.test(noComments) ||
-    (/\bif\s*\(/m.test(noComments) &&
-      /\bprocess\.exit\s*\(\s*[1-9]|\bprocess\.exitCode\s*=\s*[1-9]/m.test(noComments))
+    conditionalBodies(noComments).some((body) => EXIT_NONZERO.test(body))
   );
 
   let verdict;
@@ -133,10 +235,20 @@ export function classifySuite(filePath, rawContent) {
   };
 }
 
-async function runSelfTest() {
-  console.log('=== SUITE INTEGRITY PROBE: SELF-TEST MODE ===');
-  console.log(`Evaluating fixture corpus in: ${FIXTURES_DIR}\n`);
-
+/**
+ * The classifier's oracle: run classifySuite against every fixture in
+ * _fixtures-suite-integrity/ and compare all five fields to the expectation recorded here.
+ *
+ * Pure on purpose — prints nothing, exits nothing — so the same comparison serves both
+ * `--self-test` and the repository audit's pre-flight. Before 2026-09-05 this logic was
+ * welded to the printing and the process.exit inside runSelfTest, and since nothing in the
+ * repository ever passed `--self-test` (not package.json, not verify-all.mjs, not a hook,
+ * not a workflow), the corpus that decides whether classifySuite is correct was never
+ * executed by any gate — F-071.
+ *
+ * @returns {{passed: number, failed: number, results: Array<{filename: string, expected: object|null, actual: object|null, ok: boolean, why: string|null}>}}
+ */
+export function evaluateFixtureCorpus() {
   const expectedVerdicts = {
     'compliant.mjs': { verdict: 'VALID', hasAssertions: true, hasExitPath: true, hasSummary: true, isDiagnostic: false },
     'ternary-summary.mjs': { verdict: 'VALID', hasAssertions: true, hasExitPath: true, hasSummary: true, isDiagnostic: false },
@@ -154,47 +266,74 @@ async function runSelfTest() {
     'exit-member-ternary.mjs': { verdict: 'VALID', hasAssertions: true, hasExitPath: true, hasSummary: true, isDiagnostic: false },
     'plusequals-counter.mjs': { verdict: 'VALID', hasAssertions: true, hasExitPath: true, hasSummary: true, isDiagnostic: false },
     'conditional-exit-assertion.mjs': { verdict: 'NO_SUMMARY', hasAssertions: true, hasExitPath: true, hasSummary: false, isDiagnostic: false },
+    // Added 2026-09-05 with the structural tightening of hasAssertions alternative 4. The
+    // first is the evasion the tightening exists to catch — an `if` and a non-zero exit
+    // with no relationship to each other, which the two-independent-existence-tests form
+    // scored VALID. The next three are the legitimate shapes that must survive it: one
+    // whose exit sits behind nested condition parens AND a nested block (the two things a
+    // character-class regex cannot cross), one whose exit is in the `else` branch, and one
+    // that is a bare environment pre-flight guard and reads as an assertion by the
+    // documented imprecision. The last pins string blindness in stripComments and involves
+    // no conditional at all.
+    'unrelated-if-and-exit.mjs': { verdict: 'NO_ASSERTIONS', hasAssertions: false, hasExitPath: true, hasSummary: true, isDiagnostic: false },
+    'nested-block-exit.mjs': { verdict: 'VALID', hasAssertions: true, hasExitPath: true, hasSummary: true, isDiagnostic: false },
+    'else-branch-exit.mjs': { verdict: 'VALID', hasAssertions: true, hasExitPath: true, hasSummary: true, isDiagnostic: false },
+    'preflight-guard-only.mjs': { verdict: 'VALID', hasAssertions: true, hasExitPath: true, hasSummary: true, isDiagnostic: false },
+    'assert-in-string.mjs': { verdict: 'VALID', hasAssertions: true, hasExitPath: true, hasSummary: true, isDiagnostic: false },
     'diagnostic-marker.mjs': { verdict: 'DIAGNOSTIC', hasAssertions: false, hasExitPath: false, hasSummary: false, isDiagnostic: true },
     'unclassified.mjs': { verdict: 'UNCLASSIFIED', hasAssertions: false, hasExitPath: false, hasSummary: false, isDiagnostic: false },
   };
 
-  let passed = 0;
-  let failed = 0;
+  const FIELDS = ['verdict', 'hasAssertions', 'hasExitPath', 'hasSummary', 'isDiagnostic'];
+  const results = [];
 
   for (const [filename, expected] of Object.entries(expectedVerdicts)) {
     const fixturePath = path.join(FIXTURES_DIR, filename);
     if (!fs.existsSync(fixturePath)) {
-      console.log(`  FAIL  Missing fixture: ${filename}`);
-      failed++;
+      results.push({ filename, expected, actual: null, ok: false, why: 'missing fixture file' });
       continue;
     }
 
-    const raw = fs.readFileSync(fixturePath, 'utf8');
-    const result = classifySuite(fixturePath, raw);
+    const actual = classifySuite(fixturePath, fs.readFileSync(fixturePath, 'utf8'));
+    const ok = FIELDS.every((k) => actual[k] === expected[k]);
+    results.push({ filename, expected, actual, ok, why: ok ? null : 'classification differs from the recorded expectation' });
+  }
 
-    const verdictMatch = result.verdict === expected.verdict;
-    const summaryMatch = result.hasSummary === expected.hasSummary;
-    const exitMatch = result.hasExitPath === expected.hasExitPath;
-    const assertionsMatch = result.hasAssertions === expected.hasAssertions;
-    const diagnosticMatch = result.isDiagnostic === expected.isDiagnostic;
+  // The reverse direction, and the same class of gap as F-071 itself: a fixture that
+  // exists on disk but that nothing compares against is an UNVERIFIED fixture. Someone
+  // adds a case, forgets the table entry, and the corpus silently stops covering it while
+  // still reporting all green.
+  for (const filename of fs.readdirSync(FIXTURES_DIR).filter((f) => f.endsWith('.mjs')).sort()) {
+    if (!(filename in expectedVerdicts)) {
+      results.push({ filename, expected: null, actual: null, ok: false, why: 'fixture has no entry in the expected-verdict table' });
+    }
+  }
 
-    const allMatch = verdictMatch && summaryMatch && exitMatch && assertionsMatch && diagnosticMatch;
+  return {
+    passed: results.filter((r) => r.ok).length,
+    failed: results.filter((r) => !r.ok).length,
+    results,
+  };
+}
 
-    if (allMatch) {
-      passed++;
-      console.log(`  PASS  ${filename} -> verdict=${result.verdict} (summary=${result.hasSummary}, exit=${result.hasExitPath}, assertions=${result.hasAssertions}, diag=${result.isDiagnostic})`);
+async function runSelfTest() {
+  console.log('=== SUITE INTEGRITY PROBE: SELF-TEST MODE ===');
+  console.log(`Evaluating fixture corpus in: ${FIXTURES_DIR}\n`);
+
+  const { passed, failed, results } = evaluateFixtureCorpus();
+
+  for (const r of results) {
+    if (r.ok) {
+      console.log(`  PASS  ${r.filename} -> verdict=${r.actual.verdict} (summary=${r.actual.hasSummary}, exit=${r.actual.hasExitPath}, assertions=${r.actual.hasAssertions}, diag=${r.actual.isDiagnostic})`);
+    } else if (!r.actual) {
+      console.log(`  FAIL  ${r.filename} -> ${r.why}`);
     } else {
-      failed++;
-      console.log(`  FAIL  ${filename} -> expected ${JSON.stringify(expected)} but got ${JSON.stringify(result)}`);
+      console.log(`  FAIL  ${r.filename} -> expected ${JSON.stringify(r.expected)} but got ${JSON.stringify(r.actual)}`);
     }
   }
 
   console.log('');
-  if (failed === 0) {
-    console.log(`PASSED: ${passed} passed, ${failed} failed`);
-  } else {
-    console.log(`FAILED: ${passed} passed, ${failed} failed`);
-  }
+  console.log(`${failed === 0 ? 'PASSED' : 'FAILED'}: ${passed} passed, ${failed} failed`);
 
   process.exit(failed > 0 ? 1 : 0);
 }
@@ -279,6 +418,35 @@ async function runCrossCheck() {
 
 async function runTreeAudit() {
   console.log('=== SUITE INTEGRITY PROBE: REPOSITORY AUDIT ===');
+
+  // Pre-flight: prove the classifier still classifies correctly BEFORE letting it judge
+  // 153 suites. This is the audit path verify-all.mjs actually runs (bare, no flags), so
+  // it is the only place the fixture corpus can be reached by a gate. Fixing F-071 here
+  // rather than by adding a package script keeps verify-all's discovery contract
+  // untouched — and probe-suite-integrity.mjs must NOT be added to any NOT_A_SUITE set,
+  // which verify-all.mjs:128-133 forbids outright.
+  //
+  // The success line is deliberately NOT summary-shaped: scripts/_verdict.mjs treats any
+  // line matching /^(PASS|FAIL|PASSED|FAILED)\b|passed,\s*\d+\s*failed/i as a summary and
+  // reports the LAST one, so a second `PASSED: n passed, 0 failed` here would shadow the
+  // audit's own verdict. The failure line is summary-shaped on purpose: `^FAILED\b` makes
+  // _verdict.mjs read failure regardless of the trailing parenthetical.
+  const oracle = evaluateFixtureCorpus();
+  if (oracle.failed > 0) {
+    console.log('Classifier oracle FAILED — the auditor cannot be trusted to audit:\n');
+    for (const r of oracle.results.filter((x) => !x.ok)) {
+      console.log(`  FAIL  ${r.filename} -> ${r.why}`);
+      if (r.actual) {
+        console.log(`          expected ${JSON.stringify(r.expected)}`);
+        console.log(`          got      ${JSON.stringify(r.actual)}`);
+      }
+    }
+    console.log('');
+    console.log(`FAILED: ${oracle.passed} passed, ${oracle.failed} failed (classifier oracle)`);
+    process.exit(1);
+  }
+  console.log(`Classifier oracle: ${oracle.passed}/${oracle.results.length} fixtures classified as specified.`);
+
   console.log(`Scanning suites in: ${SCRIPTS_DIR}\n`);
 
   const files = fs.readdirSync(SCRIPTS_DIR)

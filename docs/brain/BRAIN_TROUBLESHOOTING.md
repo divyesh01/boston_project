@@ -5673,6 +5673,151 @@ out, 0 bad exit code, 2 skipped, 0 diagnostic`, and the discovery fingerprint ch
 record of the commit before this one. Same two structural skips as before
 (`probe-build-chunks.mjs`, `probe-config-exposure.mjs`).
 
+## 51. The auditor that judges 153 suites gave its strongest verdict to a file that proves nothing (2026-09-05)
+
+`scripts/probe-suite-integrity.mjs` decides whether every other suite in `scripts/`
+actually asserts anything, and `verify-all.mjs` runs it bare on every sweep. Turning this
+program's own question on the auditor — *could the behaviour be wrong while this still says
+PASS?* — answered yes twice: the classifier could call a suite VALID when nothing in it can
+fail, and the fixture corpus that decides whether the classifier is right was never
+executed by any gate.
+
+### 51.1 An `if` over here, an exit over there
+
+`hasAssertions` alternative 4 was two INDEPENDENT existence tests over the whole file:
+
+```js
+(/\bif\s*\(/m.test(noComments) &&
+  /\bprocess\.exit\s*\(\s*[1-9]|\bprocess\.exitCode\s*=\s*[1-9]/m.test(noComments))
+```
+
+Nothing required the `if` and the exit to be related, so an argv convenience
+`if (args.includes("--verbose"))` plus an uncalled `bail()` helper satisfied both. Add a
+`PASSED: 0 passed, 0 failed` line and the file scored **VALID** — the strongest verdict the
+auditor has, awarded to a file that verifies nothing. That file is now
+`scripts/_fixtures-suite-integrity/unrelated-if-and-exit.mjs`.
+
+The fix is structural. `conditionalBodies(src)` walks balanced parens and braces and
+returns every `if (...)` body plus any attached `else` body; alternative 4 now looks for a
+non-zero exit ONLY inside those spans.
+
+### 51.2 Both obvious regexes were falsified before either was written
+
+The cheap way to require adjacency is a character class, and each spelling dies on a real
+fixture:
+
+| Spelling | Killed by | Why |
+|---|---|---|
+| `if\s*\([^)]*\)\s*\{...` | `conditional-exit-assertion.mjs` | `[^)]*` cannot cross the `)` inside `startsWith("__Host-")`, so the condition never finishes matching |
+| `...\{[^{}]*process\.exit` | `nested-block-exit.mjs` | `[^{}]*` cannot cross the `{ }` of a nested `for` body, so the exit is unreachable |
+| `[\s\S]{0,400}?` window | both | re-opens the original hole in fuzzier form — an unrelated exit 399 characters later still matches |
+
+Both failures point the same way: they would flip a suite that genuinely fails on bad input
+to `NO_ASSERTIONS`. `nested-block-exit.mjs` exists so the second mistake cannot come back.
+
+### 51.3 The `else` branch is the same assertion written backwards
+
+`if (ok) { … } else { process.exit(1) }` fails the run on exactly the inputs the condition
+rejects. The loose rule covered it by accident; a scanner restricted to `if` bodies would
+have silently dropped it. `else` bodies are therefore captured, and
+`else-branch-exit.mjs` pins that as a tested capability rather than an untested line.
+`else if` is skipped in the scanner because the outer `/\bif\s*\(/g` loop reaches that `if (`
+on its own and reads its real body.
+
+### 51.4 Two imprecisions pinned instead of fixed
+
+Neither is fixable at a price worth paying, so each became a dated fixture with the reason
+written into it — a tested contract rather than a prose caveat that drifts into a bug.
+
+`preflight-guard-only.mjs` — no static pattern can tell `if (!existsSync(fixture))
+process.exit(1)` from a check of the subject. The auditor answers "can anything here fail
+the run", not "does it verify the right thing"; the DIAGNOSTIC marker and verify-all's
+DIAGNOSTIC bucket cover the rest. Its header carries a forward instruction: if a future
+change makes it read `NO_ASSERTIONS`, that is not a regression to revert blindly.
+
+`assert-in-string.mjs` — `stripComments` removes comments, not string literals, so the word
+`assert(` inside an ordinary string counts. The obvious fix was measured and REJECTED:
+`hasSummary` matches the CONTENTS of a string (`console.log("PASSED: …")`), so blanking
+string literals would make every suite in the repository read `hasSummary=false` — a narrow
+imprecision traded for a total failure of the summary contract. The same blindness is the
+honest limit of the new scanner: an unbalanced paren or brace inside a string literal can
+skew it.
+
+### 51.5 The oracle existed and nothing ran it (F-071)
+
+The 20-fixture corpus is the only thing that decides whether `classifySuite` is correct, and
+it lived behind `--self-test`. Nothing passed that flag: not `package.json`, not
+`verify-all.mjs`, not a hook, not a workflow. The corpus could have been wrong in any way at
+all and every gate in the repository stayed green.
+
+`verify-all.mjs` runs `probe-suite-integrity.mjs` **bare**, so the corpus now runs as a
+pre-flight inside `runTreeAudit()` before the classifier is allowed to judge 153 suites. No
+change to verify-all's discovery contract, and no `NOT_A_SUITE` addition —
+`verify-all.mjs:128-133` forbids that outright. The comparison moved into a pure exported
+`evaluateFixtureCorpus()` so `--self-test` and the pre-flight share one implementation, and
+it gained the reverse check as well: a fixture on disk with no table entry is an
+**unverified** fixture, which is the same class of gap as F-071 itself.
+
+The success line is deliberately not summary-shaped. `scripts/_verdict.mjs` treats any line
+matching `/^(PASS|FAIL|PASSED|FAILED)\b|passed,\s*\d+\s*failed/i` as a summary and reports
+the LAST one, so `Classifier oracle: 20/20 fixtures classified as specified.` stays
+invisible to it while the failure line `FAILED: <p> passed, <f> failed (classifier oracle)`
+is caught by `^FAILED\b` regardless of the trailing parenthetical.
+
+### 51.6 Failing-first, then green (Observed 2026-09-05)
+
+The classifier tightening, red then green on the same corpus:
+
+```text
+$ node scripts/probe-suite-integrity.mjs --self-test      # before the fix
+  FAIL  unrelated-if-and-exit.mjs -> expected {"verdict":"NO_ASSERTIONS","hasAssertions":false,…}
+                                     but got {…,"hasAssertions":true,…,"verdict":"VALID"}
+FAILED: 18 passed, 1 failed                                # exit 1
+
+$ node scripts/probe-suite-integrity.mjs --self-test      # after
+  PASS  unrelated-if-and-exit.mjs -> verdict=NO_ASSERTIONS (summary=true, exit=true, assertions=false, diag=false)
+PASSED: 20 passed, 0 failed                                # exit 0
+```
+
+F-071 needed a four-way proof, because "the oracle now runs" is only half of it. One
+`EXPECTED_VERDICTS` entry was corrupted (`compliant.mjs` VALID → NO_SUMMARY) and the bare
+audit run both with the pre-flight and, on a temporary copy with the pre-flight removed, in
+its pre-fix shape:
+
+| oracle table | pre-flight | bare exit | `classifySuiteRun` verdict |
+|---|---|---|---|
+| correct | absent (pre-fix) | 0 | PASS |
+| **corrupt** | **absent (pre-fix)** | **0** | **PASS ← the false green** |
+| correct | present | 0 | PASS |
+| **corrupt** | **present** | **1** | **FAIL** `FAILED: 19 passed, 1 failed (classifier oracle)` |
+
+The corrupt/absent row is F-071 itself: the corpus wrong, every gate green. Verdicts come
+from `classifySuiteRun` in `scripts/_verdict.mjs` — the same function verify-all uses — not
+from reading the output by eye. The tracked file was restored byte-exactly
+(`git hash-object` 8b38d9d4 before and after) and both temporary mutants deleted.
+
+### 51.7 Gates for this slice
+
+`npm test` 48 files / 413 tests · `lint` 0 · `typecheck` 0 · `hotelkey:mutate` 11/11 killed,
+restored byte-for-byte · `hotelkey:crashsafe` 10/10, residue none · `map:mutate` 17/17
+killed, restore byte-identical · `verify:v3` PASS 3.0.0 · `verify-repo-map` 186 references,
+0 problems · `probe-suite-integrity` 153/153 compliant with the oracle pre-flight running
+first.
+
+`verify:all` `150 suite(s): 148 passed, 0 failed, 0 broken, 0 timed out, 0 bad exit code, 2
+skipped, 0 diagnostic`, fingerprint `2b819cc2` — **unchanged from §50.8**, which is the
+point: five fixtures were added under `scripts/_fixtures-suite-integrity/`, and because they
+carry no suite prefix they must not move discovery.
+
+One external-dependency flake was Observed in passing, on identical repository bytes: the
+first sweep failed with `probe-worker-auth-remote.mjs` → `Authentication error [code:
+10000]` from the Cloudflare API, and the immediately following sweep passed. Same bytes,
+opposite verdict, minutes apart — the already-recorded Phase 7 class, not a defect in this
+slice.
+
+
+
+
 
 
 

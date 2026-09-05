@@ -24,6 +24,8 @@
 
 import { spawnSync } from "node:child_process";
 
+import { classifyAuditReport } from "./_audit-report.mjs";
+
 /** Severities that block the build. Mirrors the old --audit-level=high. */
 const BLOCKING = new Set(["high", "critical"]);
 
@@ -76,44 +78,31 @@ try {
   process.exit(1);
 }
 
-const blocking = [];
-const seen = new Set();
+// The decision itself lives in ./_audit-report.mjs so that what this gate accepts,
+// blocks and calls stale can be tested without spawning a real audit — the regression
+// suite is scripts/probe-audit-shape.mjs.
+const { ran, reason, counts, seen, stale, blocking } = classifyAuditReport(report, {
+  accepted: ACCEPTED,
+  blocking: BLOCKING,
+});
 
-for (const [pkg, vuln] of Object.entries(report.vulnerabilities ?? {})) {
-  for (const via of vuln.via ?? []) {
-    // A string `via` is a transitive pointer to another package's entry, not an
-    // advisory of its own; the advisory itself is always an object with a url.
-    if (typeof via !== "object" || !via.url) continue;
-    if (!BLOCKING.has(via.severity)) continue;
-
-    const id = via.url.split("/").pop();
-    const key = `${pkg}:${id}`;
-    seen.add(key);
-
-    const accepted = ACCEPTED[key];
-    if (!accepted) {
-      blocking.push({ key, severity: via.severity, title: via.title, url: via.url, fixAvailable: vuln.fixAvailable });
-      continue;
-    }
-    // The exception expires the moment it stops being needed.
-    if (vuln.fixAvailable) {
-      blocking.push({
-        key,
-        severity: via.severity,
-        title: via.title,
-        url: via.url,
-        fixAvailable: vuln.fixAvailable,
-        note: "A FIX IS NOW AVAILABLE. Upgrade and delete this entry from ACCEPTED.",
-      });
-    }
-  }
+// FAIL CLOSED ON SHAPE, not merely on unparseable output. `npm audit --json` prints
+// valid JSON when it fails, so the parse above proves nothing about whether an audit
+// happened: with the registry unreachable the entire payload is `{message, error}` and
+// the scan finds zero packages. Printing "0 critical, 0 high" for that run would be a
+// false all-clear, and comparing an empty `seen` against ACCEPTED would instruct the
+// reader to delete the written record of a real, reviewed, unfixed high-severity risk.
+// Neither may happen before we know an audit actually ran.
+if (!ran) {
+  console.error("AUDIT GATE: `npm audit --json` returned no audit.");
+  console.error(`Reason: ${reason}`);
+  console.error("This is a gate failure, not a pass — nothing was checked, so no");
+  console.error("advisory is cleared and no ACCEPTED entry can be called stale.");
+  console.error("\n--- stdout ---\n" + (res.stdout || "(empty)"));
+  console.error("\n--- stderr ---\n" + (res.stderr || "(empty)"));
+  process.exit(1);
 }
 
-// An allowlist entry for an advisory npm no longer reports is rot. Failing here
-// is deliberate: it is the only moment anyone will ever delete the entry.
-const stale = Object.keys(ACCEPTED).filter((k) => !seen.has(k));
-
-const counts = report.metadata?.vulnerabilities ?? {};
 console.log(
   `Audit: ${counts.critical ?? 0} critical, ${counts.high ?? 0} high, ` +
     `${counts.moderate ?? 0} moderate, ${counts.low ?? 0} low ` +

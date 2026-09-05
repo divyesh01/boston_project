@@ -5507,6 +5507,172 @@ it is not repaired blind.
 all tolerance-defeated prints a perfectly honest `PASSED: n passed, 0 failed`, and no verdict
 logic can see through that. That is a different gate's problem.
 
+## 50. The security gate printed "0 critical, 0 high" for an audit that never ran (2026-09-05)
+
+`npm run audit:gate` is this repo's replacement for `npm audit --audit-level=high`. It
+exists so that two unfixable `xlsx` HIGH advisories can be accepted **by name, with a
+written reachability argument**, while everything else still blocks — instead of
+lowering the gate for every future high advisory or setting `continue-on-error`. Its
+header promises it fails closed: *"A gate that goes green because the registry was
+unreachable, or because npm changed its output shape, has verified nothing at all."*
+
+Measured 2026-09-05: it did not keep that promise, and its failure mode actively
+recommended making the repository less safe.
+
+### 50.1 What the gate did with a run that audited nothing
+
+`npm audit --json` prints **valid JSON** when it fails. With the registry unreachable
+the whole payload is 186 bytes whose top-level keys are exactly `message,error` — no
+`vulnerabilities` key and no `metadata` key at all. So the `JSON.parse` guard was
+satisfied and nothing stopped the run. Then `report.vulnerabilities ?? {}` turned the
+absent map into an empty one, the scan loop iterated zero times, and the gate printed:
+
+```text
+Audit: 0 critical, 0 high, 0 moderate, 0 low (gate blocks: high, critical)
+```
+
+A clean bill of health for a run that checked nothing. The second half is worse. `seen`
+was empty, so **both** legitimate acceptances failed the staleness test and the gate
+said:
+
+```text
+AUDIT GATE FAILED — stale exception(s):
+  xlsx:GHSA-4r6h-8v6p-xvw6 is no longer reported by npm audit.
+  Delete it from ACCEPTED in scripts/audit-gate.mjs.
+```
+
+Following that instruction would erase the written record of a real, reviewed, unfixed
+HIGH-severity risk — because the network was down. The run exits 1, which is the only
+reason this is P2 and not P0: the build does stop, but for a fabricated reason, and the
+remedy it prints is destructive. Reproduce in 1.5s with
+`npm_config_registry=http://127.0.0.1:9 node scripts/audit-gate.mjs`.
+
+### 50.2 Why the whole decision moved out, not just the guard
+
+The gate spawns `npm audit --json` at module scope and then calls `process.exit`, so
+importing it to test its decision runs a real audit and then kills the test process.
+Nothing could ever feed it a payload — which is why what this gate blocks on, accepts,
+and calls stale had **zero tests** of any kind. Same seam, same remedy as
+`scripts/_verdict.mjs`: the decision is now `classifyAuditReport` in
+`scripts/_audit-report.mjs:106`, and `ACCEPTED`/`BLOCKING` stay in the gate and are
+passed in, so the suite uses its own two-key allowlist and does not turn red the day a
+real advisory is legitimately fixed and its entry deleted.
+
+The leading `_` keeps the new module out of BOTH discovery walks — `verify-all.mjs`'s
+`isSuite` and `probe-suite-integrity.mjs`'s contract audit (which counts 153 suites, not
+154, after this change).
+
+### 50.3 The guard, and the one shape it must NOT reject
+
+A run counts as an audit only when npm reported no error and returned both halves it
+always returns on success: a `vulnerabilities` **map** and a `metadata.vulnerabilities`
+**count object** (`scripts/_audit-report.mjs:49`).
+
+The trap is that an empty map is a legitimate result. A genuinely clean repository
+returns `vulnerabilities: {}` with populated zero counts, and a guard written as "reject
+an empty vulnerabilities map" would fail every clean repo forever. So the predicate is
+plain-object-ness, not non-emptiness (`scripts/_audit-report.mjs:47`), and it rejects
+arrays too — an array would be a shape change, not an empty audit.
+
+The other half that had to keep working: staleness. `scripts/probe-audit-shape.mjs:160`
+pins a real clean audit against a two-key allowlist and asserts it **still reports both
+keys stale**. Without that case the guard could have been written to swallow the very
+failure the allowlist depends on for its expiry.
+
+### 50.4 Order is the defect, so the wiring is pinned statically
+
+A `ran` check placed after the count line has already printed the false all-clear, and
+after the stale comparison has already told the reader to delete an acceptance, is not a
+guard. The suite therefore does not just test the classifier in isolation: section 6
+(`scripts/probe-audit-shape.mjs:195`) reads `audit-gate.mjs` as text and asserts the
+`!ran` branch exists, exits non-zero, and appears **before** both the `gate blocks:`
+count line and the `stale exception` report, and that the gate keeps no second copy of
+the scan loop. Live positions: guard at `scripts/audit-gate.mjs:96`, count line at
+`:109`, stale report at `:117`.
+
+### 50.5 One assertion that passed vacuously, and how it was caught
+
+The first draft of the "guard exits non-zero before either" case sliced the gate text from
+`Math.max(iGuard, 0)`. With no guard present `iGuard` is `-1`, so the slice started at 0
+and picked up the pre-existing `JSON.parse` branch's own `process.exit(1)` — the case went
+**green against a gate that had no guard at all**. It was caught by counting the red
+output: 15 failures where 16 were expected. Tightened at
+`scripts/probe-audit-shape.mjs:212` to require `iGuard >= 0 && iCount > iGuard` before
+testing the slice, which moved the red baseline from 23/15 to 22/16.
+
+This is the exact anti-pattern this audit exists to find, produced by accident while
+looking for it. A wiring assertion that locates code by index has to prove the index was
+found before it trusts anything computed from it.
+
+### 50.6 Failing-first, then green (Observed 2026-09-05)
+
+```text
+node scripts/probe-audit-shape.mjs      (extraction faithful, guard not yet written)
+  FAILED: 22 passed, 16 failed          EXIT=1
+    - the registry-unreachable payload is not an audit — expected false, got true
+    - ...and it does NOT declare the acceptances stale — expected 0, got 2
+    - a null report is not an audit — expected false, got true
+
+  (after the shape guard, before the gate was rewired)
+  FAILED: 32 passed, 6 failed           EXIT=1  — only the 6 static wiring cases
+
+  (after wiring audit-gate.mjs to the classifier)
+  PASSED: 38 passed, 0 failed           EXIT=0
+```
+
+The 22 cases green from the very first run are the load-bearing half of that ladder. They
+are the gate's pre-existing scan rules — the string-`via` skip, the `fixAvailable` expiry,
+the `<pkg>:<GHSA>` key derived from the advisory URL's last segment, moderate not
+blocking — and they passed against the extraction before one line of new logic existed.
+That is what makes this an extraction rather than a rewrite.
+
+### 50.7 The real audit is byte-identical; the offline run says the truth
+
+The risk in hardening a gate is that it starts saying something different on a normal run.
+That was closed by comparison, not by reading: the gate's real output was captured before
+the change and `diff`'d after.
+
+```text
+Audit: 0 critical, 1 high, 0 moderate, 0 low (gate blocks: high, critical)
+  accepted  xlsx:GHSA-4r6h-8v6p-xvw6 — Prototype Pollution in SheetJS
+  accepted  xlsx:GHSA-5pgg-2g8v-p4x9 — SheetJS Regular Expression Denial of Service (ReDoS)
+
+Audit gate passed: no unaccepted high or critical advisories.
+EXIT=0   → diff vs the pre-change capture: IDENTICAL (byte-for-byte)
+```
+
+One thing that looks wrong here and is not: `metadata` reports `total: 1` while the
+allowlist carries two keys. ONE vulnerable package entry carries TWO `via` advisories, so
+two allowlist keys against one counted vulnerability is consistent — that is why
+`scripts/probe-audit-shape.mjs:132` asserts `seen.size` is 2 for a single-package report.
+
+The offline run, same command, now prints the honest reason and exits 1. Grep-measured
+over its output: `0 critical, 0 high` → 0 occurrences, `stale exception` → 0,
+`Delete it from ACCEPTED` → 0, `Audit gate passed` → 0. Every dangerous string is gone.
+
+```text
+AUDIT GATE: `npm audit --json` returned no audit.
+Reason: npm reported an error instead of an audit: request to
+http://127.0.0.1:9/-/npm/v1/security/advisories/bulk failed, reason: connect ECONNREFUSED
+```
+
+The real failure payload has no `error.code`, so the reason fell through the `??` chain in
+`scripts/_audit-report.mjs:51` to `report.message` — the more informative half. The chain
+behaved as designed rather than by luck.
+
+### 50.8 Gates for this slice
+
+`npm test` 48 files / 413 tests · `lint` 0 · `typecheck` 0 · `hotelkey:mutate` 11/11 killed,
+restored byte-for-byte · `hotelkey:crashsafe` 10/10, residue none · `map:mutate` 17/17
+killed, restore byte-identical · `verify:v3` PASS 3.0.0 · `verify-repo-map` 0 problems ·
+`probe-suite-integrity` 153/153 compliant.
+
+`verify:all` moved from 149 suites to **150**: `148 passed, 0 failed, 0 broken, 0 timed
+out, 0 bad exit code, 2 skipped, 0 diagnostic`, and the discovery fingerprint changed from
+`fa60d625` to **`2b819cc2`**. Section 49.6's `fa60d625` is not now wrong — it is the dated
+record of the commit before this one. Same two structural skips as before
+(`probe-build-chunks.mjs`, `probe-config-exposure.mjs`).
+
 
 
 

@@ -79,7 +79,14 @@ try {
     process.exit(0);
   }
   databaseId = created.match(/"database_id":\s*"([0-9a-f-]+)"/i)?.[1] || "";
-  if (!databaseId) throw new Error("Could not resolve temporary D1 id.");
+  if (!databaseId) {
+    // The database exists remotely but its id could not be parsed — a `d1 create`
+    // output-format change must not leak a live D1. Delete by name (which is known
+    // even when the id is not), best-effort, then fail loudly: the throw below is
+    // still the verdict, never a silent pass.
+    try { wrangler(["d1", "delete", database, "--skip-confirmation"]); } catch { /* best-effort cleanup; the id-resolution throw below carries the failure */ }
+    throw new Error("Could not resolve temporary D1 id.");
+  }
   await writeFile(config, JSON.stringify({
     name: database,
     main: path.join(REPO_ROOT, "worker", "index.js").replaceAll("\\", "/"),

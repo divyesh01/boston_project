@@ -4561,6 +4561,10 @@ One latent hazard found while reading that probe, filed rather than fixed: if `d
 but the `database_id` regex at `scripts/probe-worker-auth-remote.mjs:63` misses, `databaseId` stays
 `""`, the probe throws, and the `finally` block's delete is skipped — leaking a live D1 database
 under a real account. `wrangler d1 list` shows this has not yet happened.
+DELIVERED in its own commit: on the id-parse miss the probe now deletes by database name
+(which is known even when the id is not), best-effort, and still throws — a format change
+can no longer leak a live D1, and the throw keeps the failure loud. Wired into
+`probe-worker-auth-remote-coverage.mjs` (28 cases).
 
 Classification, from an independent read of the same evidence: **external state / credentials** — a
 transient remote authorization failure on a valid token, plus a separately owned harness gap that

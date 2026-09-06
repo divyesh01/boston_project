@@ -76,6 +76,10 @@ for (const [name, value] of [
   const executeAt = source.indexOf('"d1", "execute"');
   check('SKIP site is scoped after the d1-create call', createAt !== -1 && skipAt > createAt);
   check('SKIP site is before any d1-execute call', executeAt !== -1 && skipAt < executeAt);
+  check(
+    'id-parse miss deletes the temporary database by name before throwing',
+    /"d1",\s*"delete",\s*database[\s\S]{0,400}Could not resolve temporary D1 id\./.test(source),
+  );
   for (const name of [
     'plaintext absent from D1 seed',
     'malformed input is controlled 4xx',
@@ -91,5 +95,5 @@ for (const [name, value] of [
 }
 
 console.log(`\nPASSED: ${passed} F-076 coverage-verdict cases passed`);
-if (passed !== 27) process.exit(1);
+if (passed !== 28) process.exit(1);
 process.exit(0);

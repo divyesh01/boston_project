@@ -669,6 +669,6 @@ Primary gates: `scripts/probe-cross-browser-sync-e2e.mjs`, `scripts/probe-gm-pro
   - Total Lifecycle Writes: 30 rows for $M=1$ (was 38,685, a 1,289x reduction); 48 rows for $M=3$ (was 38,687, an 805x reduction); 949 rows for $M=100$.
   - Session Read: 0 writes within 15-minute window; 1 write after window expiry.
 
-Primary gates: `scripts/probe-d1-write-budget.mjs`, `scripts/probe-realtime-leader.mjs`, `scripts/probe-worker-business-sync.mjs`, `scripts/probe-business-sync-global-records.mjs`, and `scripts/verify-schema-parity.mjs`.
+Primary gates: `scripts/probe-d1-write-budget.mjs` (4 assertions validating write bounds and session hysteresis), `scripts/probe-realtime-leader.mjs`, `scripts/probe-worker-business-sync.mjs`, `scripts/probe-business-sync-global-records.mjs`, and `scripts/verify-schema-parity.mjs`.
 
 

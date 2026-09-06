@@ -322,3 +322,10 @@ console.log(`  - For M=3:   ${tx3.totalLifecycleWrites} rows written (was 38,687
 console.log(`  - For M=100: ${tx100.totalLifecycleWrites} rows written (was 38,784 in baseline -> ~63x reduction)`);
 console.log(`* Rollback Cost: 2M + 3 writes (M journal restorations, M rollback change logs, status + revision update)`);
 console.log("============================================================");
+
+if (migActivateWrites > 5) throw new Error(`Migration activation writes exceeded budget: ${migActivateWrites}`);
+if (tx1.totalLifecycleWrites > 35) throw new Error(`tx1 lifecycle writes exceeded budget: ${tx1.totalLifecycleWrites}`);
+if (tx3.totalLifecycleWrites > 55) throw new Error(`tx3 lifecycle writes exceeded budget: ${tx3.totalLifecycleWrites}`);
+if (read1Writes !== 0 || read2Writes !== 0) throw new Error(`Session sliding hysteresis write violation: read1=${read1Writes}, read2=${read2Writes}`);
+
+console.log("PASSED: empirical D1 write budget verified (4 passed, 0 failed).");

@@ -100,6 +100,40 @@ function jsonResponse(body, status) {
 async function handleRead(url, env, scope) {
   if (url.pathname === "/api/session") {
     const permissions = permissionsForSession(scope.user.role, scope.user.permissions);
+    /** @type {"all" | (string | number)[]} */
+    let propertyAccess = "all";
+    if (!scope.all) {
+      /** @type {Set<string | number>} */
+      const allowed = new Set(scope.propertyIds);
+      const pointer = await env.DB.prepare(
+        "SELECT active_generation_id FROM business_dataset_pointer WHERE account_id = ?",
+      ).bind(scope.accountId).first();
+      if (pointer?.active_generation_id) {
+        const mappings = await queryAll(
+          env,
+          "SELECT property_key, server_property_id FROM business_property_map WHERE account_id = ? AND generation_id = ?",
+          [scope.accountId, pointer.active_generation_id],
+        );
+        for (const m of mappings) {
+          if (allowed.has(String(m.server_property_id))) {
+            const rawKey = String(m.property_key || "");
+            if (rawKey.startsWith("n:")) {
+              const num = Number(rawKey.slice(2));
+              if (Number.isSafeInteger(num)) {
+                allowed.add(num);
+                allowed.add(String(num));
+              }
+            } else if (rawKey.startsWith("s:")) {
+              const match = /^s:\d+:(.*)$/s.exec(rawKey);
+              if (match) {
+                allowed.add(match[1]);
+              }
+            }
+          }
+        }
+      }
+      propertyAccess = [...allowed];
+    }
     return jsonResponse({
       authenticated: true,
       initialized: true,
@@ -111,7 +145,7 @@ async function handleRead(url, env, scope) {
         full_name: scope.user.display_name,
         email: scope.user.email,
         role: scope.user.role,
-        property_access: scope.all ? "all" : scope.propertyIds,
+        property_access: propertyAccess,
         permissions,
         is_active: scope.user.is_active !== 0,
         is_locked: scope.user.is_locked === 1,

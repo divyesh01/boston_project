@@ -56,10 +56,34 @@ async function listUsers(env, accountId, search = "") {
 }
 
 async function assertProperties(env, accountId, ids) {
-  if (!ids.length) return;
-  const placeholders = ids.map(() => "?").join(",");
-  const row = await queryFirst(env, `SELECT COUNT(*) count FROM property WHERE account_id=? AND id IN (${placeholders})`, [accountId, ...ids]);
-  if (Number(row?.count || 0) !== ids.length) throw new UserRequestError("property assignment is outside account", 403);
+  if (!ids.length) return [];
+  const serverProperties = await queryAll(env, "SELECT id,code FROM property WHERE account_id=?", [accountId]);
+  const serverIdSet = new Set(serverProperties.map((p) => String(p.id)));
+  const pointer = await queryFirst(env, "SELECT active_generation_id FROM business_dataset_pointer WHERE account_id=?", [accountId]);
+  const mappings = pointer?.active_generation_id
+    ? await queryAll(env, "SELECT property_key,server_property_id FROM business_property_map WHERE account_id=? AND generation_id=?", [accountId, pointer.active_generation_id])
+    : [];
+  const resolved = [];
+  for (const raw of ids) {
+    const s = String(raw);
+    if (serverIdSet.has(s)) {
+      resolved.push(s);
+      continue;
+    }
+    let found = null;
+    for (const m of mappings) {
+      if (m.property_key === s || m.property_key === `n:${s}` || m.property_key === `s:${s.length}:${s}`) {
+        found = String(m.server_property_id);
+        break;
+      }
+    }
+    if (found && serverIdSet.has(found)) {
+      resolved.push(found);
+      continue;
+    }
+    throw new UserRequestError("property assignment is outside account", 403);
+  }
+  return [...new Set(resolved)];
 }
 
 async function bodyOf(request) {
@@ -162,7 +186,7 @@ export async function handleUsersRequest(request, env, scope, pathParts) {
       const access = data.property_access === "all" ? "all" : "specific";
       const grants = access === "all" ? [] : [...new Set((Array.isArray(data.property_access) ? data.property_access : []).map(String))];
       if (["owner", "admin", "gm"].includes(role) && access !== "all") throw new UserRequestError("this role requires all-property access");
-      await assertProperties(env, scope.accountId, grants);
+      const canonicalGrants = await assertProperties(env, scope.accountId, grants);
       const duplicate = await queryFirst(env, "SELECT id FROM user WHERE lower(username)=lower(?) OR lower(email)=lower(?) LIMIT 1", [username, email]);
       if (duplicate) throw new UserRequestError("username or email already in use", 409);
 
@@ -175,7 +199,7 @@ export async function handleUsersRequest(request, env, scope, pathParts) {
       const now = new Date().toISOString();
       const mustChangePassword = suppliedPassword ? (data.must_change_password ? 1 : 0) : 1;
       const statements = [env.DB.prepare("INSERT INTO user (id,account_id,username,display_name,email,role,property_access_mode,permissions,is_active,is_locked,must_change_password,password_hash,salt,created_date,updated_date) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(userId, scope.accountId, username, data.display_name || data.full_name || null, email, role, access, JSON.stringify(data.permissions || {}), data.is_active === false ? 0 : 1, data.is_locked ? 1 : 0, mustChangePassword, credential.encoded, credential.salt, now, now)];
-      for (const propertyId of grants) statements.push(env.DB.prepare("INSERT INTO user_property_access (account_id,user_id,property_id) VALUES (?,?,?)").bind(scope.accountId, userId, propertyId));
+      for (const propertyId of canonicalGrants) statements.push(env.DB.prepare("INSERT INTO user_property_access (account_id,user_id,property_id) VALUES (?,?,?)").bind(scope.accountId, userId, propertyId));
       try {
         await env.DB.batch(statements);
       } catch (error) {
@@ -204,7 +228,7 @@ export async function handleUsersRequest(request, env, scope, pathParts) {
       const requestedAccess = data.property_access === undefined ? current.property_access_mode : (data.property_access === "all" ? "all" : "specific");
       const grants = requestedAccess === "all" ? [] : [...new Set((Array.isArray(data.property_access) ? data.property_access : (await queryAll(env, "SELECT property_id FROM user_property_access WHERE account_id=? AND user_id=?", [scope.accountId,id])).map((row) => row.property_id)).map(String))];
       if (["owner", "admin", "gm"].includes(role) && requestedAccess !== "all") throw new UserRequestError("this role requires all-property access");
-      await assertProperties(env, scope.accountId, grants);
+      const canonicalGrants = await assertProperties(env, scope.accountId, grants);
       const active = data.is_active === undefined ? current.is_active : (data.is_active ? 1 : 0);
       const changingActiveOwner = current.role === "owner" && current.is_active !== 0 && (role !== "owner" || active === 0);
       const mutationTime = new Date().toISOString();
@@ -214,7 +238,7 @@ export async function handleUsersRequest(request, env, scope, pathParts) {
       const updateParams = [username, data.display_name ?? data.full_name ?? current.display_name, email, role, requestedAccess, JSON.stringify(data.permissions ?? JSON.parse(current.permissions || "{}")), active, data.is_locked === undefined ? current.is_locked : (data.is_locked ? 1 : 0), data.must_change_password === undefined ? current.must_change_password : (data.must_change_password ? 1 : 0), mutationTime, id, scope.accountId, ...(changingActiveOwner ? [scope.accountId, id] : [])];
       const statements = [env.DB.prepare(`UPDATE user SET username=?,display_name=?,email=?,role=?,property_access_mode=?,permissions=?,is_active=?,is_locked=?,must_change_password=?,updated_date=? WHERE id=? AND account_id=?${ownerGuard}`).bind(...updateParams)];
       statements.push(env.DB.prepare("DELETE FROM user_property_access WHERE account_id=? AND user_id=? AND EXISTS (SELECT 1 FROM user WHERE id=? AND account_id=? AND updated_date=?)").bind(scope.accountId, id, id, scope.accountId, mutationTime));
-      for (const propertyId of grants) statements.push(env.DB.prepare("INSERT INTO user_property_access (account_id,user_id,property_id) SELECT ?,?,? WHERE EXISTS (SELECT 1 FROM user WHERE id=? AND account_id=? AND updated_date=?)").bind(scope.accountId,id,propertyId,id,scope.accountId,mutationTime));
+      for (const propertyId of canonicalGrants) statements.push(env.DB.prepare("INSERT INTO user_property_access (account_id,user_id,property_id) SELECT ?,?,? WHERE EXISTS (SELECT 1 FROM user WHERE id=? AND account_id=? AND updated_date=?)").bind(scope.accountId,id,propertyId,id,scope.accountId,mutationTime));
       let results;
       try { results = await env.DB.batch(statements); }
       catch (error) {

@@ -1,5 +1,5 @@
-import localDb from '@/api/localDb';
-import { toCents } from '@/lib/decimal';
+import localDb from './localDb.js';
+import { toCents } from '../lib/decimal.js';
 
 export const BUSINESS_ENTITIES = Object.freeze([
   'Property', 'OccupancyDay', 'SourceDay', 'GrossRevenueDay', 'PaymentDay',
@@ -90,15 +90,32 @@ function centsTotal(rows, field) {
   return rows.reduce((sum, row) => sum + toCents(row?.[field] || 0), 0);
 }
 
-async function encodeRow(entity, row) {
+async function encodeRow(entity, row, propertyKeyMap = null) {
   assertLosslessJson(row);
   const record_key = typedRecordKey(row.id);
-  const property_key = entity === 'Property' ? record_key : typedRecordKey(row.property_id);
+  let property_key = entity === 'Property' ? record_key : typedRecordKey(row.property_id);
+  if (entity !== 'Property' && propertyKeyMap && propertyKeyMap.has(property_key)) {
+    property_key = propertyKeyMap.get(property_key);
+  }
   const row_hash = await sha256Hex(canonicalJson(row));
   return { entity, record_key, property_key, row, row_hash };
 }
 
 export async function inspectLocalBusinessData() {
+  const propertyRows = await localDb.Property.toArray();
+  const propertyKeyMap = new Map();
+  for (const p of propertyRows) {
+    const key = typedRecordKey(p.id);
+    propertyKeyMap.set(key, key);
+    if (typeof p.id === 'number' && Number.isSafeInteger(p.id)) {
+      propertyKeyMap.set(typedRecordKey(String(p.id)), key);
+    } else if (typeof p.id === 'string') {
+      const num = Number(p.id);
+      if (Number.isSafeInteger(num) && String(num) === p.id) {
+        propertyKeyMap.set(typedRecordKey(num), key);
+      }
+    }
+  }
   const records = [];
   const counts = {};
   const table_hashes = {};
@@ -106,7 +123,7 @@ export async function inspectLocalBusinessData() {
   for (const entity of BUSINESS_ENTITIES) {
     const rows = await localDb[entity].toArray();
     const encoded = [];
-    for (const row of rows) encoded.push(await encodeRow(entity, row));
+    for (const row of rows) encoded.push(await encodeRow(entity, row, propertyKeyMap));
     encoded.sort((left, right) => left.record_key.localeCompare(right.record_key));
     byEntity[entity] = encoded;
     counts[entity] = encoded.length;
@@ -119,7 +136,7 @@ export async function inspectLocalBusinessData() {
     chunks.push({ index: chunks.length, count: rows.length, hash: await sha256Hex(canonicalJson(rows)), rows });
   }
   const financials = {
-    revenue_cents: centsTotal(byEntity.OccupancyDay.map((item) => item.row), 'total_revenue'),
+    revenue_cents: byEntity.OccupancyDay.map((item) => item.row).reduce((sum, row) => sum + toCents(row?.total_revenue ?? row?.room_revenue ?? 0), 0),
     payments_cents: centsTotal(byEntity.PaymentDay.map((item) => item.row), 'total'),
     refunds_cents: centsTotal(byEntity.AdjustmentRefund.map((item) => item.row), 'amount'),
     expenses_cents: centsTotal(byEntity.Expense.map((item) => item.row), 'amount'),
@@ -318,6 +335,13 @@ export function createBusinessSyncClient({
           notify(entity, 'hydrate', payload);
           publish(entity, 'hydrate', payload);
         }
+      }
+      publish('dataset', 'hydrate', { generation_id: snapshot.generation_id });
+      try {
+        const { rebuildDailyAggregates } = await import('../lib/dailyAggregates.js');
+        await rebuildDailyAggregates();
+      } catch (e) {
+        // Non-blocking in headless/test environments
       }
       const state = await localDb.BusinessSyncState.get(SYNC_STATE_KEY);
       const applied = await applyFeed(state);

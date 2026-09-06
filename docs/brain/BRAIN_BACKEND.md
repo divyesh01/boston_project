@@ -626,3 +626,15 @@ npm run test:watch
 - The Worker user API stores real versioned credentials in the same atomic batch as the new user and grants. Password change/reset operations revoke sessions and MFA challenges in the same batch as the credential replacement.
 
 Primary gates: `scripts/probe-worker-entities-conflict.mjs`, `scripts/probe-worker-entities-roster-create.mjs`, `scripts/probe-worker-credential-lifecycle.mjs`, and `scripts/verify-schema-parity.mjs`.
+
+---
+
+## Authoritative Cross-Browser Sync Property Mapping (2026-09-06)
+
+- **Numeric vs. String Property ID Dual-Resolution**: Dexie stores `Property` records with auto-increment numbers (`n:1`), while parser and HTML select elements produce string IDs (`s:1:1`). `worker/business-sync.js` resolves this with `alternateKeyMap` during migration activation, ensuring child records reference their valid property without `422 orphaned property reference` errors and ensuring `UPDATE business_record SET server_property_id=?` covers both keys.
+- **Session Property Access Expansion**: `worker/index.js` `/api/session` decodes `business_property_map` entries for the active generation to ensure scoped non-owner roles (e.g. GMs) receive both server property IDs and their corresponding local numeric/string keys in `property_access`.
+- **User Administration Property Resolution**: `worker/users.js` `assertProperties` resolves incoming property IDs against active migration mappings when local numeric IDs are supplied by UI selectors.
+- **Client Manifest & Invalidation**: `src/api/businessSync.js` computes revenue cents across both `total_revenue` and `room_revenue` fields and emits `publish('dataset', 'hydrate')` on snapshot load; `src/pages/Dashboard.jsx` invalidates `"daily-aggregates"` and `"properties"` to eliminate cold-browser stale caches.
+
+Primary gates: `scripts/probe-cross-browser-sync-e2e.mjs`, `scripts/probe-gm-property-access.mjs`, `scripts/probe-adversarial-browser-b-kpis.mjs`, and `scripts/probe-worker-business-sync.mjs`.
+

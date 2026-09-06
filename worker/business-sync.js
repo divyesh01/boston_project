@@ -288,6 +288,26 @@ async function activateMigration(request, env, scope) {
     const existing = existingByCode.get(code.toLowerCase());
     mappings.set(item.record_key, { serverId: existing?.id || await deterministicPropertyId(scope.accountId, code), code, row, exists: !!existing });
   }
+  // Secondary lookup for numeric <-> string equivalents when unambiguous
+  const alternateKeyMap = new Map();
+  for (const [key, mapping] of mappings) {
+    let altKey = null;
+    if (key.startsWith("n:")) {
+      const idStr = key.slice(2);
+      altKey = `s:${idStr.length}:${idStr}`;
+    } else if (key.startsWith("s:")) {
+      const match = /^s:\d+:(.*)$/s.exec(key);
+      if (match) {
+        const num = Number(match[1]);
+        if (Number.isSafeInteger(num) && String(num) === match[1]) {
+          altKey = `n:${num}`;
+        }
+      }
+    }
+    if (altKey && !mappings.has(altKey)) {
+      alternateKeyMap.set(altKey, mapping);
+    }
+  }
   // Second line of defence for a generation ALREADY staged before the admission
   // gate in uploadChunk shipped. It must refuse HERE, above the orphan scan and
   // the mapping loop: that loop would mint a property for the sentinel, make the
@@ -305,7 +325,9 @@ async function activateMigration(request, env, scope) {
     // sentinel out of `mappings`, so the UPDATE below is always keyed by some
     // other property_key and no business_property_map row can ever claim it.
     if (isGlobalPropertyKey(key)) continue;
-    if (!mappings.has(item.property_key)) throw new SyncRequestError(`orphaned property reference: ${item.property_key}`, 422);
+    if (!mappings.has(item.property_key) && !alternateKeyMap.has(item.property_key)) {
+      throw new SyncRequestError(`orphaned property reference: ${item.property_key}`, 422);
+    }
   }
 
   const now = new Date().toISOString();
@@ -321,6 +343,11 @@ async function activateMigration(request, env, scope) {
     statements.push(env.DB.prepare(
       "UPDATE business_record SET server_property_id=? WHERE account_id=? AND generation_id=? AND property_key=?",
     ).bind(mapping.serverId, scope.accountId, generationId, propertyKey));
+  }
+  for (const [altKey, mapping] of alternateKeyMap) {
+    statements.push(env.DB.prepare(
+      "UPDATE business_record SET server_property_id=? WHERE account_id=? AND generation_id=? AND property_key=?",
+    ).bind(mapping.serverId, scope.accountId, generationId, altKey));
   }
   if (dataset.previous_generation_id) {
     statements.push(env.DB.prepare("UPDATE business_dataset SET status='retired' WHERE account_id=? AND generation_id=? AND status='active'").bind(scope.accountId, dataset.previous_generation_id));
@@ -809,8 +836,11 @@ async function mutate(request, env, scope) {
     return Response.json({ replayed: true, seq: Number(replay.seq), operation: replay.operation, row_hash: replay.row_hash, row: replay.row_json ? JSON.parse(String(replay.row_json)) : null });
   }
   const pointer = await queryFirst(env, "SELECT active_generation_id FROM business_dataset_pointer WHERE account_id=?", [scope.accountId]);
-  if (!pointer) throw new SyncRequestError("no active business dataset", 409);
-  const generationId = String(pointer.active_generation_id);
+  if (!pointer && (entity !== "Property" || operation !== "upsert" || !scope.all)) {
+    throw new SyncRequestError("no active business dataset", 409);
+  }
+  const isBootstrap = !pointer;
+  const generationId = isBootstrap ? crypto.randomUUID() : String(pointer.active_generation_id);
   const recordKey = String(body.record_key || "");
   const propertyKey = String(body.property_key || "");
   // Authorization is decided BEFORE any existence-revealing conflict check
@@ -848,7 +878,7 @@ async function mutate(request, env, scope) {
     mappedServerPropertyId = String(mapping.server_property_id);
     assertPropertyInScope(scope, mappedServerPropertyId);
   }
-  const current = await queryFirst(env, "SELECT row_hash,property_key,server_property_id,row_json FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=?", [scope.accountId, generationId, entity, recordKey]);
+  const current = isBootstrap ? null : await queryFirst(env, "SELECT row_hash,property_key,server_property_id,row_json FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=?", [scope.accountId, generationId, entity, recordKey]);
   // Keyed off the branch that resolved the mapping, so the two predicates
   // cannot drift apart if the dispatch below is ever edited. The global branch
   // leaves mappedServerPropertyId null and therefore skips this assert, which is
@@ -870,10 +900,17 @@ async function mutate(request, env, scope) {
   let rowJson = null;
   let rowHash = null;
   let changeOperation = operation;
-  const statements = [
+  const statements = [];
+  if (isBootstrap) {
+    statements.push(
+      env.DB.prepare("INSERT INTO business_dataset (account_id,generation_id,status,schema_version,manifest_hash,manifest_json,expected_chunks,expected_records,previous_generation_id,created_by,created_at,activated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").bind(scope.accountId, generationId, "active", 1, "bootstrap", "{}", 0, 1, null, String(scope.user.id), now, now),
+      env.DB.prepare("INSERT INTO business_dataset_pointer (account_id,active_generation_id,updated_at) VALUES (?,?,?) ON CONFLICT(account_id) DO UPDATE SET active_generation_id=excluded.active_generation_id,updated_at=excluded.updated_at").bind(scope.accountId, generationId, now),
+    );
+  }
+  statements.push(
     env.DB.prepare("INSERT INTO business_sync_state (account_id,revision) VALUES (?,0) ON CONFLICT(account_id) DO NOTHING").bind(scope.accountId),
     env.DB.prepare("UPDATE business_sync_state SET revision=revision+1 WHERE account_id=?").bind(scope.accountId),
-  ];
+  );
 
   if (entity === "Property") {
     if (!scope.all) throw new SyncRequestError("only all-property accounts can change the roster", 403);

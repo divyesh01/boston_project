@@ -40,7 +40,7 @@ export default function Dashboard() {
   // Feature 7: live dashboard. While enabled, cross-tab change notifications and
   // a lightweight poll invalidate these query prefixes so the dashboard stays
   // fresh without manual refresh. Default on for the operational data sets.
-  useRealtimeInvalidation(["occupancy", "sources", "gross", "clerk", "payments", "expenses", "payroll", "anomaly-alerts", "rooms", "reservations", "weather"]);
+  useRealtimeInvalidation(["occupancy", "sources", "gross", "clerk", "payments", "expenses", "payroll", "anomaly-alerts", "rooms", "reservations", "weather", "daily-aggregates", "properties"]);
 
   // The raw-ledger hooks still run (they feed the explicit Compare view and act
   // as the aggregate's fallback), but the Dashboard no longer blocks render on

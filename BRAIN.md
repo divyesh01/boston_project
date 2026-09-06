@@ -15,13 +15,16 @@
 | [INDEX] | `docs/brain/BRAIN_INDEX.md` | Historical file catalog; use `git ls-files` for the live list. |
 | [MAP] | `docs/brain/BRAIN_DEPENDENCIES.md`| See what breaks if you edit a file (Auto-Generated). |
 
-## CURRENT VERIFICATION BASELINE (2026-09-02)
+## CURRENT VERIFICATION BASELINE (2026-09-05)
 
-- `npm run verify:all -- --list`: **145 suites**, fingerprint **`513f4ebb`**.
-- Full sweep on Windows after `npm ci`: **144 PASS, 0 FAIL, 0 BROKEN, 1 SKIP**. The only skip was the optional live-dev-server exposure probe because no localhost server was running.
+- `npm run verify:all -- --list`: **150 suites**, fingerprint **`2b819cc2`**, `not run (6)`.
+- Full sweep on Windows: **149 PASS, 0 FAIL, 0 BROKEN, 0 TIMED OUT, 0 BAD EXIT CODE, 1 SKIP, 0 DIAGNOSTIC**, and the runner confirms `every discovered suite ran`.
+- The one skip is `probe-config-exposure.mjs` — no server at `http://localhost:5173`, so start the dev server if you want that surface covered. On a checkout where `dist/` is stale or absent the sweep reads **148 PASS / 2 SKIP** instead, the second skip being `probe-build-chunks.mjs`; `npm run build` turns it into a real **11 passed, 0 failed**. A skip is not a pass, so the shorter number is the one to quote only after building.
+- Mutation harnesses: `hotelkey:mutate` **11/11 killed**, `hotelkey:crashsafe` **10/10, residue none**, `map:mutate` **17/17 killed, restore byte-identical, post-restore gate exit 0**. Every mutated file was restored byte-for-byte and `git status` was empty afterwards.
 - Worker credential lifecycle: **33/33 PASS** against the production-exact authentication DDL.
 - Worker/production authentication schema parity: **44/44 PASS**.
-- Vitest: **45 files, 341 tests PASS**. Typecheck, lint, and production build pass.
+- Vitest: **48 files, 413 tests PASS**. Lint, typecheck, `npm run verify:v3` (`PASS 3.0.0`, 31 canonical files, 6 active adapters) and the production build all pass.
+- Two suites now carry a floor that names what must not silently vanish: `MUST_DISCOVER` in `scripts/verify-all.mjs` and `MUST_REMAIN_AUDITED` in `scripts/probe-suite-integrity.mjs`. Both hold `probe-auth-hardening.mjs`, the only automated check on `base44/functions/*/entry.js`. Names, not counts — a count pin fails on every honest addition and can never say which suite went missing. Section 52 of `docs/brain/BRAIN_TROUBLESHOOTING.md` records the measurement that prompted them.
 - Production was not changed by this prerequisite work. D1 business-data storage remains disabled.
 
 This measured baseline supersedes older suite counts and fingerprints retained later in this historical document.

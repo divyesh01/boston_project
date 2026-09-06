@@ -5815,6 +5815,67 @@ first sweep failed with `probe-worker-auth-remote.mjs` → `Authentication error
 opposite verdict, minutes apart — the already-recorded Phase 7 class, not a defect in this
 slice.
 
+## 52. A map entry named a file that has never existed, and "fixing the typo" would have silently deleted the only check on the production auth path (2026-09-05)
+
+THE DEFECT. Two independent exclusion lists — `EXCLUDE` in `scripts/verify-all.mjs` and
+`NOT_A_SUITE` in `scripts/probe-suite-integrity.mjs` — each carried an entry for
+`probe-auth-hardening-world.mjs`, described in both places as a fixture library imported by
+other probes. No file of that name has ever existed in this repository. Both lists are only
+ever consulted about names read off disk, so the entry excluded nothing, and `--list`
+filters its "not run" report by existence, so the entry was held but never printed: seven
+held, six shown. That gap is the whole reason it survived unnoticed. Section 46.6 recorded
+it and deliberately left one question open — whether the suite it seemed to be aiming at
+ought to run at all. This section answers that question and closes it.
+
+WHY THE OBVIOUS CLEANUP WAS THE DANGEROUS ONE. The file the entry looks like a typo for is
+`scripts/probe-auth-hardening.mjs`: 1,037 lines asserting against the real serverless entry
+files in `base44/functions/*/entry.js`, and because `eslint.config.js` ignores `base44/**`
+it is the only automated check on the production auth path — its own header says exactly
+that at `scripts/probe-auth-hardening.mjs:8`. Pointing the entry at the file that exists
+therefore removes coverage rather than tidying a list. Measured on temporary dot-prefixed
+copies, which discovery cannot see, before any fix was applied:
+
+| mutation | result |
+| --- | --- |
+| typo "corrected" in a copy of `verify-all.mjs`, `--list` | **exit 0**. `149 suite(s) — list 4ebd928b (149 discovered)`, down from `150` / `2b819cc2`. The suite moved into `not run (7)` under the false description. |
+| typo "corrected" in a copy of `probe-suite-integrity.mjs` | **exit 0**. `Total suites checked: 152`, down from 153, and `PASSED: 152 passed, 0 failed`. The suite's name appeared nowhere in the report — `grep -c` returned 0. |
+
+Both walks lost the security suite, both printed a success verdict, and both exited 0.
+Nothing anywhere reported the loss. The `-world` suffix may have come from a `testWorld`
+symbol that a rewritten probe once tried to import from this file and that the file does not
+export — `scripts/probe-audit-list.mjs:8` records that import dying on every invocation —
+but that connection is inferred, not established.
+
+THE FIX. The entry is **deleted, not corrected**, in both files, each deletion replaced by a
+note saying why a reader must not "helpfully" restore it. Then a floor in each file names
+what must not vanish quietly: `MUST_DISCOVER` in `scripts/verify-all.mjs` and
+`MUST_REMAIN_AUDITED` in `runTreeAudit()` of `scripts/probe-suite-integrity.mjs`. Re-running
+the same mutation against the fixed files now gives `exit 1` with
+`Discovery floor violated: 1 required suite(s) are not in the discovered set.` and
+`FAILED: 0 passed, 1 failed (audit floor)` respectively, each naming the suite and saying
+whether it is missing from disk or merely excluded. On the unmutated files the fix is a
+provable no-op: still `150 suite(s) — list 2b819cc2`, still `not run (6)`, still
+`Total suites checked: 153` / `PASSED: 153 passed, 0 failed`.
+
+THREE DESIGN CHOICES WORTH NOT RE-LITIGATING.
+
+- **Names, not counts.** `discovered.length === 150` fails on every honest addition, so it
+  gets raised reflexively until it means nothing, and it can never say WHICH suite went
+  missing. The floors list filenames and are checked against the full discovered set before
+  `--filter` and `--shard` narrow it, so a deliberately narrowed run cannot false-fail.
+- **One floor per walk.** `isSuite` in the sweep and `isSuiteFile` in the auditor are
+  separate walks answering different questions. A file can be swept but unaudited, so
+  nobody enforces its summary contract, or audited but never run. One shared floor would
+  hide whichever of those two failures happened.
+- **A bare count in the success line, never `n/n`.** The audit floor's success line was
+  first written `${MUST_REMAIN_AUDITED.length}/${MUST_REMAIN_AUDITED.length}` — a ratio off
+  one expression, which can never disagree with itself. That is the second instance of that
+  exact slip in two commits (see section 51). A bare count still shows an emptied floor as
+  `0 required suite(s)`.
+
+The bar for adding a name to either floor is high on purpose: a suite belongs there when it
+is the sole automated check on a production trust boundary.
+
 
 
 

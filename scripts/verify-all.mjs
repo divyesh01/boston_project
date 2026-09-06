@@ -149,10 +149,28 @@ const EXCLUDE = new Map([
   // below imposes. So this file is excluded for the same reason as the harness it drives: swept,
   // it can leave both a mutated tracked source and a stale index lock on disk.
   ["probe-hotelkey-mutation-crashsafe.mjs", "spawns the harness above, and holds .git/index.lock for a whole run — run via npm run hotelkey:crashsafe"],
-  // Library, not a suite: it exports a fixture builder for other probes to import
-  // and has no assertions of its own.
-  ["probe-auth-hardening-world.mjs", "fixture library imported by other probes"],
 ]);
+// NOT AN OMISSION: there is no entry above for probe-auth-hardening.mjs, and adding one would
+// be a loss of security coverage rather than a tidy-up.
+//
+// Until 2026-09-05 this map held a seventh entry — `probe-auth-hardening-world.mjs`, described
+// as a "fixture library imported by other probes" — and no file of that name has ever existed
+// here. `EXCLUDE.has(f)` is only ever asked about names read off disk, so the entry excluded
+// nothing, and --list filters by existence, so it was held but never printed: seven held, six
+// shown. That is why it sat unnoticed. The phrase survives at scripts/probe-audit-list.mjs:8,
+// where a probe once imported a `testWorld` symbol that probe-auth-hardening.mjs does not
+// export and died on every invocation; whether that is where the "-world" came from is
+// inferred, not established.
+//
+// The obvious cleanup is to point the entry at the file that does exist. MEASURED on a
+// temporary copy, 2026-09-05: that takes the sweep from 150 suites / list 2b819cc2 to 149 /
+// 4ebd928b, moves probe-auth-hardening.mjs into "not run" under that same false description,
+// and EXITS 0. Nothing reports it. The file is 1,037 lines of assertions against the real
+// serverless entry files in base44/functions/*/entry.js, and because eslint.config.js ignores
+// base44/** it is the only automated check on the production auth path — its own header says
+// so at scripts/probe-auth-hardening.mjs:8. "Fixing the typo" deletes that coverage in silence.
+//
+// So the entry is deleted rather than corrected, and the floor below makes a repeat loud.
 
 const isSuite = (f) =>
   f.endsWith(".mjs") &&
@@ -179,6 +197,34 @@ let suites = readdirSync(SCRIPTS_DIR).filter(isSuite).sort();
 const discovered = [...suites];
 const LIST_ID = createHash("sha256").update(discovered.join("\n")).digest("hex").slice(0, 8);
 const listId = `list ${LIST_ID} (${discovered.length} discovered)`;
+
+// ── Discovery floor ─────────────────────────────────────────────────────────
+// ADDED 2026-09-05. A suite can leave this sweep three silent ways — a new EXCLUDE entry, a
+// rename, or a deletion — and all three exit 0 today. See the note at the end of EXCLUDE for
+// the measurement that prompted this. The floor names suites whose disappearance must FAIL the
+// run instead of merely shrinking the count.
+//
+// Names, not a count. `discovered.length === 150` would fail on every honest addition, so it
+// would be raised reflexively until it meant nothing, and it could never say WHICH suite went
+// missing. Checked against the full discovered set, before --filter and --shard narrow it, so
+// a deliberately narrowed run cannot false-fail.
+//
+// The bar for adding a name is high on purpose: a suite belongs here when it is the SOLE
+// automated check on a production trust boundary. Keep it in step with MUST_REMAIN_AUDITED in
+// scripts/probe-suite-integrity.mjs, which pins the same names into the static contract audit.
+// The two walks are separate by design and each one needs its own floor: a file can be swept
+// but unaudited, or audited but never run.
+const MUST_DISCOVER = ["probe-auth-hardening.mjs"];
+const undiscovered = MUST_DISCOVER.filter((f) => !discovered.includes(f));
+if (undiscovered.length) {
+  console.error(`Discovery floor violated: ${undiscovered.length} required suite(s) are not in the discovered set.`);
+  for (const f of undiscovered) {
+    const onDisk = existsSync(path.join(SCRIPTS_DIR, f));
+    console.error(`  ${f} — ${onDisk ? "on disk, but EXCLUDE or the prefix test keeps it out of the run" : "not on disk"}`);
+  }
+  console.error("This is not count drift. Restore the suite, or — if it genuinely must stop running — remove it from MUST_DISCOVER in the same commit and record why.");
+  process.exit(1);
+}
 
 if (FILTER) suites = suites.filter((f) => f.includes(FILTER));
 

@@ -23,9 +23,15 @@ const SUITE_PREFIXES = ['probe-', 'verify-', 'test_'];
 const NOT_A_SUITE = new Set([
   'verify-all.mjs',              // the runner
   'verify-brain.mjs',            // documentation gate
-  'probe-auth-hardening-world.mjs', // fixture library imported by other probes
   'probe-suite-integrity.mjs',   // this file
 ]);
+// Deliberately absent: probe-auth-hardening.mjs. Until 2026-09-05 this set held
+// 'probe-auth-hardening-world.mjs' — a file that has never existed — labelled a fixture
+// library. Pointing that name at the real file drops 1,037 lines of production-auth assertions
+// out of the audited set: MEASURED 2026-09-05 on a temporary copy, "Total suites checked" went
+// 153 -> 152, the name disappeared from the report entirely, and the audit still printed
+// PASSED and exited 0. The full reasoning is recorded once, at the end of EXCLUDE in
+// scripts/verify-all.mjs. MUST_REMAIN_AUDITED in runTreeAudit() is what makes a repeat loud.
 const isSuiteFile = (f) =>
   f.endsWith('.mjs') && SUITE_PREFIXES.some((p) => f.startsWith(p)) && !NOT_A_SUITE.has(f);
 
@@ -446,6 +452,29 @@ async function runTreeAudit() {
     process.exit(1);
   }
   console.log(`Classifier oracle: ${oracle.passed}/${oracle.results.length} fixtures classified as specified.`);
+
+  // Second pre-flight: the suites this audit must never quietly stop covering. Same shape as
+  // the discovery floor in scripts/verify-all.mjs — names, not a count — but it guards the
+  // STATIC walk (isSuiteFile), which is a different question. A file can be swept and yet
+  // unaudited, so nobody enforces its summary contract; or audited and yet never run. Each
+  // walk therefore carries its own floor, and NOT_A_SUITE above says why this name is on it.
+  const MUST_REMAIN_AUDITED = ['probe-auth-hardening.mjs'];
+  const unaudited = MUST_REMAIN_AUDITED
+    .map((f) => ({ f, onDisk: fs.existsSync(path.join(SCRIPTS_DIR, f)) }))
+    .filter(({ f, onDisk }) => !onDisk || !isSuiteFile(f));
+  if (unaudited.length > 0) {
+    console.log('Audit floor violated — a suite that must stay covered is not in the audited set:\n');
+    for (const { f, onDisk } of unaudited) {
+      console.log(`  FAIL  ${f} -> ${onDisk ? 'on disk, but NOT_A_SUITE or the prefix test excludes it' : 'not on disk'}`);
+    }
+    console.log('');
+    console.log(`FAILED: 0 passed, ${unaudited.length} failed (audit floor)`);
+    process.exit(1);
+  }
+  // Count, not a ratio: `n/n` off one expression is a display that can never disagree with
+  // itself, which is the vacuity this whole audit exists to find. A bare count still shows an
+  // emptied floor as `0 required suite(s)`.
+  console.log(`Audit floor: ${MUST_REMAIN_AUDITED.length} required suite(s) still audited.`);
 
   console.log(`Scanning suites in: ${SCRIPTS_DIR}\n`);
 

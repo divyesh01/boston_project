@@ -75,7 +75,12 @@ import { permissionsForSession } from "./session-permissions.js";
  * @property {string} [sessionId]    D1 app-session id; absent for Access compatibility callers.
  */
 
-const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
+const JSON_HEADERS = {
+  "content-type": "application/json; charset=utf-8",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+};
 
 /**
  * @param {unknown} body
@@ -276,8 +281,8 @@ async function handleImport(request, env, scope) {
 async function handleRequest(request, env, _ctx) {
   const url = new URL(request.url);
 
-  // This Worker owns the /api/* surface only. Nothing else is routed here.
-  if (!url.pathname.startsWith("/api/")) {
+  // This Worker owns the /api surface only. Nothing else is routed here.
+  if (url.pathname !== "/api" && !url.pathname.startsWith("/api/")) {
     return jsonResponse({ error: "not found" }, 404);
   }
 

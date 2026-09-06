@@ -170,6 +170,7 @@ export function useClerkRecords(dateRange, propertyId) {
       const seen = new Map();
       for (const r of raw) {
         const key = [
+          r.property_id || "",
           r.record_type || "",
           r.clerk_name || "",
           r.payment_type || "",

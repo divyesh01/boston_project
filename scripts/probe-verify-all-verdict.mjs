@@ -487,7 +487,7 @@ for (const [label, args, flagName] of [
 const equalsFilter = runList("--filter=active-vs-idle");
 eq("filter equals form exits 0", equalsFilter.status, 0);
 eq("filter equals form narrows instead of running everything", JSON.stringify(selectedSuites(equalsFilter.stdout)), JSON.stringify([TARGET]));
-const equalsShard = runList("--shard=1/152");
+const equalsShard = runList(`--shard=1/${baselineSuites.length}`);
 eq("shard equals form exits 0", equalsShard.status, 0);
 eq("shard equals form narrows instead of running everything", selectedSuites(equalsShard.stdout).length, 1);
 const equalsTimeout = runList("--timeout=30");

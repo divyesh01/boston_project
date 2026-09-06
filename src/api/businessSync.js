@@ -203,6 +203,7 @@ export function createBusinessSyncClient({
   prepareUpdate = async (_entity, _previous, data) => ({ ...data }),
 }) {
   let hydrationPromise = null;
+  let isHydrating = false;
   let lastPullAt = 0;
   let pullPromise = null;
   let activeTransaction = null;
@@ -303,59 +304,65 @@ export function createBusinessSyncClient({
   async function hydrate({ force = false } = {}) {
     if (hydrationPromise) return hydrationPromise;
     hydrationPromise = (async () => {
-      const prior = await localDb.BusinessSyncState.get(SYNC_STATE_KEY);
-      if (!force && prior?.generation_id) {
-        try {
-          const applied = await applyFeed(prior);
-          if (!applied.rebuild) return { active: true, rebuilt: false, ...applied.state };
-        } catch (error) {
-          if ((typeof navigator !== 'undefined' && navigator.onLine === false) || error?.status == null) return { active: true, offline: true, rebuilt: false, ...prior };
+      isHydrating = true;
+      try {
+        const prior = await localDb.BusinessSyncState.get(SYNC_STATE_KEY);
+        if (!force && prior?.generation_id) {
+          try {
+            const applied = await applyFeed(prior);
+            if (!applied.rebuild) return { active: true, rebuilt: false, ...applied.state };
+          } catch (error) {
+            if ((typeof navigator !== 'undefined' && navigator.onLine === false) || error?.status == null) return { active: true, offline: true, rebuilt: false, ...prior };
+            throw error;
+          }
+        }
+        let snapshot;
+        try { snapshot = await fetchSnapshot(); }
+        catch (error) {
+          if (prior && ((typeof navigator !== 'undefined' && navigator.onLine === false) || error?.status == null)) return { active: true, offline: true, rebuilt: false, ...prior };
           throw error;
         }
-      }
-      let snapshot;
-      try { snapshot = await fetchSnapshot(); }
-      catch (error) {
-        if (prior && ((typeof navigator !== 'undefined' && navigator.onLine === false) || error?.status == null)) return { active: true, offline: true, rebuilt: false, ...prior };
-        throw error;
-      }
-      if (!snapshot) return { active: false, rebuilt: false };
-      // Existing cache remains untouched until every authoritative table has
-      // downloaded. The transaction then swaps all business stores together.
-      await localDb.transaction('rw', [...BUSINESS_ENTITIES.map((name) => localDb[name]), localDb.BusinessSyncState], async () => {
+        if (!snapshot) return { active: false, rebuilt: false };
+        // Existing cache remains untouched until every authoritative table has
+        // downloaded. The transaction then swaps all business stores together.
+        await localDb.transaction('rw', [...BUSINESS_ENTITIES.map((name) => localDb[name]), localDb.BusinessSyncState], async () => {
+          for (const entity of BUSINESS_ENTITIES) {
+            await localDb[entity].clear();
+            if (snapshot.byEntity[entity].length) await localDb[entity].bulkPut(snapshot.byEntity[entity]);
+          }
+          await localDb.BusinessSyncState.put({ key: SYNC_STATE_KEY, generation_id: snapshot.generation_id, revision: snapshot.revision, scope_fingerprint: snapshot.scope_fingerprint, updated_at: new Date().toISOString() });
+        });
         for (const entity of BUSINESS_ENTITIES) {
-          await localDb[entity].clear();
-          if (snapshot.byEntity[entity].length) await localDb[entity].bulkPut(snapshot.byEntity[entity]);
+          if (snapshot.byEntity[entity].length) {
+            const payload = { records: snapshot.byEntity[entity] };
+            notify(entity, 'hydrate', payload);
+            publish(entity, 'hydrate', payload);
+          }
         }
-        await localDb.BusinessSyncState.put({ key: SYNC_STATE_KEY, generation_id: snapshot.generation_id, revision: snapshot.revision, scope_fingerprint: snapshot.scope_fingerprint, updated_at: new Date().toISOString() });
-      });
-      for (const entity of BUSINESS_ENTITIES) {
-        if (snapshot.byEntity[entity].length) {
-          const payload = { records: snapshot.byEntity[entity] };
-          notify(entity, 'hydrate', payload);
-          publish(entity, 'hydrate', payload);
+        publish('dataset', 'hydrate', { generation_id: snapshot.generation_id });
+        try {
+          const { rebuildDailyAggregates } = await import('../lib/dailyAggregates.js');
+          await rebuildDailyAggregates();
+        } catch (e) {
+          // Non-blocking in headless/test environments
         }
+        const state = await localDb.BusinessSyncState.get(SYNC_STATE_KEY);
+        const applied = await applyFeed(state);
+        if (applied.rebuild) {
+          hydrationPromise = null;
+          return hydrate({ force: true });
+        }
+        return { active: true, rebuilt: true, ...applied.state };
+      } finally {
+        isHydrating = false;
       }
-      publish('dataset', 'hydrate', { generation_id: snapshot.generation_id });
-      try {
-        const { rebuildDailyAggregates } = await import('../lib/dailyAggregates.js');
-        await rebuildDailyAggregates();
-      } catch (e) {
-        // Non-blocking in headless/test environments
-      }
-      const state = await localDb.BusinessSyncState.get(SYNC_STATE_KEY);
-      const applied = await applyFeed(state);
-      if (applied.rebuild) {
-        hydrationPromise = null;
-        return hydrate({ force: true });
-      }
-      return { active: true, rebuilt: true, ...applied.state };
     })();
     try { return await hydrationPromise; }
     finally { hydrationPromise = null; }
   }
 
   async function ensureFresh({ allowDuringTransaction = false } = {}) {
+    if (isHydrating) return;
     if (transactionPending && !allowDuringTransaction) return;
     await recoverPendingTransactions();
     // A pull in flight is the only thing that can fill an empty cache, so a

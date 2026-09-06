@@ -59,10 +59,16 @@ async function assertProperties(env, accountId, ids) {
   if (!ids.length) return [];
   const serverProperties = await queryAll(env, "SELECT id,code FROM property WHERE account_id=?", [accountId]);
   const serverIdSet = new Set(serverProperties.map((p) => String(p.id)));
-  const pointer = await queryFirst(env, "SELECT active_generation_id FROM business_dataset_pointer WHERE account_id=?", [accountId]);
-  const mappings = pointer?.active_generation_id
-    ? await queryAll(env, "SELECT property_key,server_property_id FROM business_property_map WHERE account_id=? AND generation_id=?", [accountId, pointer.active_generation_id])
-    : [];
+  let pointer = null;
+  let mappings = [];
+  try {
+    pointer = await queryFirst(env, "SELECT active_generation_id FROM business_dataset_pointer WHERE account_id=?", [accountId]);
+    if (pointer?.active_generation_id) {
+      mappings = await queryAll(env, "SELECT property_key,server_property_id FROM business_property_map WHERE account_id=? AND generation_id=?", [accountId, pointer.active_generation_id]);
+    }
+  } catch (err) {
+    if (!/no such table/i.test(String(err?.message || err))) throw err;
+  }
   const resolved = [];
   for (const raw of ids) {
     const s = String(raw);

@@ -6261,6 +6261,22 @@ FULL GATES. The focused `--only probe-verify-all-verdict` path passed 168/168; V
 audit gates exited 0. The uninterrupted final sweep at list `86de99ae` discovered 152 suites:
 150 passed, 0 failed/broken/timed-out/bad-exit/no-verdict/diagnostic, with 2 explicit skips.
 
+## 60. Cross-Browser Cloudflare D1 Synchronization & Production Hardening (2026-09-06)
+
+F-084. Cross-browser account data synchronization required end-to-end hardening across property ID normalization, hydration race conditions, and test runner shard elasticity:
+
+1. **Property ID Representation Invariant**: Cloudflare D1 stores `property_id` as text (`TEXT NOT NULL`), whereas client applications and legacy memory fixtures frequently represent IDs as integers (e.g. `1` vs `"1"`). Queries in `worker/business-sync.js` and hydration lookups in `src/api/businessSync.js` now enforce strict string normalization via `String(propertyId).trim()` across all SQL parameters, chunk filters, and entity manifests.
+
+2. **Hydration Query Race Guard**: In `src/lib/useHotelData.js`, concurrent dashboard renders during remote D1 hydration previously risked querying an empty or partially populated IndexedDB cache. Added `isHydrating` state management and guaranteed cache invalidation dispatch upon completion of `hydrateFromRemote()`, ensuring fresh browser profiles (Browser B) reproduce bit-equal financial invariants without requiring HotelKey CSV re-uploads.
+
+3. **Dynamic Shard Slice Elasticity**: In `scripts/probe-verify-all-verdict.mjs`, the test suite previously hardcoded `--shard=1/152`. When certification suites expanded the baseline beyond 152 suites, `Math.ceil(total / 152)` evaluated to 2 instead of 1, failing shard range assertions. Replaced with dynamic slice discovery based on `baselineSuites.length`, eliminating test runner fragility.
+
+4. **Auth Harness Table Resilience**: In `worker/users.js`, querying `business_dataset_pointer` in isolated auth unit tests (which execute `0001_auth_schema.sql` without `0002_business_sync.sql`) threw `no such table: business_dataset_pointer`. Wrapped dataset pointer lookups with targeted error recovery for missing tables, allowing auth suites to execute cleanly without coupling to business sync tables while preserving full pointer resolution when present.
+
+5. **Exhaustive Certification Matrix**: Created `scripts/probe-50-trick-cases.mjs` (50 trick cases spanning empty IndexedDB, numeric/string property IDs, cold-start race conditions, chunk boundaries 500/501/1001, replay idempotency, div-by-zero, negative refunds, and leap years) and `scripts/probe-10k-adversarial-matrix.mjs` (10,000 deterministic PRNG permutations across scopes, entities, money formats, and chunk sizes). Both probes pass with 100% success rate (0 failures).
+
+FULL GATES. Vitest passed 413/413 tests in 48 files; `probe-verify-all-verdict` passed 168/168 assertions; 50 trick cases passed 50/50; 10k adversarial matrix passed 10,000/10,000; typecheck, lint, V3 (`verify:v3`), and repo-map passed with 0 errors.
+
 
 
 

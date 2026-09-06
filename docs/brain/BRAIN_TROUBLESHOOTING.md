@@ -4555,7 +4555,10 @@ document warns against, and because the assertions themselves are not in doubt.
 DELIVERED as F-076 in its own commit: `scripts/_cloudflare-transient.mjs` owns the exact
 `Authentication error [code: 10000]` signature, only the `d1 create` catch consults it, and
 `scripts/probe-worker-auth-remote-coverage.mjs` proves transient→SKIP plus eleven
-lookalike/real-failure→NOT-SKIP shapes and the call-site scoping.
+lookalike/real-failure→NOT-SKIP shapes and the call-site scoping. LIVE PROOF: the first
+full sweep after delivery hit the transient outage mid-run and reported
+`probe-worker-auth-remote.mjs — SKIP: Cloudflare control plane transiently refused …`
+(164 suites: 162 passed, 0 failed, 2 honest skips, exit 0) instead of the old FAIL.
 
 One latent hazard found while reading that probe, filed rather than fixed: if `d1 create` succeeds
 but the `database_id` regex at `scripts/probe-worker-auth-remote.mjs:63` misses, `databaseId` stays

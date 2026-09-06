@@ -60,6 +60,19 @@ try {
   await rm(complete, { recursive: true, force: true });
 }
 
+const singleMissing = await fixture({ missing: ['base44'] });
+try {
+  const result = run(singleMissing);
+  assert.equal(result.status, 1, result.output);
+  assert.match(result.output, /every directory declared in SCAN_DIRS exists/);
+  assert.match(result.output, /not found: base44/);
+  assert.doesNotMatch(result.output, /PASSED: no real identity or credential in tracked source\./);
+  passed += 1;
+  console.log('PASS one absent declared scan root => FAIL naming the root');
+} finally {
+  await rm(singleMissing, { recursive: true, force: true });
+}
+
 const incomplete = await fixture({ missing: ['base44', 'backend', 'tests'] });
 try {
   const result = run(incomplete);
@@ -74,5 +87,5 @@ try {
 }
 
 console.log(`PASSED: ${passed} F-079 coverage-verdict cases passed`);
-if (passed !== 2) process.exit(1);
+if (passed !== 3) process.exit(1);
 process.exit(0);

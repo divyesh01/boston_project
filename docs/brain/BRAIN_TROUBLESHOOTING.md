@@ -6127,9 +6127,9 @@ without moving the owner's untracked exports out of the way.
 DELIVERED F-079 — `probe-no-real-credentials.mjs` now asserts that every declared `SCAN_DIRS`
 root exists before traversal. A missing tracked root therefore fails the security-scan verdict
 and names each unavailable root instead of silently returning a smaller clean scan. The isolated
-`probe-no-real-credentials-coverage.mjs` proves both sides without real repository files: all
-five roots pass, while absent `base44`, `backend`, and `tests` fail non-zero and identify each
-root.
+`probe-no-real-credentials-coverage.mjs` proves all three sides without real repository files:
+all five roots pass; exactly one absent root (`base44`) fails non-zero and names it; while absent
+`base44`, `backend`, and `tests` fail non-zero and identify each root.
 
 DELIVERED FOLLOW-ON COVERAGE — the two remaining required-path checks now fail loudly as well:
 `probe-db-mock-rls.mjs` rejects missing tracked audit writers instead of skipping their signed-row

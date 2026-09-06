@@ -362,7 +362,7 @@ export function createBusinessSyncClient({
   }
 
   async function ensureFresh({ allowDuringTransaction = false } = {}) {
-    if (isHydrating) return;
+    if (isHydrating) { await (pullPromise || hydrationPromise); return; }
     if (transactionPending && !allowDuringTransaction) return;
     await recoverPendingTransactions();
     // A pull in flight is the only thing that can fill an empty cache, so a

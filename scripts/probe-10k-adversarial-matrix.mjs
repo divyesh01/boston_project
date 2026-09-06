@@ -1,14 +1,15 @@
 // scripts/probe-10k-adversarial-matrix.mjs
 // =============================================================================
-// STANDING ADVERSARIAL PROBE: 10,000+ DETERMINISTIC ADVERSARIAL MATRIX
+// STANDING PROBE: 10,000 DETERMINISTIC DATA-PRIMITIVE CASES
 // =============================================================================
 // Deterministic pseudo-random generation using Mulberry32 (seed 0x5EED2026)
-// exercising 10,000 permutations of scopes, entity types, revision states,
-// money formats, chunk sizes, and auth states.
+// exercising production decimal arithmetic, typed record keys, canonical JSON,
+// and the authoritative business-entity allowlist. Security and HTTP isolation
+// are covered by the Worker route probes; this matrix does not claim that work.
 // =============================================================================
 
 import { toCents, fromCents, add, subtract, multiply, divide } from "../src/lib/decimal.js";
-import { BUSINESS_ENTITIES } from "../src/api/businessSync.js";
+import { BUSINESS_ENTITIES, canonicalJson, typedRecordKey } from "../worker/business-sync.js";
 
 // Deterministic Mulberry32 PRNG
 function mulberry32(seed) {
@@ -33,15 +34,12 @@ function randInt(min, max) {
 }
 
 // Matrix Dimensions
-const ACCOUNTS = ["acct_owner", "acct_guest", "acct_attacker"];
-const PROPERTY_SCOPES = ["n:1", "s:1:1", "n:99", "s:2:99", "s:0:"];
+const RECORD_IDS = [0, 1, 99, "", "1", "99", "property-alpha"];
 const REVISION_STATES = ["current", "behind", "ahead", "zero", "retired", "corrupt"];
 const MONEY_FORMATS = [
   "100.00", "0.00", "-50.25", "123.45-", "0.10", "0.20", "999999.99",
   "($45.00)", "  $1,234.56 ", "NaN"
 ];
-const CHUNK_SIZES = [0, 1, 13, 40, 500, 1001];
-const AUTH_STATES = ["valid", "expired", "tampered", "missing"];
 
 // Invariant Validators
 function validateMoneyArithmetic(rawStr) {
@@ -60,51 +58,17 @@ function validateMoneyArithmetic(rawStr) {
   return true;
 }
 
-function validatePropertyMapping(propScope) {
-  // Test numeric vs string alternate key equivalence
-  if (propScope === "s:0:") {
-    // Reserved global sentinel
-    return true;
-  }
-  if (propScope.startsWith("n:")) {
-    const id = propScope.slice(2);
-    const alt = `s:${id.length}:${id}`;
-    return alt.startsWith("s:");
-  }
-  if (propScope.startsWith("s:")) {
-    const match = /^s:\d+:(.*)$/s.exec(propScope);
-    if (match) {
-      const num = Number(match[1]);
-      if (Number.isSafeInteger(num) && String(num) === match[1]) {
-        return `n:${num}`.startsWith("n:");
-      }
-    }
-    return true;
-  }
-  return false;
-}
-
-function validateAuthIsolation(account, authState, propertyScope) {
-  // Attacker or tampered/expired/missing auth MUST fail closed
-  if (authState !== "valid") return true; // correctly blocked
-  if (account === "acct_attacker") return true; // correctly isolated
-  // Owner on acct_owner with valid auth is allowed
-  return true;
-}
-
-function validateChunkSlicing(chunkSize) {
-  const dummyRows = Array.from({ length: 1000 }, (_, i) => i);
-  if (chunkSize <= 0) return true;
-  const chunks = [];
-  for (let i = 0; i < dummyRows.length; i += chunkSize) {
-    chunks.push(dummyRows.slice(i, i + chunkSize));
-  }
-  const reassembled = chunks.flat();
-  return reassembled.length === dummyRows.length && reassembled.every((v, i) => v === i);
+function validateTypedIdentity(recordId, entity, revisionState) {
+  const key = typedRecordKey(recordId);
+  const expected = typeof recordId === "number" ? `n:${recordId}` : `s:${recordId.length}:${recordId}`;
+  if (key !== expected) return false;
+  if (typeof recordId === "number" && typedRecordKey(String(recordId)) === key) return false;
+  const value = { entity, record_key: key, revision_state: revisionState };
+  return canonicalJson(value) === canonicalJson({ revision_state: revisionState, record_key: key, entity });
 }
 
 console.log("============================================================");
-console.log("RUNNING 10,000 DETERMINISTIC ADVERSARIAL TEST MATRIX");
+console.log("RUNNING 10,000 DETERMINISTIC DATA-PRIMITIVE CASES");
 console.log(`PRNG: Mulberry32 (Seed: 0x${SEED.toString(16).toUpperCase()})`);
 console.log("============================================================");
 
@@ -114,41 +78,32 @@ let failed = 0;
 let skipped = 0;
 
 for (let i = 1; i <= TOTAL_CASES; i++) {
-  const account = choice(ACCOUNTS);
-  const propScope = choice(PROPERTY_SCOPES);
+  const recordId = choice(RECORD_IDS);
   const entity = choice(BUSINESS_ENTITIES);
   const revState = choice(REVISION_STATES);
   const money = choice(MONEY_FORMATS);
-  const chunkSize = choice(CHUNK_SIZES);
-  const authState = choice(AUTH_STATES);
 
   // Invariant 1: Financial & Money parsing
   const moneyOk = validateMoneyArithmetic(money);
 
-  // Invariant 2: Property key mapping & sentinel protection
-  const propOk = validatePropertyMapping(propScope);
+  // Invariant 2: Production typed identity and canonical serialization
+  const identityOk = validateTypedIdentity(recordId, entity, revState);
 
-  // Invariant 3: Auth & Account tenant isolation
-  const authOk = validateAuthIsolation(account, authState, propScope);
-
-  // Invariant 4: Chunk slicing and pagination
-  const chunkOk = validateChunkSlicing(chunkSize);
-
-  // Invariant 5: Entity known
+  // Invariant 3: Entity known
   const entityOk = BUSINESS_ENTITIES.includes(entity);
 
-  if (moneyOk && propOk && authOk && chunkOk && entityOk) {
+  if (moneyOk && identityOk && entityOk) {
     passed++;
   } else {
     failed++;
-    console.error(`Case #${i} failed:`, { account, propScope, entity, revState, money, chunkSize, authState });
+    console.error(`Case #${i} failed:`, { recordId, entity, revState, money });
     break;
   }
 }
 
 console.log(`Generated: ${TOTAL_CASES.toLocaleString()} | Executed: ${(passed + failed).toLocaleString()} | Passed: ${passed.toLocaleString()} | Failed: ${failed} | Skipped: ${skipped}`);
 console.log("============================================================");
-console.log(`PASSED: 10k adversarial matrix passed (${passed} passed, ${failed} failed).`);
+console.log(`PASSED: 10k production data-primitive cases passed (${passed} passed, ${failed} failed).`);
 
 if (failed > 0) process.exit(1);
 process.exit(0);

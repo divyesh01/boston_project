@@ -28,7 +28,10 @@ function isOwner(scope) {
 }
 
 function assertMayManageRole(scope, role) {
-  if (String(role).toLowerCase() === "owner" && !isOwner(scope)) throw new UserRequestError("only an owner may manage an owner account", 403);
+  const targetRole = String(role).toLowerCase();
+  const callerRole = String(scope.user.role || "").toLowerCase();
+  if (targetRole === "owner" && !isOwner(scope)) throw new UserRequestError("only an owner may manage an owner account", 403);
+  if (targetRole === "admin" && callerRole !== "owner" && callerRole !== "admin") throw new UserRequestError("only an owner or admin may manage an admin account", 403);
 }
 
 function mayReadRoster(scope) {

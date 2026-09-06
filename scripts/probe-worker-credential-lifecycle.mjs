@@ -270,6 +270,44 @@ await run.check("GATE 1 ROLE HIERARCHY: a delegated admin cannot promote an exis
   assertEqual(promoted.status, 403, `delegated admin promoted an owner: ${JSON.stringify(promoted.body)}`);
 });
 
+await run.check("GATE 1 ROLE HIERARCHY: gm+manage_users cannot create or promote an admin", async () => {
+  const { db, env, owner } = await freshWorld();
+  const staff = await createUser(env, owner, { ...STAFF, password: STAFF_PASSWORD });
+  seedUser(db, { id: "U_GM", email: "gm@example.test", role: "gm", mode: "all", username: "gm1" });
+  db.prepare("UPDATE user SET permissions=? WHERE id=?").run(JSON.stringify({ manage_users: true }), "U_GM");
+  await seedCredential(db, { userId: "U_GM", password: NEXT_PASSWORD, pepper: PEPPER_V1 });
+  const gm = await login(env, "gm1", NEXT_PASSWORD);
+  const created = await createUser(env, gm.cookie, {
+    username: "admin2", email: "admin2@example.test", role: "admin", property_access: "all", password: NEXT_PASSWORD,
+  });
+  assertEqual(created.status, 403, `gm minted an admin: ${JSON.stringify(created.body)}`);
+  const promoted = await call(env, `/api/users/${staff.body.user.id}`, {
+    method: "PATCH", cookie: gm.cookie, body: { data: { role: "admin", property_access: "all" } },
+  });
+  assertEqual(promoted.status, 403, `gm promoted an admin: ${JSON.stringify(promoted.body)}`);
+});
+
+await run.check("GATE 1 ROLE HIERARCHY: gm+manage_users cannot alter or delete an admin", async () => {
+  const { db, env } = await freshWorld();
+  seedUser(db, { id: "U_ADMIN", email: "admin@example.test", role: "admin", mode: "all", username: "admin1" });
+  await seedCredential(db, { userId: "U_ADMIN", password: STAFF_PASSWORD, pepper: PEPPER_V1 });
+  seedUser(db, { id: "U_GM", email: "gm@example.test", role: "gm", mode: "all", username: "gm1" });
+  db.prepare("UPDATE user SET permissions=? WHERE id=?").run(JSON.stringify({ manage_users: true }), "U_GM");
+  await seedCredential(db, { userId: "U_GM", password: NEXT_PASSWORD, pepper: PEPPER_V1 });
+  const gm = await login(env, "gm1", NEXT_PASSWORD);
+  const before = userRow(db, "U_ADMIN").password_hash;
+  const patched = await call(env, "/api/users/U_ADMIN", { method: "PATCH", cookie: gm.cookie, body: { data: { display_name: "Tampered" } } });
+  assertEqual(patched.status, 403, `gm patched an admin: ${JSON.stringify(patched.body)}`);
+  const reset = await call(env, "/api/users/U_ADMIN/password/reset", { method: "POST", cookie: gm.cookie });
+  assertEqual(reset.status, 403, `gm reset an admin password: ${JSON.stringify(reset.body)}`);
+  const set = await call(env, "/api/users/U_ADMIN/password/set", { method: "POST", cookie: gm.cookie, body: { newPassword: NEXT_PASSWORD } });
+  assertEqual(set.status, 403, `gm set an admin password: ${JSON.stringify(set.body)}`);
+  assertEqual(userRow(db, "U_ADMIN").password_hash, before, "admin credential was altered by gm");
+  const deleted = await call(env, "/api/users/U_ADMIN", { method: "DELETE", cookie: gm.cookie });
+  assertEqual(deleted.status, 403, `gm deleted an admin: ${JSON.stringify(deleted.body)}`);
+  assert(userRow(db, "U_ADMIN"), "admin user row was deleted");
+});
+
 await run.check("GATE 1 PATCH VALIDATION: malformed identity is refused and duplicate identity is controlled", async () => {
   const { env, owner } = await freshWorld();
   const first = await createUser(env, owner, { ...STAFF, password: STAFF_PASSWORD });

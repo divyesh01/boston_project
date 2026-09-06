@@ -107,6 +107,15 @@ await run.check("numeric 7 and string 7 have distinct typed identities", () => {
   assertEqual(typedRecordKey("7"), "s:1:7");
 });
 
+await run.check("migration start rejects an unsupported schema version", async () => {
+  const invalid = await buildPayload();
+  invalid.manifest.schema_version = 999;
+  invalid.manifest_hash = await hash(canonicalJson(invalid.manifest));
+  const response = await call("migration/start", { method: "POST", body: { manifest: invalid.manifest, manifest_hash: invalid.manifest_hash } });
+  assertEqual(response.status, 422);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_dataset WHERE account_id='A_1' AND manifest_hash=?").get(invalid.manifest_hash).n), 0);
+});
+
 await run.check("25-percent interruption is invisible and staging rollback is complete", async () => {
   const started = await start(payload);
   abortedGeneration = started.generation_id;
@@ -180,6 +189,22 @@ await run.check("server-first mutation is idempotent and appears in the feed", a
   const feed = await (await call("feed?since=0&limit=10")).json();
   assertEqual(feed.items.length, 1);
   assertEqual(feed.items[0].row.amount, 20.01);
+});
+
+await run.check("direct mutations reject server-managed scope fields", async () => {
+  const currentExpense = db.prepare("SELECT row_hash FROM business_record WHERE generation_id=? AND entity_name='Expense' AND record_key=?").get(generation, typedRecordKey(1));
+  const attempts = [
+    { mutation_id: "scope_field_expense_create_01", entity: "Expense", operation: "upsert", record_key: typedRecordKey(101), property_key: typedRecordKey(7), row: { id: 101, property_id: 7, amount: 5, account_id: "A_1" } },
+    { mutation_id: "scope_field_expense_update_02", entity: "Expense", operation: "upsert", record_key: typedRecordKey(1), property_key: typedRecordKey(7), base_row_hash: currentExpense.row_hash, row: { id: 1, property_id: 7, amount: 15, server_property_id: "injected" } },
+    { mutation_id: "scope_field_property_create_03", entity: "Property", operation: "upsert", record_key: typedRecordKey(8), property_key: typedRecordKey(8), row: { id: 8, code: "P-8", name: "Property Eight", server_property_id: "injected" } },
+  ];
+  const property = db.prepare("SELECT row_hash,row_json FROM business_record WHERE generation_id=? AND entity_name='Property' AND record_key=?").get(generation, typedRecordKey(7));
+  attempts.push({ mutation_id: "scope_field_property_update_04", entity: "Property", operation: "upsert", record_key: typedRecordKey(7), property_key: typedRecordKey(7), base_row_hash: property.row_hash, row: { ...JSON.parse(property.row_json), account_id: "A_1" } });
+  for (const body of attempts) {
+    const response = await call("mutate", { method: "POST", body });
+    assertEqual(response.status, 403, `reserved scope field accepted for ${body.entity}`);
+    assertEqual((await response.json()).error, "server scope fields are not accepted");
+  }
 });
 
 await run.check("stale write and cross-property write fail closed", async () => {
@@ -266,6 +291,30 @@ await run.check("an activated replacement can roll back to the prior generation"
   const restored = db.prepare("SELECT name,rooms FROM property WHERE account_id='A_1' AND code='NUM-7'").get();
   assertEqual(restored.name, "Numeric Seven");
   assertEqual(restored.rooms, 10);
+});
+
+await run.check("rollback restores a prior roster after live property codes are reused", async () => {
+  const variant = await buildVariantPayload();
+  variant.chunks[0][0].row.name = "Second replacement";
+  variant.chunks[0][0].row_hash = await hash(canonicalJson(variant.chunks[0][0].row));
+  variant.descriptors[0].hash = await hash(canonicalJson(variant.chunks[0]));
+  variant.manifest.chunks = variant.descriptors;
+  variant.manifest_hash = await hash(canonicalJson(variant.manifest));
+  const started = await start(variant);
+  for (let index = 0; index < variant.chunks.length; index += 1) await upload(started.generation_id, variant, index);
+  assertEqual((await call("migration/activate", { method: "POST", body: { generation_id: started.generation_id } })).status, 200);
+
+  const numeric = db.prepare("SELECT row_hash,row_json FROM business_record WHERE account_id='A_1' AND generation_id=? AND entity_name='Property' AND record_key=?").get(started.generation_id, typedRecordKey(7));
+  const numericRow = { ...JSON.parse(numeric.row_json), code: "TEMP-NUM-7" };
+  assertEqual((await call("mutate", { method: "POST", body: { mutation_id: "rollback_code_vacate_001", entity: "Property", operation: "upsert", record_key: typedRecordKey(7), property_key: typedRecordKey(7), base_row_hash: numeric.row_hash, row: numericRow } })).status, 200);
+  const stringy = db.prepare("SELECT row_hash,row_json FROM business_record WHERE account_id='A_1' AND generation_id=? AND entity_name='Property' AND record_key=?").get(started.generation_id, typedRecordKey("7"));
+  const stringRow = { ...JSON.parse(stringy.row_json), code: "NUM-7" };
+  assertEqual((await call("mutate", { method: "POST", body: { mutation_id: "rollback_code_reuse_002", entity: "Property", operation: "upsert", record_key: typedRecordKey("7"), property_key: typedRecordKey("7"), base_row_hash: stringy.row_hash, row: stringRow } })).status, 200);
+
+  const rollback = await call("migration/rollback", { method: "POST", body: { generation_id: started.generation_id } });
+  assertEqual(rollback.status, 200, `rollback failed after code reuse: ${JSON.stringify(await rollback.clone().json())}`);
+  assertEqual(db.prepare("SELECT name FROM property WHERE account_id='A_1' AND code='NUM-7'").get().name, "Numeric Seven");
+  assertEqual(db.prepare("SELECT name FROM property WHERE account_id='A_1' AND code='STR-7'").get().name, "String Seven");
 });
 
 await run.check("staged transaction preserves unchanged rows and accepts ordered idempotent chunks", async () => {
@@ -630,6 +679,79 @@ await run.check("a second account cannot read, mutate, abort, or commit the firs
   assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_2'").get().n), 0, "the intruder account must hold no business records");
   assertEqual(db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id, activeA);
   assertEqual((await call("transaction/abort", { method: "POST", body: { tx_id: txId } })).status, 200);
+});
+
+await run.check("only a transaction creator or account administrator can abort it", async () => {
+  const propertyId = db.prepare("SELECT server_property_id FROM business_property_map WHERE account_id='A_1' AND property_key=? LIMIT 1").get(typedRecordKey(7)).server_property_id;
+  seedUser(db, { id: "manager_creator", email: "manager.creator@test.local", role: "manager", mode: "specific", grants: [propertyId] });
+  seedUser(db, { id: "manager_unrelated", email: "manager.unrelated@test.local", role: "manager", mode: "specific", grants: [propertyId] });
+  const creator = { user: { id: "manager_creator", role: "manager", permissions: { manual_entry: true } }, accountId: "A_1", all: false, propertyIds: [propertyId] };
+  const unrelated = { user: { id: "manager_unrelated", role: "manager", permissions: { manual_entry: true } }, accountId: "A_1", all: false, propertyIds: [propertyId] };
+  const txId = "transaction_abort_owner_0016";
+  const operation = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(1600), property_key: typedRecordKey(7), row: { id: 1600, property_id: 7, amount: 16 } };
+  assertEqual((await call("transaction/start", { method: "POST", scope: creator, body: { tx_id: txId, request_hash: await hash(canonicalJson([operation])), expected_chunks: 1, operation_count: 1 } })).status, 201);
+  assertEqual((await call("transaction/chunk", { method: "POST", scope: creator, body: { tx_id: txId, chunk_index: 0, chunk_hash: await transactionChunkHash([operation]), operations: [operation] } })).status, 200);
+  assertEqual((await call("transaction/abort", { method: "POST", scope: unrelated, body: { tx_id: txId } })).status, 403);
+  assertEqual(db.prepare("SELECT status FROM business_staging_transaction WHERE account_id='A_1' AND tx_id=?").get(txId).status, "pending");
+  assertEqual((await call("transaction/abort", { method: "POST", scope: creator, body: { tx_id: txId } })).status, 200);
+});
+
+await run.check("atomic guard blocks concurrent transaction starts at the cap boundary", async () => {
+  for (const row of db.prepare("SELECT tx_id FROM business_staging_transaction WHERE account_id='A_1' AND status='pending'").all()) await call("transaction/abort", { method: "POST", body: { tx_id: row.tx_id } });
+  for (let index = 1; index <= 2; index += 1) {
+    const operation = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(1800 + index), property_key: typedRecordKey(7), row: { id: 1800 + index, property_id: 7, amount: 18 + index / 100 } };
+    assertEqual((await call("transaction/start", { method: "POST", body: { tx_id: `transaction_cap_fill_00${index}`, request_hash: await hash(canonicalJson([operation])), expected_chunks: 1, operation_count: 1 } })).status, 201);
+  }
+  const candidates = [1, 2].map((index) => ({
+    txId: `transaction_cap_race_00${index}`,
+    operation: { entity: "Expense", operation: "upsert", record_key: typedRecordKey(1810 + index), property_key: typedRecordKey(7), row: { id: 1810 + index, property_id: 7, amount: 18.1 + index / 100 } },
+  }));
+  const [first, second] = await Promise.all(
+    candidates.map(async ({ txId, operation }) => call("transaction/start", {
+      method: "POST",
+      body: { tx_id: txId, request_hash: await hash(canonicalJson([operation])), expected_chunks: 1, operation_count: 1 },
+    })),
+  );
+  assertEqual([first.status, second.status].sort().join(","), "201,409");
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_staging_transaction WHERE account_id='A_1' AND status='pending'").get().n), 3);
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_mutation_guard WHERE account_id='A_1' AND mutation_id LIKE 'transaction_cap_%:cap'").get().n), 0);
+  for (const row of db.prepare("SELECT tx_id FROM business_staging_transaction WHERE account_id='A_1' AND status='pending'").all()) await call("transaction/abort", { method: "POST", body: { tx_id: row.tx_id } });
+});
+
+await run.check("expired pending transactions free capacity before admission", async () => {
+  const txIds = [];
+  for (let index = 1; index <= 3; index += 1) {
+    const txId = `transaction_expiry_cap_00${index}`;
+    const operation = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(1900 + index), property_key: typedRecordKey(7), row: { id: 1900 + index, property_id: 7, amount: 19 + index / 100 } };
+    assertEqual((await call("transaction/start", { method: "POST", body: { tx_id: txId, request_hash: await hash(canonicalJson([operation])), expected_chunks: 1, operation_count: 1 } })).status, 201);
+    txIds.push(txId);
+  }
+  db.prepare("UPDATE business_staging_transaction SET expires_at='2000-01-01T00:00:00.000Z' WHERE account_id='A_1' AND tx_id=?").run(txIds[0]);
+  const replacement = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(1904), property_key: typedRecordKey(7), row: { id: 1904, property_id: 7, amount: 19.04 } };
+  assertEqual((await call("transaction/start", { method: "POST", body: { tx_id: "transaction_expiry_cap_004", request_hash: await hash(canonicalJson([replacement])), expected_chunks: 1, operation_count: 1 } })).status, 201);
+  assertEqual(db.prepare("SELECT status FROM business_staging_transaction WHERE account_id='A_1' AND tx_id=?").get(txIds[0]).status, "expired");
+  for (const row of db.prepare("SELECT tx_id FROM business_staging_transaction WHERE account_id='A_1' AND status='pending'").all()) await call("transaction/abort", { method: "POST", body: { tx_id: row.tx_id } });
+});
+
+await run.check("pending transaction cap blocks unbounded dataset cloning", async () => {
+  for (const row of db.prepare("SELECT tx_id FROM business_staging_transaction WHERE account_id='A_1' AND status='pending'").all()) {
+    await call("transaction/abort", { method: "POST", body: { tx_id: row.tx_id } });
+  }
+  const accepted = [];
+  for (let index = 1; index <= 4; index += 1) {
+    const txId = `transaction_cap_test_00${index}`;
+    const operation = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(1700 + index), property_key: typedRecordKey(7), row: { id: 1700 + index, property_id: 7, amount: 17 + index } };
+    const response = await call("transaction/start", { method: "POST", body: { tx_id: txId, request_hash: await hash(canonicalJson([operation])), expected_chunks: 1, operation_count: 1 } });
+    if (index <= 3) {
+      assertEqual(response.status, 201);
+      accepted.push(txId);
+    } else {
+      assertEqual(response.status, 409, "fourth pending transaction must fail closed");
+      assertEqual((await response.json()).error, "pending transaction limit reached");
+    }
+  }
+  assertEqual(Number(db.prepare("SELECT COUNT(*) AS n FROM business_staging_transaction WHERE account_id='A_1' AND status='pending'").get().n), 3);
+  for (const txId of accepted) assertEqual((await call("transaction/abort", { method: "POST", body: { tx_id: txId } })).status, 200);
 });
 
 run.done();

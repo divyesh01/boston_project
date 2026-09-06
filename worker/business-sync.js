@@ -5,6 +5,7 @@ const MAX_CHUNK_ROWS = 40;
 const MAX_PAGE_ROWS = 500;
 const MAX_DATASET_ROWS = 250_000;
 const MAX_TRANSACTION_CHUNK_OPERATIONS = 13;
+const MAX_PENDING_TRANSACTIONS = 3;
 const TRANSACTION_TTL_MS = 24 * 60 * 60 * 1000;
 
 export const BUSINESS_ENTITIES = Object.freeze([
@@ -142,6 +143,7 @@ async function startMigration(request, env, scope) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new SyncRequestError("manifest is required");
   }
+  if (Number(manifest.schema_version) !== 1) throw new SyncRequestError("unsupported manifest schema version", 422);
   const chunks = Array.isArray(manifest.chunks) ? manifest.chunks : [];
   const counts = manifest.counts && typeof manifest.counts === "object" ? manifest.counts : {};
   if (chunks.length === 0 || chunks.length > 10_000) throw new SyncRequestError("manifest chunks are invalid", 422);
@@ -390,6 +392,19 @@ async function rollbackMigration(request, env, scope) {
     );
     const previousIds = new Set(previousProperties.map((item) => String(item.server_property_id)));
     const rosterStatements = [];
+    const targetCodes = new Set(previousProperties.map((item) => String(JSON.parse(String(item.row_json)).code || "").trim().toLowerCase()));
+    const currentProperties = await queryAll(env, "SELECT id,code FROM property WHERE account_id=?", [scope.accountId]);
+    const occupiedCodes = new Set(currentProperties.map((item) => String(item.code || "").toLowerCase()));
+    let evacuationIndex = 0;
+    for (const item of currentProperties) {
+      if (!previousIds.has(String(item.id)) && !targetCodes.has(String(item.code || "").toLowerCase())) continue;
+      let placeholder;
+      do {
+        placeholder = `__rollback__:${generationId}:${evacuationIndex++}:${crypto.randomUUID()}`;
+      } while (occupiedCodes.has(placeholder.toLowerCase()));
+      occupiedCodes.add(placeholder.toLowerCase());
+      rosterStatements.push(env.DB.prepare("UPDATE property SET code=? WHERE account_id=? AND id=?").bind(placeholder, scope.accountId, String(item.id)));
+    }
     for (const item of previousProperties) {
       const row = JSON.parse(String(item.row_json));
       const code = String(row.code || "").trim();
@@ -465,6 +480,9 @@ async function startTransaction(request, env, scope) {
   if (!Number.isSafeInteger(operationCount) || operationCount <= 0 || operationCount > 130_000) throw new SyncRequestError("operation_count is invalid", 422);
   if (Math.ceil(operationCount / MAX_TRANSACTION_CHUNK_OPERATIONS) !== expectedChunks) throw new SyncRequestError("transaction chunk count does not match operation count", 422);
 
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  await expirePendingTransactions(env, scope, now);
   const existing = await queryFirst(env, "SELECT * FROM business_staging_transaction WHERE account_id=? AND tx_id=?", [scope.accountId, txId]);
   if (existing) {
     if (existing.request_hash !== requestHash || Number(existing.expected_chunks) !== expectedChunks || Number(existing.operation_count) !== operationCount) {
@@ -473,9 +491,8 @@ async function startTransaction(request, env, scope) {
     return Response.json({ tx_id: txId, generation_id: existing.staging_generation_id, status: existing.status, resumed: true });
   }
 
-  const nowMs = Date.now();
-  const now = new Date(nowMs).toISOString();
-  await expirePendingTransactions(env, scope, now);
+  const pending = await queryFirst(env, "SELECT COUNT(*) AS count FROM business_staging_transaction WHERE account_id=? AND status='pending' AND expires_at>?", [scope.accountId, now]);
+  if (Number(pending?.count || 0) >= MAX_PENDING_TRANSACTIONS) throw new SyncRequestError("pending transaction limit reached", 409);
   const baseline = await queryFirst(env, "SELECT p.active_generation_id,s.revision FROM business_dataset_pointer p JOIN business_sync_state s ON s.account_id=p.account_id WHERE p.account_id=?", [scope.accountId]);
   if (!baseline) throw new SyncRequestError("no active business dataset", 409);
   const baseGenerationId = String(baseline.active_generation_id);
@@ -487,16 +504,21 @@ async function startTransaction(request, env, scope) {
   const baseCount = await queryFirst(env, "SELECT COUNT(*) AS count FROM business_record WHERE account_id=? AND generation_id=?", [scope.accountId, baseGenerationId]);
   try {
     await env.DB.batch([
+      env.DB.prepare("INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN (SELECT COUNT(*) FROM business_staging_transaction WHERE account_id=? AND status='pending' AND expires_at>? AND tx_id<>?) < ? THEN 1 ELSE 0 END,?").bind(scope.accountId, `${txId}:cap`, requestHash, scope.accountId, now, txId, MAX_PENDING_TRANSACTIONS, now),
       env.DB.prepare("INSERT INTO business_dataset (account_id,generation_id,status,schema_version,manifest_hash,manifest_json,expected_chunks,expected_records,previous_generation_id,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)").bind(scope.accountId, stagingGenerationId, "staging", 1, manifestHash, manifestJson, expectedChunks, Number(baseCount?.count || 0), baseGenerationId, String(scope.user.id), now),
       env.DB.prepare("INSERT INTO business_record (account_id,generation_id,entity_name,record_key,property_key,server_property_id,row_json,row_hash,updated_at) SELECT account_id,?,entity_name,record_key,property_key,server_property_id,row_json,row_hash,? FROM business_record WHERE account_id=? AND generation_id=?").bind(stagingGenerationId, now, scope.accountId, baseGenerationId),
       env.DB.prepare("INSERT INTO business_property_map (account_id,generation_id,property_key,server_property_id,property_code) SELECT account_id,?,property_key,server_property_id,property_code FROM business_property_map WHERE account_id=? AND generation_id=?").bind(stagingGenerationId, scope.accountId, baseGenerationId),
       env.DB.prepare("INSERT INTO business_staging_transaction (account_id,tx_id,request_hash,base_generation_id,base_revision,staging_generation_id,status,expected_chunks,next_chunk_index,operation_count,created_by,created_at,expires_at) VALUES (?,?,?,?,?,?,'pending',?,0,?,?,?,?)").bind(scope.accountId, txId, requestHash, baseGenerationId, baseRevision, stagingGenerationId, expectedChunks, operationCount, String(scope.user.id), now, expiresAt),
+      env.DB.prepare("DELETE FROM business_mutation_guard WHERE account_id=? AND mutation_id=?").bind(scope.accountId, `${txId}:cap`),
     ]);
   } catch (error) {
-    if (!/UNIQUE constraint/i.test(String(error?.message || error))) throw error;
     const concurrent = await queryFirst(env, "SELECT * FROM business_staging_transaction WHERE account_id=? AND tx_id=?", [scope.accountId, txId]);
-    if (!concurrent || concurrent.request_hash !== requestHash || Number(concurrent.expected_chunks) !== expectedChunks || Number(concurrent.operation_count) !== operationCount) throw error;
-    return Response.json({ tx_id: txId, generation_id: concurrent.staging_generation_id, status: concurrent.status, resumed: true });
+    if (concurrent) {
+      if (concurrent.request_hash !== requestHash || Number(concurrent.expected_chunks) !== expectedChunks || Number(concurrent.operation_count) !== operationCount) throw error;
+      return Response.json({ tx_id: txId, generation_id: concurrent.staging_generation_id, status: concurrent.status, resumed: true });
+    }
+    if (isGuardViolation(error)) throw new SyncRequestError("pending transaction limit reached", 409);
+    throw error;
   }
   return Response.json({ tx_id: txId, generation_id: stagingGenerationId, status: "pending", resumed: false }, { status: 201 });
 }
@@ -631,6 +653,19 @@ async function abortTransaction(request, env, scope) {
   const body = await readBody(request);
   const txId = String(body.tx_id || "");
   const tx = await loadStagingTransaction(env, scope, txId);
+  const role = String(scope.user?.role || "").toLowerCase();
+  if (!['owner', 'admin'].includes(role)) {
+    if (String(scope.user?.id || "") !== String(tx.created_by)) throw new SyncRequestError("forbidden", 403);
+    const targets = await queryAll(env, "SELECT DISTINCT server_property_id FROM business_staging_target WHERE account_id=? AND tx_id=?", [scope.accountId, txId]);
+    for (const target of targets) {
+      const serverPropertyId = String(target.server_property_id);
+      if (serverPropertyId === GLOBAL_STAGING_TARGET_ID) {
+        if (!scope.all) throw new SyncRequestError("only all-property accounts are permitted to change account-global records", 403);
+      } else {
+        assertPropertyInScope(scope, serverPropertyId);
+      }
+    }
+  }
   if (tx.status === "aborted") return Response.json({ tx_id: txId, status: "aborted", replayed: true });
   if (tx.status !== "pending") throw new SyncRequestError("only a pending transaction can be aborted", 409);
   const generationId = String(tx.staging_generation_id);
@@ -925,6 +960,7 @@ async function mutate(request, env, scope) {
     } else {
       const row = body.row;
       if (!row || typedRecordKey(row.id) !== recordKey) throw new SyncRequestError("record key mismatch", 422);
+      if ("account_id" in row || "server_property_id" in row) throw new SyncRequestError("server scope fields are not accepted", 403);
       assertLosslessJson(row);
       const code = String(row.code || "").trim();
       const name = String(row.name || "").trim();
@@ -970,6 +1006,7 @@ async function mutate(request, env, scope) {
     } else {
       const row = body.row;
       if (!row || typedRecordKey(row.id) !== recordKey || typedRecordKey(row.property_id) !== propertyKey) throw new SyncRequestError("record or property key mismatch", 422);
+      if ("account_id" in row || "server_property_id" in row) throw new SyncRequestError("server scope fields are not accepted", 403);
       assertLosslessJson(row);
       rowJson = canonicalJson(row);
       rowHash = await sha256(rowJson);

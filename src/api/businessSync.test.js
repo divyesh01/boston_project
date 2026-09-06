@@ -186,6 +186,44 @@ describe('businessSync', () => {
     expect(firstRows).toEqual([expense]);
     expect(secondRows).toEqual([expense]);
   });
+
+  it('does not let a read arriving during hydration observe the pre-hydration cache', async () => {
+    const expense = { id: 10, property_id: 4, amount: 56.78 };
+    let releaseSnapshot = () => {};
+    let markSnapshotRequested = () => {};
+    const snapshotGate = new Promise((resolve) => { releaseSnapshot = () => resolve(); });
+    const snapshotRequested = new Promise((resolve) => { markSnapshotRequested = () => resolve(); });
+    let firstPageHeld = false;
+    const request = async (path) => {
+      if (path.startsWith('business-sync/snapshot')) {
+        if (!firstPageHeld) {
+          firstPageHeld = true;
+          markSnapshotRequested();
+          await snapshotGate;
+        }
+        const entity = new URL(`https://x/${path}`).searchParams.get('entity');
+        const rows = entity === 'Expense' ? [expense] : [];
+        return {
+          generation_id: 'generation-1', snapshot_revision: 0, scope_fingerprint: 'scope-1', entity,
+          items: await Promise.all(rows.map(async (row) => ({ record_key: typedRecordKey(row.id), row_hash: await sha256Hex(canonicalJson(row)), row }))),
+          has_more: false, next_cursor: null,
+        };
+      }
+      if (path.startsWith('business-sync/feed')) return { items: [], active_generation_id: 'generation-1', scope_fingerprint: 'scope-1', current_revision: 0, next_revision: 0, has_more: false };
+      throw new Error(`unexpected request ${path}`);
+    };
+    const client = createBusinessSyncClient({ request });
+    const proxy = client.wrapEntity('Expense', { filter: async () => localDb.Expense.toArray() });
+
+    const first = proxy.filter({});
+    await snapshotRequested;
+    const second = proxy.filter({});
+    releaseSnapshot();
+
+    const [firstRows, secondRows] = await Promise.all([first, second]);
+    expect(firstRows).toEqual([expense]);
+    expect(secondRows).toEqual([expense]);
+  });
 });
 
 describe('authoritative business transactions', () => {

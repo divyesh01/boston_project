@@ -341,7 +341,7 @@ function routeMatrix({ generationId, txId, propertyKey, recordKey, mutationId })
   ];
 }
 
-const ATTACK_MANIFEST = { chunks: [{ index: 0, hash: HEX64, record_count: 1 }], counts: { Property: 1 } };
+const ATTACK_MANIFEST = { schema_version: 1, chunks: [{ index: 0, hash: HEX64, record_count: 1 }], counts: { Property: 1 } };
 const ATTACK_MANIFEST_HASH = await sha256Hex(ATTACK_MANIFEST);
 
 const A1_TARGETS = {

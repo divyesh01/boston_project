@@ -59,7 +59,7 @@ number of rows below, verified against `src/pages/*.jsx` (excluding `*.test.jsx`
 | Page | File | What It Does | Key Dependencies |
 |------|------|-------------|-----------------|
 | **Employees** | `src/pages/Employees.jsx` | Staff roster, clerk cash variance audit, anomaly sign-off | `anomalyDetector.js`, `anomalySignoff.js`, `ClerkAuditMatrix` |
-| **Payroll** | `src/pages/Payroll.jsx` | Payroll register: hourly/salary, overtime, compensation | `payrollCalc.js`, `timecardCalc.js`, `employeeId.js`, `deleteGuard.js` |
+| **Payroll** | `src/pages/Payroll.jsx` | Payroll register: hourly/salary, overtime, compensation, realtime invalidation | `payrollCalc.js`, `timecardCalc.js`, `employeeId.js`, `deleteGuard.js`, `realtime.js` |
 
 ### Analytics & Intelligence
 | Page | File | What It Does | Key Dependencies |
@@ -753,3 +753,20 @@ and a route at the same path is a silent shadowing bug: the alias is declared fi
 real page would never render.
 
 ---
+
+## 54. Payroll Realtime Synchronization and Property Scoping (2026-09-06)
+
+1. **Realtime Invalidation**:
+   `src/pages/Payroll.jsx` subscribes to realtime cross-tab and cross-window entity change notifications via `useRealtimeInvalidation(["staff", "payroll"])`.
+   In `src/lib/realtime.js`, table prefix matching is case-insensitive (`String(msg.table).toLowerCase().startsWith(prefix)`), ensuring changes to the `"Staff"` and `"PayrollRun"` Dexie/D1 tables immediately invalidate React Query caches across open tabs/windows without manual reload.
+   `invalidateQueries` passes normalized array keys (`Array.isArray(p) ? p : [p]`) so TanStack Query v5 properly invalidates prefix matching queries.
+
+2. **Property-Scoped Staff Query**:
+   `useStaff(propertyId)` scopes staff roster retrieval to the active global property filter:
+   - When a specific property is selected, only staff assigned to that property plus account-global staff (`property_id === ""`) are returned.
+   - When "All Properties" (`"all"`) is selected, staff across all authorized properties and account-global staff are returned.
+   - Query key is `["staff", propertyId]` so changing the global property filter automatically updates the staff query.
+   - Staff creation (`Staff.create`) only mutates the `Staff` table and does NOT create or alter `TimecardPunch` records or clock shifts.
+
+Covered by probe `scripts/probe-payroll-staff-sync.mjs`.
+

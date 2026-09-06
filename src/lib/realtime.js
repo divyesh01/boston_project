@@ -273,7 +273,7 @@ export function useRealtimeInvalidation(queryKeyPrefixes, { enabled = true, poll
 
   const invalidate = () => {
     for (const p of prefixes.current) {
-      queryClientInstance.invalidateQueries({ queryKey: p });
+      queryClientInstance.invalidateQueries({ queryKey: Array.isArray(p) ? p : [p] });
     }
   };
 
@@ -283,9 +283,13 @@ export function useRealtimeInvalidation(queryKeyPrefixes, { enabled = true, poll
     if (!enabled) return undefined;
     initLeaderCoordinator();
 
-    // 1. Cross-tab entity change listener
+    // 1. Cross-tab entity change listener (case-insensitive table & prefix matching)
     const unsubChanges = subscribeChanges((msg) => {
-      if (prefixes.current.some((p) => String(msg.table).startsWith(p))) {
+      const table = String((msg && msg.table) || "").toLowerCase();
+      if (prefixes.current.some((p) => {
+        const prefix = String(Array.isArray(p) ? p[0] : p || "").toLowerCase();
+        return table.startsWith(prefix) || prefix.startsWith(table);
+      })) {
         setLastChange(new Date());
         invalidate();
       }
@@ -296,7 +300,13 @@ export function useRealtimeInvalidation(queryKeyPrefixes, { enabled = true, poll
     const handleLeaderMessage = (ev) => {
       const data = ev && ev.data;
       if (data && data.type === "POLL_TICK" && !isLeader) {
-        const matches = Array.isArray(data.prefixes) && data.prefixes.some((prefix) => prefixes.current.includes(prefix));
+        const matches = Array.isArray(data.prefixes) && data.prefixes.some((prefix) => {
+          const normPrefix = String(Array.isArray(prefix) ? prefix[0] : prefix || "").toLowerCase();
+          return prefixes.current.some((p) => {
+            const normP = String(Array.isArray(p) ? p[0] : p || "").toLowerCase();
+            return normPrefix === normP || normPrefix.startsWith(normP) || normP.startsWith(normPrefix);
+          });
+        });
         if (matches) {
           setLastChange(new Date());
           invalidate();

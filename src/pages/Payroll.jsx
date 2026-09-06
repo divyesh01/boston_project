@@ -11,6 +11,7 @@ import KpiCard from "@/components/ui-exec/KpiCard";
 import StatusBadge from "@/components/ui-exec/StatusBadge";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
+import { useRealtimeInvalidation } from "@/lib/realtime";
 import { num, pct, C, PROPERTY, money2 } from "@/lib/hotel";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { reserveEmployeeId } from "@/lib/employeeId";
@@ -64,10 +65,18 @@ function usePayroll(propertyId) {
   });
 }
 
-function useStaff() {
+function useStaff(propertyId) {
   return useQuery({
-    queryKey: ["staff"],
-    queryFn: () => db.entities.Staff.list("employee_name", 100000),
+    queryKey: ["staff", Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
+    queryFn: async () => {
+      const rows = (await db.entities.Staff.list("employee_name", 100000)) || [];
+      if (!propertyId || propertyId === "all") return rows;
+      const targetIds = Array.isArray(propertyId) ? propertyId.map(String) : [String(propertyId)];
+      return rows.filter((r) => {
+        const pid = r.property_id != null ? String(r.property_id).trim() : "";
+        return pid === "" || targetIds.includes(pid);
+      });
+    },
   });
 }
 
@@ -95,8 +104,9 @@ function useOccupancyRange(from, to, propertyId) {
 export default function Payroll() {
   const { property, properties } = useGlobalFilters();
   const qc = useQueryClient();
+  useRealtimeInvalidation(["staff", "payroll"]);
   const payrollQ = usePayroll(property);
-  const staffQ = useStaff();
+  const staffQ = useStaff(property);
   const { data: payroll = [] } = payrollQ;
   const { data: staff = [] } = staffQ;
   // "No payroll runs yet" on a failed read looks like a month nobody has been paid

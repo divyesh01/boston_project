@@ -157,7 +157,12 @@ if (existsSync(viteChunks)) {
     mutation,
     'this assignment in vite:build-import-analysis.generateBundle is what invalidated the old hash');
 } else {
-  console.log('  SKIP  node_modules/vite not installed — upstream hazard not inspected');
+  // "SKIP:" with the colon, not "SKIP ". scripts/_verdict.mjs anchors on /^SKIP:/i;
+  // written without it, this decline is invisible to the runner and the suite reports
+  // unqualified green with section 2 never inspected. Because this suite also prints
+  // its own PASSED/FAILED counter, the runner files the line under PARTIAL COVERAGE
+  // rather than calling the whole suite skipped.
+  console.log('  SKIP: node_modules/vite not installed — upstream hazard not inspected');
 }
 
 // ── 3. the built artifact, if there is one ──────────────────────────────────
@@ -167,7 +172,7 @@ const distDir = path.join(ROOT, 'dist');
 const distHtml = path.join(distDir, 'index.html');
 
 if (!existsSync(distHtml)) {
-  console.log('  SKIP  dist/index.html not present — run `npm run build` to gate the artifact too');
+  console.log('  SKIP: dist/index.html not present — run `npm run build` to gate the artifact too');
   console.log('        (the static contract in section 1 is what protects a clean checkout)');
 } else {
   const html = readFileSync(distHtml, 'utf8');

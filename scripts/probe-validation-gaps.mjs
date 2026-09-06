@@ -254,8 +254,21 @@ ok("the short row's missing cells did not become a fake occupancy",
 // source of truth instead of against a snapshot.
 console.log("\n=== 5. the real Occupancy Summary: derived == what the PMS printed ===");
 
-const REAL = path.join(DATA, "Occupancy Summary midelboro.csv");
+// OCCUPANCY_FILE overrides the fixture path, mirroring verify-statistics.mjs's
+// STATS_FILE. Two reasons, both practical: the default is a *.csv .gitignore keeps
+// out of the repository, so a fresh clone has no way to point section 5 at a real
+// export it does hold; and the absent-fixture branch below is otherwise only
+// reachable by moving the owner's own untracked data out of the way, which is not an
+// acceptable price for testing the runner's decline handling. Point it at a
+// nonexistent path to exercise the SKIP branch.
+const REAL = process.env.OCCUPANCY_FILE
+  || path.join(DATA, "Occupancy Summary midelboro.csv");
 if (!fs.existsSync(REAL)) {
+  // "SKIP:" with the colon is what scripts/_verdict.mjs anchors on. This is a
+  // SECTION-scoped decline: the suite goes on to print its own PASSED/FAILED counter
+  // for the other 56 checks, so the runner files this under PARTIAL COVERAGE. Before
+  // 2026-09-05 it read the line as a whole-suite decline and reported 56 real
+  // assertions as zero coverage — which, on a fresh clone, was every run.
   console.log(`  SKIP: fixture not found at ${REAL}`);
 } else {
   const text = fs.readFileSync(REAL, "utf8");

@@ -6010,6 +6010,140 @@ not restrict the sweep — it silently runs all 150. (3) Section 42 of this docu
 comment inside `.githooks/pre-commit` both still say that file is untracked; section 53 tracked
 it, so both statements are now stale.
 
+## 55. "It ran, and part of it didn't" was a sentence the harness could not say, so two suites lied about themselves in opposite directions (2026-09-05)
+
+This closes backlog item (1) of section 54.
+
+`SKIP` was a whole-suite word. A suite either declined everything or declined nothing, and
+every real partial run had to be filed as one of those two — so it was filed wrongly, and which
+way it went wrong depended on a single character of punctuation.
+
+THE LOUD HALF (F-078). `scripts/probe-validation-gaps.mjs` declines ONE section when the
+owner's Occupancy Summary export is absent, and says so correctly: an indented
+`  SKIP: fixture not found at …`. It then runs and reports everything else. The classifier
+trims lines before applying its anchor (`scripts/_verdict.mjs:55`), so a section-scoped line
+satisfied the whole-suite rule and the sweep filed the entire suite as skipped — 47 real
+assertions reported as zero coverage, and exempted from the green gate. That fixture is a
+`*.csv` that `.gitignore` keeps out of the repository for the same correct reason as section
+54's: it is real hotel data. So on every fresh clone and in CI, that mis-filing was not an edge
+case — it was the only shape the suite had.
+
+THE SILENT HALF (F-077). Three sites wrote the same intent without the colon in the anchored
+position, and matched nothing at all: `probe-sri-integrity.mjs` printed `  SKIP  node_modules/
+vite not installed` and `  SKIP  dist/index.html not present`, and `verify-coexistence.mjs`
+printed `  SKIP statistics half: …`. Those suites reported unqualified green with sections that
+never executed. `verify-coexistence.mjs` is the sharper of the two: with its statistics fixture
+absent it runs 18 of 23 assertions, never exercises the statistics importer at all, and
+half of a coexistence test is not a coexistence test.
+
+THE DISCRIMINATOR IS A FACT ABOUT THE RUN, NOT A PROMISE THE SUITE MAKES. No second token was
+introduced. A `PARTIAL:` keyword would have been a second thing for an author to get wrong in
+exactly the one-character way that F-074 and F-077 already cost, and the information is already
+on the wire: a suite that stated a verdict RAN, so any SKIP line it printed can only be
+section-scoped; a suite that stated no verdict declined as a whole.
+
+```js
+// scripts/_verdict.mjs:178-187
+const skipLines = lines.filter((l) => /^SKIP:/i.test(l));
+const verdictLines = summaryLines.filter((l) => !DIAGNOSTIC_MARKER.test(l));
+const skipped = code === 0 && !!skipLine && verdictLines.length === 0;
+const partial = verdictLines.length > 0 ? skipLines : [];
+```
+
+WHY `verdictLines` AND NOT `summaryLines`. The DIAGNOSTIC marker is deliberately inside
+`SUMMARY_LINE` (`:38-39`) so that a diagnostic suite can DISPLAY its marker as its summary
+instead of a trailing Node warning. But "I assert nothing" is the opposite of stating a verdict.
+Discriminating on raw `summaryLines` would have demoted a real shape — `verify-harness.mjs`
+printing `SKIP: vite unavailable` next to a diagnostic marker — from an honest whole-suite SKIP
+to "ran, one section declined", which is false twice over, and it would have relaxed the
+existing oracle case at `probe-verify-all-verdict.mjs:127` in precisely the way that file's
+header forbids. The bug was caught by writing the case down before writing the code, not by
+running it afterwards. Two GUARD assertions now pin the ranking permanently.
+
+MEASURED BEFORE IT WAS WRITTEN, which is the only reason a rule this central was safe to
+tighten. Statically, across all 156 suite-shaped files in `scripts/` (a superset of the 150 the
+sweep discovers — `verify-all.mjs:87`'s `EXCLUDE` holds back six), exactly 8 print a
+skip-shaped line, and they split cleanly:
+
+| class | sites | must classify as |
+|---|---|---|
+| whole-suite decline | `probe-build-chunks:72,:100`, `probe-config-exposure:99,:131`, `verify-harness:74`, `verify-statistics:69` | SKIP, unchanged |
+| section-scoped decline | `probe-validation-gaps:259`, `probe-sri-integrity:160,:170`, `verify-coexistence:129` | PASS + partial |
+
+Every one of the six whole-suite sites terminates — `process.exit(0)`, or a `return` out of
+`main()` — BEFORE any counter prints, so `verdictLines` is empty for all of them and the
+tightening reclassifies nothing that is honest today. The one genuine ambiguity was checked
+individually rather than assumed: `probe-config-exposure.mjs`'s 404 branch uses `return`, not
+`process.exit`, and reading `:105-175` confirmed the `return` leaves `main()` ahead of both the
+assertion loop and `finish()`. A repo-wide grep for any string literal opening with SKIP
+returned the same 8 files, so no site was missed.
+
+PROOF, in the order the work required. FAILING-FIRST: section 11 of
+`scripts/probe-verify-all-verdict.mjs`, 13 new cases, run against the unfixed classifier —
+`FAILED: 55 passed, 9 failed`, exit 1. The four GUARD cases inside that section passed BEFORE
+the fix, which is what makes the blast-radius claim above mechanical rather than argued. AFTER:
+`PASSED: 64 passed, 0 failed`, exit 0. END TO END, both halves, induced without touching the
+owner's untracked data — `OCCUPANCY_FILE` and `STATS_FILE` point the two suites at absent paths:
+
+```text
+PASS  probe-validation-gaps.mjs  PASSED: 47 passed, 0 failed     (was: SKIP, 0 assertions counted)
+PASS  verify-coexistence.mjs     PASSED: 18 passed, 0 failed     (was: unqualified "All green.")
+
+PARTIAL COVERAGE — ran and reported, but these sections declined:
+  probe-validation-gaps.mjs
+    │ SKIP: fixture not found at C:/nope/absent-fixture.csv
+
+All green, except: 1 left a section unrun — green does not cover those.
+```
+
+A PARTIAL PASS IS STILL A PASS, and `partials` is therefore derived orthogonally
+(`verify-all.mjs:405-406`) rather than being made a bucket of its own. Lifting those suites out
+of `passed` would have been the mirror image of the bug section 54 fixed: it would count a
+suite that passed 47 checks as not-green. What green may no longer do is go unqualified over a
+section that never executed.
+
+THE CAVEAT SENTENCE HAD TO CHANGE SHAPE, not just gain an item. It read
+`All green, except: 2 skipped, 1 asserted nothing — that many suites verified nothing here.`
+One shared predicate for two items that happened to mean the same thing. A suite that ran 47
+checks and declined one section verified plenty, so appending it under that tail would have
+made the tail false — and a false qualifier is worse than no qualifier, because it invites the
+reader to discount the whole line. Each item now carries its own predicate: `2 declined to
+run; 1 asserted nothing; 1 left a section unrun`. Before rewording it, a grep confirmed nothing
+asserts mechanically on this runner's output strings — only historical prose in this document —
+so the reword breaks no gate.
+
+WHAT THE THREE SUITES NEEDED. Almost nothing, which is the point: the tightened rule alone
+reclassifies `probe-validation-gaps.mjs:272` correctly with no change to its line, and the other
+three sites needed one colon each. `verify-coexistence.mjs:171,:180` KEEP their conditional
+`HAS_STATS ? 3 : 2` expected counts on purpose — a hard `3` would turn a missing fixture into a
+red on every fresh clone, the permanent false alarm this repo rejects
+(`probe-config-exposure.mjs:16-18`). The defect was never that the suite adapted; it was that
+the adaptation was silent. `probe-validation-gaps.mjs` also gained an `OCCUPANCY_FILE` override
+mirroring `verify-statistics.mjs`'s `STATS_FILE`, so the absent-fixture path is inducible
+without moving the owner's untracked exports out of the way.
+
+BACKLOG. (1) NEW, F-079 — an UNANNOUNCED decline is a class this fix does not reach, and it is
+worse than either half above, because both halves at least printed something. A guard that
+shrinks a scan silently prints nothing and reads as a genuine pass. 38 runtime guards across 20
+suites were inventoried; most are loud and correct (`probe-monthly-calendar:264`,
+`probe-mtd-growth:119,:154`, `probe-repo-root:111`, `probe-deploy-config:373`,
+`probe-suite-integrity:298`, `probe-toast-lifecycle:120` all assert `false` on absence, and
+`probe-standalone-deploy:181,:229,:299` each pair their guard with an existence assertion). The
+live candidates are `probe-no-real-credentials.mjs:74` — `walk()` returns its accumulator
+unchanged for a missing directory, and `SCAN_DIRS` at `:69` lists five, so a partial checkout
+makes "no routable email addresses in the codebase" true over fewer files with no announcement,
+in the one suite whose whole job is finding leaked credentials — plus
+`probe-db-mock-rls.mjs:335,:346` and, more weakly, `verify-no-auto-merge.mjs:445` and
+`verify-ui-exec-gates.mjs:196,:230`, where the aggregate assertion still fires but over a
+silently smaller file set. All five `SCAN_DIRS` are present locally, so this is latent, not
+live — the same shape section 54's defect had until a fresh clone met it. (2) `--only <file>`
+still does not restrict the sweep; it silently runs all 150. (3) Section 42 and the comment
+inside `.githooks/pre-commit` still call that file untracked, which section 53 made false.
+
+
+
+
+
 
 
 

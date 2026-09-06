@@ -337,9 +337,9 @@ function runSuite(file) {
       const ms = Date.now() - started;
 
       // Every judgement about what this output MEANS lives in _verdict.mjs, which
-      // scripts/probe-verify-all-verdict.mjs holds to 50 measured assertions over the
+      // scripts/probe-verify-all-verdict.mjs holds to 64 measured assertions over the
       // output shapes real suites in this repo have actually produced.
-      const { status, summary } = classifySuiteRun({ out, code, killed });
+      const { status, summary, partial } = classifySuiteRun({ out, code, killed });
 
       resolve({
         file,
@@ -350,6 +350,9 @@ function runSuite(file) {
         lyingExitCode: status === "BAD-EXIT",
         skipped: status === "SKIP",
         diagnostic: status === "DIAGNOSTIC",
+        // Sections this suite declined while still stating a verdict. A whole-suite
+        // decline is the SKIP status instead, and carries an empty array.
+        partial,
         status,
         summary,
         output: out,
@@ -393,6 +396,14 @@ const diagnostics = by("DIAGNOSTIC");
 // those are declared, this one is undeclared, so nothing about the run is known. See
 // the NO-VERDICT note in _verdict.mjs — it is counted as not-green on purpose.
 const noVerdict = by("NO-VERDICT");
+// PARTIAL COVERAGE. Orthogonal to the buckets above rather than a bucket of its own:
+// these suites RAN and stated a verdict, and separately declined one or more sections.
+// Keeping it orthogonal is deliberate — a partial pass is still a pass and must not be
+// lifted out of `passed` (that would understate coverage the way the DIAGNOSTIC fix
+// once had to correct for overstating it), but "green" cannot be printed unqualified
+// over a section that never executed. See the PARTIAL COVERAGE note in _verdict.mjs.
+const partials = results.filter((r) => r.partial?.length);
+const passedPartial = passed.filter((r) => r.partial?.length);
 const notPassing = [...failed, ...broken, ...timedOut, ...badExit, ...noVerdict];
 
 // Every result must land in exactly one bucket. Computed here, outside the report
@@ -416,11 +427,12 @@ if (AS_JSON) {
     skipped: skipped.length,
     diagnostics: diagnostics.length,
     noVerdict: noVerdict.length,
+    partialCoverage: partials.length,
     suites: results.map(({ output: _output, ...rest }) => rest),
   }, null, 2));
 } else {
   console.log(`\n${"─".repeat(78)}`);
-  console.log(`${results.length} suite(s)${shardLabel}: ${passed.length} passed, ${failed.length} failed, ${broken.length} broken, ${timedOut.length} timed out, ${badExit.length} bad exit code, ${noVerdict.length} stated no verdict, ${skipped.length} skipped, ${diagnostics.length} diagnostic (asserted nothing)`);
+  console.log(`${results.length} suite(s)${shardLabel}: ${passed.length} passed${passedPartial.length ? ` (${passedPartial.length} with declined sections)` : ""}, ${failed.length} failed, ${broken.length} broken, ${timedOut.length} timed out, ${badExit.length} bad exit code, ${noVerdict.length} stated no verdict, ${skipped.length} skipped, ${diagnostics.length} diagnostic (asserted nothing)`);
 
   // The fingerprint belongs NEXT TO the tally, not only in the header.
   //
@@ -473,6 +485,22 @@ if (AS_JSON) {
     // suites ran to completion and checked nothing, so their green is not coverage.
     console.log(`\nDIAGNOSTIC — ran, asserted nothing, so they verified nothing:`);
     diagnostics.forEach((r) => console.log(`  ${r.file} — ${r.summary}`));
+  }
+
+  if (partials.length) {
+    // Printed even when everything is green, for the same reason as SKIPPED and
+    // DIAGNOSTIC — and it is the shape those two sections could not express. Before
+    // 2026-09-05 a suite that ran 56 checks and declined one section was filed under
+    // SKIPPED in its entirety (probe-validation-gaps.mjs, whose fixture .gitignore
+    // keeps out of the repo, so that is its only shape in a fresh clone), while three
+    // suites whose decline lines were missing the colon reported unqualified green.
+    // Name the file, then the sections, because a partial pass is a pass with a hole
+    // in it and the hole is what the reader needs.
+    console.log(`\nPARTIAL COVERAGE — ran and reported, but these sections declined:`);
+    for (const r of partials) {
+      console.log(`  ${r.file}`);
+      r.partial.forEach((l) => console.log(`    │ ${l}`));
+    }
   }
 
   if (broken.length) {
@@ -532,15 +560,23 @@ if (AS_JSON) {
   // "All green." on its own overclaimed: before 2026-08-23 the four DIAGNOSTIC
   // printers sat in the PASS bucket, so a run with zero assertions in four suites
   // still printed an unqualified all-clear. Say what green does not cover.
+  //
+  // Each caveat carries its OWN predicate, changed 2026-09-05 when partial coverage
+  // joined the list. The sentence used to end "— that many suites verified nothing
+  // here", one shared tail for two items that happened to mean the same thing. A
+  // suite that ran 56 checks and declined one section verified plenty, so that tail
+  // would have been false of it, and a false qualifier is worse than none: it invites
+  // the reader to discount the whole line.
   const caveats = [
-    skipped.length ? `${skipped.length} skipped` : null,
+    skipped.length ? `${skipped.length} declined to run` : null,
     diagnostics.length ? `${diagnostics.length} asserted nothing` : null,
+    partials.length ? `${partials.length} left a section unrun` : null,
   ].filter(Boolean);
   console.log(
     notPassing.length
       ? `\nNOT GREEN.`
       : caveats.length
-        ? `\nAll green, except: ${caveats.join(", ")} — that many suites verified nothing here.`
+        ? `\nAll green, except: ${caveats.join("; ")} — green does not cover those.`
         : `\nAll green.`
   );
 }

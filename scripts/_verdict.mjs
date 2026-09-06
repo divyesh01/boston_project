@@ -42,7 +42,12 @@ const SUMMARY_LINE =
  * Classify one finished suite process.
  *
  * @param {{ out: string, code: number|null, killed?: boolean }} run
- * @returns {{ status: "TIMEOUT"|"BROKEN"|"BAD-EXIT"|"SKIP"|"DIAGNOSTIC"|"NO-VERDICT"|"PASS"|"FAIL", summary: string }}
+ * @returns {{
+ *   status: "TIMEOUT"|"BROKEN"|"BAD-EXIT"|"SKIP"|"DIAGNOSTIC"|"NO-VERDICT"|"PASS"|"FAIL",
+ *   summary: string,
+ *   partial: string[],
+ * }} `partial` holds the sections a suite declined while still stating a verdict —
+ *    empty for a whole-suite SKIP, which is the status itself.
  */
 export function classifySuiteRun({ out, code, killed = false }) {
   const broken = !killed && code !== 0 && BROKEN_SIGNATURES.some((re) => re.test(out));
@@ -131,8 +136,55 @@ export function classifySuiteRun({ out, code, killed = false }) {
   // FAIL trains the reader to ignore red, and reporting them as PASS claims
   // coverage that does not exist. They print a line starting with "SKIP:" and
   // exit 0; this is the only way to be counted as skipped.
-  const skipLine = lines.find((l) => /^SKIP:/i.test(l));
-  const skipped = code === 0 && !!skipLine;
+  //
+  // PARTIAL COVERAGE, added 2026-09-05 for F-077/F-078. "SKIP:" used to be a
+  // whole-suite word with no way to say "it ran, and part of it didn't", so both
+  // halves of a partial run were reported wrongly, in opposite directions:
+  //
+  //   probe-validation-gaps.mjs:259 declines ONE section — an indented
+  //   "  SKIP: fixture not found at ..." — then runs and reports the rest
+  //   ("PASSED: 56 passed, 0 failed"). Lines are trimmed before the anchor is
+  //   applied (:50), so the section-scoped line satisfied /^SKIP:/i and the whole
+  //   suite was filed as skipped: 56 real assertions reported as zero coverage. On
+  //   a fresh clone that is the only shape it has, because the fixture is a *.csv
+  //   .gitignore keeps out of the repository.
+  //
+  //   probe-sri-integrity.mjs:160,:170 and verify-coexistence.mjs:129 had the
+  //   opposite bug — "  SKIP  <why>" and "SKIP statistics half:", no colon in the
+  //   anchored position, matching nothing. Those suites reported unqualified green
+  //   with sections that never ran.
+  //
+  // The discriminator is a fact about the run rather than a promise the suite makes
+  // about itself: a suite that stated a verdict RAN, so any SKIP line it printed can
+  // only be section-scoped; one that stated no verdict declined as a whole. No second
+  // token ("PARTIAL:") was introduced, because a second token is a second thing for
+  // an author to get wrong in the same one-character way F-074 already cost.
+  //
+  // MEASURED BEFORE IT WAS WRITTEN, statically across all 156 suite-shaped files in
+  // scripts/ (a superset of the 150 the sweep discovers): exactly 8 print a
+  // skip-shaped line. Six sites in four suites are whole-suite declines —
+  // probe-build-chunks:72,:100, probe-config-exposure:99,:131, verify-harness:74,
+  // verify-statistics:69 — and every one of them terminates (process.exit(0), or a
+  // `return` out of main() ahead of its assertion loop) before any counter is
+  // printed, so `verdictLines` is empty and all six stay SKIP. The tightening
+  // reclassifies nothing that is honest today.
+  //
+  // DIAGNOSTIC is excluded from verdictLines on purpose. The marker is inside
+  // SUMMARY_LINE (:38-39) so that it can be DISPLAYED as a suite's summary, but
+  // "I assert nothing" is the opposite of stating a verdict — counting it would
+  // demote a real shape (verify-harness.mjs's vite decline printed next to a
+  // diagnostic marker) from an honest whole-suite SKIP to "ran, one section
+  // declined", which is false twice over.
+  const skipLines = lines.filter((l) => /^SKIP:/i.test(l));
+  const skipLine = skipLines[0];
+  const verdictLines = summaryLines.filter((l) => !DIAGNOSTIC_MARKER.test(l));
+  const skipped = code === 0 && !!skipLine && verdictLines.length === 0;
+
+  // Declined sections of a suite that DID state a verdict. Populated regardless of
+  // status: a run that failed and also skipped a section has told the reader two
+  // true things, and hiding the second because of the first is how coverage goes
+  // missing quietly. verify-all.mjs lists these under PARTIAL COVERAGE.
+  const partial = verdictLines.length > 0 ? skipLines : [];
 
   // DIAGNOSTIC. Four suites (probe-active-vs-idle, probe-idle-polling,
   // probe-session-expiry, probe-startup) print state for a human to read and
@@ -187,5 +239,5 @@ export function classifySuiteRun({ out, code, killed = false }) {
     : code === 0 ? "PASS"
     : "FAIL";
 
-  return { status, summary: skipped ? skipLine : summary };
+  return { status, summary: skipped ? skipLine : summary, partial };
 }

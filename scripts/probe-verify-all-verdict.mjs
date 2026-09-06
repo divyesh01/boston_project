@@ -276,6 +276,105 @@ status("a broken import with no verdict is still BROKEN",
 status("a suite whose only verdict-shaped line is a PASS progress line is unaffected",
   { out: "  PASS  a\n  ok   b", code: 0 }, "PASS");
 
+console.log("\n11. a suite that declined PART of its work (F-077/F-078)");
+
+// WHY. SKIP was a whole-suite word, and the classifier had no way to say
+// "it ran, and some of it didn't". So both halves of a partial run were reported
+// wrongly, in opposite directions, and the repository contained live examples of
+// each — measured 2026-09-05 across all 150 discovered suites:
+//
+//   F-078, the loud half. probe-validation-gaps.mjs:259 prints an indented
+//   "  SKIP: fixture not found at ..." for ONE of its sections and then runs and
+//   reports the rest ("PASSED: 56 passed, 0 failed"). Lines are trimmed before
+//   /^SKIP:/i is applied (_verdict.mjs:50), so `skipped` fired on a section-scoped
+//   line and the whole suite was reported SKIP — 56 real assertions filed as zero
+//   coverage. On a fresh clone that is the ONLY shape this suite has, because the
+//   fixture it wants is a *.csv .gitignore keeps out of the repo.
+//
+//   F-077, the silent half. probe-sri-integrity.mjs:160,:170 and
+//   verify-coexistence.mjs:129 print "  SKIP  <why>" / "SKIP statistics half:" —
+//   no colon in the anchored position — which matches nothing at all. Those suites
+//   reported unqualified green with sections that never ran.
+//
+// The discriminator is a fact about the run, not a promise the suite makes: a suite
+// that stated a verdict RAN, so its SKIP lines can only be section-scoped. One that
+// stated no verdict declined as a whole. That is why no new "PARTIAL:" token was
+// introduced — a second token is a second thing for an author to get wrong, and the
+// six honest whole-suite declines in this repo (probe-build-chunks:72,:100,
+// probe-config-exposure:99,:131, verify-harness:74, verify-statistics:69) all
+// terminate before printing a counter, so the rule reclassifies none of them.
+function partial(label, run, expected) {
+  eq(label, JSON.stringify(classifySuiteRun(run).partial ?? null), JSON.stringify(expected));
+}
+
+// The measured probe-validation-gaps.mjs shape, verbatim in structure.
+const PART_RUN =
+  "  SKIP: fixture not found at C:/repo/scripts/data/Occupancy Summary midelboro.csv\n" +
+  "  PASS  rejects a row with no date\n" +
+  "PASSED: 56 passed, 0 failed";
+
+status("REGRESSION: a suite that declined one section and passed the rest is a PASS",
+  { out: PART_RUN, code: 0 }, "PASS");
+partial("...and the section it declined is carried, not swallowed",
+  { out: PART_RUN, code: 0 },
+  ["SKIP: fixture not found at C:/repo/scripts/data/Occupancy Summary midelboro.csv"]);
+summary("...and its own counter is what the reader is shown",
+  { out: PART_RUN, code: 0 }, "PASSED: 56 passed, 0 failed");
+
+// The six whole-suite declines must be untouched by the tightening. Both real
+// shapes, including the multi-line paragraph verify-statistics.mjs:69 now prints.
+status("GUARD: a whole-suite decline that states no verdict is still SKIP",
+  { out: "SKIP: no dist/ to read — run `npm run build` first.\n" +
+         "      Reported as SKIP rather than PASS: an artifact that does not exist\n" +
+         "      cannot be shown to be free of the defects above.", code: 0 }, "SKIP");
+partial("...and it reports no declined SECTIONS, because the whole suite declined",
+  { out: "SKIP: no dist/ to read — run `npm run build` first.", code: 0 }, []);
+status("GUARD: the multi-line fixture decline is still a whole-suite SKIP",
+  { out: "SKIP: verify-statistics — no statistics fixture found, so none of its 84 checks ran.\n" +
+         "  Looked for: C:/repo/scripts/data/Hotel Statistics (1).csv\n" +
+         "  The file is git-ignored on purpose (real guest data).", code: 0 }, "SKIP");
+
+// The DIAGNOSTIC marker is inside SUMMARY_LINE (_verdict.mjs:38-39) for a display
+// reason, but "I assert nothing" is the opposite of stating a verdict. If the
+// discriminator counted it, this pair — a real shape, verify-harness.mjs's vite
+// decline landing next to a diagnostic printer's marker — would have been demoted
+// from SKIP to "ran, with a declined section", which is false twice over. Section 6
+// pins the ranking; these two pin the reason the ranking survives the tightening.
+status("GUARD: SKIP + DIAGNOSTIC is still a whole-suite SKIP, not a partial",
+  { out: "SKIP: vite unavailable\nDIAGNOSTIC: no assertions (informational output only)", code: 0 },
+  "SKIP");
+partial("...and a diagnostic marker does not turn its decline into a section",
+  { out: "SKIP: vite unavailable\nDIAGNOSTIC: no assertions (informational output only)", code: 0 },
+  []);
+
+// The colon is load-bearing in both directions. This is the F-077 mechanism kept
+// visible: fixing the three suites was necessary precisely BECAUSE the classifier
+// cannot infer intent from prose.
+status("a decline written without the colon is invisible, and the suite reads green",
+  { out: "  SKIP  node_modules/vite not installed\nPASSED: 3 passed, 0 failed", code: 0 }, "PASS");
+partial("...and nothing is reported as declined, which is why those suites were edited",
+  { out: "  SKIP  node_modules/vite not installed\nPASSED: 3 passed, 0 failed", code: 0 }, []);
+
+// Two sections declining in one run: probe-sri-integrity.mjs's real shape once its
+// two lines are written to contract. Order is the order the reader saw them.
+partial("every declined section is listed, in the order printed",
+  { out: "  SKIP: node_modules/vite not installed — upstream hazard not inspected\n" +
+         "  SKIP: dist/index.html not present — run `npm run build` to gate the artifact too\n" +
+         "PASSED: 21 passed, 0 failed", code: 0 },
+  ["SKIP: node_modules/vite not installed — upstream hazard not inspected",
+   "SKIP: dist/index.html not present — run `npm run build` to gate the artifact too"]);
+
+// A decline must never soften a result. The suite failed; that it also skipped a
+// section is extra information, not mitigation.
+status("a declined section does not launder a failing run",
+  { out: "  SKIP: half of it\nFAILED: 1 passed, 2 failed", code: 1 }, "FAIL");
+partial("...and the failing run still names what it skipped",
+  { out: "  SKIP: half of it\nFAILED: 1 passed, 2 failed", code: 1 }, ["SKIP: half of it"]);
+
+// A suite with no declines at all must not grow an empty caveat.
+partial("an ordinary green suite reports no declined sections",
+  { out: "PASSED: 115 passed, 0 failed", code: 0 }, []);
+
 console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 if (failures.length) {
   console.log("\nFailures:");

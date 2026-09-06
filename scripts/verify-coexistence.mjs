@@ -126,7 +126,13 @@ if (HAS_STATS) {
   const res = await parsers.importReport(scan, meta);
   imported.push({ name: path.basename(STATS_FILE), count: res.count });
 } else {
-  console.log(`  SKIP statistics half: no fixture at ${STATS_FILE} (set STATS_FILE to enable)`);
+  // "SKIP:" with the colon. scripts/_verdict.mjs anchors on /^SKIP:/i, so the older
+  // "SKIP statistics half:" wording matched nothing and this suite reported
+  // unqualified green with the statistics importer never exercised — half of a
+  // coexistence test is not a coexistence test. This suite prints its own
+  // PASSED/FAILED counter, so the runner files the line under PARTIAL COVERAGE
+  // rather than treating the whole suite as declined.
+  console.log(`  SKIP: statistics half — no fixture at ${STATS_FILE} (set STATS_FILE to enable)`);
 }
 console.log("   " + imported.map((i) => `${i.name}=${i.count}`).join("  "));
 
@@ -160,6 +166,13 @@ console.log("\n3. dedupe independence");
   // Counts derive from what was actually imported rather than a literal 4, so
   // the bookkeeping assertions stay honest when the statistics fixture is
   // absent and only the transaction files run.
+  //
+  // These stay CONDITIONAL on purpose, and that is not the same defect as the
+  // silent decline fixed at :129. A hard `3` here would turn a missing fixture into
+  // a red on every fresh clone and in CI — the fixture is a *.csv .gitignore keeps
+  // out of the repository — which is the permanent false alarm this repo rejects
+  // (see probe-config-exposure.mjs:16-18). What was wrong was that the adaptation
+  // was unannounced; the runner now names the declined section instead.
   const FILE_COUNT = imported.length;
   const TXN_FILE_COUNT = TXN_FILES.length;
   const STATS_FILE_COUNT = HAS_STATS ? 1 : 0;

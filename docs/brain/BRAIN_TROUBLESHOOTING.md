@@ -3711,6 +3711,15 @@ when the gap appeared. It was fixed in its own commit; see **§43**, which also 
 that the `NO_SUMMARY` rating was only *one* of two independent defects in that one file, and
 that fixing it could not have made the sweep green on its own.
 
+FOLLOW-ON (integrity gate green): three newer suites repeated the same two shapes and were
+fixed the emit way in their own commit — `probe-payroll-staff-sync.mjs` and
+`probe-realtime-leader.mjs` printed `<name>: X passed, Y failed` without the verdict token
+(`NO_SUMMARY`), so each summary is now a ternary `PASSED:`/`FAILED:` line keeping the suite
+name; `probe-d1-write-budget.mjs` asserted its four budgets with bare throws and no exit
+path (`NO_EXIT_PATH`), so the guards are now a counted `checkBudget` with a `FAILED` summary
+naming the broken budget plus `process.exit(failed ? 1 : 0)`. Success output is byte-identical
+in all three; `probe-suite-integrity.mjs` reports 167 passed, 0 failed.
+
 ### 42.6 A gate that cannot fail is decoration
 
 `scripts/probe-repo-map-gate.mjs` mutates one document at a time to reproduce seventeen

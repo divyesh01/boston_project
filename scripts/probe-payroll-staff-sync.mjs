@@ -221,5 +221,5 @@ assert(afterPunches === initialPunches, "Zero TimecardPunch records created when
 // Clean up test staff record
 await localDb.Staff.delete(newStaffId);
 
-console.log(`\nprobe-payroll-staff-sync: ${passed} passed, ${failed} failed`);
+console.log(`\n${failed === 0 ? "PASSED" : "FAILED"}: probe-payroll-staff-sync: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

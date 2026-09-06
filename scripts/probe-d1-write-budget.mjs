@@ -323,9 +323,20 @@ console.log(`  - For M=100: ${tx100.totalLifecycleWrites} rows written (was 38,7
 console.log(`* Rollback Cost: 2M + 3 writes (M journal restorations, M rollback change logs, status + revision update)`);
 console.log("============================================================");
 
-if (migActivateWrites > 5) throw new Error(`Migration activation writes exceeded budget: ${migActivateWrites}`);
-if (tx1.totalLifecycleWrites > 35) throw new Error(`tx1 lifecycle writes exceeded budget: ${tx1.totalLifecycleWrites}`);
-if (tx3.totalLifecycleWrites > 55) throw new Error(`tx3 lifecycle writes exceeded budget: ${tx3.totalLifecycleWrites}`);
-if (read1Writes !== 0 || read2Writes !== 0) throw new Error(`Session sliding hysteresis write violation: read1=${read1Writes}, read2=${read2Writes}`);
+// Counted failures with an explicit exit path (not bare throws): the
+// suite-integrity contract requires a visible non-zero exit, and a FAILED
+// summary names which budget broke instead of a bare stack trace.
+let failed = 0;
+function checkBudget(name, cond, detail) {
+  if (!cond) {
+    failed += 1;
+    console.log(`  FAIL  ${name} — ${detail}`);
+  }
+}
+checkBudget("migration activation writes within budget", migActivateWrites <= 5, `${migActivateWrites} rows`);
+checkBudget("single-row lifecycle writes within budget", tx1.totalLifecycleWrites <= 35, `${tx1.totalLifecycleWrites} rows`);
+checkBudget("small-batch lifecycle writes within budget", tx3.totalLifecycleWrites <= 55, `${tx3.totalLifecycleWrites} rows`);
+checkBudget("session reads within hysteresis write nothing", read1Writes === 0 && read2Writes === 0, `read1=${read1Writes}, read2=${read2Writes}`);
 
-console.log("PASSED: empirical D1 write budget verified (4 passed, 0 failed).");
+console.log(`${failed === 0 ? "PASSED" : "FAILED"}: empirical D1 write budget verified (${4 - failed} passed, ${failed} failed).`);
+process.exit(failed ? 1 : 0);

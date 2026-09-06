@@ -49,5 +49,5 @@ assert(receivedMessages.length >= 0, "leader broadcast channel is operational");
 unsub();
 peerChannel.close();
 
-console.log(`\nprobe-realtime-leader: ${passed} passed, ${failed} failed`);
+console.log(`\n${failed === 0 ? "PASSED" : "FAILED"}: probe-realtime-leader: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

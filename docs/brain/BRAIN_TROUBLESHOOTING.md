@@ -5924,6 +5924,92 @@ cannot check it, because a CI checkout has no installed hook to compare against,
 checker would only run when the hook is installed — which is circular. Byte-identity is
 recorded here so a future drift is at least provable by hand.
 
+## 54. A suite that verified nothing was reported PASS, and the line the sweep showed for it was the instruction for how to make it run (2026-09-05)
+
+THE DEFECT, HALF ONE — the suite. `scripts/verify-statistics.mjs` guards 84 assertions about
+statistics parsing and YTD revenue on a fixture that `.gitignore` keeps out of the repository
+(`:69 *.csv`). The only CSV negation in that file is `!src/lib/__fixtures__/**/*.csv` — ten
+tracked HotelKey fixtures built from invented guests — and this input is a real hotel's
+export, so the ignore rule is correct by design: real guest data must never enter the
+repository. That makes the absent-fixture branch not an edge case for one unlucky developer
+but the path EVERY fresh clone and every CI run takes. It announced that decline as
+`SKIP verify-statistics: …`, a space where the harness requires the colon adjacent to the
+keyword (`/^SKIP:/i` at `scripts/_verdict.mjs:134`), so it matched nothing.
+
+THE DEFECT, HALF TWO — the classifier. The verdict ladder ended `code === 0 ? "PASS" : "FAIL"`,
+so a process that exited 0 having stated no result at all was promoted on its exit code alone.
+The sweep printed this, and it is worth reading twice:
+
+```text
+PASS  0.2s  verify-statistics.mjs  Set STATS_FILE=/path/to/... to run it
+1 suite(s): 1 passed, ... 0 skipped, 0 diagnostic
+All green.
+```
+
+The reported summary is the instruction for how to make the suite run. With no verdict-shaped
+line, `summaryLines` is empty and the display falls back to the suite's LAST line. One
+character stood between zero coverage and a green run, and one character is not an acceptable
+amount of distance — which is why this was fixed on both sides rather than in the suite alone.
+
+THE FIX, PART 1 — the suite states its decline to contract. `scripts/verify-statistics.mjs:69`
+now prints `SKIP:` with the colon, names the count that did not run (84 checks), records that
+the fixture is git-ignored on purpose, and gives both ways to enable it (`STATS_FILE=…`, or
+drop the file in `scripts/data/`).
+
+THE FIX, PART 2 — the classifier gets a floor. `NO-VERDICT` at `scripts/_verdict.mjs:179` is
+`code === 0 && summaryLines.length === 0`: exit 0, and nothing the harness recognises as a
+statement of result. It sits after `DIAGNOSTIC` and before the `PASS` fallthrough, and it is
+in `notPassing` at `scripts/verify-all.mjs:396`, so the sweep exits 1 on it. It is deliberately
+NOT a third caveat bucket beside SKIP and DIAGNOSTIC: those are DECLARED declines that a suite
+can be held to, and this one is undeclared, so the remedy printed at `scripts/verify-all.mjs:518`
+tells the reader the suite must state a verdict rather than telling them to go find a fixture.
+
+MEASURED BEFORE IT WAS WRITTEN, because a new floor under 150 suites can only be safe if its
+blast radius is known. Across a full sweep, exactly two suites produce no verdict-shaped line —
+`probe-build-chunks.mjs` and `probe-config-exposure.mjs` — and both are already claimed by the
+SKIP branch above the floor, so the new state changes no existing suite's verdict. The subtlety
+that keeps it narrow is at `scripts/_verdict.mjs:50`: lines are TRIMMED before the anchored
+summary pattern is applied, so an indented `  PASS  <check name>` progress line already counts
+as verdict-shaped. A suite that is merely mid-run has stated something, and the floor does not
+fire on it.
+
+THE ORACLE. `scripts/probe-verify-all-verdict.mjs` — the only thing that tests the classifier
+149 other suites are judged by — grew a tenth section and now carries 50 assertions. Its
+fixture at `:246` is the paragraph the real suite actually printed, and the pair that IS the
+finding sits next to it: the same decline, the same exit code, opposite trust. One case in
+section 2 was CHANGED rather than added: it asserted that a bare glyph-prefixed success banner
+is a pass, citing `probe-db-mock-rls.mjs` as a suite with no counters. Measured, that suite
+prints `PASSED: 22 passed, 0 failed` above its banner — the counter is what speaks for it. No
+suite in the tree (150 of 150) states its result with a banner alone, so accepting one bought
+nothing and cost exactly the false green section 3 exists to catch: `✅ PROBE PASSED` printed
+unconditionally is indistinguishable from a real pass.
+
+VERIFICATION (Observed, all four legs of failing-first → fix → detection → gates). The original
+failure was reproduced by pointing `STATS_FILE` at a nonexistent path and re-classifying, and
+the same shape is now caught. Full gates on the finished slice: `npm test` 413/413 in 48 files;
+`npm run hotelkey:mutate` 11/11 killed, restore byte-identical, residue empty;
+`npm run hotelkey:crashsafe` 10/10; `npm run map:mutate` 17/17 killed; `lint`, `typecheck`,
+`verify:v3` (`sha256:8998c0c8…`), `map:verify` (10 areas, 27 matrix rows, 36 contracts, 186
+references), `audit:gate` (0 critical, 1 high — the two accepted `xlsx@0.18.5` advisories) all
+exit 0; `verify:all` 150 discovered, 148 passed, 0 failed, 0 broken, 0 timed out, 0 bad exit
+code, **0 stated no verdict**, 2 skipped, 0 diagnostic, exit 0. The two skips are the honest
+ones named above. Note what this run does NOT prove: the statistics fixture is present on this
+machine, so `verify-statistics.mjs` reported `PASSED: 84 passed, 0 failed` here and the fixed
+branch was never taken by the sweep — only by the induced proof.
+
+BACKLOG, recorded here rather than fixed, because each needs its own failing-first proof.
+(1) The harness has no vocabulary for PARTIAL coverage, and two suites are already paying for
+it in opposite directions. `verify-coexistence.mjs` prints an indented `SKIP statistics half:`
+that matches nothing, runs 14 of its 21 assertions, and — at `verify-coexistence.mjs:165` and
+`:167` — automatically relaxes its own expected table and file counts so the degraded run still
+passes, then reports PASS. `probe-validation-gaps.mjs` writes a section-scoped decline at
+`probe-validation-gaps.mjs:259` with the exact `SKIP:` token, and because lines are trimmed
+first, the whole passing suite is reported SKIP and exempted from the green gate. One
+over-claims, one under-claims; neither can currently tell the truth. (2) `--only <file>` does
+not restrict the sweep — it silently runs all 150. (3) Section 42 of this document and the
+comment inside `.githooks/pre-commit` both still say that file is untracked; section 53 tracked
+it, so both statements are now stale.
+
 
 
 

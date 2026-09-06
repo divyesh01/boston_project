@@ -337,7 +337,8 @@ function runSuite(file) {
       const ms = Date.now() - started;
 
       // Every judgement about what this output MEANS lives in _verdict.mjs, which
-      // scripts/probe-verify-all-verdict.mjs holds to 14 measured output shapes.
+      // scripts/probe-verify-all-verdict.mjs holds to 50 measured assertions over the
+      // output shapes real suites in this repo have actually produced.
       const { status, summary } = classifySuiteRun({ out, code, killed });
 
       resolve({
@@ -362,7 +363,7 @@ function runSuite(file) {
 // parallel in this environment starved them badly enough that they produced no
 // output at all — which would have been reported as BROKEN.
 const results = [];
-const label = { PASS: "PASS   ", FAIL: "FAIL   ", BROKEN: "BROKEN ", TIMEOUT: "TIMEOUT", "BAD-EXIT": "BADEXIT", SKIP: "SKIP   ", DIAGNOSTIC: "DIAG   " };
+const label = { PASS: "PASS   ", FAIL: "FAIL   ", BROKEN: "BROKEN ", TIMEOUT: "TIMEOUT", "BAD-EXIT": "BADEXIT", SKIP: "SKIP   ", DIAGNOSTIC: "DIAG   ", "NO-VERDICT": "NO-VERD" };
 
 if (!AS_JSON) console.log(`Running ${suites.length} suite(s)${shardLabel}, ${TIMEOUT_S}s timeout each — ${listId}\n`);
 
@@ -388,14 +389,18 @@ const skipped = by("SKIP");
 // out of `passed` for the opposite reason — it verified nothing, so counting it
 // green overstates coverage by one suite per printer.
 const diagnostics = by("DIAGNOSTIC");
-const notPassing = [...failed, ...broken, ...timedOut, ...badExit];
+// Exit 0 with no verdict line at all. NOT a caveat bucket like SKIP and DIAGNOSTIC:
+// those are declared, this one is undeclared, so nothing about the run is known. See
+// the NO-VERDICT note in _verdict.mjs — it is counted as not-green on purpose.
+const noVerdict = by("NO-VERDICT");
+const notPassing = [...failed, ...broken, ...timedOut, ...badExit, ...noVerdict];
 
 // Every result must land in exactly one bucket. Computed here, outside the report
 // branch, because it also decides the exit code: a tally that does not add up is a
 // broken runner, and a broken runner reporting 0 is the worst outcome this script
 // has — it is the same class of defect as the console.assert probes that printed a
 // success line unconditionally.
-const bucketed = passed.length + failed.length + broken.length + timedOut.length + badExit.length + skipped.length + diagnostics.length;
+const bucketed = passed.length + failed.length + broken.length + timedOut.length + badExit.length + skipped.length + diagnostics.length + noVerdict.length;
 
 if (AS_JSON) {
   console.log(JSON.stringify({
@@ -410,11 +415,12 @@ if (AS_JSON) {
     badExit: badExit.length,
     skipped: skipped.length,
     diagnostics: diagnostics.length,
+    noVerdict: noVerdict.length,
     suites: results.map(({ output: _output, ...rest }) => rest),
   }, null, 2));
 } else {
   console.log(`\n${"─".repeat(78)}`);
-  console.log(`${results.length} suite(s)${shardLabel}: ${passed.length} passed, ${failed.length} failed, ${broken.length} broken, ${timedOut.length} timed out, ${badExit.length} bad exit code, ${skipped.length} skipped, ${diagnostics.length} diagnostic (asserted nothing)`);
+  console.log(`${results.length} suite(s)${shardLabel}: ${passed.length} passed, ${failed.length} failed, ${broken.length} broken, ${timedOut.length} timed out, ${badExit.length} bad exit code, ${noVerdict.length} stated no verdict, ${skipped.length} skipped, ${diagnostics.length} diagnostic (asserted nothing)`);
 
   // The fingerprint belongs NEXT TO the tally, not only in the header.
   //
@@ -502,6 +508,16 @@ if (AS_JSON) {
   if (badExit.length) {
     console.log(`\nBAD EXIT CODE — printed a failure but exited 0 (a probe that cannot fail):`);
     badExit.forEach((r) => console.log(`  ${r.file} — ${r.summary}`));
+  }
+  if (noVerdict.length) {
+    // The summary shown here is the suite's LAST line, which is all there was to
+    // show — that is the point. F-074's row read `PASS  verify-statistics.mjs  Set
+    // STATS_FILE=... to run it`: the evidence that the suite verified nothing was
+    // printed inside a green row for weeks. Name the remedy, because the reader of
+    // this section is usually the person who just wrote the suite.
+    console.log(`\nNO VERDICT — exited 0 without stating a result, so nothing about them is known:`);
+    noVerdict.forEach((r) => console.log(`  ${r.file} — last line was: ${r.summary}`));
+    console.log(`  Fix in the suite: print its own PASSED/FAILED summary, or declare "SKIP: <why>", or "DIAGNOSTIC: no assertions".`);
   }
   if (timedOut.length) {
     console.log(`\nTIMED OUT after ${TIMEOUT_S}s:`);

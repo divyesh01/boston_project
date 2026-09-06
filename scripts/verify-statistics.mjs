@@ -35,8 +35,26 @@ import path from "node:path";
 // This used to be a bare absolute path into one particular session's upload
 // directory. That directory belongs to a machine and a moment, so the suite
 // hard-crashed with EACCES/ENOENT for anyone else who ran it — a failure that
-// looks exactly like a real regression but says nothing about the code. The
-// fixture now travels with the repo.
+// looks exactly like a real regression but says nothing about the code.
+//
+// CORRECTED 2026-09-05 (F-074). This comment used to end "The fixture now travels
+// with the repo." Measured: it does not and must not. `git check-ignore -v` resolves
+// scripts/data/Hotel Statistics (1).csv to `.gitignore:69:*.csv`, and the only CSV
+// negation in the file is `!src/lib/__fixtures__/**/*.csv` — 10 tracked HotelKey
+// fixtures built from invented guests. That ignore rule is correct by design: this
+// input is a real hotel's statistics export and real guest data must never enter the
+// repository. So the absent-fixture branch below is not an edge case for one unlucky
+// developer — it is what EVERY fresh clone and every CI run takes, and it decides
+// whether 84 assertions about statistics parsing and YTD revenue ran or not.
+//
+// The declaration must therefore be one the harness can hold this suite to.
+// scripts/_verdict.mjs counts a suite as skipped only on a line matching /^SKIP:/i —
+// the colon is load-bearing. This printed "SKIP verify-statistics:" with a space, so
+// it matched nothing, fell through to `code === 0 ? "PASS"`, and `npm run verify:all`
+// reported `PASS verify-statistics.mjs  Set STATS_FILE=... to run it` and All green
+// while the suite asserted nothing at all. One character is not an acceptable amount
+// of distance between zero coverage and a green run, so the classifier now has a
+// floor under this too (NO-VERDICT), and the line below states the contract exactly.
 import { fileURLToPath } from "node:url";
 
 const LOCAL_STATS = path.join(
@@ -48,9 +66,9 @@ const FILE = process.env.STATS_FILE || LOCAL_STATS;
 
 if (!fs.existsSync(FILE)) {
   console.log(
-    `SKIP verify-statistics: no statistics fixture found.\n` +
+    `SKIP: verify-statistics — no statistics fixture found, so none of its 84 checks ran.\n` +
       `  Looked for: ${FILE}\n` +
-      `  Set STATS_FILE=/path/to/'Hotel Statistics.csv' or drop the file in scripts/data/ to run it.`
+      `  The file is git-ignored on purpose (real guest data). Set STATS_FILE=/path/to/'Hotel Statistics.csv' or drop the file in scripts/data/ to run it.`
   );
   process.exit(0);
 }

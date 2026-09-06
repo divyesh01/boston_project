@@ -78,9 +78,26 @@ status("verify-actioncenter's 'PASS: all scenarios correct' is a pass",
   { out: "PASS: all scenarios correct", code: 0 }, "PASS");
 status("verify-actioncenter's 'FAIL: n check(s) failed' + exit 0 is a bad exit code",
   { out: "FAIL: 2 check(s) failed", code: 0 }, "BAD-EXIT");
-// probe-db-mock-rls.mjs ends with this and has no counters at all.
-status("a bare success banner with no counters is a pass",
-  { out: "✅ PROBE PASSED: no db shim, RLS operators canonical.", code: 0 }, "PASS");
+// CHANGED 2026-09-05 (F-075). This case read "a bare success banner with no counters
+// is a pass", citing probe-db-mock-rls.mjs as a suite that "ends with this and has no
+// counters at all". Measured against that suite's real output, the second clause is
+// false — it prints
+//
+//   PASSED: 22 passed, 0 failed
+//   ✅ PROBE PASSED: no db shim, no shim call sites, RLS operators canonical, ...
+//
+// so the counter line is what speaks for it and the banner is decoration. No suite in
+// the tree (measured: 150 of 150) states its result with a glyph-prefixed banner
+// ALONE, so accepting one as a verdict buys nothing and costs the exact false green
+// section 3 exists to catch: "✅ PROBE PASSED" printed unconditionally is
+// indistinguishable from a real pass, while a counter or an anchored PASSED/FAILED is
+// not. A suite whose entire output is a banner must say so in a form the harness can
+// hold it to.
+status("a glyph-prefixed banner alone is not a verdict the harness will accept",
+  { out: "✅ PROBE PASSED: no db shim, RLS operators canonical.", code: 0 }, "NO-VERDICT");
+status("...and the same banner above a counter line is a pass, which is the real suite",
+  { out: "PASSED: 22 passed, 0 failed\n✅ PROBE PASSED: no db shim, RLS canonical.", code: 0 },
+  "PASS");
 
 console.log("\n3. console.assert cannot fail a process — the trap this runner exists for");
 
@@ -155,8 +172,13 @@ summary("a suite with no summary at all falls back to its last line",
   { out: "  ok   a\n  ok   b", code: 0 }, "ok   b");
 summary("no output at all is reported as such",
   { out: "", code: 0 }, "(no output)");
-status("no output plus exit 0 is still only a pass by exit code",
-  { out: "", code: 0 }, "PASS");
+// CHANGED 2026-09-05 (F-074/F-075). This case expected PASS, which was the
+// fallthrough written down as a contract: a process that exited 0 having stated no
+// result at all counted as a verified suite. The summary expectations above are
+// unchanged — the display still falls back the same way — only the verdict is no
+// longer green. See section 10.
+status("no output plus exit 0 states no result, so it is not a pass",
+  { out: "", code: 0 }, "NO-VERDICT");
 
 console.log("\n8. a zero count must not overrule an explicit FAILED verdict");
 
@@ -203,6 +225,56 @@ status("REGRESSION: countless '  FAIL  <name>' progress lines are not failure cl
   "PASS");
 status("an earlier zero-count section summary does not manufacture a failure",
   { out: "PASSED: 2 passed, 0 failed\nPASSED: 5 passed, 0 failed", code: 0 }, "PASS");
+
+console.log("\n10. exit 0 with no verdict at all is not a pass");
+
+// Measured 2026-09-05 — F-074. scripts/verify-statistics.mjs guards its 84
+// assertions on a fixture that .gitignore keeps out of the repository
+// (`:69 *.csv`), so in every fresh clone and in CI it takes its absent-fixture
+// branch, prints the paragraph below and exits 0. The paragraph contains no
+// verdict-shaped line, so `summaryLines` was empty, the display fell back to the
+// LAST line — literally the instruction for how to make the suite run — and the
+// ladder promoted it on its exit code. The sweep printed:
+//
+//   PASS  0.2s  verify-statistics.mjs  Set STATS_FILE=/path/to/... to run it
+//   1 suite(s): 1 passed, ... 0 skipped, 0 diagnostic
+//   All green.
+//
+// Two defects in one row, and this section pins the classifier half: the suite's
+// own one-character slip (it printed "SKIP " where :134 requires "SKIP:") must not
+// be the only thing standing between zero assertions and a green run.
+const NO_FIXTURE =
+  "SKIP verify-statistics: no statistics fixture found.\n" +
+  "  Looked for: C:/repo/scripts/data/Hotel Statistics (1).csv\n" +
+  "  Set STATS_FILE=/path/to/'Hotel Statistics.csv' or drop the file in scripts/data/ to run it.";
+
+status("REGRESSION: a suite that exits 0 stating no result is not a pass",
+  { out: NO_FIXTURE, code: 0 }, "NO-VERDICT");
+summary("...and the display still shows its last line, so nothing is hidden",
+  { out: NO_FIXTURE, code: 0 },
+  "Set STATS_FILE=/path/to/'Hotel Statistics.csv' or drop the file in scripts/data/ to run it.");
+// The one-character difference that separates an honest decline from a silent one.
+// This pair is the whole finding: same intent, same exit code, opposite trust.
+status("the same decline written to contract IS a skip",
+  { out: "SKIP: verify-statistics — no statistics fixture found.", code: 0 }, "SKIP");
+status("progress output with no verdict line is not a pass either",
+  { out: "  ok   parsed 12 rows\n  ok   totals reconcile", code: 0 }, "NO-VERDICT");
+// The floor is deliberately narrow. Every other state must still win, or a new
+// bucket would swallow the ones that already work.
+status("a non-zero exit with no verdict stays an ordinary failure, not NO-VERDICT",
+  { out: "  ok   a\n  ok   b", code: 1 }, "FAIL");
+status("a killed suite with no verdict is still a timeout",
+  { out: "  ok   a", code: null, killed: true }, "TIMEOUT");
+status("a declared DIAGNOSTIC still outranks the floor",
+  { out: "reads config\nDIAGNOSTIC: no assertions (informational output only)", code: 0 },
+  "DIAGNOSTIC");
+status("a broken import with no verdict is still BROKEN",
+  { out: "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'x'", code: 1 }, "BROKEN");
+// A trimmed "  PASS  <check>" progress line DOES match SUMMARY_LINE (lines are
+// trimmed before the anchor is applied), so a suite mid-run has stated something
+// verdict-shaped and the floor must not fire on it.
+status("a suite whose only verdict-shaped line is a PASS progress line is unaffected",
+  { out: "  PASS  a\n  ok   b", code: 0 }, "PASS");
 
 console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 if (failures.length) {

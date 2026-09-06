@@ -42,7 +42,7 @@ const SUMMARY_LINE =
  * Classify one finished suite process.
  *
  * @param {{ out: string, code: number|null, killed?: boolean }} run
- * @returns {{ status: "TIMEOUT"|"BROKEN"|"BAD-EXIT"|"SKIP"|"DIAGNOSTIC"|"PASS"|"FAIL", summary: string }}
+ * @returns {{ status: "TIMEOUT"|"BROKEN"|"BAD-EXIT"|"SKIP"|"DIAGNOSTIC"|"NO-VERDICT"|"PASS"|"FAIL", summary: string }}
  */
 export function classifySuiteRun({ out, code, killed = false }) {
   const broken = !killed && code !== 0 && BROKEN_SIGNATURES.some((re) => re.test(out));
@@ -143,11 +143,47 @@ export function classifySuiteRun({ out, code, killed = false }) {
   // through to FAIL.
   const diagnostic = code === 0 && lines.some((l) => DIAGNOSTIC_MARKER.test(l));
 
+  // NO-VERDICT. The floor under everything above: a suite that exits 0 having stated
+  // no result at all is not a pass. Added 2026-09-05 for F-074/F-075.
+  //
+  // The ladder below used to end `code === 0 ? "PASS" : "FAIL"`, so a process that
+  // printed nothing a reader could call a verdict was promoted on its exit code
+  // alone. scripts/verify-statistics.mjs is what that costs: its 84 assertions are
+  // guarded on a fixture .gitignore keeps out of the repository (`:69 *.csv`), so in
+  // every fresh clone and in CI it printed a three-line "no statistics fixture found"
+  // paragraph and exited 0 — and the sweep reported `PASS  verify-statistics.mjs  Set
+  // STATS_FILE=... to run it`, `0 skipped`, `All green.` The suite's own slip was one
+  // character (it printed "SKIP " where the skip rule at the bottom of this file
+  // requires "SKIP:"), and one character should never be all that separates zero
+  // assertions from a green run.
+  //
+  // MEASURED BEFORE IT WAS WRITTEN, across a full 150-suite `verify-all --json`
+  // sweep: exactly 2 suites produce no verdict-shaped line — probe-config-exposure
+  // (a correctly declared `SKIP:`) and probe-worker-auth-remote (a non-zero-exit
+  // crash) — and BOTH are already claimed by earlier branches. Zero healthy passing
+  // suites reach this test, so its live blast radius is nil; it fires on the next
+  // silent suite, not on today's tree.
+  //
+  // `summaryLines.length === 0` is the same condition as "the chosen summary is not
+  // verdict-shaped", because `summary` is `summaryLines[last]` whenever that array is
+  // non-empty. Note that SUMMARY_LINE is applied to TRIMMED lines, so an ordinary
+  // "  PASS  <check name>" progress line does match it: a suite that got far enough to
+  // report one check has stated something, and the floor stays out of its way.
+  //
+  // It is deliberately NOT a caveat bucket like SKIP or DIAGNOSTIC. Those are
+  // DECLARED — an author wrote down "I did not run" or "I assert nothing", and the
+  // reader is told which coverage is missing. This state is undeclared: nobody
+  // claimed anything, so nothing can be trusted, and the remedy is one line in the
+  // suite (say SKIP:, say DIAGNOSTIC:, or print your summary). verify-all.mjs
+  // therefore counts it as not-green.
+  const noVerdict = code === 0 && summaryLines.length === 0;
+
   const status = killed ? "TIMEOUT"
     : broken ? "BROKEN"
     : lyingExitCode ? "BAD-EXIT"
     : skipped ? "SKIP"
     : diagnostic ? "DIAGNOSTIC"
+    : noVerdict ? "NO-VERDICT"
     : code === 0 ? "PASS"
     : "FAIL";
 

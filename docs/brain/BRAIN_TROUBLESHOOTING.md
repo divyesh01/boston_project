@@ -6135,9 +6135,54 @@ checks, and `verify-ui-exec-gates.mjs` rejects a missing named primitive instead
 raw-hex scan. `probe-unannounced-declines-coverage.mjs` proves all-present and missing-path
 verdicts for both guards in disposable fixtures.
 
-BACKLOG. (1) `--only <file>`
-still does not restrict the sweep; it silently runs every discovered suite. (2) Section 42 and the comment
-inside `.githooks/pre-commit` still call that file untracked, which section 53 made false.
+BACKLOG. Section 42 and the comment inside `.githooks/pre-commit` still call that file
+untracked, which section 53 made false.
+
+## 56. `verify-all --only` was ignored, so a typo silently ran the full suite set and exited green (2026-09-06)
+
+This closes backlog item (1) of section 55.
+
+F-080. The troubleshooting ledger named `--only <file>` as the way to isolate one suite, but
+`scripts/verify-all.mjs:57-68` parsed only `--filter`, `--timeout`, and boolean flags. Node ignores
+unknown application arguments, so every `--only` spelling fell through to the ordinary sweep.
+That was not merely slow: `--only probe-does-not-exist.mjs --list` exited 0 after listing all 152
+discovered suites. A misspelled targeted gate therefore claimed success over work the caller did
+not request, and without saying the target had never been found.
+
+FAILING-FIRST. Section 12 of `scripts/probe-verify-all-verdict.mjs` invokes the runner only through
+`--list`, so the oracle cannot recursively execute the suite set. Against the unfixed runner it
+reported `FAILED: 78 passed, 30 failed`, exit 1: all five accepted spellings listed 152 suites
+instead of one, and all ten malformed, unsafe, conflicting, nonexistent, or excluded targets
+exited 0. The unchanged default-list guards passed before the fix.
+
+THE FIX SELECTS FROM EVIDENCE, NOT FROM A PATH. `--only` now accepts an exact discovered `.mjs`
+filename or its exact extensionless basename, optionally after `scripts/` or `scripts\\`
+normalization. It never uses substring fallback (that remains `--filter`), never constructs a
+free filesystem target, and requires membership in the full post-EXCLUDE discovery set. Traversal,
+absolute/nested paths, empty or flag-stolen values, repeats, exclusions, and combinations with
+`--filter` or `--shard` fail non-zero before execution. The full discovery floor and LIST_ID are
+computed before narrowing, so targeted mode cannot weaken or rewrite repository provenance.
+
+THE RESULT CANNOT MASQUERADE AS A FULL GREEN. Human output carries
+`[only <canonical-suite>]`, the tally says it is a narrowed run, and the terminal verdict says the
+full set was not verified. JSON adds `mode`, `isPartialRun`, requested/matched target names,
+`fullSuiteListId`, `discoveredTotal`, and `selectedTotal` while retaining every prior field.
+Targeted SKIP and DIAGNOSTIC keep the runner's existing semantics and remain explicit caveats;
+scope selection does not redefine suite verdicts.
+
+PROOF AFTER THE FIX. The oracle reports `PASSED: 116 passed, 0 failed`, including exact filename,
+extensionless, POSIX and Windows prefixes, equals syntax, zero-match, substring, traversal,
+absolute-path, missing-value, flag-theft, repeat, filter/shard conflict, excluded-self, default-list
+identity, and a real targeted JSON execution of `probe-ci-node-version.mjs`. Four independent
+post-fix Gemini roles approved the supplied diff after targeted permission-failure retries; no
+BLOCKER or HIGH finding remained.
+
+FULL GATES. `npm test` passed 413/413 across 48 files; lint and typecheck exited 0; V3 verified
+3.0.0 at `sha256:8998c0c8…`; Brain, repo-map (10 areas, 27 matrix rows, 36 contracts, 186
+references), and dependency audit gates passed; repo-map mutations killed 17/17, HotelKey
+crash-safety passed 10/10 with no residue, and HotelKey mutations killed 11/11 with byte-identical
+restoration. The final sweep discovered 152 suites at list `86de99ae`: 150 passed, 0 failed,
+0 broken, 0 timed out, 0 bad exit, 0 no-verdict, 2 explicit skips, 0 diagnostic.
 
 
 

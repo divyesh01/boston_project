@@ -24,6 +24,8 @@
 // invented ones. The three regression guards are marked. Do NOT relax a case to
 // make this green: each one encodes a runner behaviour that was wrong once.
 
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { classifySuiteRun } from "./_verdict.mjs";
 
 let pass = 0;
@@ -374,6 +376,79 @@ partial("...and the failing run still names what it skipped",
 // A suite with no declines at all must not grow an empty caveat.
 partial("an ordinary green suite reports no declined sections",
   { out: "PASSED: 115 passed, 0 failed", code: 0 }, []);
+
+console.log("\n12. --only must select exactly one safe discovered suite (F-080)");
+
+// `--only` was documented in the troubleshooting ledger but not parsed by the
+// runner. Every spelling therefore fell through to an ordinary full --list, and
+// even a typo exited 0 after listing every suite. Use --list for the selection
+// contract so this regression test can never recursively execute child suites.
+const VERIFY_ALL = fileURLToPath(new URL("./verify-all.mjs", import.meta.url));
+const runList = (...args) => spawnSync(process.execPath, [VERIFY_ALL, "--list", ...args], {
+  encoding: "utf8",
+});
+const selectedSuites = (stdout) => {
+  const beforeExcluded = stdout.split(/\r?\nnot run \(/)[0];
+  return beforeExcluded.split(/\r?\n/)
+    .map((line) => /^  ((?:probe-|verify-|test_).+\.mjs)$/.exec(line)?.[1])
+    .filter(Boolean);
+};
+const TARGET = "probe-active-vs-idle.mjs";
+const STEM = TARGET.replace(/\.mjs$/, "");
+
+const baselineList = runList();
+eq("GUARD: default --list still exits 0", baselineList.status, 0);
+const baselineSuites = selectedSuites(baselineList.stdout);
+eq("GUARD: default --list discovers more than the targeted suite", baselineSuites.length > 1, true);
+const baselineListId = /list ([0-9a-f]{8}) \((\d+) discovered\)/.exec(baselineList.stdout)?.[0];
+eq("GUARD: default --list states its full-list identity", Boolean(baselineListId), true);
+
+for (const [label, args] of [
+  ["exact filename", ["--only", TARGET]],
+  ["extensionless basename", ["--only", STEM]],
+  ["scripts/ prefix", ["--only", `scripts/${TARGET}`]],
+  ["Windows scripts\\ prefix", ["--only", `scripts\\${TARGET}`]],
+  ["equals form", [`--only=${TARGET}`]],
+]) {
+  const result = runList(...args);
+  eq(`${label} exits 0`, result.status, 0);
+  eq(`${label} selects exactly the requested suite`, JSON.stringify(selectedSuites(result.stdout)), JSON.stringify([TARGET]));
+  eq(`${label} discloses targeted mode`, result.stdout.includes(`[only ${TARGET}]`), true);
+  eq(`${label} preserves the full-list identity`, result.stdout.includes(baselineListId), true);
+}
+
+for (const [label, args, message] of [
+  ["nonexistent target", ["--only", "probe-does-not-exist.mjs"], /not (?:a )?discovered suite/i],
+  ["substring target", ["--only", "probe-active"], /not (?:a )?discovered suite/i],
+  ["traversal", ["--only", `../scripts/${TARGET}`], /invalid --only target/i],
+  ["absolute path", ["--only", `C:\\tmp\\${TARGET}`], /invalid --only target/i],
+  ["missing value", ["--only"], /--only requires/i],
+  ["flag theft", ["--only", "--json"], /--only requires/i],
+  ["repeated flag", ["--only", TARGET, "--only", TARGET], /only.*once/i],
+  ["filter conflict", ["--only", TARGET, "--filter", "active"], /cannot combine --only/i],
+  ["shard conflict", ["--only", TARGET, "--shard", "1\/2"], /cannot combine --only/i],
+  ["excluded runner", ["--only", "verify-all.mjs"], /excluded/i],
+]) {
+  const result = runList(...args);
+  eq(`${label} exits non-zero`, result.status === 0, false);
+  eq(`${label} explains the rejection on stderr`, message.test(result.stderr), true);
+}
+
+const jsonRun = spawnSync(process.execPath, [VERIFY_ALL, "--only", "probe-ci-node-version", "--json", "--timeout", "30"], {
+  encoding: "utf8",
+});
+eq("targeted JSON run exits 0", jsonRun.status, 0);
+const targetedJson = JSON.parse(jsonRun.stdout);
+eq("targeted JSON names its mode", targetedJson.mode, "only");
+eq("targeted JSON declares that it is partial", targetedJson.isPartialRun, true);
+eq("targeted JSON preserves what the caller requested", targetedJson.targetRequested, "probe-ci-node-version");
+eq("targeted JSON names the canonical match", targetedJson.targetMatched, "probe-ci-node-version.mjs");
+eq("targeted JSON counts one selected suite", targetedJson.selectedTotal, 1);
+eq("targeted JSON counts one executed suite", targetedJson.total, 1);
+eq("targeted JSON keeps the full discovery identity", targetedJson.fullSuiteListId, baselineListId?.split(" ")[1]);
+
+const postList = runList();
+eq("GUARD: targeted attempts do not mutate default --list output", postList.stdout, baselineList.stdout);
 
 console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 if (failures.length) {

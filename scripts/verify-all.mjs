@@ -23,6 +23,7 @@
 //
 // Usage:
 //   npm run verify:all                 all suites
+//   npm run verify:all -- --only probe-auth-hardening  exactly one discovered suite
 //   npm run verify:all -- --filter audit     only names containing "audit"
 //   npm run verify:all -- --list             list what would run, run nothing
 //   npm run verify:all -- --bail             stop at the first failure
@@ -57,10 +58,40 @@ const REPO_ROOT = path.resolve(SCRIPTS_DIR, "..");
 // ── Args ─────────────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(`--${name}`);
+const hasOption = (name) => argv.some((arg) => arg === `--${name}` || arg.startsWith(`--${name}=`));
 const value = (name, fallback) => {
   const i = argv.indexOf(`--${name}`);
   return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback;
 };
+const onlyValues = [];
+for (let i = 0; i < argv.length; i += 1) {
+  const arg = argv[i];
+  if (arg === "--only") {
+    const next = argv[i + 1];
+    if (!next || next.startsWith("-")) {
+      console.error("--only requires one suite name; another flag cannot be its value.");
+      process.exit(1);
+    }
+    onlyValues.push(next);
+    i += 1;
+  } else if (arg.startsWith("--only=")) {
+    const next = arg.slice("--only=".length);
+    if (!next || next.startsWith("-")) {
+      console.error("--only requires one non-empty suite name.");
+      process.exit(1);
+    }
+    onlyValues.push(next);
+  }
+}
+if (onlyValues.length > 1) {
+  console.error("--only may be specified only once.");
+  process.exit(1);
+}
+const ONLY_REQUESTED = onlyValues[0] ?? null;
+if (ONLY_REQUESTED && (hasOption("filter") || hasOption("shard"))) {
+  console.error("Cannot combine --only with --filter or --shard; choose one narrowing mode.");
+  process.exit(1);
+}
 const FILTER = value("filter", null);
 const TIMEOUT_S = Number(value("timeout", "240"));
 const LIST_ONLY = flag("list");
@@ -226,7 +257,35 @@ if (undiscovered.length) {
   process.exit(1);
 }
 
-if (FILTER) suites = suites.filter((f) => f.includes(FILTER));
+let ONLY_TARGET = null;
+if (ONLY_REQUESTED) {
+  let normalized = ONLY_REQUESTED.trim().replace(/\\/g, "/");
+  if (normalized.startsWith("scripts/")) normalized = normalized.slice("scripts/".length);
+
+  // A target is a name from the already-discovered, post-exclusion set — never a
+  // path. This keeps --only from turning the suite runner into an arbitrary Node
+  // launcher while still accepting the two repository-relative spellings people use.
+  if (!/^[A-Za-z0-9_-]+(?:\.mjs)?$/.test(normalized) || normalized.includes("..")) {
+    console.error(`Invalid --only target ${JSON.stringify(ONLY_REQUESTED)}: use an exact suite filename or extensionless basename, optionally prefixed by scripts/.`);
+    process.exit(1);
+  }
+
+  const canonical = normalized.endsWith(".mjs") ? normalized : `${normalized}.mjs`;
+  if (EXCLUDE.has(canonical)) {
+    console.error(`Suite ${JSON.stringify(canonical)} is excluded from this runner: ${EXCLUDE.get(canonical)}.`);
+    process.exit(1);
+  }
+  if (!discovered.includes(canonical)) {
+    console.error(`--only target ${JSON.stringify(ONLY_REQUESTED)} is not a discovered suite. Use --list for exact names or --filter for substring matching.`);
+    process.exit(1);
+  }
+  ONLY_TARGET = canonical;
+  suites = [canonical];
+} else if (FILTER) {
+  suites = suites.filter((f) => f.includes(FILTER));
+}
+
+const onlyLabel = ONLY_TARGET ? ` [only ${ONLY_TARGET}]` : "";
 
 // ── Sharding ────────────────────────────────────────────────────────────────
 // ADDED 2026-08-20. `--shard 2/7` runs the second of seven consecutive slices.
@@ -281,7 +340,7 @@ if (!suites.length) {
 }
 
 if (LIST_ONLY) {
-  console.log(`${suites.length} suite(s)${shardLabel} — ${listId}:`);
+  console.log(`${suites.length} suite(s)${shardLabel}${onlyLabel} — ${listId}:`);
   suites.forEach((s) => console.log(`  ${s}`));
   const skipped = [...EXCLUDE.entries()].filter(([f]) => existsSync(path.join(SCRIPTS_DIR, f)));
   if (skipped.length) {
@@ -368,7 +427,7 @@ function runSuite(file) {
 const results = [];
 const label = { PASS: "PASS   ", FAIL: "FAIL   ", BROKEN: "BROKEN ", TIMEOUT: "TIMEOUT", "BAD-EXIT": "BADEXIT", SKIP: "SKIP   ", DIAGNOSTIC: "DIAG   ", "NO-VERDICT": "NO-VERD" };
 
-if (!AS_JSON) console.log(`Running ${suites.length} suite(s)${shardLabel}, ${TIMEOUT_S}s timeout each — ${listId}\n`);
+if (!AS_JSON) console.log(`Running ${suites.length} suite(s)${shardLabel}${onlyLabel}, ${TIMEOUT_S}s timeout each — ${listId}\n`);
 
 for (const file of suites) {
   const r = await runSuite(file);
@@ -415,8 +474,15 @@ const bucketed = passed.length + failed.length + broken.length + timedOut.length
 
 if (AS_JSON) {
   console.log(JSON.stringify({
+    mode: ONLY_TARGET ? "only" : SHARD ? "shard" : FILTER ? "filter" : BAIL ? "bail" : "all",
+    isPartialRun: Boolean(ONLY_TARGET || SHARD || FILTER || BAIL),
+    targetRequested: ONLY_REQUESTED,
+    targetMatched: ONLY_TARGET,
+    fullSuiteListId: LIST_ID,
     listId: LIST_ID,
     discovered: discovered.length,
+    discoveredTotal: discovered.length,
+    selectedTotal: suites.length,
     shard: SHARD || null,
     total: results.length,
     passed: passed.length,
@@ -432,7 +498,7 @@ if (AS_JSON) {
   }, null, 2));
 } else {
   console.log(`\n${"─".repeat(78)}`);
-  console.log(`${results.length} suite(s)${shardLabel}: ${passed.length} passed${passedPartial.length ? ` (${passedPartial.length} with declined sections)` : ""}, ${failed.length} failed, ${broken.length} broken, ${timedOut.length} timed out, ${badExit.length} bad exit code, ${noVerdict.length} stated no verdict, ${skipped.length} skipped, ${diagnostics.length} diagnostic (asserted nothing)`);
+  console.log(`${results.length} suite(s)${shardLabel}${onlyLabel}: ${passed.length} passed${passedPartial.length ? ` (${passedPartial.length} with declined sections)` : ""}, ${failed.length} failed, ${broken.length} broken, ${timedOut.length} timed out, ${badExit.length} bad exit code, ${noVerdict.length} stated no verdict, ${skipped.length} skipped, ${diagnostics.length} diagnostic (asserted nothing)`);
 
   // The fingerprint belongs NEXT TO the tally, not only in the header.
   //
@@ -447,7 +513,7 @@ if (AS_JSON) {
   //
   // --shard, --filter and --bail all narrow the run on purpose, so only an
   // unnarrowed run is expected to account for every discovered suite.
-  const narrowed = Boolean(SHARD || FILTER || BAIL);
+  const narrowed = Boolean(SHARD || FILTER || BAIL || ONLY_TARGET);
   const ranAll = results.length === discovered.length;
   console.log(
     ranAll
@@ -575,9 +641,13 @@ if (AS_JSON) {
   console.log(
     notPassing.length
       ? `\nNOT GREEN.`
-      : caveats.length
-        ? `\nAll green, except: ${caveats.join("; ")} — green does not cover those.`
-        : `\nAll green.`
+      : ONLY_TARGET
+        ? caveats.length
+          ? `\nTargeted suite has no failing verdict, except: ${caveats.join("; ")} — this run did not verify the full set.`
+          : `\nTargeted suite green. This run did not verify the full set.`
+        : caveats.length
+          ? `\nAll green, except: ${caveats.join("; ")} — green does not cover those.`
+          : `\nAll green.`
   );
 }
 

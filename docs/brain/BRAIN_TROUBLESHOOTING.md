@@ -3639,8 +3639,10 @@ plain two-command sequence         exit=0   <-- brain FAILED, commit would proce
 status-collecting hook             exit=1   <-- brain failure not masked
 ```
 
-The hook as installed. **`.git/hooks/` is untracked, so this cannot be committed** —
-this block is the record. Re-create it byte-for-byte on a fresh clone:
+The hook as originally installed under `.git/hooks/` was untracked, so this block was
+initially its only repository record. Section 53 later made `.githooks/pre-commit` the
+tracked canonical copy and wired CI/fresh-clone installation; the installed `.git/hooks/`
+copy remains outside Git. Its executable body is:
 
 ```sh
 #!/bin/sh
@@ -6135,8 +6137,7 @@ checks, and `verify-ui-exec-gates.mjs` rejects a missing named primitive instead
 raw-hex scan. `probe-unannounced-declines-coverage.mjs` proves all-present and missing-path
 verdicts for both guards in disposable fixtures.
 
-BACKLOG. Section 42 and the comment inside `.githooks/pre-commit` still call that file
-untracked, which section 53 made false.
+BACKLOG. None recorded in this TEST-THE-TESTS chain after F-081.
 
 ## 56. `verify-all --only` was ignored, so a typo silently ran the full suite set and exited green (2026-09-06)
 
@@ -6183,6 +6184,17 @@ references), and dependency audit gates passed; repo-map mutations killed 17/17,
 crash-safety passed 10/10 with no residue, and HotelKey mutations killed 11/11 with byte-identical
 restoration. The final sweep discovered 152 suites at list `86de99ae`: 150 passed, 0 failed,
 0 broken, 0 timed out, 0 bad exit, 0 no-verdict, 2 explicit skips, 0 diagnostic.
+
+## 57. The tracked hook still called itself untracked after section 53 made that false (2026-09-06)
+
+F-081. Section 42 and `.githooks/pre-commit:15-16` both preserved a once-true statement after
+the hook moved into the repository: “this file is untracked … so it cannot be committed.” The
+contradiction is mechanical, not interpretive: `git ls-files -- .githooks/pre-commit` prints the
+path, and its first tracked commit is `38beb8a` (`ci(gates): track the pre-commit hook and run the
+map gate in CI`). Meanwhile the installed `.git/hooks/pre-commit` and tracked canonical copy have
+the same SHA-256 on this checkout. The corrected wording keeps the useful boundary — the installed
+copy under `.git/` is untracked — while identifying `.githooks/pre-commit` as the tracked canonical
+source and pointing to section 53's installation/CI proof.
 
 
 

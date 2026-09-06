@@ -438,4 +438,5 @@ console.log(`============================================================`);
 
 run.done();
 if (process.exitCode) process.exit(1);
+console.log("PASSED: 10,000+ certification matrix and trick cases verified.");
 process.exit(0);

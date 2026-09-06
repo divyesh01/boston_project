@@ -6277,6 +6277,23 @@ F-084. Cross-browser account data synchronization required end-to-end hardening 
 
 FULL GATES. Vitest passed 413/413 tests in 48 files; `probe-verify-all-verdict` passed 168/168 assertions; 50 trick cases passed 50/50; 10k adversarial matrix passed 10,000/10,000; typecheck, lint, V3 (`verify:v3`), and repo-map passed with 0 errors.
 
+## 61. Cross-browser probes now state machine-readable terminal verdicts (2026-09-06)
+
+Six existing probe corrections close the gap between a successful process exit and the
+verdict text consumed by `scripts/verify-all.mjs`. The Browser B KPI, Browser B hydration,
+10,000+ certification-matrix, cross-browser synchronization, and GM property-access probes
+now print an explicit `PASSED:` terminal line only after `run.done()` and a nonzero
+`process.exitCode` guard. The cross-browser probe deliberately evaluates that guard before
+its success line, so a failed assertion cannot leave false-green `PASSED:` text in CI logs.
+The GM property-access probe also exits explicitly after the guarded success verdict.
+
+`scripts/probe-no-real-credentials.mjs` documents the three cross-browser sign-in fixtures
+and the GM property-access fixture required by those probes. Every value is synthetic and
+probe-specific; the GM fixture uses a self-describing value instead of the generic
+`Password123!`, avoiding a broad blind spot in the value-based test-fixture allowlist. The
+allowlist's existing stale-entry check still requires every documented fixture to remain in
+real scanned test source.
+
 
 
 

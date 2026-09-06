@@ -73,4 +73,5 @@ await run.check("What happens when runInTransaction is called with no active dat
 
 run.done();
 if (process.exitCode) process.exit(1);
+console.log("PASSED: Browser B hydration verification completed.");
 process.exit(0);

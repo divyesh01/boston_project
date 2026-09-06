@@ -190,4 +190,5 @@ await run.check("Step 3: Browser B (empty storage) logs in, queries, and compute
 
 run.done();
 if (process.exitCode) process.exit(1);
+console.log("PASSED: Adversarial Browser B KPIs matched bit-equal.");
 process.exit(0);

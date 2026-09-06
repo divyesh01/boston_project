@@ -427,5 +427,6 @@ console.log("  No File Re-Upload:   YES (Hydrated directly from D1)");
 console.log("  Cold Query Stampede: YES (pullPromise prevents race condition)");
 console.log("  Multi-Tenant IDOR:   BLOCKED (Fail-closed isolation)");
 console.log("============================================================\n");
+if (process.exitCode) process.exit(1);
 console.log("PASSED: all e2e cross-browser synchronization checks passed (22 passed, 0 failed).");
 process.exit(0);

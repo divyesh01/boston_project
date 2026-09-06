@@ -250,6 +250,10 @@ const ALLOWED_TEST_FIXTURES = new Map([
   // The shared harness sign-in used by every suite that must authenticate first
   // (see _harness-auth.mjs). Self-describing name.
   ['Harness-Owner-Password-1!', '_harness-auth.mjs shared owner sign-in'],
+  ['Owner-Secure-Pass-1!', 'probe-cross-browser-sync-e2e.mjs owner fixture'],
+  ['GM-Secure-Pass-1!', 'probe-cross-browser-sync-e2e.mjs GM fixture'],
+  ['Attacker-Pass-1!', 'probe-cross-browser-sync-e2e.mjs attacker fixture'],
+  ['GM-Property-Access-Probe-1!', 'probe-gm-property-access.mjs test user fixture'],
 ]);
 
 const credOffenders = [];

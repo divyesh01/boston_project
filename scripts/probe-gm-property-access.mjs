@@ -142,7 +142,7 @@ await run.check("Check: Admin creating user with local property id [1] succeeds 
       email: "fd1@test.local",
       role: "front_desk",
       property_access: [1], // Admin UI passed local ID 1
-      password: "Password123!",
+      password: "GM-Property-Access-Probe-1!",
     }),
   });
 
@@ -160,3 +160,5 @@ await run.check("Check: Admin creating user with local property id [1] succeeds 
 
 run.done();
 if (process.exitCode) process.exit(1);
+console.log("PASSED: GM and manager property access verified.");
+process.exit(0);

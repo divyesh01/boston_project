@@ -456,9 +456,9 @@ await run.check("a staged transaction can carry an account-global operation and 
   const committed = await call("transaction/commit", { method: "POST", body: { tx_id: txId } });
   const committedBody = await committed.json();
   assertEqual(committed.status, 200, `transaction/commit (body ${JSON.stringify(committedBody)})`);
-  assertEqual(activeGeneration(), startedBody.generation_id, "the committed staging generation must become active");
+  assertEqual(committedBody.status, "committed");
   const after = storedRecord("Staff", STAFF_KEY);
-  assert(after, "the global record vanished from the committed generation");
+  assert(after, "the global record vanished from the active generation");
   assertEqual(after.property_key, GLOBAL_KEY, "the commit must not re-home the record");
   assertEqual(after.server_property_id, null, "the commit must keep server_property_id NULL");
   assert(after.row_hash !== before.row_hash, "the committed row_hash must change");
@@ -551,7 +551,8 @@ await run.check("a restricted caller cannot stage an account-global operation in
   assert(chunkBody.code !== "sync_conflict", `an unauthorized staged operation must not be reported as a write conflict (body ${JSON.stringify(chunkBody)})`);
   assertEqual(countRows("SELECT COUNT(*) AS n FROM business_staging_target WHERE account_id=? AND tx_id=?", ACCOUNT, txId), 0, "no global target may be staged");
   assertEqual(countRows("SELECT next_chunk_index AS n FROM business_staging_transaction WHERE account_id=? AND tx_id=?", ACCOUNT, txId), 0, "the chunk cursor must not advance on a denied chunk");
-  assertEqual(storedRecord("Staff", STAFF_KEY, startedBody.generation_id).row_hash, before.row_hash, "the staging copy of the global record must be untouched");
+  assertEqual(countRows("SELECT COUNT(*) AS n FROM business_record_staging WHERE account_id=? AND transaction_id=?", ACCOUNT, txId), 0, "no row may be staged");
+  assertEqual(storedRecord("Staff", STAFF_KEY).row_hash, before.row_hash, "the active copy of the global record must be untouched");
   assertEqual((await call("transaction/abort", { method: "POST", scope: restricted, body: { tx_id: txId } })).status, 200, "the denied transaction must be abortable");
 });
 
@@ -662,15 +663,12 @@ await run.check("a staged global upsert cannot re-home a property-owned record",
   const stagingGeneration = startedBody.generation_id;
   const chunk = await settle("transaction/chunk", { method: "POST", body: { tx_id: txId, chunk_index: 0, chunk_hash: await transactionChunkHash([operation]), operations: [operation] } });
   assert(chunk.status !== 200, `a staged global upsert onto a property-owned record must be refused (status ${chunk.status}, body ${JSON.stringify(chunk.body)})`);
-  const staged = storedRecord("Expense", EXPENSE_KEY, stagingGeneration);
-  assert(staged, `the staging copy of the Expense vanished from ${stagingGeneration}`);
-  assertEqual(staged.server_property_id, PROPERTY_ID, "the staged Expense must keep its original non-NULL server_property_id");
-  assertEqual(staged.property_key, PROPERTY_KEY, "the staged Expense must keep its original property_key");
-  assertEqual(staged.row_hash, before.row_hash, "the staged Expense row must be byte-unchanged");
+  assertEqual(countRows("SELECT COUNT(*) AS n FROM business_record_staging WHERE account_id=? AND transaction_id=?", ACCOUNT, txId), 0, "no row may be staged in business_record_staging");
   assertEqual(countRows("SELECT COUNT(*) AS n FROM business_staging_target WHERE account_id=? AND tx_id=?", ACCOUNT, txId), 0, "no target may survive the rolled-back batch");
   const active = storedRecord("Expense", EXPENSE_KEY);
   assertEqual(active.server_property_id, PROPERTY_ID, "the active generation's Expense must be untouched");
   assertEqual(active.property_key, PROPERTY_KEY, "the active generation's Expense property_key must be untouched");
+  assertEqual(active.row_hash, before.row_hash, "the active generation's Expense row must be byte-unchanged");
   assertEqual((await call("transaction/abort", { method: "POST", body: { tx_id: txId } })).status, 200, "the refused transaction must be abortable");
 });
 
@@ -800,7 +798,9 @@ await run.check("a caller downgraded mid-transaction cannot commit a global targ
 
   const control = await settle("transaction/commit", { method: "POST", scope: racer, body: { tx_id: controlTx } });
   assertEqual(control.status, 200, `the SAME downgraded caller must still commit its GRANTED property, or the 403 above proves nothing (body ${JSON.stringify(control.body)})`);
-  assertEqual(activeGeneration(), controlStaging, "the granted-property commit must publish its generation");
+  assertEqual(activeGeneration(), baseGeneration, "the active generation is mutated in place");
+  const afterControl = storedRecord("Expense", EXPENSE_KEY, baseGeneration);
+  assert(afterControl && afterControl.row_hash !== expenseBefore.row_hash, "the granted-property commit must update the record in place");
 });
 
 // ---------------------------------------------------------------------------

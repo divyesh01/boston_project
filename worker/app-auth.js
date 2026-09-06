@@ -244,19 +244,33 @@ export async function authenticateAppSession(request, env) {
   const now = new Date().toISOString();
   const row = await queryFirst(
     env,
-    `SELECT s.id session_id,s.expires_at,s.remember,u.id,u.email,u.is_active,u.is_locked,u.locked_until
+    `SELECT s.id session_id,s.expires_at,s.remember,s.last_seen_at,u.id,u.email,u.is_active,u.is_locked,u.locked_until
        FROM app_session s JOIN user u ON u.id=s.user_id
       WHERE s.token_hash=? LIMIT 1`,
     [tokenHash],
   );
   if (!row || String(row.expires_at) <= now || row.is_active === 0 || row.is_locked === 1 || (row.locked_until && String(row.locked_until) > now)) {
-    if (row?.session_id) await env.DB.prepare("DELETE FROM app_session WHERE id=?").bind(row.session_id).run();
+    if (row?.session_id) {
+      try {
+        await env.DB.prepare("DELETE FROM app_session WHERE id=?").bind(row.session_id).run();
+      } catch {}
+    }
     return { ok: false };
   }
-  const slidingExpiry = new Date(Date.now() + SESSION_MS).toISOString();
-  await env.DB.prepare(
-    "UPDATE app_session SET last_seen_at=?,expires_at=CASE WHEN remember=0 THEN ? ELSE expires_at END WHERE id=?",
-  ).bind(now, slidingExpiry, row.session_id).run();
+  const nowMs = Date.now();
+  const lastSeenMs = row.last_seen_at ? new Date(row.last_seen_at).getTime() : 0;
+  // 15-minute sliding-session hysteresis: decouple rapid polling from D1 writes
+  if (nowMs - lastSeenMs >= 15 * 60 * 1000) {
+    const slidingExpiry = new Date(nowMs + SESSION_MS).toISOString();
+    try {
+      await env.DB.prepare(
+        "UPDATE app_session SET last_seen_at=?,expires_at=CASE WHEN remember=0 THEN ? ELSE expires_at END WHERE id=?",
+      ).bind(now, slidingExpiry, row.session_id).run();
+    } catch (touchError) {
+      console.warn("Non-blocking session heartbeat update failed", touchError);
+      // Fail-silent telemetry: allow authenticated read to continue even if heartbeat write fails
+    }
+  }
   return {
     ok: true,
     principal: {

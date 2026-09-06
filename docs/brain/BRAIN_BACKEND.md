@@ -643,3 +643,32 @@ Primary gates: `scripts/probe-worker-entities-conflict.mjs`, `scripts/probe-work
 
 Primary gates: `scripts/probe-cross-browser-sync-e2e.mjs`, `scripts/probe-gm-property-access.mjs`, `scripts/probe-adversarial-browser-b-kpis.mjs`, and `scripts/probe-worker-business-sync.mjs`.
 
+---
+
+## Cloudflare D1 Write-Amplification Remediation (Option D Architecture) (2026-09-06)
+
+- **Elimination of O(N) Generation Cloning**: `startTransaction` in `worker/business-sync.js` no longer clones the active generation (previously copying 38,684 rows into `business_record`). Routine transactions now stage deltas in `business_record_staging` without touching the active generation until commit.
+- **Set-Based Atomic In-Place Commit**: On `commitTransaction`, staged deltas are applied directly to the active dataset in `business_record`, generating sequential change logs in `business_change` (`seq = currentRevision + 1 + index`) and advancing `business_sync_state.revision += stagedRows.length`.
+- **Inverse Pre/Post-Image Rollback Journaling with CAS Conflict Protection**:
+  - `business_rollback_journal` captures the exact pre-image (`previous_row_json`, `previous_row_hash`) and applied post-image hash (`applied_row_hash`).
+  - `POST /api/business-sync/transaction/rollback` restores prior states in $O(M)$ time. If any live record was altered by a subsequent transaction, CAS detection fails closed with HTTP 409 `ROLLBACK_CONFLICT`.
+- **Migration Rollback Barrier**: When transactions commit against an active generation, `business_dataset.post_migration_mutated` is set to `1`. Subsequent calls to `rollbackMigration` are rejected with HTTP 409 `MIGRATION_ROLLBACK_BLOCKED` to prevent destroying post-migration business changes.
+- **Migration Upfront Property Resolution**: `uploadChunk` resolves and stamps authoritative `server_property_id` on initial insert. `activateMigration` performs zero rewrites on `business_record` (reducing activation writes by 38,683 rows).
+- **Auth Session Sliding Hysteresis & Fail-Silent Recovery**:
+  - `authenticateAppSession` in `worker/app-auth.js` enforces a 15-minute sliding hysteresis window before issuing `UPDATE app_session` writes.
+  - Heartbeat touches on read paths are non-blocking and fail-silent: transient D1 write quota limits do not block authenticated reads.
+- **Client Realtime Tab Leader Election & Backoff**:
+  - `src/lib/realtime.js` establishes a single leader tab across open browser tabs via `BroadcastChannel` (`rri_realtime_leader`). Only the elected leader executes the active polling timer.
+  - When the leader polls, it broadcasts `POLL_TICK` to all peer tabs so they refresh local queries simultaneously without making redundant server requests.
+  - Tabs automatically pause polling when minimized or hidden (`document.hidden`).
+  - Exponential backoff doubles polling intervals up to 60s upon network or server errors, resetting to 10s on success.
+- **Empirical Write Accounting (Proven by `scripts/probe-d1-write-budget.mjs`)**:
+  - Transaction Start: 5 writes (guards, dataset, property map, staging tx).
+  - Transaction Chunk: $3M + 2$ writes.
+  - Transaction Commit: $3M + 6$ writes (journal, live updates, change log, revision, status, staging cleanup).
+  - Total Lifecycle Writes: 30 rows for $M=1$ (was 38,685, a 1,289x reduction); 48 rows for $M=3$ (was 38,687, an 805x reduction); 949 rows for $M=100$.
+  - Session Read: 0 writes within 15-minute window; 1 write after window expiry.
+
+Primary gates: `scripts/probe-d1-write-budget.mjs`, `scripts/probe-realtime-leader.mjs`, `scripts/probe-worker-business-sync.mjs`, `scripts/probe-business-sync-global-records.mjs`, and `scripts/verify-schema-parity.mjs`.
+
+

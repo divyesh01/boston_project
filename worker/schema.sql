@@ -699,6 +699,7 @@ CREATE TABLE business_dataset (
   created_by             TEXT NOT NULL REFERENCES user(id),
   created_at             TEXT NOT NULL,
   activated_at           TEXT,
+  post_migration_mutated INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (account_id, generation_id),
   UNIQUE (account_id, manifest_hash)
 );
@@ -822,6 +823,7 @@ CREATE TABLE business_staging_transaction (
   created_at            TEXT NOT NULL,
   expires_at            TEXT NOT NULL,
   committed_at          TEXT,
+  rolled_back_at        TEXT,
   PRIMARY KEY (account_id, tx_id),
   UNIQUE (account_id, staging_generation_id),
   FOREIGN KEY (account_id, base_generation_id)
@@ -845,3 +847,42 @@ CREATE TABLE business_staging_target (
 );
 CREATE INDEX idx_business_staging_target_lookup
   ON business_staging_target (account_id, tx_id, server_property_id);
+
+CREATE TABLE business_record_staging (
+  account_id         TEXT NOT NULL,
+  transaction_id     TEXT NOT NULL,
+  entity_name        TEXT NOT NULL,
+  record_key         TEXT NOT NULL,
+  property_key       TEXT,
+  server_property_id TEXT,
+  operation          TEXT NOT NULL CHECK (operation IN ('insert', 'update', 'delete')),
+  row_json           TEXT,
+  row_hash           TEXT,
+  base_row_hash      TEXT,
+  created_at         TEXT NOT NULL,
+  PRIMARY KEY (account_id, transaction_id, entity_name, record_key),
+  FOREIGN KEY (account_id) REFERENCES account(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_staging_lookup
+  ON business_record_staging (account_id, transaction_id);
+
+CREATE TABLE business_rollback_journal (
+  account_id           TEXT NOT NULL,
+  transaction_id       TEXT NOT NULL,
+  entity_name          TEXT NOT NULL,
+  record_key           TEXT NOT NULL,
+  property_key         TEXT,
+  server_property_id   TEXT,
+  operation            TEXT NOT NULL CHECK (operation IN ('create', 'update', 'delete')),
+  pre_commit_revision  INTEGER NOT NULL,
+  previous_row_json    TEXT,
+  previous_row_hash    TEXT,
+  applied_row_hash     TEXT,
+  committed_at         TEXT NOT NULL,
+  PRIMARY KEY (account_id, transaction_id, entity_name, record_key),
+  FOREIGN KEY (account_id) REFERENCES account(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_rollback_journal_lookup
+  ON business_rollback_journal (account_id, transaction_id);
+CREATE INDEX idx_rollback_journal_record
+  ON business_rollback_journal (account_id, entity_name, record_key);

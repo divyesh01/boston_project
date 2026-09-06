@@ -792,6 +792,7 @@ export function createBusinessSyncClient({
       reserveIdSequence: (prefix, floor) => request('business-sync/id-sequence/reserve', { method: 'POST', body: JSON.stringify({ prefix, floor }) }),
       status: () => localDb.BusinessSyncState.get(SYNC_STATE_KEY),
       runTransaction,
+      rollbackTransaction: (txId) => request('business-sync/transaction/rollback', { method: 'POST', body: JSON.stringify({ tx_id: txId }) }),
       deferImportRecordIds,
       recoverPendingTransactions,
     },

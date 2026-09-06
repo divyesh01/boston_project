@@ -234,9 +234,62 @@ async function uploadChunk(request, env, scope) {
     return Response.json({ accepted: rows.length, replayed: true });
   }
   const now = new Date().toISOString();
-  const statements = normalized.map((row) => env.DB.prepare(
-    "INSERT INTO business_record (account_id,generation_id,entity_name,record_key,property_key,row_json,row_hash,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(account_id,generation_id,entity_name,record_key) DO UPDATE SET property_key=excluded.property_key,row_json=excluded.row_json,row_hash=excluded.row_hash,updated_at=excluded.updated_at",
-  ).bind(scope.accountId, generationId, row.entity, row.recordKey, row.propertyKey, row.rowJson, row.rowHash, now));
+
+  // Register property mappings upfront if this chunk carries Property records
+  const propertyRows = normalized.filter((r) => r.entity === "Property");
+  if (propertyRows.length > 0) {
+    const existingProperties = await queryAll(env, "SELECT id,code FROM property WHERE account_id=?", [scope.accountId]);
+    const existingByCode = new Map(existingProperties.map((row) => [String(row.code || "").toLowerCase(), row]));
+    const propBatch = [];
+    for (const item of propertyRows) {
+      const pRow = JSON.parse(item.rowJson);
+      const code = String(pRow.code || "").trim();
+      const name = String(pRow.name || "").trim();
+      if (code && name) {
+        const existing = existingByCode.get(code.toLowerCase());
+        const serverId = existing?.id || await deterministicPropertyId(scope.accountId, code);
+        propBatch.push(env.DB.prepare(
+          "INSERT INTO property (id,account_id,code,name,rooms,address,city,state,phone,active,created_date) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id,code) DO UPDATE SET name=excluded.name,rooms=excluded.rooms,address=excluded.address,city=excluded.city,state=excluded.state,phone=excluded.phone,active=excluded.active,created_date=excluded.created_date",
+        ).bind(serverId, scope.accountId, code, name, pRow.rooms ?? null, pRow.address ?? null, pRow.city ?? null, pRow.state ?? null, pRow.phone ?? null, pRow.active === false ? 0 : 1, pRow.created_date ?? null));
+        propBatch.push(env.DB.prepare(
+          "INSERT INTO business_property_map (account_id,generation_id,property_key,server_property_id,property_code) VALUES (?,?,?,?,?) ON CONFLICT(account_id,generation_id,property_key) DO NOTHING",
+        ).bind(scope.accountId, generationId, item.recordKey, serverId, code));
+      }
+    }
+    if (propBatch.length > 0) {
+      await env.DB.batch(propBatch);
+    }
+  }
+
+  // Authoritative property mapping lookup for initial record stamping
+  const currentMaps = await queryAll(env, "SELECT property_key,server_property_id FROM business_property_map WHERE account_id=? AND generation_id=?", [scope.accountId, generationId]);
+  const mapByPropKey = new Map(currentMaps.map((m) => [m.property_key, String(m.server_property_id)]));
+  for (const [key, serverId] of [...mapByPropKey.entries()]) {
+    if (key.startsWith("n:")) {
+      const idStr = key.slice(2);
+      const alt = `s:${idStr.length}:${idStr}`;
+      if (!mapByPropKey.has(alt)) mapByPropKey.set(alt, serverId);
+    } else if (key.startsWith("s:")) {
+      const match = /^s:\d+:(.*)$/s.exec(key);
+      if (match) {
+        const num = Number(match[1]);
+        if (Number.isSafeInteger(num) && String(num) === match[1]) {
+          const alt = `n:${num}`;
+          if (!mapByPropKey.has(alt)) mapByPropKey.set(alt, serverId);
+        }
+      }
+    }
+  }
+
+  const statements = normalized.map((row) => {
+    let serverPropertyId = null;
+    if (!isGlobalPropertyKey(row.propertyKey)) {
+      serverPropertyId = mapByPropKey.get(row.propertyKey) || null;
+    }
+    return env.DB.prepare(
+      "INSERT INTO business_record (account_id,generation_id,entity_name,record_key,property_key,server_property_id,row_json,row_hash,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id,generation_id,entity_name,record_key) DO UPDATE SET property_key=excluded.property_key,server_property_id=excluded.server_property_id,row_json=excluded.row_json,row_hash=excluded.row_hash,updated_at=excluded.updated_at",
+    ).bind(scope.accountId, generationId, row.entity, row.recordKey, row.propertyKey, serverPropertyId, row.rowJson, row.rowHash, now);
+  });
   statements.push(env.DB.prepare(
     "INSERT INTO business_migration_chunk (account_id,generation_id,chunk_index,chunk_hash,record_count,received_at) VALUES (?,?,?,?,?,?)",
   ).bind(scope.accountId, generationId, chunkIndex, chunkHash, rows.length, now));
@@ -340,15 +393,15 @@ async function activateMigration(request, env, scope) {
       "INSERT INTO property (id,account_id,code,name,rooms,address,city,state,phone,active,created_date) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id,code) DO UPDATE SET name=excluded.name,rooms=excluded.rooms,address=excluded.address,city=excluded.city,state=excluded.state,phone=excluded.phone,active=excluded.active,created_date=excluded.created_date",
     ).bind(mapping.serverId, scope.accountId, mapping.code, String(row.name), row.rooms ?? null, row.address ?? null, row.city ?? null, row.state ?? null, row.phone ?? null, row.active === false ? 0 : 1, row.created_date ?? null));
     statements.push(env.DB.prepare(
-      "INSERT INTO business_property_map (account_id,generation_id,property_key,server_property_id,property_code) VALUES (?,?,?,?,?)",
+      "INSERT OR IGNORE INTO business_property_map (account_id,generation_id,property_key,server_property_id,property_code) VALUES (?,?,?,?,?)",
     ).bind(scope.accountId, generationId, propertyKey, mapping.serverId, mapping.code));
     statements.push(env.DB.prepare(
-      "UPDATE business_record SET server_property_id=? WHERE account_id=? AND generation_id=? AND property_key=?",
+      "UPDATE business_record SET server_property_id=? WHERE account_id=? AND generation_id=? AND property_key=? AND server_property_id IS NULL",
     ).bind(mapping.serverId, scope.accountId, generationId, propertyKey));
   }
   for (const [altKey, mapping] of alternateKeyMap) {
     statements.push(env.DB.prepare(
-      "UPDATE business_record SET server_property_id=? WHERE account_id=? AND generation_id=? AND property_key=?",
+      "UPDATE business_record SET server_property_id=? WHERE account_id=? AND generation_id=? AND property_key=? AND server_property_id IS NULL",
     ).bind(mapping.serverId, scope.accountId, generationId, altKey));
   }
   if (dataset.previous_generation_id) {
@@ -373,6 +426,9 @@ async function rollbackMigration(request, env, scope) {
     return Response.json({ generation_id: generationId, status: "aborted", active_dataset_changed: false });
   }
   if (dataset.status === "active" && dataset.previous_generation_id) {
+    if (Number(dataset.post_migration_mutated) === 1) {
+      throw new SyncRequestError("migration cannot be rolled back because subsequent business transactions have been committed", 409, { code: "MIGRATION_ROLLBACK_BLOCKED" });
+    }
     const previous = await loadDataset(env, scope, String(dataset.previous_generation_id));
     if (!['retired', 'active'].includes(String(previous.status))) throw new SyncRequestError("previous generation is not rollback-eligible", 409);
     const now = new Date().toISOString();
@@ -451,6 +507,7 @@ async function expirePendingTransactions(env, scope, now) {
       await env.DB.batch([
         pendingCleanupGuard(env, scope, String(row.tx_id), String(row.request_hash), now, true),
         env.DB.prepare("DELETE FROM business_record WHERE account_id=? AND generation_id=?").bind(scope.accountId, row.staging_generation_id),
+        env.DB.prepare("DELETE FROM business_record_staging WHERE account_id=? AND transaction_id=?").bind(scope.accountId, row.tx_id),
         env.DB.prepare("DELETE FROM business_property_map WHERE account_id=? AND generation_id=?").bind(scope.accountId, row.staging_generation_id),
         env.DB.prepare("DELETE FROM business_migration_chunk WHERE account_id=? AND generation_id=?").bind(scope.accountId, row.staging_generation_id),
         env.DB.prepare("DELETE FROM business_staging_target WHERE account_id=? AND tx_id=?").bind(scope.accountId, row.tx_id),
@@ -506,7 +563,6 @@ async function startTransaction(request, env, scope) {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN (SELECT COUNT(*) FROM business_staging_transaction WHERE account_id=? AND status='pending' AND expires_at>? AND tx_id<>?) < ? THEN 1 ELSE 0 END,?").bind(scope.accountId, `${txId}:cap`, requestHash, scope.accountId, now, txId, MAX_PENDING_TRANSACTIONS, now),
       env.DB.prepare("INSERT INTO business_dataset (account_id,generation_id,status,schema_version,manifest_hash,manifest_json,expected_chunks,expected_records,previous_generation_id,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)").bind(scope.accountId, stagingGenerationId, "staging", 1, manifestHash, manifestJson, expectedChunks, Number(baseCount?.count || 0), baseGenerationId, String(scope.user.id), now),
-      env.DB.prepare("INSERT INTO business_record (account_id,generation_id,entity_name,record_key,property_key,server_property_id,row_json,row_hash,updated_at) SELECT account_id,?,entity_name,record_key,property_key,server_property_id,row_json,row_hash,? FROM business_record WHERE account_id=? AND generation_id=?").bind(stagingGenerationId, now, scope.accountId, baseGenerationId),
       env.DB.prepare("INSERT INTO business_property_map (account_id,generation_id,property_key,server_property_id,property_code) SELECT account_id,?,property_key,server_property_id,property_code FROM business_property_map WHERE account_id=? AND generation_id=?").bind(stagingGenerationId, scope.accountId, baseGenerationId),
       env.DB.prepare("INSERT INTO business_staging_transaction (account_id,tx_id,request_hash,base_generation_id,base_revision,staging_generation_id,status,expected_chunks,next_chunk_index,operation_count,created_by,created_at,expires_at) VALUES (?,?,?,?,?,?,'pending',?,0,?,?,?,?)").bind(scope.accountId, txId, requestHash, baseGenerationId, baseRevision, stagingGenerationId, expectedChunks, operationCount, String(scope.user.id), now, expiresAt),
       env.DB.prepare("DELETE FROM business_mutation_guard WHERE account_id=? AND mutation_id=?").bind(scope.accountId, `${txId}:cap`),
@@ -615,11 +671,11 @@ async function uploadTransactionChunk(request, env, scope) {
     statements.push(env.DB.prepare("INSERT INTO business_staging_target (account_id,tx_id,entity_name,record_key,server_property_id,operation) VALUES (?,?,?,?,?,?)").bind(scope.accountId, txId, op.entity, op.recordKey, op.isGlobal ? GLOBAL_STAGING_TARGET_ID : op.serverPropertyId, op.operation));
     const guardId = await sha256(`${txId}:${chunkIndex}:${index}:${tx.request_hash}`);
     statements.push(op.operation === 'upsert' && op.baseRowHash == null
-      ? absentGuard(env, scope, stagingGenerationId, op.entity, op.recordKey, guardId, String(tx.request_hash), now)
-      : presentGuard(env, scope, stagingGenerationId, op.entity, op.recordKey, String(op.baseRowHash), op.serverPropertyId, guardId, String(tx.request_hash), now, op.isGlobal));
-    statements.push(op.operation === 'delete'
-      ? env.DB.prepare("DELETE FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=?").bind(scope.accountId, stagingGenerationId, op.entity, op.recordKey)
-      : env.DB.prepare("INSERT INTO business_record (account_id,generation_id,entity_name,record_key,property_key,server_property_id,row_json,row_hash,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id,generation_id,entity_name,record_key) DO UPDATE SET property_key=excluded.property_key,server_property_id=excluded.server_property_id,row_json=excluded.row_json,row_hash=excluded.row_hash,updated_at=excluded.updated_at").bind(scope.accountId, stagingGenerationId, op.entity, op.recordKey, op.propertyKey, op.serverPropertyId, op.rowJson, op.rowHash, now));
+      ? stagingAwareAbsentGuard(env, scope, tx.base_generation_id, txId, op.entity, op.recordKey, guardId, String(tx.request_hash), now)
+      : stagingAwarePresentGuard(env, scope, tx.base_generation_id, txId, op.entity, op.recordKey, String(op.baseRowHash), op.serverPropertyId, guardId, String(tx.request_hash), now, op.isGlobal));
+    statements.push(env.DB.prepare(
+      "INSERT INTO business_record_staging (account_id,transaction_id,entity_name,record_key,property_key,server_property_id,operation,row_json,row_hash,base_row_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id,transaction_id,entity_name,record_key) DO UPDATE SET property_key=excluded.property_key,server_property_id=excluded.server_property_id,operation=excluded.operation,row_json=excluded.row_json,row_hash=excluded.row_hash,base_row_hash=excluded.base_row_hash,created_at=excluded.created_at",
+    ).bind(scope.accountId, txId, op.entity, op.recordKey, op.propertyKey, op.serverPropertyId, op.operation === 'delete' ? 'delete' : (op.baseRowHash ? 'update' : 'insert'), op.rowJson, op.rowHash, op.baseRowHash, now));
   }
   statements.push(env.DB.prepare("INSERT INTO business_migration_chunk (account_id,generation_id,chunk_index,chunk_hash,record_count,received_at) VALUES (?,?,?,?,?,?)").bind(scope.accountId, stagingGenerationId, chunkIndex, chunkHash, operations.length, now));
   statements.push(env.DB.prepare("UPDATE business_staging_transaction SET next_chunk_index=? WHERE account_id=? AND tx_id=? AND status='pending' AND next_chunk_index=?").bind(nextChunkIndex + 1, scope.accountId, txId, nextChunkIndex));
@@ -645,7 +701,7 @@ async function transactionStatus(url, env, scope) {
   if (!/^[A-Za-z0-9_-]{16,128}$/.test(txId)) throw new SyncRequestError("tx_id is invalid", 422);
   const tx = await loadStagingTransaction(env, scope, txId);
   const receipts = await queryFirst(env, "SELECT COALESCE(SUM(record_count),0) AS received_operations FROM business_migration_chunk WHERE account_id=? AND generation_id=?", [scope.accountId, tx.staging_generation_id]);
-  return Response.json({ tx_id: tx.tx_id, status: tx.status, base_generation_id: tx.base_generation_id, base_revision: Number(tx.base_revision), staging_generation_id: tx.staging_generation_id, expected_chunks: Number(tx.expected_chunks), received_chunks: Number(tx.next_chunk_index), expected_operations: Number(tx.operation_count), received_operations: Number(receipts?.received_operations || 0), created_at: tx.created_at, expires_at: tx.expires_at, committed_at: tx.committed_at || null });
+  return Response.json({ tx_id: tx.tx_id, status: tx.rolled_back_at ? "rolled_back" : tx.status, base_generation_id: tx.base_generation_id, base_revision: Number(tx.base_revision), staging_generation_id: tx.staging_generation_id, expected_chunks: Number(tx.expected_chunks), received_chunks: Number(tx.next_chunk_index), expected_operations: Number(tx.operation_count), received_operations: Number(receipts?.received_operations || 0), created_at: tx.created_at, expires_at: tx.expires_at, committed_at: tx.committed_at || null, rolled_back_at: tx.rolled_back_at || null });
 }
 
 async function abortTransaction(request, env, scope) {
@@ -674,6 +730,7 @@ async function abortTransaction(request, env, scope) {
     await env.DB.batch([
       pendingCleanupGuard(env, scope, txId, String(tx.request_hash), now),
       env.DB.prepare("DELETE FROM business_record WHERE account_id=? AND generation_id=?").bind(scope.accountId, generationId),
+      env.DB.prepare("DELETE FROM business_record_staging WHERE account_id=? AND transaction_id=?").bind(scope.accountId, txId),
       env.DB.prepare("DELETE FROM business_property_map WHERE account_id=? AND generation_id=?").bind(scope.accountId, generationId),
       env.DB.prepare("DELETE FROM business_migration_chunk WHERE account_id=? AND generation_id=?").bind(scope.accountId, generationId),
       env.DB.prepare("DELETE FROM business_staging_target WHERE account_id=? AND tx_id=?").bind(scope.accountId, txId),
@@ -695,7 +752,7 @@ async function commitTransaction(request, env, scope) {
   const body = await readBody(request);
   const txId = String(body.tx_id || "");
   const tx = await loadStagingTransaction(env, scope, txId);
-  if (tx.status === "committed") return Response.json({ tx_id: txId, status: "committed", active_generation_id: tx.staging_generation_id, replayed: true });
+  if (tx.status === "committed") return Response.json({ tx_id: txId, status: "committed", active_generation_id: tx.base_generation_id, replayed: true });
   if (tx.status === "conflict") throw new SyncRequestError("transaction conflicts with newer business data", 409, { code: "sync_conflict" });
   const now = new Date().toISOString();
   if (tx.status !== "pending" || String(tx.expires_at) <= now) throw new SyncRequestError("transaction is not pending or has expired", 409);
@@ -705,29 +762,69 @@ async function commitTransaction(request, env, scope) {
 
   const requestHash = String(tx.request_hash);
   const userId = String(scope.user.id);
+  const stagedRows = await queryAll(env,
+    "SELECT * FROM business_record_staging WHERE account_id=? AND transaction_id=? ORDER BY created_at, entity_name, record_key",
+    [scope.accountId, txId]
+  );
+
   const statements = [
     env.DB.prepare("INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN EXISTS (SELECT 1 FROM user u WHERE u.account_id=? AND u.id=? AND u.is_active=1 AND u.is_locked=0 AND (lower(u.role) IN ('owner','admin') OR (lower(u.role) IN ('gm','manager') AND json_valid(u.permissions) AND (json_extract(u.permissions,'$.import_reports')=1 OR json_extract(u.permissions,'$.manual_entry')=1 OR json_extract(u.permissions,'$.manage_operations')=1)))) THEN 1 ELSE 0 END,?").bind(scope.accountId, `${txId}:auth`, requestHash, scope.accountId, userId, now),
-    // An account-global target carries the staging sentinel, which no grant can
-    // name: it is satisfiable only by the two unrestricted arms (role
-    // owner/admin/gm, or property_access_mode='all'), which is exactly scope.all.
     env.DB.prepare("INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN NOT EXISTS (SELECT 1 FROM (SELECT DISTINCT server_property_id FROM business_staging_target WHERE account_id=? AND tx_id=?) t WHERE NOT EXISTS (SELECT 1 FROM user u WHERE u.account_id=? AND u.id=? AND u.is_active=1 AND u.is_locked=0 AND (lower(u.role) IN ('owner','admin','gm') OR u.property_access_mode='all' OR (t.server_property_id <> ? AND EXISTS (SELECT 1 FROM user_property_access upa WHERE upa.account_id=u.account_id AND upa.user_id=u.id AND upa.property_id=t.server_property_id))))) THEN 1 ELSE 0 END,?").bind(scope.accountId, `${txId}:scope`, requestHash, scope.accountId, txId, scope.accountId, userId, GLOBAL_STAGING_TARGET_ID, now),
     env.DB.prepare("INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN EXISTS (SELECT 1 FROM business_dataset_pointer p JOIN business_sync_state s ON s.account_id=p.account_id WHERE p.account_id=? AND p.active_generation_id=? AND s.revision=?) THEN 1 ELSE 0 END,?").bind(scope.accountId, `${txId}:cas`, requestHash, scope.accountId, tx.base_generation_id, tx.base_revision, now),
     env.DB.prepare("INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN EXISTS (SELECT 1 FROM business_staging_transaction WHERE account_id=? AND tx_id=? AND status='pending' AND expires_at>?) THEN 1 ELSE 0 END,?").bind(scope.accountId, `${txId}:pending`, requestHash, scope.accountId, txId, now, now),
-    env.DB.prepare("UPDATE business_dataset SET status='retired' WHERE account_id=? AND generation_id=? AND status='active'").bind(scope.accountId, tx.base_generation_id),
-    env.DB.prepare("UPDATE business_dataset SET status='active',activated_at=? WHERE account_id=? AND generation_id=? AND status='staging'").bind(now, scope.accountId, tx.staging_generation_id),
-    env.DB.prepare("UPDATE business_dataset_pointer SET active_generation_id=?,updated_at=? WHERE account_id=? AND active_generation_id=?").bind(tx.staging_generation_id, now, scope.accountId, tx.base_generation_id),
-    env.DB.prepare("UPDATE business_sync_state SET revision=revision+1 WHERE account_id=? AND revision=?").bind(scope.accountId, tx.base_revision),
-    env.DB.prepare("UPDATE business_staging_transaction SET status='committed',committed_at=? WHERE account_id=? AND tx_id=? AND status='pending'").bind(now, scope.accountId, txId),
-    env.DB.prepare("DELETE FROM business_staging_target WHERE account_id=? AND tx_id=?").bind(scope.accountId, txId),
-    env.DB.prepare("DELETE FROM business_mutation_guard WHERE account_id=? AND request_hash=?").bind(scope.accountId, requestHash),
   ];
+
+  const currentRevision = Number(tx.base_revision);
+  for (const [index, staged] of stagedRows.entries()) {
+    const existing = await queryFirst(env,
+      "SELECT row_json,row_hash FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=?",
+      [scope.accountId, tx.base_generation_id, staged.entity_name, staged.record_key]
+    );
+    const journalOp = existing ? (staged.operation === 'delete' ? 'delete' : 'update') : 'create';
+    const prevJson = existing ? String(existing.row_json) : null;
+    const prevHash = existing ? String(existing.row_hash) : null;
+    const appliedHash = staged.operation === 'delete' ? null : staged.row_hash;
+
+    statements.push(env.DB.prepare(
+      "INSERT INTO business_rollback_journal (account_id,transaction_id,entity_name,record_key,property_key,server_property_id,operation,pre_commit_revision,previous_row_json,previous_row_hash,applied_row_hash,committed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+    ).bind(
+      scope.accountId, txId, staged.entity_name, staged.record_key, staged.property_key, staged.server_property_id,
+      journalOp, currentRevision, prevJson, prevHash, appliedHash, now
+    ));
+
+    if (staged.operation === 'delete') {
+      statements.push(env.DB.prepare(
+        "DELETE FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=?",
+      ).bind(scope.accountId, tx.base_generation_id, staged.entity_name, staged.record_key));
+    } else {
+      statements.push(env.DB.prepare(
+        "INSERT INTO business_record (account_id,generation_id,entity_name,record_key,property_key,server_property_id,row_json,row_hash,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id,generation_id,entity_name,record_key) DO UPDATE SET property_key=excluded.property_key,server_property_id=excluded.server_property_id,row_json=excluded.row_json,row_hash=excluded.row_hash,updated_at=excluded.updated_at",
+      ).bind(scope.accountId, tx.base_generation_id, staged.entity_name, staged.record_key, staged.property_key, staged.server_property_id, staged.row_json, staged.row_hash, now));
+    }
+
+    const mutationId = `${txId}:${staged.entity_name}:${staged.record_key}`;
+    const changeOp = staged.operation === 'delete' ? 'delete' : 'upsert';
+    const seq = currentRevision + 1 + index;
+    statements.push(env.DB.prepare(
+      "INSERT INTO business_change (account_id,seq,generation_id,entity_name,record_key,server_property_id,operation,row_json,row_hash,mutation_id,request_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+    ).bind(scope.accountId, seq, tx.base_generation_id, staged.entity_name, staged.record_key, staged.server_property_id, changeOp, staged.row_json, staged.row_hash, mutationId, requestHash, now));
+  }
+
+  statements.push(env.DB.prepare("UPDATE business_sync_state SET revision=revision+? WHERE account_id=? AND revision=?").bind(stagedRows.length, scope.accountId, tx.base_revision));
+  statements.push(env.DB.prepare("UPDATE business_dataset SET post_migration_mutated=1 WHERE account_id=? AND generation_id=?").bind(scope.accountId, tx.base_generation_id));
+  statements.push(env.DB.prepare("UPDATE business_staging_transaction SET status='committed',committed_at=? WHERE account_id=? AND tx_id=? AND status='pending'").bind(now, scope.accountId, txId));
+  statements.push(env.DB.prepare("DELETE FROM business_record_staging WHERE account_id=? AND transaction_id=?").bind(scope.accountId, txId));
+  statements.push(env.DB.prepare("DELETE FROM business_staging_target WHERE account_id=? AND tx_id=?").bind(scope.accountId, txId));
+  statements.push(env.DB.prepare("DELETE FROM business_mutation_guard WHERE account_id=? AND request_hash=?").bind(scope.accountId, requestHash));
+  statements.push(env.DB.prepare("UPDATE business_dataset SET status='retired' WHERE account_id=? AND generation_id=? AND status='staging'").bind(scope.accountId, tx.staging_generation_id));
+
   try {
     await env.DB.batch(statements);
   } catch (error) {
     if (!/business_mutation_guard|CHECK constraint/i.test(String(error?.message || error))) throw error;
-    const committed = await queryFirst(env, "SELECT status,staging_generation_id FROM business_staging_transaction WHERE account_id=? AND tx_id=?", [scope.accountId, txId]);
+    const committed = await queryFirst(env, "SELECT status,base_generation_id FROM business_staging_transaction WHERE account_id=? AND tx_id=?", [scope.accountId, txId]);
     if (committed?.status === "committed") {
-      return Response.json({ tx_id: txId, status: "committed", active_generation_id: committed.staging_generation_id, replayed: true });
+      return Response.json({ tx_id: txId, status: "committed", active_generation_id: committed.base_generation_id, replayed: true });
     }
     if (committed?.status && committed.status !== "pending") {
       throw new SyncRequestError("transaction is no longer pending", 409, { code: "transaction_not_pending" });
@@ -742,8 +839,6 @@ async function commitTransaction(request, env, scope) {
       const targets = await queryAll(env, "SELECT DISTINCT server_property_id FROM business_staging_target WHERE account_id=? AND tx_id=?", [scope.accountId, txId]);
       const grants = await queryAll(env, "SELECT property_id FROM user_property_access WHERE account_id=? AND user_id=?", [scope.accountId, userId]);
       const allowed = new Set(grants.map((row) => String(row.property_id)));
-      // Same explicit rule as the SQL guard: the staging sentinel is never a
-      // granted property, so a restricted caller can never satisfy a global target.
       if (targets.some((row) => String(row.server_property_id) === GLOBAL_STAGING_TARGET_ID || !allowed.has(String(row.server_property_id)))) throw new SyncRequestError("property access was revoked during transaction", 403, { code: "auth_scope_revoked" });
     }
     const live = await queryFirst(env, "SELECT p.active_generation_id,s.revision FROM business_dataset_pointer p JOIN business_sync_state s ON s.account_id=p.account_id WHERE p.account_id=?", [scope.accountId]);
@@ -752,6 +847,7 @@ async function commitTransaction(request, env, scope) {
         await env.DB.batch([
           pendingCleanupGuard(env, scope, txId, requestHash, now),
           env.DB.prepare("DELETE FROM business_record WHERE account_id=? AND generation_id=?").bind(scope.accountId, tx.staging_generation_id),
+          env.DB.prepare("DELETE FROM business_record_staging WHERE account_id=? AND transaction_id=?").bind(scope.accountId, txId),
           env.DB.prepare("DELETE FROM business_property_map WHERE account_id=? AND generation_id=?").bind(scope.accountId, tx.staging_generation_id),
           env.DB.prepare("DELETE FROM business_migration_chunk WHERE account_id=? AND generation_id=?").bind(scope.accountId, tx.staging_generation_id),
           env.DB.prepare("DELETE FROM business_staging_target WHERE account_id=? AND tx_id=?").bind(scope.accountId, txId),
@@ -761,9 +857,9 @@ async function commitTransaction(request, env, scope) {
         ]);
       } catch (cleanupError) {
         if (!isGuardViolation(cleanupError)) throw cleanupError;
-        const raced = await queryFirst(env, "SELECT status,staging_generation_id FROM business_staging_transaction WHERE account_id=? AND tx_id=?", [scope.accountId, txId]);
+        const raced = await queryFirst(env, "SELECT status,base_generation_id FROM business_staging_transaction WHERE account_id=? AND tx_id=?", [scope.accountId, txId]);
         if (raced?.status === "committed") {
-          return Response.json({ tx_id: txId, status: "committed", active_generation_id: raced.staging_generation_id, replayed: true });
+          return Response.json({ tx_id: txId, status: "committed", active_generation_id: raced.base_generation_id, replayed: true });
         }
         throw new SyncRequestError("transaction is no longer pending", 409, { code: "transaction_not_pending", status: raced?.status || "unknown" });
       }
@@ -771,7 +867,84 @@ async function commitTransaction(request, env, scope) {
     }
     throw error;
   }
-  return Response.json({ tx_id: txId, status: "committed", active_generation_id: tx.staging_generation_id, replayed: false });
+  return Response.json({ tx_id: txId, status: "committed", active_generation_id: tx.base_generation_id, replayed: false });
+}
+
+async function rollbackTransaction(request, env, scope) {
+  requireMutationRole(scope);
+  const body = await readBody(request);
+  const txId = String(body.tx_id || "");
+  if (!txId) throw new SyncRequestError("tx_id is required", 422);
+
+  const tx = await queryFirst(env, "SELECT * FROM business_staging_transaction WHERE account_id=? AND tx_id=?", [scope.accountId, txId]);
+  if (!tx) throw new SyncRequestError("transaction not found", 404);
+  if (tx.rolled_back_at || tx.status === "rolled_back") return Response.json({ tx_id: txId, status: "rolled_back", replayed: true });
+  if (tx.status !== "committed") throw new SyncRequestError("only a committed transaction can be rolled back", 409);
+
+  const journalRows = await queryAll(env,
+    "SELECT * FROM business_rollback_journal WHERE account_id=? AND transaction_id=? ORDER BY entity_name, record_key",
+    [scope.accountId, txId]
+  );
+  if (journalRows.length === 0) throw new SyncRequestError("rollback journal is empty or missing", 409);
+
+  for (const entry of journalRows) {
+    if (entry.server_property_id && !scope.all) {
+      assertPropertyInScope(scope, String(entry.server_property_id));
+    }
+  }
+
+  const pointer = await queryFirst(env, "SELECT active_generation_id FROM business_dataset_pointer WHERE account_id=?", [scope.accountId]);
+  const activeGenerationId = String(pointer?.active_generation_id || tx.base_generation_id);
+
+  // CAS Post-Image Verification Contract: verify each affected row still matches the applied post-image hash
+  for (const entry of journalRows) {
+    const live = await queryFirst(env,
+      "SELECT row_hash FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=?",
+      [scope.accountId, activeGenerationId, entry.entity_name, entry.record_key]
+    );
+    if (entry.operation === "create" || entry.operation === "update") {
+      if (!live || live.row_hash !== entry.applied_row_hash) {
+        throw new SyncRequestError("Record has been modified by a later transaction", 409, { code: "ROLLBACK_CONFLICT", entity: entry.entity_name, record_key: entry.record_key });
+      }
+    } else if (entry.operation === "delete") {
+      if (live) {
+        throw new SyncRequestError("Deleted record has been recreated by a later transaction", 409, { code: "ROLLBACK_CONFLICT", entity: entry.entity_name, record_key: entry.record_key });
+      }
+    }
+  }
+
+  const currentSync = await queryFirst(env, "SELECT revision FROM business_sync_state WHERE account_id=?", [scope.accountId]);
+  const currentRevision = Number(currentSync?.revision || 0);
+  const now = new Date().toISOString();
+  const statements = [];
+  for (const [index, entry] of journalRows.entries()) {
+    const seq = currentRevision + 1 + index;
+    if (entry.operation === "create") {
+      statements.push(env.DB.prepare(
+        "DELETE FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=?",
+      ).bind(scope.accountId, activeGenerationId, entry.entity_name, entry.record_key));
+
+      const mutationId = `rollback:${txId}:${entry.entity_name}:${entry.record_key}`;
+      statements.push(env.DB.prepare(
+        "INSERT INTO business_change (account_id,seq,generation_id,entity_name,record_key,server_property_id,operation,row_json,row_hash,mutation_id,request_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+      ).bind(scope.accountId, seq, activeGenerationId, entry.entity_name, entry.record_key, entry.server_property_id, "delete", null, null, mutationId, `rollback:${txId}`, now));
+    } else {
+      statements.push(env.DB.prepare(
+        "INSERT INTO business_record (account_id,generation_id,entity_name,record_key,property_key,server_property_id,row_json,row_hash,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id,generation_id,entity_name,record_key) DO UPDATE SET property_key=excluded.property_key,server_property_id=excluded.server_property_id,row_json=excluded.row_json,row_hash=excluded.row_hash,updated_at=excluded.updated_at",
+      ).bind(scope.accountId, activeGenerationId, entry.entity_name, entry.record_key, entry.property_key, entry.server_property_id, entry.previous_row_json, entry.previous_row_hash, now));
+
+      const mutationId = `rollback:${txId}:${entry.entity_name}:${entry.record_key}`;
+      statements.push(env.DB.prepare(
+        "INSERT INTO business_change (account_id,seq,generation_id,entity_name,record_key,server_property_id,operation,row_json,row_hash,mutation_id,request_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+      ).bind(scope.accountId, seq, activeGenerationId, entry.entity_name, entry.record_key, entry.server_property_id, "upsert", entry.previous_row_json, entry.previous_row_hash, mutationId, `rollback:${txId}`, now));
+    }
+  }
+
+  statements.push(env.DB.prepare("UPDATE business_sync_state SET revision=revision+? WHERE account_id=? AND revision=?").bind(journalRows.length, scope.accountId, currentRevision));
+  statements.push(env.DB.prepare("UPDATE business_staging_transaction SET rolled_back_at=? WHERE account_id=? AND tx_id=?").bind(now, scope.accountId, txId));
+
+  await env.DB.batch(statements);
+  return Response.json({ tx_id: txId, status: "rolled_back", reverted_operations: journalRows.length, replayed: false });
 }
 
 function scopedRecordClause(scope) {
@@ -853,6 +1026,19 @@ function presentGuard(env, scope, generationId, entity, recordKey, rowHash, serv
   return env.DB.prepare(
     "INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN EXISTS (SELECT 1 FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=? AND row_hash=? AND ((?=1 AND server_property_id IS NULL) OR (?=0 AND (? IS NULL OR server_property_id=?)))) THEN 1 ELSE 0 END,?",
   ).bind(scope.accountId, mutationId, requestHash, scope.accountId, generationId, entity, recordKey, rowHash, globalFlag, globalFlag, serverPropertyId, serverPropertyId, now);
+}
+
+function stagingAwareAbsentGuard(env, scope, baseGenerationId, txId, entity, recordKey, mutationId, requestHash, now) {
+  return env.DB.prepare(
+    "INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN NOT EXISTS (SELECT 1 FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=?) AND NOT EXISTS (SELECT 1 FROM business_record_staging WHERE account_id=? AND transaction_id=? AND entity_name=? AND record_key=?) THEN 1 ELSE 0 END,?",
+  ).bind(scope.accountId, mutationId, requestHash, scope.accountId, baseGenerationId, entity, recordKey, scope.accountId, txId, entity, recordKey, now);
+}
+
+function stagingAwarePresentGuard(env, scope, baseGenerationId, txId, entity, recordKey, rowHash, serverPropertyId, mutationId, requestHash, now, requireGlobal = false) {
+  const globalFlag = requireGlobal ? 1 : 0;
+  return env.DB.prepare(
+    "INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN (EXISTS (SELECT 1 FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=? AND row_hash=? AND ((?=1 AND server_property_id IS NULL) OR (?=0 AND (? IS NULL OR server_property_id=?)))) OR EXISTS (SELECT 1 FROM business_record_staging WHERE account_id=? AND transaction_id=? AND entity_name=? AND record_key=? AND row_hash=?)) THEN 1 ELSE 0 END,?",
+  ).bind(scope.accountId, mutationId, requestHash, scope.accountId, baseGenerationId, entity, recordKey, rowHash, globalFlag, globalFlag, serverPropertyId, serverPropertyId, scope.accountId, txId, entity, recordKey, rowHash, now);
 }
 
 async function mutate(request, env, scope) {
@@ -1064,6 +1250,7 @@ export async function handleBusinessSyncRequest(request, env, scope, url, parts)
     if (action === "transaction" && parts[3] === "chunk" && request.method === "POST") return await uploadTransactionChunk(request, env, scope);
     if (action === "transaction" && parts[3] === "commit" && request.method === "POST") return await commitTransaction(request, env, scope);
     if (action === "transaction" && parts[3] === "abort" && request.method === "POST") return await abortTransaction(request, env, scope);
+    if (action === "transaction" && parts[3] === "rollback" && request.method === "POST") return await rollbackTransaction(request, env, scope);
     if (action === "transaction" && parts[3] === "status" && request.method === "GET") return await transactionStatus(url, env, scope);
     return responseError("not found", 404);
   } catch (error) {

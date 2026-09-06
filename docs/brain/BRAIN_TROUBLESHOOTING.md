@@ -4543,6 +4543,10 @@ ending with "Retry it before believing it." The repair is real and small: wrap *
 while every other wrangler failure and all seven assertions keep failing loudly. It is not made
 here, because greening an unrelated red suite inside a documentation commit is the exact move this
 document warns against, and because the assertions themselves are not in doubt.
+DELIVERED as F-076 in its own commit: `scripts/_cloudflare-transient.mjs` owns the exact
+`Authentication error [code: 10000]` signature, only the `d1 create` catch consults it, and
+`scripts/probe-worker-auth-remote-coverage.mjs` proves transient→SKIP plus eleven
+lookalike/real-failure→NOT-SKIP shapes and the call-site scoping.
 
 One latent hazard found while reading that probe, filed rather than fixed: if `d1 create` succeeds
 but the `database_id` regex at `scripts/probe-worker-auth-remote.mjs:63` misses, `databaseId` stays

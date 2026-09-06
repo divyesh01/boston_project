@@ -3,11 +3,13 @@
 // removes every temporary Cloudflare/local resource in a finally block.
 
 import { randomBytes } from "node:crypto";
+import { writeSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createCredential } from "../worker/password-credential.js";
+import { isTransientD1ProvisioningOutage } from "./_cloudflare-transient.mjs";
 import { REPO_ROOT } from "./_repo-root.mjs";
 
 const npxCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npx-cli.js");
@@ -59,7 +61,23 @@ async function request(body) {
 }
 
 try {
-  const created = wrangler(["d1", "create", database, "--location", "enam"]);
+  // F-076: only the pre-assertion provisioning call may SKIP. A transient
+  // Cloudflare control-plane refusal (`Authentication error [code: 10000]`
+  // on a valid token) means no auth assertion ran, so it prints one SKIP
+  // line and exits 0. Every other wrangler failure rethrows and fails.
+  // process.exit bypasses the outer finally, so the (still empty) work dir
+  // is removed here; databaseId is "" so there is nothing remote to delete.
+  let created;
+  try {
+    created = wrangler(["d1", "create", database, "--location", "enam"]);
+  } catch (error) {
+    if (!isTransientD1ProvisioningOutage(error)) throw error;
+    // Synchronous write: process.exit below can truncate a pipe-buffered
+    // console.log, and this line is the whole verdict the runner classifies.
+    writeSync(1, "SKIP: Cloudflare control plane transiently refused the temporary D1 provisioning (Authentication error [code: 10000]); no Worker auth assertion ran. Re-run to retry.\n");
+    await rm(work, { recursive: true, force: true });
+    process.exit(0);
+  }
   databaseId = created.match(/"database_id":\s*"([0-9a-f-]+)"/i)?.[1] || "";
   if (!databaseId) throw new Error("Could not resolve temporary D1 id.");
   await writeFile(config, JSON.stringify({

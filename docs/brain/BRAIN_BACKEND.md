@@ -530,10 +530,12 @@ returning 200 in the same process 0.2s later. A differential over this machine's
 `d1 create` invocations found 28 successes, and on 2026-09-01 the byte-identical
 command failed at 09:23:32 and succeeded at 09:23:59 — 27 seconds later, same token,
 same flags, no repository change. Re-running the suite unchanged returned 8 passed,
-0 failed. Because the throw happens before the first `check()`, the suite prints no
-PASS/FAIL/SKIP summary and exits 1, so `verify-all` reports FAIL for a run that
-asserted nothing; it does not implement the `SKIP:`-and-exit-0 convention that seven
-other suites use for an unavailable environment. Retry it before believing it.
+0 failed. DELIVERED F-076: only the `d1 create` call may SKIP — the exact
+`Authentication error [code: 10000]` signature (classified by
+`scripts/_cloudflare-transient.mjs`) prints one `SKIP:` line and exits 0, while
+every other wrangler failure and all eight assertions keep failing loudly.
+`verify-all` therefore reports SKIP for a run that asserted nothing instead of
+FAIL. A FAIL from this suite is now evidence again — retry a SKIP, believe a FAIL.
 
 Measured, not estimated. The heading here previously read "106 Files", which matched
 nothing countable. Re-counted 2026-08-22; the 2026-08-20 set (117 / 95 / 73 / 71 / 34)

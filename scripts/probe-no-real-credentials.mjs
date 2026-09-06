@@ -83,6 +83,19 @@ function walk(dir, out = []) {
   return out;
 }
 
+// Coverage must be established before traversal: walk intentionally treats an
+// absent directory as empty, which is correct for recursion but not for a
+// declared security-scan root.
+const missingRoots = SCAN_DIRS.filter((d) => !existsSync(path.join(REPO_ROOT, d)));
+check(
+  'every directory declared in SCAN_DIRS exists',
+  missingRoots.length === 0,
+  missingRoots.length
+    ? `not found: ${missingRoots.join(', ')} — all of SCAN_DIRS is tracked, so this is a broken checkout or an undeclared rename; ` +
+      `only ${SCAN_DIRS.length - missingRoots.length} of ${SCAN_DIRS.length} declared roots can be scanned and every verdict below is narrower than it reads`
+    : ''
+);
+
 const files = [];
 for (const d of SCAN_DIRS) walk(path.join(REPO_ROOT, d), files);
 // Root-level scripts too — this is the exact gap test-auth.cjs slipped through.
@@ -97,6 +110,31 @@ const rel = (f) => path.relative(REPO_ROOT, f).replace(/\\/g, '/');
 const SELF = rel(new URL(import.meta.url).href ? path.join(REPO_ROOT, 'scripts', 'probe-no-real-credentials.mjs') : '');
 
 section(`1. Scanning ${files.length} source files for routable email addresses`);
+
+// COVERAGE IS PART OF THE VERDICT. `walk()` returns its accumulator unchanged for
+// a directory that is not there (:74). That is correct as a recursion base case
+// and wrong as the only thing standing between this probe and a smaller world,
+// because nothing below is a function of how many roots were actually opened.
+// Measured on a synthetic checkout of this exact file with base44/, backend/ and
+// tests/ removed: `RESULT: 15 passed, 0 failed`, exit 0, and `PASSED: no real
+// identity or credential in tracked source.` over 6 files instead of 9 — naming
+// none of the three roots it never opened. Same verdict, same assertion count,
+// smaller repo, no announcement.
+//
+// AN ASSERTION, NOT A SKIP LINE. Every entry in SCAN_DIRS is tracked in git
+// (src 322 files, scripts 200, base44 43, backend 2, tests 3), so a missing root
+// is never a legitimate configuration — it is a broken checkout, or a rename that
+// did not update line 69. Printing `SKIP: base44` would let that rename retire the
+// only gate in the repo that looks for a leaked credential, and a retired gate
+// that still prints PASSED is worse than no gate. So it fails, and it names the
+// path, which is what a broken checkout needs told to it.
+// The degenerate case the check above cannot see: all five roots present and all
+// five empty of code still collects nothing, and a scan of nothing is clean.
+check(
+  'the scan collected at least one source file',
+  files.length > 0,
+  'no file was collected, so every finding below is vacuous'
+);
 
 // Reserved, non-routable domains. Anything else is treated as a real address.
 const SAFE_EMAIL_DOMAIN = /@(?:[\w-]+\.)*(?:test|local|localhost|invalid|example)$|@example\.(?:com|org|net)$/i;

@@ -6122,22 +6122,13 @@ the adaptation was silent. `probe-validation-gaps.mjs` also gained an `OCCUPANCY
 mirroring `verify-statistics.mjs`'s `STATS_FILE`, so the absent-fixture path is inducible
 without moving the owner's untracked exports out of the way.
 
-BACKLOG. (1) NEW, F-079 — an UNANNOUNCED decline is a class this fix does not reach, and it is
-worse than either half above, because both halves at least printed something. A guard that
-shrinks a scan silently prints nothing and reads as a genuine pass. 38 runtime guards across 20
-suites were inventoried; most are loud and correct (`probe-monthly-calendar:264`,
-`probe-mtd-growth:119,:154`, `probe-repo-root:111`, `probe-deploy-config:373`,
-`probe-suite-integrity:298`, `probe-toast-lifecycle:120` all assert `false` on absence, and
-`probe-standalone-deploy:181,:229,:299` each pair their guard with an existence assertion). The
-live candidates are `probe-no-real-credentials.mjs:74` — `walk()` returns its accumulator
-unchanged for a missing directory, and `SCAN_DIRS` at `:69` lists five, so a partial checkout
-makes "no routable email addresses in the codebase" true over fewer files with no announcement,
-in the one suite whose whole job is finding leaked credentials — plus
-`probe-db-mock-rls.mjs:335,:346` and, more weakly, `verify-no-auto-merge.mjs:445` and
-`verify-ui-exec-gates.mjs:196,:230`, where the aggregate assertion still fires but over a
-silently smaller file set. All five `SCAN_DIRS` are present locally, so this is latent, not
-live — the same shape section 54's defect had until a fresh clone met it. (2) `--only <file>`
-still does not restrict the sweep; it silently runs all 150. (3) Section 42 and the comment
+DELIVERED F-079 — `probe-no-real-credentials.mjs` now asserts that every declared `SCAN_DIRS`
+root exists before traversal. A missing tracked root therefore fails the security-scan verdict
+and names each unavailable root instead of silently returning a smaller clean scan. The isolated
+`probe-no-real-credentials-coverage.mjs` proves both sides without real repository files: all
+five roots pass, while absent `base44`, `backend`, and `tests` fail non-zero and identify each
+root. (1) `--only <file>`
+still does not restrict the sweep; it silently runs every discovered suite. (2) Section 42 and the comment
 inside `.githooks/pre-commit` still call that file untracked, which section 53 made false.
 
 

@@ -5876,6 +5876,54 @@ THREE DESIGN CHOICES WORTH NOT RE-LITIGATING.
 The bar for adding a name to either floor is high on purpose: a suite belongs there when it
 is the sole automated check on a production trust boundary.
 
+## 53. Both documentation gates lived in an untracked file, and CI ran neither (2026-09-05)
+
+THE DEFECT. `verify-brain.mjs` and `verify-repo-map.mjs` were invoked from exactly one
+place: `.git/hooks/pre-commit`. `.git/` is not in the repository, so that file is untracked
+by construction — it runs for whoever happens to have it on disk and for nobody else.
+`git config core.hooksPath` was unset, there is no `.githooks/` and no `.husky/`, and
+`.github/workflows/security.yml` ran lint → typecheck → test → audit:gate → build and none
+of the documentation or map gates. A fresh clone had no doc gate at all, and CI had none on
+any run. Section 42 of this document records the hook's contents verbatim precisely because
+nothing else could.
+
+THE FIX, PART 1 — track the hook. `.githooks/pre-commit` is now committed, byte-identical to
+the live hook: `sha256 8206d68f…a43af` for both, and the staged blob hashes to the same
+value, so the comparison is meaningful at the blob level and not just in one working tree.
+Install it with one command:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+Two Windows details that are easy to get wrong and were both caught by measurement. First,
+`core.filemode` is `false` here, so `chmod +x` does not reach the index; the executable bit
+had to be set with `git update-index --chmod=+x`, and `git ls-files -s` confirms mode
+`100755`. Second, `.gitattributes` carries `* text=auto`, and staging the hook printed
+`warning: in the working copy of '.githooks/pre-commit', LF will be replaced by CRLF the
+next time Git touches it`. A CR captured in a `#!/bin/sh` line is handed to the kernel as
+part of the interpreter path, so the hook would fail to execute rather than fail a gate —
+the quiet direction. `.githooks/pre-commit text eol=lf` pins it, alongside the two existing
+LF pins in that file, and `git check-attr` confirms `eol: lf`.
+
+THE FIX, PART 2 — put the enforceable gate in CI, and only that one. `npm run map:verify`
+is now a step in `.github/workflows/security.yml`, between typecheck and test.
+`npm run brain:verify` was deliberately NOT added, and adding it would be worse than
+leaving it out. Its only input is `execSync('git diff --cached --name-only')` at
+`scripts/verify-brain.mjs:4`; CI stages nothing, so it would read no files, check no
+citations and exit 0 on every run forever. A gate that cannot fail is indistinguishable
+from a gate that is working — the exact shape of green this whole audit exists to remove.
+`verify-repo-map.mjs` never consults the index (measured: zero occurrences of
+`diff --cached`), so it reports the same thing in CI as locally.
+
+BACKLOG, recorded here rather than fixed. (1) `verify-brain.mjs` needs its input selection
+reworked — diff against the merge base rather than the index — before it can be a CI gate;
+that is a behaviour change to a governance script, not a CI edit. (2) Nothing checks that an
+installed `.git/hooks/pre-commit` still matches the tracked `.githooks/pre-commit`. CI
+cannot check it, because a CI checkout has no installed hook to compare against, and a local
+checker would only run when the hook is installed — which is circular. Byte-identity is
+recorded here so a future drift is at least provable by hand.
+
 
 
 

@@ -51,6 +51,31 @@ jobs:
         # (`tsc -p ./jsconfig.json`) so they cannot drift apart again.
         run: npm run typecheck
 
+      - name: Verify Repo Map
+        # ADDED 2026-09-05. Both documentation gates lived ONLY in
+        # .git/hooks/pre-commit, and .git/ is not in the repository, so the hook is
+        # untracked by construction: it runs for whoever happens to have the file
+        # and for nobody else. `git config core.hooksPath` is unset and there is no
+        # .husky/ — so before this step, a clone that never installed the hook had
+        # no doc gate at all, and CI had none on any run. .githooks/pre-commit is
+        # now tracked; `git config core.hooksPath .githooks` installs it.
+        #
+        # This step is deliberately map:verify ALONE. brain:verify does not belong
+        # in CI and adding it would be worse than leaving it out: its only input is
+        # `execSync('git diff --cached --name-only')` at scripts/verify-brain.mjs:4,
+        # and CI stages nothing, so it would read no files, check no citations and
+        # exit 0 on every run forever — a gate that cannot fail is indistinguishable
+        # from a gate that is working, which is the exact shape of green this
+        # repository's audits exist to remove. Fixing its input selection (diff
+        # against the merge base instead of the index) is a real change, tracked in
+        # docs/brain/BRAIN_TROUBLESHOOTING.md section 52, not a CI edit.
+        #
+        # verify-repo-map.mjs compares docs/*.md against the actual tree and never
+        # consults the index — measured 0 occurrences of `diff --cached` — so it
+        # reports the same thing in CI as it does locally: `10 areas, 27 matrix
+        # rows, 36 contracts, 186 references resolved, 0 problems` at this commit.
+        run: npm run map:verify
+
       - name: Run Tests
         run: npm test
 

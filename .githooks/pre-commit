@@ -1,0 +1,20 @@
+#!/bin/sh
+# Documentation gates. Both must pass.
+#
+# Run BOTH, then fail if EITHER failed. A plain two-command sequence would report
+# only the last command's status, so a passing map gate would mask a failing brain
+# gate: sh has no set -e here on purpose (an early exit would skip the second gate
+# and hide the second class of drift), so the status is collected explicitly.
+#
+# verify-brain.mjs    — BRAIN/docs/brain anti-rot + file.ext:NNN citation bounds
+# verify-repo-map.mjs — docs/AI_REPO_GUIDE.md, docs/TEST_MATRIX.md,
+#                       docs/MODULE_CONTRACTS.md and PROJECT_MAP.md's table must
+#                       still match the tree (npm run map:verify)
+#
+# Neither runs inside `npm run verify:all`; both carry an EXCLUDE entry there.
+# This file is untracked (.git/ is not in the repository), so it cannot be
+# committed — docs/brain/BRAIN_TROUBLESHOOTING.md section 42 records it verbatim.
+status=0
+node scripts/verify-brain.mjs || status=1
+node scripts/verify-repo-map.mjs || status=1
+exit $status

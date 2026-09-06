@@ -6196,6 +6196,42 @@ the same SHA-256 on this checkout. The corrected wording keeps the useful bounda
 copy under `.git/` is untracked — while identifying `.githooks/pre-commit` as the tracked canonical
 source and pointing to section 53's installation/CI proof.
 
+## 58. Removing the `test_` discovery branch silently dropped seven suites while every runner oracle stayed green (2026-09-06)
+
+F-082. `verify-all.mjs` and `probe-suite-integrity.mjs` each know the three suite-name conventions,
+but they answer different questions: the runner schedules files; the static auditor checks source
+contracts. Their duplicated `test_` branches were joined only by comments. The runner's sole
+`MUST_DISCOVER` name is `probe-auth-hardening.mjs`, while section 12 of
+`probe-verify-all-verdict.mjs` required merely more than one listed suite and a LIST_ID. Static
+audit coverage could therefore be mistaken for execution coverage.
+
+MEASURED FAILURE BEFORE THE ORACLE. Removing only `f.startsWith("test_")` from the runner changed
+`--list` from 152 / `86de99ae` to 145 / `ccbc90dd`, but it still exited 0 and the existing runner
+oracle still reported `PASSED: 116 passed, 0 failed`. The omitted files were all seven legacy-name
+suites: anomaly detection, audit-log immutability, bulletproof auth, defect 5, local auth, realtime
+revocation, and validator. The static auditor continued to see them from disk; it did not prove the
+runner would execute them.
+
+THE FIX IS AN INDEPENDENT BLACK-BOX COMPARISON, not an exact count and not a shared predicate.
+Section 12 now derives every `test_*.mjs` basename directly from its own directory, proves that
+convention is non-vacuous, and requires every derived name to appear in `verify-all --list` output.
+An honest eighth suite automatically joins both sides without changing the oracle. Sharing the
+runner predicate would test a function against itself; pinning 152 would make every honest addition
+fail and invite reflexive count edits.
+
+FAILURE-FIRST AFTER ADDING THE ORACLE, with the runner still mutated: `FAILED: 117 passed, 1 failed`,
+exit 1, naming all seven missing files. Restoring the branch returned `PASSED: 118 passed, 0 failed`.
+Four independent Gemini roles confirmed the defect and test design, and four post-fix roles approved
+the one-file diff with no BLOCKER or HIGH findings.
+
+FULL GATES. The focused runner path passed 118/118, Vitest passed 413/413 in 48 files, and lint,
+typecheck, V3 (`sha256:8998c0c8…`), Brain, and repo-map gates exited 0. The first final sweep had
+one external-runtime failure: Cloudflare returned authentication code 10000 before
+`probe-worker-auth-remote.mjs` could run, despite the unchanged suite passing earlier in the same
+turn. It remained a hard failure — never converted to SKIP. An isolated retry passed 8/8, then a
+fresh uninterrupted sweep passed at list `86de99ae`: 152 discovered, 150 passed, 0 failed/broken/
+timed-out/bad-exit/no-verdict/diagnostic, and the same 2 explicit artifact/runtime skips.
+
 
 
 

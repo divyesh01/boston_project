@@ -25,6 +25,7 @@
 // make this green: each one encodes a runner behaviour that was wrong once.
 
 import { spawnSync } from "node:child_process";
+import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { classifySuiteRun } from "./_verdict.mjs";
 
@@ -377,7 +378,7 @@ partial("...and the failing run still names what it skipped",
 partial("an ordinary green suite reports no declined sections",
   { out: "PASSED: 115 passed, 0 failed", code: 0 }, []);
 
-console.log("\n12. --only must select exactly one safe discovered suite (F-080)");
+console.log("\n12. verify-all discovery and --only must select the intended suites (F-080/F-082)");
 
 // `--only` was documented in the troubleshooting ledger but not parsed by the
 // runner. Every spelling therefore fell through to an ordinary full --list, and
@@ -402,6 +403,18 @@ const baselineSuites = selectedSuites(baselineList.stdout);
 eq("GUARD: default --list discovers more than the targeted suite", baselineSuites.length > 1, true);
 const baselineListId = /list ([0-9a-f]{8}) \((\d+) discovered\)/.exec(baselineList.stdout)?.[0];
 eq("GUARD: default --list states its full-list identity", Boolean(baselineListId), true);
+
+// `test_` is the oldest of the three supported suite-name conventions. It cannot
+// share the runner's predicate here: comparing a predicate with itself would make
+// the oracle circular. Derive the expected names independently from the directory,
+// then compare them with the runner's black-box --list. This grows automatically
+// when an honest test_ suite is added and never pins the repository's total count.
+const expectedTestUnderscoreSuites = readdirSync(fileURLToPath(new URL(".", import.meta.url)))
+  .filter((file) => /^test_.+\.mjs$/.test(file))
+  .sort();
+eq("GUARD: the test_ convention is non-vacuous in this repository", expectedTestUnderscoreSuites.length > 0, true);
+const missingTestUnderscoreSuites = expectedTestUnderscoreSuites.filter((file) => !baselineSuites.includes(file));
+eq("REGRESSION: verify-all discovers every test_ suite present on disk", JSON.stringify(missingTestUnderscoreSuites), "[]");
 
 for (const [label, args] of [
   ["exact filename", ["--only", TARGET]],

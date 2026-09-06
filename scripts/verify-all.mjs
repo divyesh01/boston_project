@@ -60,8 +60,32 @@ const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(`--${name}`);
 const hasOption = (name) => argv.some((arg) => arg === `--${name}` || arg.startsWith(`--${name}=`));
 const value = (name, fallback) => {
-  const i = argv.indexOf(`--${name}`);
-  return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback;
+  const token = `--${name}`;
+  let resolved = fallback;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    let candidate;
+    if (arg === token) {
+      candidate = argv[i + 1];
+      if (candidate === undefined || candidate.startsWith("-")) {
+        console.error(`${token} requires one non-empty value; another flag cannot be its value.`);
+        process.exit(1);
+      }
+      i += 1;
+    } else if (arg.startsWith(`${token}=`)) {
+      candidate = arg.slice(token.length + 1);
+    } else {
+      continue;
+    }
+    if (!candidate.trim()) {
+      console.error(`${token} requires one non-empty value.`);
+      process.exit(1);
+    }
+    // Last occurrence wins so an npm script or CI wrapper can supply a default and
+    // the direct caller can append an explicit override.
+    resolved = candidate.trim();
+  }
+  return resolved;
 };
 const onlyValues = [];
 for (let i = 0; i < argv.length; i += 1) {
@@ -93,7 +117,12 @@ if (ONLY_REQUESTED && (hasOption("filter") || hasOption("shard"))) {
   process.exit(1);
 }
 const FILTER = value("filter", null);
-const TIMEOUT_S = Number(value("timeout", "240"));
+const TIMEOUT_RAW = value("timeout", "240");
+const TIMEOUT_S = Number(TIMEOUT_RAW);
+if (!Number.isFinite(TIMEOUT_S) || TIMEOUT_S <= 0 || TIMEOUT_S * 1000 > 2_147_483_647) {
+  console.error(`--timeout must be a positive finite number of seconds no greater than 2147483.647 (got ${JSON.stringify(TIMEOUT_RAW)}).`);
+  process.exit(1);
+}
 const LIST_ONLY = flag("list");
 const BAIL = flag("bail");
 const AS_JSON = flag("json");

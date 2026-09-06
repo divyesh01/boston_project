@@ -6232,6 +6232,35 @@ turn. It remained a hard failure — never converted to SKIP. An isolated retry 
 fresh uninterrupted sweep passed at list `86de99ae`: 152 discovered, 150 passed, 0 failed/broken/
 timed-out/bad-exit/no-verdict/diagnostic, and the same 2 explicit artifact/runtime skips.
 
+## 59. Missing or equals-form narrowing values failed open, while invalid timeouts collapsed the watchdog (2026-09-06)
+
+F-083. The runner's generic `value(name, fallback)` used `argv.indexOf("--<name>")` and a
+truthiness check on the following token. Four distinct caller mistakes therefore had unrelated but
+misleading outcomes: a missing/empty `--filter` or `--shard` silently fell back to no narrowing;
+standard `--filter=value` / `--shard=value` syntax was ignored as an unknown token; an adjacent flag
+could be stolen as the value; and `--timeout nope|0|-1|Infinity|<overflow>` reached Node's timer as
+NaN, non-positive, or beyond its signed 32-bit millisecond range. Measured directly,
+`--list --filter` and `--list --shard` both exited 0 and listed all 152 suites.
+
+FAILING-FIRST. Section 13 of `probe-verify-all-verdict.mjs` added black-box `--list` cases, so invalid
+configuration is tested without spawning any suite. Against the old parser it reported
+`FAILED: 126 passed, 42 failed`: missing/empty/flag-stolen values failed open, invalid timeouts were
+accepted, equals forms listed all 152, and the first duplicate filter defeated a later wrapper
+override.
+
+THE FIX. The shared value parser now accepts both `--name value` and `--name=value`, rejects missing,
+empty, whitespace, or flag-stolen values before discovery, and uses deterministic last-occurrence
+wins semantics so direct arguments can override npm/CI defaults. Timeout values must be positive,
+finite, and no greater than 2,147,483.647 seconds, the largest value whose milliseconds fit Node's
+timer. Existing filter+shard composition and `--only` exclusivity are unchanged. The oracle now
+reports `PASSED: 168 passed, 0 failed`; four post-fix Gemini roles approved the exact diff with no
+BLOCKER or HIGH finding.
+
+FULL GATES. The focused `--only probe-verify-all-verdict` path passed 168/168; Vitest passed
+413/413 in 48 files; lint, typecheck, V3 (`sha256:8998c0c8…`), Brain, repo-map, and dependency
+audit gates exited 0. The uninterrupted final sweep at list `86de99ae` discovered 152 suites:
+150 passed, 0 failed/broken/timed-out/bad-exit/no-verdict/diagnostic, with 2 explicit skips.
+
 
 
 

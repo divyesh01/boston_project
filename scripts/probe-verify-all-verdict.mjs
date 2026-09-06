@@ -460,6 +460,43 @@ eq("targeted JSON counts one selected suite", targetedJson.selectedTotal, 1);
 eq("targeted JSON counts one executed suite", targetedJson.total, 1);
 eq("targeted JSON keeps the full discovery identity", targetedJson.fullSuiteListId, baselineListId?.split(" ")[1]);
 
+console.log("\n13. value-taking runner flags must fail closed (F-083)");
+
+for (const [label, args, flagName] of [
+  ["filter missing value", ["--filter"], "--filter"],
+  ["filter empty value", ["--filter", ""], "--filter"],
+  ["filter flag theft", ["--filter", "--shard", "1/2"], "--filter"],
+  ["shard missing value", ["--shard"], "--shard"],
+  ["shard empty value", ["--shard", ""], "--shard"],
+  ["shard flag theft", ["--shard", "--filter", "active"], "--shard"],
+  ["timeout missing value", ["--timeout"], "--timeout"],
+  ["timeout empty value", ["--timeout", ""], "--timeout"],
+  ["timeout flag theft", ["--timeout", "--filter", "active"], "--timeout"],
+  ["timeout non-number", ["--timeout", "nope"], "--timeout"],
+  ["timeout zero", ["--timeout", "0"], "--timeout"],
+  ["timeout negative", ["--timeout", "-1"], "--timeout"],
+  ["timeout infinite", ["--timeout", "Infinity"], "--timeout"],
+  ["timeout overflow", ["--timeout", "2147484"], "--timeout"],
+]) {
+  const result = runList(...args);
+  eq(`${label} exits non-zero`, result.status === 0, false);
+  eq(`${label} names the invalid option`, result.stderr.includes(flagName), true);
+  eq(`${label} aborts before listing suites`, selectedSuites(result.stdout).length, 0);
+}
+
+const equalsFilter = runList("--filter=active-vs-idle");
+eq("filter equals form exits 0", equalsFilter.status, 0);
+eq("filter equals form narrows instead of running everything", JSON.stringify(selectedSuites(equalsFilter.stdout)), JSON.stringify([TARGET]));
+const equalsShard = runList("--shard=1/152");
+eq("shard equals form exits 0", equalsShard.status, 0);
+eq("shard equals form narrows instead of running everything", selectedSuites(equalsShard.stdout).length, 1);
+const equalsTimeout = runList("--timeout=30");
+eq("timeout equals form exits 0", equalsTimeout.status, 0);
+eq("timeout equals form preserves the planned suite set", selectedSuites(equalsTimeout.stdout).length, baselineSuites.length);
+const duplicateFilter = runList("--filter", "does-not-exist", "--filter", "active-vs-idle");
+eq("a later filter value overrides an earlier wrapper default", duplicateFilter.status, 0);
+eq("the last filter value decides the selection", JSON.stringify(selectedSuites(duplicateFilter.stdout)), JSON.stringify([TARGET]));
+
 const postList = runList();
 eq("GUARD: targeted attempts do not mutate default --list output", postList.stdout, baselineList.stdout);
 

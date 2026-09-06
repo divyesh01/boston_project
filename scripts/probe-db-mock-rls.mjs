@@ -332,7 +332,20 @@ if (fs.existsSync(agents) && fs.readFileSync(agents, "utf8").includes("__B44_DB_
 
 for (const rel of ["base44/functions/autoPayroll/entry.ts", "base44/functions/deleteAccount/entry.ts"]) {
   const abs = path.join(ROOT, rel);
-  if (!fs.existsSync(abs)) continue;
+  // This was `if (!fs.existsSync(abs)) continue;`. Renaming or moving either file
+  // then retired the AUDIT_CANONICAL_V1 check on it and the probe still printed
+  // `✅ PROBE PASSED: ... audit rows signed.` — an unsigned row and an unread file
+  // produced the same verdict. Both paths are tracked, so absence here is a broken
+  // checkout or a move that did not update this list, never an optional
+  // configuration; announcing it as a skip would let the rename quietly take the
+  // guard with it. So it fails and it names the path.
+  //
+  // The `continue` on the next condition is a different animal and stays silent on
+  // purpose: a function that writes no audit rows has nothing to sign.
+  if (!fs.existsSync(abs)) {
+    failures.push(`${rel} is missing — it is tracked, so it was renamed, moved or deleted; the AUDIT_CANONICAL_V1 signed-payload check did not run against it`);
+    continue;
+  }
   const src = fs.readFileSync(abs, "utf8");
   if (!/AuditLog\.create/.test(src)) continue;
   if (!src.includes("AUDIT_CANONICAL_V1")) {
@@ -343,7 +356,15 @@ for (const rel of ["base44/functions/autoPayroll/entry.ts", "base44/functions/de
 // ── 6. repo-root helper scripts must at least parse ───────────────────────────
 
 const enhance = path.join(ROOT, "enhance.js");
-if (fs.existsSync(enhance)) {
+// The `if (fs.existsSync(enhance))` that used to open this block had no else, so a
+// missing enhance.js meant the parse check simply did not happen and the probe
+// reported the same PASSED line. enhance.js is tracked and is not gitignored
+// (`git check-ignore -v enhance.js` is empty), so its absence is a broken checkout,
+// not a build that legitimately skips it — hence a failure naming the file rather
+// than a skip line nobody reads.
+if (!fs.existsSync(enhance)) {
+  failures.push("enhance.js is missing — it is tracked and not gitignored, so the `node --check` parse test could not run; restore the file or delete this check deliberately");
+} else {
   try {
     execFileSync(process.execPath, ["--check", enhance], { stdio: "pipe" });
   } catch (err) {

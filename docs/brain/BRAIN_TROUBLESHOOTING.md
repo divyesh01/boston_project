@@ -6127,7 +6127,15 @@ root exists before traversal. A missing tracked root therefore fails the securit
 and names each unavailable root instead of silently returning a smaller clean scan. The isolated
 `probe-no-real-credentials-coverage.mjs` proves both sides without real repository files: all
 five roots pass, while absent `base44`, `backend`, and `tests` fail non-zero and identify each
-root. (1) `--only <file>`
+root.
+
+DELIVERED FOLLOW-ON COVERAGE — the two remaining required-path checks now fail loudly as well:
+`probe-db-mock-rls.mjs` rejects missing tracked audit writers instead of skipping their signed-row
+checks, and `verify-ui-exec-gates.mjs` rejects a missing named primitive instead of reducing the
+raw-hex scan. `probe-unannounced-declines-coverage.mjs` proves all-present and missing-path
+verdicts for both guards in disposable fixtures.
+
+BACKLOG. (1) `--only <file>`
 still does not restrict the sweep; it silently runs every discovered suite. (2) Section 42 and the comment
 inside `.githooks/pre-commit` still call that file untracked, which section 53 made false.
 

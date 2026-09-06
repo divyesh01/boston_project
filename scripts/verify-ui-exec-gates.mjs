@@ -158,8 +158,11 @@ const uiExecFiles = walk(UIEXEC, [".jsx", ".tsx", ".js", ".ts"]);
 if (FIXTURE && existsSync(FIXTURE) && !uiExecFiles.includes(FIXTURE)) uiExecFiles.push(FIXTURE);
 
 // The four new primitives this change introduced. Hex ban is scoped here.
-const FOUR = ["Button.jsx", "Input.jsx", "Select.jsx", "SegmentedControl.jsx"]
+// FOUR_NAMED is the list WITHOUT the optional injected fixture, so the existence
+// assertion in (c) below judges only the four files that must always be there.
+const FOUR_NAMED = ["Button.jsx", "Input.jsx", "Select.jsx", "SegmentedControl.jsx"]
   .map((n) => join(UIEXEC, n));
+const FOUR = [...FOUR_NAMED];
 if (FIXTURE && existsSync(FIXTURE) && !FOUR.includes(FIXTURE)) FOUR.push(FIXTURE);
 
 const readStripped = (p) => stripComments(readFileSync(p, "utf8"));
@@ -200,6 +203,19 @@ const readStripped = (p) => stripComments(readFileSync(p, "utf8"));
   ok(offenders.length === 0,
     "(c) none of Button/Input/Select/SegmentedControl carries a raw hex colour (tokens only)",
     offenders.join("; "));
+  // The `if (!existsSync(f)) continue;` above keeps the aggregate assertion alive
+  // over a silently smaller set: rename Button.jsx and "(c) none of Button/Input/
+  // Select/SegmentedControl carries a raw hex colour" still passes, having read
+  // three files. The count printed on the next line was the only trace, and a
+  // printed number nobody diffs is not a gate — so the count is now asserted.
+  // All four paths are tracked, which makes absence a broken checkout or a rename
+  // that must update FOUR_NAMED, not an optional configuration; a skip line would
+  // let that rename drop a primitive out of the hex ban for good. FIXTURE is
+  // excluded because it is genuinely optional (see :146) — that one may be absent.
+  const missingPrimitives = FOUR_NAMED.filter((f) => !existsSync(f));
+  ok(missingPrimitives.length === 0,
+    "(c) all four named ui-exec primitives exist (a missing one shrinks the hex scan without changing the verdict)",
+    missingPrimitives.map(relOf).join(", "));
   console.log(`  (c) scanned ${FOUR.filter(existsSync).length} named primitives for raw hex`);
 }
 

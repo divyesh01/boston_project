@@ -17,9 +17,16 @@ import { queryClientInstance } from "./query-client.js";
 //     full row set, to avoid unbounded channel traffic on bulk imports.
 //   * Subscribing page invalidates its react-query queries by queryKey prefix,
 //     so TanStack refetches exactly the queries that changed.
+//
+// NOTE: Polling is coordinated one-per-tab (see the shared poll loop below);
+// per-hook timers were removed because N mounted components produced N
+// independent timer chains, N invalidations and N POLL_TICKs per interval.
+// Cross-tab server pulls cannot collapse further: each tab owns an
+// independent IndexedDB cache, so every tab must run its own lightweight
+// feed check. The floor is one feed per tab per interval, not one per app.
 
 const CHANNEL_NAME = "rri_realtime";
-const FALLBACK_KEY = "rri_realtime_change";
+export const FALLBACK_KEY = "rri_realtime_change";
 
 let poster = null;
 function getPoster() {
@@ -34,10 +41,24 @@ function getPoster() {
   return poster;
 }
 
+function generateMessageId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
 // Broadcast one change to all other tabs. Safe to call from anywhere (the
 // entity proxy in base44Client.js is the primary emitter).
 export function publishChange(table, change, record) {
-  const message = { ts: Date.now(), type: "ENTITY_CHANGE", table, change, record };
+  const message = {
+    id: generateMessageId(),
+    ts: Date.now(),
+    type: "ENTITY_CHANGE",
+    table,
+    change,
+    record,
+  };
   const ch = getPoster();
   if (ch) {
     try {
@@ -60,25 +81,49 @@ function isChangeMessage(data) {
 // Subscribe to cross-tab change notifications. `handler` receives each
 // { table, change, record }. Returns an unsubscribe function.
 export function subscribeChanges(handler) {
-  const ch = typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(CHANNEL_NAME);
+  let ch = null;
+  if (typeof BroadcastChannel !== "undefined") {
+    try {
+      ch = new BroadcastChannel(CHANNEL_NAME);
+    } catch {
+      ch = null;
+    }
+  }
+
+  const seenIds = new Set();
+  const handleMessage = (data) => {
+    if (!isChangeMessage(data)) return;
+    const msgId = data.id || `${data.ts}_${data.table}_${data.change}`;
+    if (seenIds.has(msgId)) return;
+    seenIds.add(msgId);
+    if (seenIds.size > 1000) {
+      const first = seenIds.values().next().value;
+      seenIds.delete(first);
+    }
+    handler(data);
+  };
+
   if (ch) {
     ch.onmessage = (ev) => {
-      if (isChangeMessage(ev && ev.data)) handler(ev.data);
+      handleMessage(ev && ev.data);
     };
   }
+
   const onStorage = (e) => {
     if (e && e.key === FALLBACK_KEY && e.newValue) {
       try {
         const data = JSON.parse(e.newValue);
-        if (isChangeMessage(data)) handler(data);
+        handleMessage(data);
       } catch {
         // ignore malformed sentinel writes
       }
     }
   };
+
   if (typeof window !== "undefined" && window.addEventListener) {
     window.addEventListener("storage", onStorage);
   }
+
   return () => {
     if (ch) {
       ch.onmessage = null;
@@ -158,13 +203,9 @@ function notifyLeadership(next) {
 // Global coordinator that manages leader election lifecycle across open tabs
 let coordinatorInitialized = false;
 function initLeaderCoordinator() {
-  if (coordinatorInitialized) return;
-  coordinatorInitialized = true;
-
+  const isVisible = () => typeof document === "undefined" || !document.hidden;
   const id = getCurrentTabId();
   const ch = getLeaderChannel();
-
-  const isVisible = () => typeof document === "undefined" || !document.hidden;
 
   const claimLeadership = () => {
     if (!isVisible()) return;
@@ -188,6 +229,14 @@ function initLeaderCoordinator() {
       } catch {}
     }
   };
+
+  if (coordinatorInitialized) {
+    if (isVisible() && !currentLeaderId) {
+      claimLeadership();
+    }
+    return;
+  }
+  coordinatorInitialized = true;
 
   if (ch) {
     ch.onmessage = (ev) => {
@@ -265,17 +314,125 @@ function initLeaderCoordinator() {
   }
 }
 
+// Union of every page-level prefix. Mounted once by the authenticated shell
+// (Layout) so server synchronization no longer depends on which page happens
+// to be open. Pages keep their own targeted hooks; those only register
+// interest with the shared loop below.
+export const APP_SYNC_PREFIXES = [
+  "occupancy", "sources", "gross", "clerk", "payments", "expenses",
+  "payroll", "anomaly-alerts", "rooms", "reservations", "weather",
+  "daily-aggregates", "properties", "staff", "room-stays",
+  "housekeeping", "reviews",
+];
+
+// Shared per-tab poll coordination. Each useRealtimeInvalidation instance
+// registers its live prefix set; ONE timer performs ONE union invalidation
+// plus ONE POLL_TICK per interval, gated once on the shared leader flag.
+// Invalidation itself is unchanged — same queryClient calls, same order.
+const pollClients = new Map();
+let pollClientSeq = 0;
+let sharedPollTimer = null;
+let sharedBaseMs = DEFAULT_POLL_MS;
+let sharedBackoffMs = DEFAULT_POLL_MS;
+
+function prefixKey(p) {
+  return String(Array.isArray(p) ? p[0] : p ?? "");
+}
+
+function unionPrefixes() {
+  const out = [];
+  const seen = new Set();
+  for (const client of pollClients.values()) {
+    for (const p of client.getPrefixes()) {
+      const key = prefixKey(p);
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(p);
+      }
+    }
+  }
+  return out;
+}
+
+async function invalidatePrefixList(list) {
+  for (const p of list) {
+    // throwOnError lives in the OPTIONS argument only: TanStack v5
+    // InvalidateQueryFilters has no such key, so placing it in the filter
+    // object is a type error and dead at runtime.
+    await queryClientInstance.invalidateQueries(
+      { queryKey: Array.isArray(p) ? p : [p] },
+      { throwOnError: true }
+    );
+  }
+}
+
+function scheduleSharedPoll() {
+  if (sharedPollTimer) {
+    clearTimeout(sharedPollTimer);
+    sharedPollTimer = null;
+  }
+  if (pollClients.size === 0) return;
+  sharedPollTimer = setTimeout(runSharedPoll, sharedBackoffMs);
+}
+
+// Visibility return / leadership gain: reset backoff and reschedule at base.
+export function pokeSharedPoll() {
+  sharedBackoffMs = sharedBaseMs;
+  scheduleSharedPoll();
+}
+
+export function registerPollClient(client) {
+  const id = ++pollClientSeq;
+  pollClients.set(id, client);
+  let base = 0;
+  for (const c of pollClients.values()) base = base ? Math.min(base, c.pollMs) : c.pollMs;
+  sharedBaseMs = base || DEFAULT_POLL_MS;
+  scheduleSharedPoll();
+  return () => {
+    pollClients.delete(id);
+    let next = 0;
+    for (const c of pollClients.values()) next = next ? Math.min(next, c.pollMs) : c.pollMs;
+    sharedBaseMs = next || DEFAULT_POLL_MS;
+    scheduleSharedPoll();
+  };
+}
+
+async function runSharedPoll() {
+  sharedPollTimer = null;
+  if (typeof document !== "undefined" && document.hidden) {
+    scheduleSharedPoll();
+    return;
+  }
+  if (isLeader) {
+    const union = unionPrefixes();
+    if (union.length) {
+      try {
+        for (const client of pollClients.values()) {
+          try { client.notify(); } catch {}
+        }
+        await invalidatePrefixList(union);
+        const ch = getLeaderChannel();
+        if (ch) {
+          try {
+            ch.postMessage({ type: "POLL_TICK", prefixes: union, ts: Date.now() });
+          } catch {}
+        }
+        sharedBackoffMs = sharedBaseMs;
+      } catch {
+        sharedBackoffMs = Math.min(sharedBackoffMs * 2, MAX_POLL_MS);
+      }
+    }
+  }
+  scheduleSharedPoll();
+}
+
 // React hook: invalidates queries across tabs using Tab Leader Election,
 // Exponential Backoff on 5xx, and Page Visibility pausing.
 export function useRealtimeInvalidation(queryKeyPrefixes, { enabled = true, pollMs = DEFAULT_POLL_MS } = {}) {
   const prefixes = useRef([...(queryKeyPrefixes || [])]);
   prefixes.current = queryKeyPrefixes || [];
 
-  const invalidate = () => {
-    for (const p of prefixes.current) {
-      queryClientInstance.invalidateQueries({ queryKey: Array.isArray(p) ? p : [p] });
-    }
-  };
+  const invalidate = async () => invalidatePrefixList(prefixes.current);
 
   const [lastChange, setLastChange] = useState(null);
 
@@ -291,7 +448,7 @@ export function useRealtimeInvalidation(queryKeyPrefixes, { enabled = true, poll
         return table.startsWith(prefix) || prefix.startsWith(table);
       })) {
         setLastChange(new Date());
-        invalidate();
+        invalidate().catch(() => {});
       }
     });
 
@@ -309,7 +466,7 @@ export function useRealtimeInvalidation(queryKeyPrefixes, { enabled = true, poll
         });
         if (matches) {
           setLastChange(new Date());
-          invalidate();
+          invalidate().catch(() => {});
         }
       }
     };
@@ -317,54 +474,38 @@ export function useRealtimeInvalidation(queryKeyPrefixes, { enabled = true, poll
       ch.addEventListener("message", handleLeaderMessage);
     }
 
-    // 3. Leader polling timer with exponential backoff
-    let pollTimer = null;
-    let currentInterval = pollMs;
-
-    const scheduleNextPoll = () => {
-      if (pollTimer) clearTimeout(pollTimer);
-      pollTimer = setTimeout(async () => {
-        if (typeof document !== "undefined" && document.hidden) {
-          scheduleNextPoll();
-          return;
-        }
-
-        if (isLeader && prefixes.current.length) {
-          try {
-            setLastChange(new Date());
-            invalidate();
-            // Broadcast POLL_TICK so all peer tabs invalidate simultaneously without querying server
-            if (ch) {
-              try {
-                ch.postMessage({ type: "POLL_TICK", prefixes: prefixes.current, ts: Date.now() });
-              } catch {}
-            }
-            // Reset backoff on successful tick
-            currentInterval = pollMs;
-          } catch (err) {
-            // Apply exponential backoff on error
-            currentInterval = Math.min(currentInterval * 2, MAX_POLL_MS);
-          }
-        }
-        scheduleNextPoll();
-      }, currentInterval);
+    // 3. Immediate invalidation when page transitions from hidden to visible
+    const onVisibilityChange = () => {
+      if (typeof document !== "undefined" && !document.hidden) {
+        setLastChange(new Date());
+        invalidate().catch(() => {});
+        if (isLeader) pokeSharedPoll();
+      }
     };
+    if (typeof document !== "undefined" && document.addEventListener) {
+      document.addEventListener("visibilitychange", onVisibilityChange);
+    }
 
-    scheduleNextPoll();
+    // 4. Shared per-tab poll loop (one timer no matter how many hooks mount)
+    const unregisterPoll = registerPollClient({
+      getPrefixes: () => prefixes.current,
+      notify: () => setLastChange(new Date()),
+      pollMs,
+    });
 
     // Re-evaluate whenever leadership status changes
     const unsubLeadership = subscribeLeadership((amLeader) => {
-      if (amLeader) {
-        currentInterval = pollMs;
-        scheduleNextPoll();
-      }
+      if (amLeader) pokeSharedPoll();
     });
 
     return () => {
+      unregisterPoll();
       unsubChanges();
       unsubLeadership();
-      if (pollTimer) clearTimeout(pollTimer);
       if (ch) ch.removeEventListener("message", handleLeaderMessage);
+      if (typeof document !== "undefined" && document.removeEventListener) {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+      }
     };
   }, [enabled, pollMs]);
 
@@ -372,3 +513,5 @@ export function useRealtimeInvalidation(queryKeyPrefixes, { enabled = true, poll
 }
 
 export const REALTIME_CHANNEL = CHANNEL_NAME;
+export { queryClientInstance };
+

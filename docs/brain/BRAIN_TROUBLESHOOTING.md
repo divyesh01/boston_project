@@ -6314,14 +6314,39 @@ probe-specific; the GM fixture uses a self-describing value instead of the gener
 allowlist's existing stale-entry check still requires every documented fixture to remain in
 real scanned test source.
 
+## 62. Rollback/feed race barriers plus one-per-tab sync coordinator (2026-09-07)
 
+Four server races were reproduced as 200-where-409/empty-page-advancing failures and
+fixed in `worker/business-sync.js`, each with a killing probe in
+`scripts/probe-sync-certification-races.mjs` (5/5; reverting the worker change kills
+exactly the covered cases): restricted-global rollback now fails closed on a null journal
+property id (403); rollback applies behind per-row CAS guards plus revision-conditional
+updates in one batch, tripping 409 ROLLBACK_CONFLICT instead of overwriting later state;
+the rollback CAS additionally pins the active generation, so a migration activation
+landing mid-rollback fails closed rather than writing into a retired generation; feed
+reads the revision before the page and reports `max(revision, tail)`, so an interleaved
+row is never skipped (the in-repo client advances per-item and consults
+`current_revision` only on empty pages). A fifth proposed change — marking the
+generation mutated on every direct `mutate` — was REVERTED, not shipped: the tracked
+`probe-worker-business-sync.mjs` pins that migration rollback still restores the prior
+roster after direct mutates (37/37 green), and the barrier keeps its documented meaning
+(staged-transaction commits only). Stale device writes were separately determined to be
+fail-closed already: direct `mutate` demands `base_row_hash` equality (409
+`sync_conflict`), deletes require it too, so neither silent overwrite nor resurrection
+is reachable.
 
-
-
-
-
-
-
+`src/lib/realtime.js` had N hook instances running N timer chains with N POLL_TICKs per
+interval, and 21 pages mounted no hook at all (sync depended on which page was open).
+There is now one shared per-tab poll loop over the ref-counted prefix union (unit-proven:
+two hooks sharing a prefix produce exactly one invalidation; last unmount stops the
+timer), and `Layout` mounts `APP_SYNC_PREFIXES` once so every authenticated page syncs.
+Cross-tab pulls cannot collapse further — each tab owns an independent IndexedDB cache,
+so the floor is one lightweight feed per tab per interval. Measured: 3 real browser
+contexts idle 10s produce 3 HTTP requests total with 0 business writes; CRUD E2E across
+A/B/C converges at mean ~9.9s, max ~10.2s (n=12); 10 tabs elect exactly 1 leader.
+`scripts/probe-three-browser-sync.mjs` passes 8/8 real-Chromium. Full sweep at this
+commit: 166 suites, 165 passed, 0 failed, 1 honest skip (no dev server); vitest 49/419;
+lint, typecheck, build, V3, brain, repo-map green.
 
 
 

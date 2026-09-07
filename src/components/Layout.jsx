@@ -9,6 +9,7 @@ import GlobalControlBar from "@/components/GlobalControlBar";
 import { useAuth } from "@/lib/AuthContext";
 import CommandMenu from "@/components/CommandMenu";
 import { NAV, PRIMARY, MORE } from "@/lib/navigation";
+import { useRealtimeInvalidation, APP_SYNC_PREFIXES } from "@/lib/realtime";
 
 function SidebarBrand() {
   const { property, properties } = useGlobalFilters();
@@ -26,6 +27,11 @@ function SidebarBrand() {
 }
 
 export default function Layout() {
+  // Profile-wide sync coordinator: exactly one registration with the union of
+  // every page-level prefix, so server synchronization runs on every
+  // authenticated page — not only the six pages that mount their own hook.
+  // Page hooks keep working unchanged; the shared loop polls once per tab.
+  useRealtimeInvalidation(APP_SYNC_PREFIXES);
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { canAccessRoute, user, logout } = useAuth();

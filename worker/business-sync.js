@@ -888,7 +888,10 @@ async function rollbackTransaction(request, env, scope) {
   if (journalRows.length === 0) throw new SyncRequestError("rollback journal is empty or missing", 409);
 
   for (const entry of journalRows) {
-    if (entry.server_property_id && !scope.all) {
+    if (!scope.all) {
+      if (entry.server_property_id === null || entry.server_property_id === undefined) {
+        throw new SyncRequestError("only all-property accounts are permitted to change account-global records", 403);
+      }
       assertPropertyInScope(scope, String(entry.server_property_id));
     }
   }
@@ -916,7 +919,20 @@ async function rollbackTransaction(request, env, scope) {
   const currentSync = await queryFirst(env, "SELECT revision FROM business_sync_state WHERE account_id=?", [scope.accountId]);
   const currentRevision = Number(currentSync?.revision || 0);
   const now = new Date().toISOString();
-  const statements = [];
+  const rollbackRequestHash = await sha256(canonicalJson({ tx_id: txId, revision: currentRevision }));
+  const statements = [
+    env.DB.prepare("INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN EXISTS (SELECT 1 FROM business_dataset_pointer p JOIN business_sync_state s ON s.account_id=p.account_id WHERE p.account_id=? AND p.active_generation_id=? AND s.revision=?) THEN 1 ELSE 0 END,?").bind(scope.accountId, `rollback:${txId}:cas`, rollbackRequestHash, scope.accountId, activeGenerationId, currentRevision, now),
+    env.DB.prepare("INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN EXISTS (SELECT 1 FROM business_staging_transaction WHERE account_id=? AND tx_id=? AND status='committed' AND rolled_back_at IS NULL) THEN 1 ELSE 0 END,?").bind(scope.accountId, `rollback:${txId}:tx`, rollbackRequestHash, scope.accountId, txId, now),
+  ];
+
+  for (const [index, entry] of journalRows.entries()) {
+    const guardId = `rollback:${txId}:${entry.entity_name}:${entry.record_key}:${index}`;
+    if (entry.operation === "delete") {
+      statements.push(absentGuard(env, scope, activeGenerationId, entry.entity_name, entry.record_key, guardId, rollbackRequestHash, now));
+    } else {
+      statements.push(presentGuard(env, scope, activeGenerationId, entry.entity_name, entry.record_key, String(entry.applied_row_hash), entry.server_property_id, guardId, rollbackRequestHash, now, entry.server_property_id == null));
+    }
+  }
   for (const [index, entry] of journalRows.entries()) {
     const seq = currentRevision + 1 + index;
     if (entry.operation === "create") {
@@ -942,8 +958,16 @@ async function rollbackTransaction(request, env, scope) {
 
   statements.push(env.DB.prepare("UPDATE business_sync_state SET revision=revision+? WHERE account_id=? AND revision=?").bind(journalRows.length, scope.accountId, currentRevision));
   statements.push(env.DB.prepare("UPDATE business_staging_transaction SET rolled_back_at=? WHERE account_id=? AND tx_id=?").bind(now, scope.accountId, txId));
+  statements.push(env.DB.prepare("DELETE FROM business_mutation_guard WHERE account_id=? AND request_hash=?").bind(scope.accountId, rollbackRequestHash));
 
-  await env.DB.batch(statements);
+  try {
+    await env.DB.batch(statements);
+  } catch (error) {
+    if (isGuardViolation(error)) {
+      throw new SyncRequestError("Record has been modified by a later transaction", 409, { code: "ROLLBACK_CONFLICT" });
+    }
+    throw error;
+  }
   return Response.json({ tx_id: txId, status: "rolled_back", reverted_operations: journalRows.length, replayed: false });
 }
 
@@ -981,9 +1005,10 @@ async function snapshot(url, env, scope) {
 async function feed(url, env, scope) {
   const since = Math.max(0, Number(url.searchParams.get("since")) || 0);
   const limit = Math.max(1, Math.min(MAX_PAGE_ROWS, Number(url.searchParams.get("limit")) || 200));
+  const current = await queryFirst(env, "SELECT revision FROM business_sync_state WHERE account_id=?", [scope.accountId]);
+  const currentRevision = Number(current?.revision || 0);
   const scoped = scopedRecordClause(scope);
   const rows = await queryAll(env, `SELECT seq,generation_id,entity_name,record_key,operation,row_json,row_hash FROM business_change WHERE account_id=? AND seq>? AND ${scoped.sql} ORDER BY seq LIMIT ?`, [scope.accountId, since, ...scoped.params, limit]);
-  const current = await queryFirst(env, "SELECT revision FROM business_sync_state WHERE account_id=?", [scope.accountId]);
   const pointer = await queryFirst(env, "SELECT active_generation_id FROM business_dataset_pointer WHERE account_id=?", [scope.accountId]);
   const destructive = await queryFirst(env, "SELECT seq FROM business_change WHERE account_id=? AND seq>? AND operation='property_delete' ORDER BY seq LIMIT 1", [scope.accountId, since]);
   return Response.json({
@@ -991,7 +1016,7 @@ async function feed(url, env, scope) {
     active_generation_id: pointer?.active_generation_id || null,
     scope_fingerprint: await scopeFingerprint(scope),
     rebuild_required: !!destructive,
-    current_revision: Number(current?.revision || 0),
+    current_revision: rows.length ? Math.max(currentRevision, Number(rows.at(-1).seq)) : currentRevision,
     next_revision: rows.length ? Number(rows.at(-1).seq) : since,
     has_more: rows.length === limit,
   });
@@ -1132,6 +1157,7 @@ async function mutate(request, env, scope) {
     env.DB.prepare("INSERT INTO business_sync_state (account_id,revision) VALUES (?,0) ON CONFLICT(account_id) DO NOTHING").bind(scope.accountId),
     env.DB.prepare("UPDATE business_sync_state SET revision=revision+1 WHERE account_id=?").bind(scope.accountId),
   );
+
 
   if (entity === "Property") {
     if (!scope.all) throw new SyncRequestError("only all-property accounts can change the roster", 403);

@@ -6391,20 +6391,19 @@ giving the appearance of an inert or silently failing form.
 
 Resolution:
 1. `src/api/businessSync.js`:
-   - `hydrate()` checks `localDb.Property.count()`. If zero and `empty_roster_confirmed` is not set,
-     it executes a single targeted snapshot request for `entity=Property` (rather than downloading all 38,687 records across 25 entities in 95 pages), healing `localDb.Property` in <300ms without touching other stores.
-   - `fetchSnapshot()` records `empty_roster_confirmed: snapshot.byEntity.Property.length === 0` in `BusinessSyncState`.
-   - `wrapEntity.create('Property')` catches HTTP 409 collisions and triggers `hydrate({ force: true })`
-     so the client immediately syncs the authoritative property roster from D1.
+   - Extracted dedicated `syncPropertyRoster()` helper that queries `business-sync/snapshot?entity=Property&limit=500` (<300ms, single HTTP request) and updates `localDb.Property` and `BusinessSyncState` with notifications.
+   - Decoupled `wrapEntity.create('Property')` 409 collision handling from monolithic `hydrate({ force: true })`. On HTTP 409 or `already mapped|belongs to another property`, it calls `syncPropertyRoster()` rather than forcing a 38,687-record download across 25 entities in 95 requests.
+   - In `wrapEntity('Property')`, `list()`, `filter()`, `count()`, and `get()` fast-path local IndexedDB rows immediately when `count() > 0` without waiting for in-flight snapshot promises for other entities, and fetch the roster quickly via `syncPropertyRoster()` if the table is empty.
+   - In `fetchSnapshot()`, writes `Property` to IndexedDB and notifies subscribers as soon as the first table finishes downloading.
+   - `hydrate()` delegates missing property roster sync to `syncPropertyRoster(applied.state)`.
 2. `src/pages/Settings.jsx`:
-   - Removed `propertiesQ.isLoading` from the "Add Property" button disabled expression so manual property entry is never blocked by background sync buffering.
-   - Added `isAddingProp` loading state and disable guards on input fields and "Add Property" button during active mutation.
-   - Shows a loading indicator (`Loader2`) while `propertiesQ.isLoading` only when `properties` is empty, avoiding layout shifts or hiding existing cards.
-   - Differentiates error and success messaging (`propMsgType`), styling errors with `text-[#FF6B6B]` (red) and success with `text-[#00E096]` (green).
-   - Automatically triggers `refetchProps()` and query invalidation on 409 mapped code collisions.
+   - `handleAddProperty` pre-checks local `Property` cache for duplicate codes before network submission, providing immediate feedback.
+   - Formats server 409 collisions into clear, actionable red error text (`Property code "..." is already mapped on the server.`) and invalidates `["properties"]` query cache.
+   - Ensures `isAddingProp: false` always resets in `finally`, preventing stuck button spinners.
+   - Refresh button fast-paths roster sync without blocking.
 3. Automated verification:
-   - Added unit tests in `src/api/businessSync.test.js` covering cache roster healing and 409 rehydration.
-   - All 49 test files and 421 tests passed; typecheck, lint, build, and verify:v3 green.
+   - Added tests in `src/api/businessSync.test.js` verifying Property fast-path without network and verifying only `Property` is queried on 409 collision.
+   - All tests, typecheck, lint, build, verify:v3, brain:verify, and map:verify green.
 
 
 

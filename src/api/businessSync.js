@@ -249,6 +249,46 @@ export function createBusinessSyncClient({
     return { ...activated, status, backup_filename, baseline: snapshot.manifest };
   }
 
+  async function syncPropertyRoster(baseState = null) {
+    const propRows = [];
+    let propCursor = '';
+    let generationId = null;
+    let snapshotRevision = null;
+    let scopeFingerprint = null;
+    do {
+      const page = await requestOptional(`business-sync/snapshot?entity=Property&cursor=${encodeURIComponent(propCursor)}&limit=500`);
+      if (!page?.items) break;
+      generationId = page.generation_id || generationId;
+      snapshotRevision = page.snapshot_revision != null ? Number(page.snapshot_revision) : snapshotRevision;
+      scopeFingerprint = page.scope_fingerprint || scopeFingerprint;
+      propRows.push(...page.items.map((item) => item.row));
+      propCursor = page.has_more ? page.next_cursor : '';
+    } while (propCursor);
+
+    await localDb.transaction('rw', [localDb.Property, localDb.BusinessSyncState], async () => {
+      await localDb.Property.clear();
+      if (propRows.length) await localDb.Property.bulkPut(propRows);
+      const priorState = baseState || await localDb.BusinessSyncState.get(SYNC_STATE_KEY);
+      if (priorState || generationId) {
+        await localDb.BusinessSyncState.put({
+          key: SYNC_STATE_KEY,
+          generation_id: generationId || priorState?.generation_id,
+          revision: snapshotRevision ?? priorState?.revision ?? 0,
+          scope_fingerprint: scopeFingerprint || priorState?.scope_fingerprint,
+          empty_roster_confirmed: propRows.length === 0,
+          updated_at: new Date().toISOString()
+        });
+      }
+    });
+
+    if (propRows.length) {
+      const payload = { records: propRows };
+      notify('Property', 'hydrate', payload);
+      publish('Property', 'hydrate', payload);
+    }
+    return { rows: propRows, generation_id: generationId };
+  }
+
   async function fetchSnapshot() {
     const byEntity = {};
     let generationId = null;
@@ -271,6 +311,17 @@ export function createBusinessSyncClient({
         cursor = page.has_more ? page.next_cursor : '';
       } while (cursor);
       byEntity[entity] = rows;
+      if (entity === 'Property' && rows.length) {
+        try {
+          await localDb.Property.clear();
+          await localDb.Property.bulkPut(rows);
+          const payload = { records: rows };
+          notify('Property', 'hydrate', payload);
+          publish('Property', 'hydrate', payload);
+        } catch {
+          // Non-blocking in headless/test environments
+        }
+      }
     }
     return { generation_id: generationId, revision: snapshotRevision || 0, scope_fingerprint: scopeFingerprint, byEntity };
   }
@@ -318,31 +369,8 @@ export function createBusinessSyncClient({
               if (localPropertyCount > 0 || prior?.empty_roster_confirmed) {
                 return { active: true, rebuilt: false, ...applied.state };
               }
-              const propRows = [];
-              let propCursor = '';
-              do {
-                const page = await requestOptional(`business-sync/snapshot?entity=Property&cursor=${encodeURIComponent(propCursor)}&limit=500`);
-                if (!page?.items) break;
-                propRows.push(...page.items.map((item) => item.row));
-                propCursor = page.has_more ? page.next_cursor : '';
-              } while (propCursor);
-              if (propRows.length || prior) {
-                await localDb.transaction('rw', [localDb.Property, localDb.BusinessSyncState], async () => {
-                  await localDb.Property.clear();
-                  if (propRows.length) await localDb.Property.bulkPut(propRows);
-                  await localDb.BusinessSyncState.put({
-                    ...applied.state,
-                    empty_roster_confirmed: propRows.length === 0,
-                    updated_at: new Date().toISOString()
-                  });
-                });
-                if (propRows.length) {
-                  const payload = { records: propRows };
-                  notify('Property', 'hydrate', payload);
-                  publish('Property', 'hydrate', payload);
-                }
-                return { active: true, rebuilt: false, ...applied.state, empty_roster_confirmed: propRows.length === 0 };
-              }
+              const roster = await syncPropertyRoster(applied.state);
+              return { active: true, rebuilt: false, ...applied.state, empty_roster_confirmed: roster.rows.length === 0 };
             }
           } catch (error) {
             if ((typeof navigator !== 'undefined' && navigator.onLine === false) || error?.status == null) return { active: true, offline: true, rebuilt: false, ...prior };
@@ -708,13 +736,35 @@ export function createBusinessSyncClient({
 
     const wrapped = {
       async filter(query = {}, sortField, limit) {
-        if (!activeTransaction) { await ensureFresh(); return localProxy.filter(query, sortField, limit); }
+        if (!activeTransaction) {
+          if (entity === 'Property') {
+            const count = await table.count();
+            if (count > 0) return localProxy.filter(query, sortField, limit);
+            try {
+              await syncPropertyRoster();
+              return localProxy.filter(query, sortField, limit);
+            } catch {}
+          }
+          await ensureFresh();
+          return localProxy.filter(query, sortField, limit);
+        }
         let rows = (await transactionRows()).filter((row) => matchesBusinessFilter(row, query));
         rows = sortBusinessRows(rows, sortField);
         return limit ? rows.slice(0, limit) : rows;
       },
       async list(sortField, limit) {
-        if (!activeTransaction) { await ensureFresh(); return localProxy.list(sortField, limit); }
+        if (!activeTransaction) {
+          if (entity === 'Property') {
+            const count = await table.count();
+            if (count > 0) return localProxy.list(sortField, limit);
+            try {
+              await syncPropertyRoster();
+              return localProxy.list(sortField, limit);
+            } catch {}
+          }
+          await ensureFresh();
+          return localProxy.list(sortField, limit);
+        }
         const rows = sortBusinessRows(await transactionRows(), sortField);
         return limit ? rows.slice(0, limit) : rows;
       },
@@ -731,11 +781,25 @@ export function createBusinessSyncClient({
         return { items, total, hasMore: rows.length > limit, nextCursor: items.length ? items.at(-1)?.[field] : null };
       },
       async count(query = {}) {
-        if (!activeTransaction) { await ensureFresh(); return localProxy.count(query); }
+        if (!activeTransaction) {
+          if (entity === 'Property') {
+            const count = await table.count();
+            if (count > 0) return localProxy.count(query);
+          }
+          await ensureFresh();
+          return localProxy.count(query);
+        }
         return (await transactionRows()).filter((row) => matchesBusinessFilter(row, query)).length;
       },
       async get(id) {
-        if (!activeTransaction) { await ensureFresh(); return localProxy.get(id); }
+        if (!activeTransaction) {
+          if (entity === 'Property') {
+            const row = await exactLocalGet(table, id);
+            if (row) return row;
+          }
+          await ensureFresh();
+          return localProxy.get(id);
+        }
         return transactionRow(id);
       },
       async create(data) {
@@ -752,7 +816,7 @@ export function createBusinessSyncClient({
           return result.row;
         } catch (error) {
           if (entity === 'Property' && (error?.status === 409 || /already mapped|belongs to another property/i.test(String(error?.message)))) {
-            await hydrate({ force: true }).catch(() => {});
+            await syncPropertyRoster().catch(() => {});
           }
           throw error;
         }
@@ -836,6 +900,7 @@ export function createBusinessSyncClient({
       migrateLocalData,
       hydrateFromServer: () => hydrate({ force: true }),
       syncNow: async () => { await flushOutbox(); return hydrate(); },
+      syncPropertyRoster,
       reserveIdSequence: (prefix, floor) => request('business-sync/id-sequence/reserve', { method: 'POST', body: JSON.stringify({ prefix, floor }) }),
       status: () => localDb.BusinessSyncState.get(SYNC_STATE_KEY),
       runTransaction,

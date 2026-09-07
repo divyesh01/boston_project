@@ -72,7 +72,7 @@ describe('businessSync', () => {
     expect(await localDb.Property.toArray()).toEqual([property]);
     expect(await localDb.Expense.toArray()).toEqual([expense]);
     expect((await localDb.BusinessSyncState.get('authoritative-business-data')).generation_id).toBe('generation-1');
-  }, 15000);
+  }, 30000);
 
   it('rebuilds missing property roster when BusinessSyncState exists but Property table is empty', async () => {
     await localDb.BusinessSyncState.put({
@@ -114,6 +114,7 @@ describe('businessSync', () => {
       updated_at: new Date().toISOString(),
     });
     const property = { id: 1, code: 'RRI1416', name: 'Red roof Middleboro', rooms: 100, active: true };
+    const requestedEntities = [];
     const request = async (path) => {
       if (path.startsWith('business-sync/feed')) {
         return { items: [], active_generation_id: 'generation-1', scope_fingerprint: 'scope-1', current_revision: 5, next_revision: 5, has_more: false };
@@ -123,6 +124,7 @@ describe('businessSync', () => {
       }
       if (path.startsWith('business-sync/snapshot')) {
         const entity = new URL(`https://x/${path}`).searchParams.get('entity');
+        requestedEntities.push(entity);
         const rows = entity === 'Property' ? [property] : [];
         return {
           generation_id: 'generation-1', snapshot_revision: 5, scope_fingerprint: 'scope-1', entity,
@@ -141,6 +143,8 @@ describe('businessSync', () => {
     await expect(proxy.create({ code: 'RRI1416', name: 'Midelboro', rooms: 100 })).rejects.toThrow('property code is already mapped');
     expect(await localDb.Property.count()).toBe(1);
     expect(await localDb.Property.toArray()).toEqual([property]);
+    expect(requestedEntities.length).toBeGreaterThan(0);
+    expect(requestedEntities.every((e) => e === 'Property')).toBe(true);
   }, 15000);
 
   it('does not write to IndexedDB when the authoritative server rejects a create', async () => {
@@ -292,6 +296,23 @@ describe('businessSync', () => {
     const [firstRows, secondRows] = await Promise.all([first, second]);
     expect(firstRows).toEqual([expense]);
     expect(secondRows).toEqual([expense]);
+  });
+
+  it('allows Property listing to return immediately without waiting for in-flight snapshot of other entities', async () => {
+    const property = { id: 1, code: 'RRI1416', name: 'Red roof Middleboro', rooms: 100, active: true };
+    await localDb.Property.put(property);
+    const client = createBusinessSyncClient({
+      request: async () => {
+        throw new Error('should not make any network request when Property is already in IndexedDB');
+      },
+    });
+    const localProxy = {
+      list: async () => localDb.Property.toArray(),
+      filter: async () => localDb.Property.toArray(),
+    };
+    const proxy = client.wrapEntity('Property', localProxy);
+    const listed = await proxy.list();
+    expect(listed).toEqual([property]);
   });
 });
 

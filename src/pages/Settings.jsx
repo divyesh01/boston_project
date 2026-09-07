@@ -464,15 +464,22 @@ export default function Settings() {
       rotateCsrfToken();
       return;
     }
+    const sanitizedCode = sanitizeAlphanumeric(newPropCode.trim()).toUpperCase();
+    if (!sanitizedCode) {
+      setPropMsg("Invalid property code.");
+      setPropMsgType("error");
+      return;
+    }
     setPropMsg("");
     setPropMsgType("info");
     setIsAddingProp(true);
     try {
-      const sanitizedCode = sanitizeAlphanumeric(newPropCode.trim()).toUpperCase();
       const existing = await db.entities.Property.filter({ code: sanitizedCode });
       if (existing.length > 0) {
-        setPropMsg("A property with this code already exists.");
+        setPropMsg(`Property with code "${sanitizedCode}" already exists (${existing[0].name || "Active"}).`);
         setPropMsgType("error");
+        refetchProps();
+        queryClientInstance.invalidateQueries({ queryKey: ["properties"] });
         return;
       }
       const sanitizedName = sanitizeCsvCell(sanitizeText(newPropName.trim()));
@@ -492,12 +499,15 @@ export default function Settings() {
       queryClientInstance.invalidateQueries({ queryKey: ["properties"] });
       rotateCsrfToken();
     } catch (e) {
-      setPropMsg(e.message || "Could not add property.");
-      setPropMsgType("error");
-      if (/already mapped|belongs to another property/i.test(String(e.message))) {
-        refetchProps();
-        queryClientInstance.invalidateQueries({ queryKey: ["properties"] });
+      const errMsg = e?.message || "Could not add property.";
+      if (/already mapped|belongs to another property/i.test(String(errMsg))) {
+        setPropMsg(`Property code "${sanitizedCode}" is already mapped on the server.`);
+      } else {
+        setPropMsg(errMsg);
       }
+      setPropMsgType("error");
+      refetchProps();
+      queryClientInstance.invalidateQueries({ queryKey: ["properties"] });
     } finally {
       setIsAddingProp(false);
     }

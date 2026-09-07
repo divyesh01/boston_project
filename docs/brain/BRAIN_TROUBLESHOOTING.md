@@ -6348,6 +6348,19 @@ A/B/C converges at mean ~9.9s, max ~10.2s (n=12); 10 tabs elect exactly 1 leader
 commit: 166 suites, 165 passed, 0 failed, 1 honest skip (no dev server); vitest 49/419;
 lint, typecheck, build, V3, brain, repo-map green.
 
+## 63. Production Option-D migration 0004 applied; 8d2ff4f deployed (2026-09-06 ~21:15 EDT)
+
+BEFORE (read-only): pointer `e66a1e74-…`, active rows exactly 38,687, journal 1-3,
+`business_record_staging`/`business_rollback_journal` absent. `wrangler.jsonc` binds
+the prod DB with `migrations_dir: migrations-production`, so only 0004 ran (DDL-only:
+2 tables, 3 indexes, 2 columns; zero data writes). AFTER: journal 1-4, both tables and
+both columns present, pointer unchanged, active rows still exactly 38,687, no pending
+migrations. Built clean 8d2ff4f, deployed worker version `c5d9e0d0`: `/` serves 200,
+`/api/account/status` fail-closed 401 unauthenticated, and a post-deploy count confirms
+reads wrote zero business rows. NOT done (no owner session available): controlled
+1-row transaction + rollback, and the authenticated Browser A → B → C disposable CRUD.
+No test rows created, no data re-uploaded, no rollback executed on prod.
+
 
 
 

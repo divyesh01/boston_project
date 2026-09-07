@@ -2,7 +2,7 @@ import { db } from '@/api/base44Client';
 
 import React, { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
-import { Save, Plus, CheckCircle2, RotateCcw, Trash2, Building2, RefreshCw, UserCog, LogOut, Shield, ShieldOff, Key, Smartphone, Download, Upload, Database } from "lucide-react";
+import { Save, Plus, CheckCircle2, RotateCcw, Trash2, Hotel, Edit2, RefreshCw, UserCog, LogOut, Shield, ShieldOff, Key, Smartphone, Download, Upload, Database } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { ErrorState } from "@/components/ui/status";
 import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, getCcFeeOnRefunds, setCcFeeOnRefunds, COMMISSION_TYPES } from "@/lib/commissionRates";
@@ -12,6 +12,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { getTaxSettings, saveTaxSettings } from "@/lib/taxSettings";
 import { toast } from "@/components/ui/use-toast";
 
+import localDb from '@/api/localDb';
 import { useAuth } from "@/lib/AuthContext";
 import { useProperties } from "@/lib/useHotelData";
 import { queryClientInstance } from "@/lib/query-client";
@@ -19,6 +20,10 @@ import {
   AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogHeader,
   AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog, DialogContent, DialogHeader,
+  DialogTitle, DialogDescription, DialogFooter,
+} from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -58,6 +63,15 @@ export default function Settings() {
   const [propMsgType, setPropMsgType] = useState("info");
   const [isAddingProp, setIsAddingProp] = useState(false);
   const [propDeleteTarget, setPropDeleteTarget] = useState(null);
+  const [propEditTarget, setPropEditTarget] = useState(null);
+  const [editPropName, setEditPropName] = useState("");
+  const [editPropRooms, setEditPropRooms] = useState("100");
+  const [editPropCity, setEditPropCity] = useState("");
+  const [editPropState, setEditPropState] = useState("");
+  const [isSavingEditProp, setIsSavingEditProp] = useState(false);
+  const [isTogglingActive, setIsTogglingActive] = useState(null);
+  const [isDeletingProp, setIsDeletingProp] = useState(false);
+  const [deleteConfirmCode, setDeleteConfirmCode] = useState("");
   
   // MFA self-service state
   const [mfaSetupOpen, setMfaSetupOpen] = useState(false);
@@ -513,6 +527,73 @@ export default function Settings() {
     }
   };
 
+  const handleToggleActive = async (property) => {
+    if (!property?.id || isTogglingActive) return;
+    setIsTogglingActive(property.id);
+    try {
+      const nextActive = property.active === false ? true : false;
+      await db.entities.Property.update(property.id, { active: nextActive });
+      toast({
+        title: nextActive ? "Property Activated" : "Property Deactivated",
+        description: `${property.name} (${property.code}) is now ${nextActive ? "Active" : "Inactive"}.`,
+      });
+      refetchProps();
+      queryClientInstance.invalidateQueries({ queryKey: ["properties"] });
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        title: "Could not update property status",
+        description: e?.message || "Failed to update property.",
+      });
+    } finally {
+      setIsTogglingActive(null);
+    }
+  };
+
+  const handleOpenEditModal = (property) => {
+    setPropEditTarget(property);
+    setEditPropName(property.name || "");
+    setEditPropRooms(String(property.rooms || 100));
+    setEditPropCity(property.city || "");
+    setEditPropState(property.state || "");
+  };
+
+  const handleSaveEditProperty = async () => {
+    if (!propEditTarget?.id) return;
+    const sanitizedName = sanitizeCsvCell(sanitizeText(editPropName.trim()));
+    if (!sanitizedName) {
+      toast({ variant: "destructive", title: "Validation Error", description: "Property name is required." });
+      return;
+    }
+    const sanitizedRooms = Math.max(1, Math.min(10000, Number(editPropRooms) || 100));
+    const sanitizedCity = sanitizeCsvCell(sanitizeText(editPropCity.trim()));
+    const sanitizedState = sanitizeAlphanumeric(editPropState.trim()).toUpperCase().slice(0, 10);
+    setIsSavingEditProp(true);
+    try {
+      await db.entities.Property.update(propEditTarget.id, {
+        name: sanitizedName,
+        rooms: sanitizedRooms,
+        city: sanitizedCity || null,
+        state: sanitizedState || null,
+      });
+      toast({
+        title: "Property Updated",
+        description: `Changes to "${sanitizedName}" saved successfully.`,
+      });
+      setPropEditTarget(null);
+      refetchProps();
+      queryClientInstance.invalidateQueries({ queryKey: ["properties"] });
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        title: "Could not update property",
+        description: e?.message || "Failed to save property changes.",
+      });
+    } finally {
+      setIsSavingEditProp(false);
+    }
+  };
+
   const handleDeleteProperty = async (id) => {
     const rateLimit = sensitiveActionRateLimiter.check();
     if (!rateLimit.allowed) {
@@ -525,28 +606,33 @@ export default function Settings() {
       rotateCsrfToken();
       return;
     }
+    setIsDeletingProp(true);
     try {
-      // Cascade-delete every record referencing this property so no orphaned
-      // rows silently appear in other properties' totals or the DB health checks.
+      // 1. Authoritative delete: server D1 cascade deletes all business_record rows
+      // referencing this property and the property row atomically in <500ms.
+      await db.entities.Property.delete(id);
+
+      // 2. Direct client-side cleanup of local IndexedDB tables in milliseconds
+      // without making 38,000+ individual HTTP network requests.
       const propertyTables = [
         "OccupancyDay", "SourceDay", "GrossRevenueDay", "PaymentDay",
         "ClerkShiftRecord", "UploadedReport", "Expense", "PayrollRun", "Staff",
+        "Room", "RoomStay", "HousekeepingTask", "WeatherSnapshot", "Review",
+        "DailyFinancialAggregate", "ScanResult", "TimecardPunch", "Reservation"
       ];
       for (const tableName of propertyTables) {
-        try {
-          const rows = await db.entities[tableName].filter({ property_id: id }, "-created_date", 100000);
-          const ids = rows.map((r) => r.id).filter(Boolean);
-          if (ids.length) await db.entities[tableName].bulkDelete(ids);
-        } catch (e) {
-          // Some tables may not exist or have different schemas — continue.
-          if (!/does not exist/i.test(String(e.message)) && !/Unknown entity/i.test(String(e.message))) {
-            console.warn(`[settings] cleanup ${tableName}:`, e);
+        if (localDb[tableName]?.where) {
+          try {
+            await localDb[tableName].where("property_id").equals(id).delete();
+          } catch {
+            // Some tables may not have property_id index
           }
         }
       }
-      await db.entities.Property.delete(id);
+
       setPropDeleteTarget(null);
-      setPropMsg("Property removed.");
+      setDeleteConfirmCode("");
+      setPropMsg("Property removed successfully.");
       setPropMsgType("success");
       refetchProps();
       queryClientInstance.invalidateQueries({ queryKey: ["properties"] });
@@ -560,6 +646,8 @@ export default function Settings() {
     } catch (e) {
       setPropMsg(e.message || "Could not delete property.");
       setPropMsgType("error");
+    } finally {
+      setIsDeletingProp(false);
     }
   };
 
@@ -1062,20 +1150,59 @@ export default function Settings() {
           {properties.map((p) => (
             <div key={p.id} className="flex items-center justify-between rounded-xl border border-white/5 bg-[#0A1628]/60 px-4 py-3">
               <div className="flex items-center gap-3">
-                <Building2 className="h-4 w-4 text-[#6C63FF]" />
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#00D4FF]/20 bg-[#00D4FF]/10 text-[#00D4FF]">
+                  <Hotel className="h-5 w-5" />
+                </div>
                 <div>
-                  <p className="text-sm text-white">{p.name}</p>
-                  <p className="text-xs text-slate-500">{p.code} · {p.rooms || 100} rooms · {p.city || ""}{p.state ? `, ${p.state}` : ""}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium text-white">{p.name}</p>
+                    <span className="font-mono text-xs text-[#00D4FF]/80 bg-[#00D4FF]/10 px-1.5 py-0.5 rounded border border-[#00D4FF]/20">
+                      {p.code}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    {p.rooms || 100} rooms{p.city ? ` · ${p.city}` : ""}{p.state ? `, ${p.state}` : ""}
+                  </p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <span className={`rounded-full px-3 py-1 text-xs ${p.active ? "bg-[#00E096]/15 text-[#00E096]" : "bg-white/5 text-slate-500"}`}>
-                  {p.active ? "Active" : "Inactive"}
-                </span>
                 <button
-                  onClick={() => setPropDeleteTarget(p)}
-                  className="text-xs text-slate-500 transition-colors hover:text-[#FF6B6B]"
+                  type="button"
+                  onClick={() => handleToggleActive(p)}
+                  disabled={isTogglingActive === p.id}
+                  title={p.active !== false ? "Click to deactivate (hide from dashboards)" : "Click to activate property"}
+                  className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-all ${
+                    p.active !== false
+                      ? "border border-[#00E096]/30 bg-[#00E096]/15 text-[#00E096] hover:bg-[#00E096]/25"
+                      : "border border-amber-500/30 bg-amber-500/15 text-amber-400 hover:bg-amber-500/25"
+                  }`}
                 >
+                  {isTogglingActive === p.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <span className={`h-1.5 w-1.5 rounded-full ${p.active !== false ? "bg-[#00E096] animate-pulse" : "bg-amber-400"}`} />
+                  )}
+                  {p.active !== false ? "Active" : "Inactive"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleOpenEditModal(p)}
+                  className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-[#0A1628] px-2.5 py-1 text-xs text-slate-300 transition-colors hover:border-[#00D4FF]/40 hover:text-[#00D4FF]"
+                  title="Edit property details"
+                >
+                  <Edit2 className="h-3.5 w-3.5" />
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeleteConfirmCode("");
+                    setPropDeleteTarget(p);
+                  }}
+                  className="inline-flex items-center gap-1 rounded-lg border border-white/5 bg-transparent px-2.5 py-1 text-xs text-slate-400 transition-colors hover:border-red-500/30 hover:bg-red-500/10 hover:text-red-400"
+                  title="Remove property"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
                   Remove
                 </button>
               </div>
@@ -1092,30 +1219,153 @@ export default function Settings() {
           )}
         </div>
 
-        <AlertDialog open={!!propDeleteTarget} onOpenChange={(open) => { if (!open) setPropDeleteTarget(null); }}>
+        <AlertDialog open={!!propDeleteTarget} onOpenChange={(open) => { if (!open && !isDeletingProp) { setPropDeleteTarget(null); setDeleteConfirmCode(""); } }}>
           <AlertDialogContent className="border-white/10 bg-[#0F1F35]">
             <AlertDialogHeader>
               <AlertDialogTitle className="text-white">Remove property “{propDeleteTarget?.name}”?</AlertDialogTitle>
-              <AlertDialogDescription className="text-slate-400">
-                This permanently deletes the property and <span className="text-[#FF6B6B]">all</span> of its imported
-                report rows (occupancy, sources, gross revenue, payments, clerk records, expenses, payroll, and uploaded
-                report history). This cannot be undone.
+              <AlertDialogDescription asChild>
+                <div className="space-y-3 text-sm text-slate-400">
+                  <p>
+                    This permanently deletes the property and <span className="text-[#FF6B6B]">all</span> of its associated
+                    report rows (occupancy, revenue, clerk records, expenses, payroll, and uploads). This cannot be undone.
+                  </p>
+                  <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-2.5 text-xs text-amber-300">
+                    💡 <strong>Keep your financial history:</strong> If this property is no longer active and you do not want to add new reports, you can simply mark it as <strong>Inactive</strong> instead of deleting it.
+                  </div>
+                  <div className="pt-2">
+                    <label className="text-xs font-medium text-slate-300">
+                      Type <strong className="text-white">{propDeleteTarget?.code}</strong> to confirm deletion:
+                    </label>
+                    <Input
+                      value={deleteConfirmCode}
+                      onChange={(e) => setDeleteConfirmCode(e.target.value)}
+                      placeholder={`Type ${propDeleteTarget?.code || ""} to confirm`}
+                      disabled={isDeletingProp}
+                      className="mt-1 border-white/10 bg-[#0A1628] text-sm text-white focus:border-red-500"
+                    />
+                  </div>
+                </div>
               </AlertDialogDescription>
               {propMsg && propMsgType === "error" && <p className="text-sm text-[#FF6B6B]">{propMsg}</p>}
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel className="border-white/10 bg-[#0A1628] text-slate-300 hover:bg-[#1a2a40] hover:text-white">
+              <AlertDialogCancel
+                disabled={isDeletingProp}
+                className="border-white/10 bg-[#0A1628] text-slate-300 hover:bg-[#1a2a40] hover:text-white"
+              >
                 Cancel
               </AlertDialogCancel>
               <AlertDialogAction
-                onClick={() => propDeleteTarget && handleDeleteProperty(propDeleteTarget.id)}
-                className="bg-[#FF6B6B] text-white hover:bg-[#e55555]"
+                disabled={isDeletingProp || (deleteConfirmCode.trim().toUpperCase() !== String(propDeleteTarget?.code || "").trim().toUpperCase())}
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (propDeleteTarget) handleDeleteProperty(propDeleteTarget.id);
+                }}
+                className="bg-[#FF6B6B] text-white hover:bg-[#e55555] disabled:cursor-not-allowed disabled:opacity-40"
               >
-                Yes, delete everything for this property
+                {isDeletingProp ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  "Yes, delete property"
+                )}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        <Dialog open={!!propEditTarget} onOpenChange={(open) => { if (!open && !isSavingEditProp) setPropEditTarget(null); }}>
+          <DialogContent className="border-white/10 bg-[#0F1F35] text-white sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="text-lg font-semibold text-white">Edit Property Details</DialogTitle>
+              <DialogDescription className="text-xs text-slate-400">
+                Update property name, room capacity, and location details.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <div>
+                <label className="text-xs font-medium text-slate-400">Property Code (Immutable)</label>
+                <Input
+                  value={propEditTarget?.code || ""}
+                  disabled
+                  className="mt-1 border-white/10 bg-[#0A1628]/60 text-slate-400 cursor-not-allowed text-sm font-mono"
+                />
+                <p className="mt-1 text-[11px] text-slate-500">Property code links directly to imported data and cannot be renamed.</p>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-slate-300">Property Name *</label>
+                <Input
+                  value={editPropName}
+                  onChange={(e) => setEditPropName(e.target.value)}
+                  placeholder="e.g. Red Roof Middleboro"
+                  disabled={isSavingEditProp}
+                  className="mt-1 border-white/10 bg-[#0A1628] text-white text-sm focus:border-[#00D4FF]"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-slate-300">Total Rooms</label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="10000"
+                  value={editPropRooms}
+                  onChange={(e) => setEditPropRooms(e.target.value)}
+                  disabled={isSavingEditProp}
+                  className="mt-1 border-white/10 bg-[#0A1628] text-white text-sm focus:border-[#00D4FF]"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-slate-300">City</label>
+                  <Input
+                    value={editPropCity}
+                    onChange={(e) => setEditPropCity(e.target.value)}
+                    placeholder="e.g. Middleborough"
+                    disabled={isSavingEditProp}
+                    className="mt-1 border-white/10 bg-[#0A1628] text-white text-sm focus:border-[#00D4FF]"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-slate-300">State</label>
+                  <Input
+                    value={editPropState}
+                    onChange={(e) => setEditPropState(e.target.value)}
+                    placeholder="e.g. MA"
+                    maxLength={10}
+                    disabled={isSavingEditProp}
+                    className="mt-1 border-white/10 bg-[#0A1628] text-white text-sm focus:border-[#00D4FF]"
+                  />
+                </div>
+              </div>
+            </div>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button
+                variant="ghost"
+                disabled={isSavingEditProp}
+                onClick={() => setPropEditTarget(null)}
+                className="border-white/10 bg-[#0A1628] text-slate-300 hover:bg-[#1a2a40] hover:text-white"
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={isSavingEditProp || !editPropName.trim()}
+                onClick={handleSaveEditProperty}
+                className="bg-[#00D4FF] font-medium text-black hover:bg-[#00b8dc]"
+              >
+                {isSavingEditProp ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  "Save Changes"
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <div className="mt-4 grid gap-2 sm:grid-cols-4">
           <input

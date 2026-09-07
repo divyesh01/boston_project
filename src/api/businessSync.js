@@ -186,7 +186,17 @@ export function downloadBusinessBackup(snapshot, filename = `rri-business-backup
 }
 
 async function exactLocalGet(table, id) {
-  return (await table.get(id)) || null;
+  if (!table || id == null) return null;
+  let found = await table.get(id);
+  if (!found && typeof id === 'string' && /^\d+$/.test(id)) {
+    found = await table.get(Number(id));
+  } else if (!found && typeof id === 'number') {
+    found = await table.get(String(id));
+  }
+  if (!found && table?.name === 'Property') {
+    found = await table.filter((row) => String(row.id) === String(id) || (row.code && String(row.code).toUpperCase() === String(id).toUpperCase())).first();
+  }
+  return found || null;
 }
 
 function decodeRecordKey(key) {

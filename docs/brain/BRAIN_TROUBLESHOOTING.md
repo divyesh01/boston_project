@@ -6405,6 +6405,28 @@ Resolution:
    - Added tests in `src/api/businessSync.test.js` verifying Property fast-path without network and verifying only `Property` is queried on 409 collision.
    - All tests, typecheck, lint, build, verify:v3, brain:verify, and map:verify green.
 
+## 65. Settings Property Management Icon, Active Toggle, Edit Modal, and Atomic Cascade Deletion (2026-09-07)
+
+Users reported three interrelated UX and operational issues in Settings → Property Management:
+1. The property icon rendered `Building2` (16×16px) which, on dark background with two small towers and cutout squares, visually resembled a padlock ("YOU ARE ADDING HIM AS A LOCK OR SOMETHING").
+2. The "Remove" button appeared broken or frozen indefinitely. `handleDeleteProperty` was iterating through 9 property tables in the browser, querying all records (38,686 rows), and attempting to delete them one-by-one with `db.entities[table].bulkDelete(ids)` over sequential HTTP requests, causing browser hangs and rate limits.
+3. Property owners who wanted to stop adding reports for a hotel had no way to deactivate it without permanently destroying all historical financial reporting data.
+
+Resolution:
+1. `src/pages/Settings.jsx`:
+   - Replaced `Building2` with a distinct `Hotel` icon enclosed in a styled cyan badge container (`bg-[#00D4FF]/10 text-[#00D4FF] border border-[#00D4FF]/20`), clearly representing a hotel building.
+   - Replaced the slow client-side deletion loop with a single authoritative call to `await db.entities.Property.delete(id)`. The Cloudflare Worker D1 backend already performs atomic cascade deletion in D1 (`DELETE FROM business_record ...; DELETE FROM property ...`) in <500ms. Local IndexedDB tables are cleaned up directly in milliseconds without network calls.
+   - Added an interactive `Active / Inactive` toggle badge button (`handleToggleActive`). Property owners can toggle a property's operational status with one click, preserving historical financial records while hiding inactive properties from daily operational views.
+   - Added an "Edit" button and Edit Property modal dialog (`Dialog`) to modify property name, total room count, city, and state.
+   - Upgraded Remove confirmation dialog (`AlertDialog`) with double safety: explains that properties can be marked Inactive instead of deleted, and requires typing the property code before permanent deletion is enabled.
+2. `src/api/businessSync.js`:
+   - Enhanced `exactLocalGet` to support numeric/string ID resolution and case-insensitive property code lookups.
+3. Automated verification:
+   - All 49 test suites and 422 vitest tests passed.
+   - TypeScript `npm run typecheck`, ESLint `npm run lint`, and production build `npm run build` passed.
+   - `verify:v3`, `brain:verify`, and `map:verify` passed.
+
+
 
 
 

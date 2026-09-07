@@ -81,7 +81,7 @@ number of rows below, verified against `src/pages/*.jsx` (excluding `*.test.jsx`
 | **ChangePassword** | `src/pages/ChangePassword.jsx` | Change own password with strength check | `security.js`, `securityUtils.js`, `AuthContext.jsx` |
 | **Users** | `src/pages/Users.jsx` | User management: invitations, roles, lockouts, MFA | `permissions.js`, `security.js` |
 | **AuditLog** | `src/pages/AuditLog.jsx` | Security audit log viewer + chain verification | `securityUtils.js`, `auditFilter.js` |
-| **Settings** | `src/pages/Settings.jsx` | App settings: commissions, alerts, taxes, MFA, backup/restore, **delete account** | `commissionRates.js`, `alertThresholds.js`, `taxSettings.js`, `dbArchive.js`, `AuthContext.jsx` (`logout`) |
+| **Settings** | `src/pages/Settings.jsx` | App settings: properties (active toggle, edit modal, atomic delete), commissions, alerts, taxes, MFA, backup/restore, **delete account** | `commissionRates.js`, `alertThresholds.js`, `taxSettings.js`, `dbArchive.js`, `AuthContext.jsx` (`logout`), `localDb.js` |
 | **PrivacyPolicy** | `src/pages/PrivacyPolicy.jsx` | Legal page | None |
 | **TermsOfService** | `src/pages/TermsOfService.jsx` | Legal page | None |
 | **DemoYDoc** | `src/pages/DemoYDoc.jsx` | Real-time CRDT sync demo | `crdt.jsx` |

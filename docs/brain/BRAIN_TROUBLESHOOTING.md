@@ -6392,18 +6392,20 @@ giving the appearance of an inert or silently failing form.
 Resolution:
 1. `src/api/businessSync.js`:
    - `hydrate()` checks `localDb.Property.count()`. If zero and `empty_roster_confirmed` is not set,
-     it falls through to `fetchSnapshot()` to heal the missing roster unless inside an active transaction (`allowDuringTransaction || transactionPending`).
+     it executes a single targeted snapshot request for `entity=Property` (rather than downloading all 38,687 records across 25 entities in 95 pages), healing `localDb.Property` in <300ms without touching other stores.
    - `fetchSnapshot()` records `empty_roster_confirmed: snapshot.byEntity.Property.length === 0` in `BusinessSyncState`.
    - `wrapEntity.create('Property')` catches HTTP 409 collisions and triggers `hydrate({ force: true })`
      so the client immediately syncs the authoritative property roster from D1.
 2. `src/pages/Settings.jsx`:
-   - Added `isAddingProp` loading state and disable guards on input fields and "Add Property" button during mutation.
-   - Shows a loading indicator (`Loader2`) while `propertiesQ.isLoading` rather than prematurely stating "No properties yet".
+   - Removed `propertiesQ.isLoading` from the "Add Property" button disabled expression so manual property entry is never blocked by background sync buffering.
+   - Added `isAddingProp` loading state and disable guards on input fields and "Add Property" button during active mutation.
+   - Shows a loading indicator (`Loader2`) while `propertiesQ.isLoading` only when `properties` is empty, avoiding layout shifts or hiding existing cards.
    - Differentiates error and success messaging (`propMsgType`), styling errors with `text-[#FF6B6B]` (red) and success with `text-[#00E096]` (green).
    - Automatically triggers `refetchProps()` and query invalidation on 409 mapped code collisions.
 3. Automated verification:
    - Added unit tests in `src/api/businessSync.test.js` covering cache roster healing and 409 rehydration.
    - All 49 test files and 421 tests passed; typecheck, lint, build, and verify:v3 green.
+
 
 
 

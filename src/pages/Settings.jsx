@@ -1137,14 +1137,18 @@ export default function Settings() {
         <div className="mt-3 flex items-center gap-3">
           <button
             onClick={handleAddProperty}
-            disabled={isAddingProp || propertiesQ.isLoading || !newPropCode.trim() || !newPropName.trim()}
+            disabled={isAddingProp || !newPropCode.trim() || !newPropName.trim()}
             className="flex items-center gap-2 rounded-lg bg-[#6C63FF] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#5b52e8] disabled:opacity-50"
           >
             {isAddingProp ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
             {isAddingProp ? "Adding Property..." : "Add Property"}
           </button>
           <button
-            onClick={() => { refetchProps(); queryClientInstance.invalidateQueries({ queryKey: ["properties"] }); }}
+            onClick={async () => {
+              try { await db.entities.Property.list(); } catch {}
+              refetchProps();
+              queryClientInstance.invalidateQueries({ queryKey: ["properties"] });
+            }}
             disabled={propertiesQ.isFetching}
             className="flex items-center gap-2 rounded-lg border border-white/10 px-4 py-2.5 text-sm text-slate-400 transition-colors hover:border-[#00D4FF]/60 hover:text-white disabled:opacity-50"
           >

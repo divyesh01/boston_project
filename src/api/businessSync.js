@@ -318,6 +318,31 @@ export function createBusinessSyncClient({
               if (localPropertyCount > 0 || prior?.empty_roster_confirmed) {
                 return { active: true, rebuilt: false, ...applied.state };
               }
+              const propRows = [];
+              let propCursor = '';
+              do {
+                const page = await requestOptional(`business-sync/snapshot?entity=Property&cursor=${encodeURIComponent(propCursor)}&limit=500`);
+                if (!page?.items) break;
+                propRows.push(...page.items.map((item) => item.row));
+                propCursor = page.has_more ? page.next_cursor : '';
+              } while (propCursor);
+              if (propRows.length || prior) {
+                await localDb.transaction('rw', [localDb.Property, localDb.BusinessSyncState], async () => {
+                  await localDb.Property.clear();
+                  if (propRows.length) await localDb.Property.bulkPut(propRows);
+                  await localDb.BusinessSyncState.put({
+                    ...applied.state,
+                    empty_roster_confirmed: propRows.length === 0,
+                    updated_at: new Date().toISOString()
+                  });
+                });
+                if (propRows.length) {
+                  const payload = { records: propRows };
+                  notify('Property', 'hydrate', payload);
+                  publish('Property', 'hydrate', payload);
+                }
+                return { active: true, rebuilt: false, ...applied.state, empty_roster_confirmed: propRows.length === 0 };
+              }
             }
           } catch (error) {
             if ((typeof navigator !== 'undefined' && navigator.onLine === false) || error?.status == null) return { active: true, offline: true, rebuilt: false, ...prior };

@@ -6426,6 +6426,26 @@ Resolution:
    - TypeScript `npm run typecheck`, ESLint `npm run lint`, and production build `npm run build` passed.
    - `verify:v3`, `brain:verify`, and `map:verify` passed.
 
+## 66. Property Management Infinite Buffering Resolution via Background Queue Decoupling (2026-09-07)
+
+Users observed infinite buffering spinners ("Adding Property...", "Saving...", "Deleting...") across all Property operations in Settings → Property Management. Hard-refreshing the page did not resolve the freeze and restarted the buffering loop.
+
+Root Cause:
+1. Monolithic Background Queue Blocking: In `src/api/businessSync.js`, `wrapEntity` called `await ensureFresh()` inside `create`, `update`, and `delete`. On a fresh tab or session, `ensureFresh()` initiated a full download of 38,687 historical records across 24 database entities spanning 95 sequential HTTP requests. Every Property action was queued behind this 95-request queue. A hard refresh aborted the in-flight download and restarted the 95 requests from zero on page load.
+2. D1 Record Key Invariant Mismatch: In `sendMutation`, the `record_key` for `Property` was generated directly from `effective.id`. In D1, canonical properties have numeric integer primary keys in `business_record` (e.g. `record_key: "n:1"` for RRI1416), while client-side state may refer to string identifiers, resulting in key mismatch during mutations.
+
+Resolution:
+1. `src/api/businessSync.js`:
+   - Decoupled `wrapEntity('Property')` (`get`, `create`, `update`, `delete`) from `await ensureFresh()`. Property mutations and lookups execute immediately against local IndexedDB or fast-path via `syncPropertyRoster()` (<200ms) without waiting for the 38k-record background download queue.
+   - In `sendMutation`, added canonical record ID resolution for `entity === 'Property'` to query `localDb.Property` and use the canonical numeric ID, ensuring `typedRecordKey(recordId)` yields `"n:1"` to match D1 `business_property_map`.
+2. `src/pages/Settings.jsx`:
+   - Introduced `withActionTimeout` helper enforcing an 8-second fail-safe timeout on `handleAddProperty`, `handleToggleActive`, `handleSaveEditProperty`, and `handleDeleteProperty`.
+   - Guaranteed UI loading states (`isAddingProp`, `isTogglingActive`, `isSavingEditProp`, `isDeletingProp`) always reset cleanly in `finally`, eliminating indefinite spinner locks even under adverse network conditions.
+3. Automated Verification:
+   - Vitest suite `src/api/businessSync.test.js` (25 tests) passed.
+   - TypeScript typecheck, ESLint, production build, `verify:v3`, `brain:verify`, and `map:verify` all passed.
+
+
 
 
 

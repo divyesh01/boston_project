@@ -655,14 +655,21 @@ export function createBusinessSyncClient({
     const effective = row || previous;
     if (row) assertLosslessJson(row);
     const mutation_id = `web_${crypto.randomUUID()}`;
+    let recordId = effective.id;
+    if (entity === 'Property') {
+      const canonical = await exactLocalGet(localDb.Property, effective.id ?? effective.code);
+      if (canonical?.id != null) recordId = canonical.id;
+    }
+    const payloadRow = row && entity === 'Property' && recordId !== row.id ? { ...row, id: recordId } : (row || undefined);
+    const basePrevious = previous && entity === 'Property' && recordId !== previous.id ? { ...previous, id: recordId } : previous;
     const payload = {
       mutation_id,
       entity,
       operation,
-      record_key: typedRecordKey(effective.id),
-      property_key: entity === 'Property' ? typedRecordKey(effective.id) : typedRecordKey(effective.property_id),
-      row: row || undefined,
-      base_row_hash: previous ? await sha256Hex(canonicalJson(previous)) : null,
+      record_key: typedRecordKey(recordId),
+      property_key: entity === 'Property' ? typedRecordKey(recordId) : typedRecordKey(effective.property_id),
+      row: payloadRow,
+      base_row_hash: basePrevious ? await sha256Hex(canonicalJson(basePrevious)) : null,
     };
     const entry = { mutation_id, entity, operation, payload, created_at: new Date().toISOString() };
     await localDb.BusinessSyncOutbox.put(entry);
@@ -804,8 +811,12 @@ export function createBusinessSyncClient({
       async get(id) {
         if (!activeTransaction) {
           if (entity === 'Property') {
-            const row = await exactLocalGet(table, id);
+            let row = await exactLocalGet(table, id);
             if (row) return row;
+            try {
+              await syncPropertyRoster();
+              return await exactLocalGet(table, id);
+            } catch {}
           }
           await ensureFresh();
           return localProxy.get(id);
@@ -814,7 +825,9 @@ export function createBusinessSyncClient({
       },
       async create(data) {
         if (activeTransaction) return captureCreate(data);
-        await ensureFresh();
+        if (entity !== 'Property') {
+          await ensureFresh();
+        }
         const now = new Date().toISOString();
         const prepared = await prepareCreate(entity, data);
         const row = { ...prepared, id: prepared.id ?? crypto.randomUUID(), created_date: prepared.created_date || now, updated_date: now };
@@ -833,8 +846,14 @@ export function createBusinessSyncClient({
       },
       async update(id, data) {
         if (activeTransaction) return captureUpdate(id, data);
-        await ensureFresh();
-        const previous = await exactLocalGet(table, id);
+        if (entity !== 'Property') {
+          await ensureFresh();
+        }
+        let previous = await exactLocalGet(table, id);
+        if (!previous && entity === 'Property') {
+          await syncPropertyRoster().catch(() => {});
+          previous = await exactLocalGet(table, id);
+        }
         if (!previous) throw new Error(`${entity} record not found.`);
         const prepared = await prepareUpdate(entity, previous, data);
         const row = { ...previous, ...prepared, id: previous.id, updated_date: new Date().toISOString() };
@@ -846,8 +865,14 @@ export function createBusinessSyncClient({
       },
       async delete(id) {
         if (activeTransaction) return captureDelete(id);
-        await ensureFresh();
-        const previous = await exactLocalGet(table, id);
+        if (entity !== 'Property') {
+          await ensureFresh();
+        }
+        let previous = await exactLocalGet(table, id);
+        if (!previous && entity === 'Property') {
+          await syncPropertyRoster().catch(() => {});
+          previous = await exactLocalGet(table, id);
+        }
         if (!previous) return { success: true };
         await sendMutation(entity, 'delete', null, previous);
         await localProxy.delete(previous.id);

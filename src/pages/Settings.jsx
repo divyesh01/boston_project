@@ -465,6 +465,12 @@ export default function Settings() {
     rotateCsrfToken();
   };
 
+  const withActionTimeout = (promise, ms = 8000, message = "Operation timed out. Please check your connection and try again.") =>
+    Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+    ]);
+
   const handleAddProperty = async () => {
     if (!newPropCode.trim() || !newPropName.trim()) return;
     const rateLimit = sensitiveActionRateLimiter.check();
@@ -488,7 +494,11 @@ export default function Settings() {
     setPropMsgType("info");
     setIsAddingProp(true);
     try {
-      const existing = await db.entities.Property.filter({ code: sanitizedCode });
+      const existing = await withActionTimeout(
+        db.entities.Property.filter({ code: sanitizedCode }),
+        8000,
+        "Timed out checking existing property."
+      );
       if (existing.length > 0) {
         setPropMsg(`Property with code "${sanitizedCode}" already exists (${existing[0].name || "Active"}).`);
         setPropMsgType("error");
@@ -498,12 +508,16 @@ export default function Settings() {
       }
       const sanitizedName = sanitizeCsvCell(sanitizeText(newPropName.trim()));
       const sanitizedRooms = Math.max(1, Math.min(10000, Number(newPropRooms) || 100));
-      await db.entities.Property.create({
-        code: sanitizedCode,
-        name: sanitizedName,
-        rooms: sanitizedRooms,
-        active: true,
-      });
+      await withActionTimeout(
+        db.entities.Property.create({
+          code: sanitizedCode,
+          name: sanitizedName,
+          rooms: sanitizedRooms,
+          active: true,
+        }),
+        8000,
+        "Timed out adding property."
+      );
       setPropMsg(`Property "${sanitizedName}" added.`);
       setPropMsgType("success");
       setNewPropCode("");
@@ -532,7 +546,11 @@ export default function Settings() {
     setIsTogglingActive(property.id);
     try {
       const nextActive = property.active === false ? true : false;
-      await db.entities.Property.update(property.id, { active: nextActive });
+      await withActionTimeout(
+        db.entities.Property.update(property.id, { active: nextActive }),
+        8000,
+        "Timed out updating property status."
+      );
       toast({
         title: nextActive ? "Property Activated" : "Property Deactivated",
         description: `${property.name} (${property.code}) is now ${nextActive ? "Active" : "Inactive"}.`,
@@ -570,12 +588,16 @@ export default function Settings() {
     const sanitizedState = sanitizeAlphanumeric(editPropState.trim()).toUpperCase().slice(0, 10);
     setIsSavingEditProp(true);
     try {
-      await db.entities.Property.update(propEditTarget.id, {
-        name: sanitizedName,
-        rooms: sanitizedRooms,
-        city: sanitizedCity || null,
-        state: sanitizedState || null,
-      });
+      await withActionTimeout(
+        db.entities.Property.update(propEditTarget.id, {
+          name: sanitizedName,
+          rooms: sanitizedRooms,
+          city: sanitizedCity || null,
+          state: sanitizedState || null,
+        }),
+        8000,
+        "Timed out saving property changes."
+      );
       toast({
         title: "Property Updated",
         description: `Changes to "${sanitizedName}" saved successfully.`,
@@ -610,7 +632,11 @@ export default function Settings() {
     try {
       // 1. Authoritative delete: server D1 cascade deletes all business_record rows
       // referencing this property and the property row atomically in <500ms.
-      await db.entities.Property.delete(id);
+      await withActionTimeout(
+        db.entities.Property.delete(id),
+        8000,
+        "Timed out deleting property."
+      );
 
       // 2. Direct client-side cleanup of local IndexedDB tables in milliseconds
       // without making 38,000+ individual HTTP network requests.

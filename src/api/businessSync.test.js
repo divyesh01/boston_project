@@ -72,7 +72,76 @@ describe('businessSync', () => {
     expect(await localDb.Property.toArray()).toEqual([property]);
     expect(await localDb.Expense.toArray()).toEqual([expense]);
     expect((await localDb.BusinessSyncState.get('authoritative-business-data')).generation_id).toBe('generation-1');
-  });
+  }, 15000);
+
+  it('rebuilds missing property roster when BusinessSyncState exists but Property table is empty', async () => {
+    await localDb.BusinessSyncState.put({
+      key: 'authoritative-business-data',
+      generation_id: 'generation-1',
+      revision: 5,
+      scope_fingerprint: 'scope-1',
+      updated_at: new Date().toISOString(),
+    });
+    const property = { id: 1, code: 'RRI1416', name: 'Red roof Middleboro', rooms: 100, active: true };
+    const request = async (path) => {
+      if (path.startsWith('business-sync/feed')) {
+        return { items: [], active_generation_id: 'generation-1', scope_fingerprint: 'scope-1', current_revision: 5, next_revision: 5, has_more: false };
+      }
+      if (path.startsWith('business-sync/snapshot')) {
+        const entity = new URL(`https://x/${path}`).searchParams.get('entity');
+        const rows = entity === 'Property' ? [property] : [];
+        return {
+          generation_id: 'generation-1', snapshot_revision: 5, scope_fingerprint: 'scope-1', entity,
+          items: await Promise.all(rows.map(async (row) => ({ record_key: typedRecordKey(row.id), row_hash: await sha256Hex(canonicalJson(row)), row }))),
+          has_more: false, next_cursor: null,
+        };
+      }
+      throw new Error(`unexpected request ${path}`);
+    };
+    const client = createBusinessSyncClient({ request });
+    const result = await client.api.syncNow();
+    expect(result.active).toBe(true);
+    expect(await localDb.Property.count()).toBe(1);
+    expect(await localDb.Property.toArray()).toEqual([property]);
+  }, 15000);
+
+  it('triggers rehydration when Property create encounters a 409 mapped code collision', async () => {
+    await localDb.BusinessSyncState.put({
+      key: 'authoritative-business-data',
+      generation_id: 'generation-1',
+      revision: 5,
+      scope_fingerprint: 'scope-1',
+      updated_at: new Date().toISOString(),
+    });
+    const property = { id: 1, code: 'RRI1416', name: 'Red roof Middleboro', rooms: 100, active: true };
+    const request = async (path) => {
+      if (path.startsWith('business-sync/feed')) {
+        return { items: [], active_generation_id: 'generation-1', scope_fingerprint: 'scope-1', current_revision: 5, next_revision: 5, has_more: false };
+      }
+      if (path === 'business-sync/mutate') {
+        throw Object.assign(new Error('property code is already mapped'), { status: 409 });
+      }
+      if (path.startsWith('business-sync/snapshot')) {
+        const entity = new URL(`https://x/${path}`).searchParams.get('entity');
+        const rows = entity === 'Property' ? [property] : [];
+        return {
+          generation_id: 'generation-1', snapshot_revision: 5, scope_fingerprint: 'scope-1', entity,
+          items: await Promise.all(rows.map(async (row) => ({ record_key: typedRecordKey(row.id), row_hash: await sha256Hex(canonicalJson(row)), row }))),
+          has_more: false, next_cursor: null,
+        };
+      }
+      throw new Error(`unexpected request ${path}`);
+    };
+    const client = createBusinessSyncClient({ request });
+    const localProxy = {
+      list: async () => localDb.Property.toArray(),
+      filter: async (q) => (await localDb.Property.toArray()).filter(r => !q.code || r.code === q.code),
+    };
+    const proxy = client.wrapEntity('Property', localProxy);
+    await expect(proxy.create({ code: 'RRI1416', name: 'Midelboro', rooms: 100 })).rejects.toThrow('property code is already mapped');
+    expect(await localDb.Property.count()).toBe(1);
+    expect(await localDb.Property.toArray()).toEqual([property]);
+  }, 15000);
 
   it('does not write to IndexedDB when the authoritative server rejects a create', async () => {
     await localDb.BusinessSyncState.put({ key: 'authoritative-business-data', generation_id: 'generation-1', revision: 0, scope_fingerprint: 'scope-1' });

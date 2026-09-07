@@ -301,7 +301,7 @@ export function createBusinessSyncClient({
     return { rebuild: false, state: next };
   }
 
-  async function hydrate({ force = false } = {}) {
+  async function hydrate({ force = false, allowDuringTransaction = false } = {}) {
     if (hydrationPromise) return hydrationPromise;
     hydrationPromise = (async () => {
       isHydrating = true;
@@ -310,7 +310,15 @@ export function createBusinessSyncClient({
         if (!force && prior?.generation_id) {
           try {
             const applied = await applyFeed(prior);
-            if (!applied.rebuild) return { active: true, rebuilt: false, ...applied.state };
+            if (!applied.rebuild) {
+              if (allowDuringTransaction || transactionPending) {
+                return { active: true, rebuilt: false, ...applied.state };
+              }
+              const localPropertyCount = await localDb.Property.count();
+              if (localPropertyCount > 0 || prior?.empty_roster_confirmed) {
+                return { active: true, rebuilt: false, ...applied.state };
+              }
+            }
           } catch (error) {
             if ((typeof navigator !== 'undefined' && navigator.onLine === false) || error?.status == null) return { active: true, offline: true, rebuilt: false, ...prior };
             throw error;
@@ -330,7 +338,14 @@ export function createBusinessSyncClient({
             await localDb[entity].clear();
             if (snapshot.byEntity[entity].length) await localDb[entity].bulkPut(snapshot.byEntity[entity]);
           }
-          await localDb.BusinessSyncState.put({ key: SYNC_STATE_KEY, generation_id: snapshot.generation_id, revision: snapshot.revision, scope_fingerprint: snapshot.scope_fingerprint, updated_at: new Date().toISOString() });
+          await localDb.BusinessSyncState.put({
+            key: SYNC_STATE_KEY,
+            generation_id: snapshot.generation_id,
+            revision: snapshot.revision,
+            scope_fingerprint: snapshot.scope_fingerprint,
+            empty_roster_confirmed: snapshot.byEntity.Property.length === 0,
+            updated_at: new Date().toISOString()
+          });
         });
         for (const entity of BUSINESS_ENTITIES) {
           if (snapshot.byEntity[entity].length) {
@@ -375,7 +390,7 @@ export function createBusinessSyncClient({
     pullPromise = (async () => {
       try { await flushOutbox(); }
       catch (error) { if (error?.status != null) throw error; }
-      await hydrate();
+      await hydrate({ allowDuringTransaction });
       // Arm the throttle only once the pull has left the cache authoritative.
       // `hydrate` resolves for a completed swap, for an offline fall back to a
       // usable prior cache, and for an inactive dataset; it throws only when no
@@ -704,11 +719,18 @@ export function createBusinessSyncClient({
         const now = new Date().toISOString();
         const prepared = await prepareCreate(entity, data);
         const row = { ...prepared, id: prepared.id ?? crypto.randomUUID(), created_date: prepared.created_date || now, updated_date: now };
-        const result = await sendMutation(entity, 'upsert', row, null);
-        await table.put(result.row);
-        notify(entity, 'create', result.row);
-        publish(entity, 'create', result.row);
-        return result.row;
+        try {
+          const result = await sendMutation(entity, 'upsert', row, null);
+          await table.put(result.row);
+          notify(entity, 'create', result.row);
+          publish(entity, 'create', result.row);
+          return result.row;
+        } catch (error) {
+          if (entity === 'Property' && (error?.status === 409 || /already mapped|belongs to another property/i.test(String(error?.message)))) {
+            await hydrate({ force: true }).catch(() => {});
+          }
+          throw error;
+        }
       },
       async update(id, data) {
         if (activeTransaction) return captureUpdate(id, data);

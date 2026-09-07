@@ -55,6 +55,8 @@ export default function Settings() {
   const [newPropName, setNewPropName] = useState("");
   const [newPropRooms, setNewPropRooms] = useState("100");
   const [propMsg, setPropMsg] = useState("");
+  const [propMsgType, setPropMsgType] = useState("info");
+  const [isAddingProp, setIsAddingProp] = useState(false);
   const [propDeleteTarget, setPropDeleteTarget] = useState(null);
   
   // MFA self-service state
@@ -463,11 +465,14 @@ export default function Settings() {
       return;
     }
     setPropMsg("");
+    setPropMsgType("info");
+    setIsAddingProp(true);
     try {
       const sanitizedCode = sanitizeAlphanumeric(newPropCode.trim()).toUpperCase();
       const existing = await db.entities.Property.filter({ code: sanitizedCode });
       if (existing.length > 0) {
         setPropMsg("A property with this code already exists.");
+        setPropMsgType("error");
         return;
       }
       const sanitizedName = sanitizeCsvCell(sanitizeText(newPropName.trim()));
@@ -479,6 +484,7 @@ export default function Settings() {
         active: true,
       });
       setPropMsg(`Property "${sanitizedName}" added.`);
+      setPropMsgType("success");
       setNewPropCode("");
       setNewPropName("");
       setNewPropRooms("100");
@@ -487,6 +493,13 @@ export default function Settings() {
       rotateCsrfToken();
     } catch (e) {
       setPropMsg(e.message || "Could not add property.");
+      setPropMsgType("error");
+      if (/already mapped|belongs to another property/i.test(String(e.message))) {
+        refetchProps();
+        queryClientInstance.invalidateQueries({ queryKey: ["properties"] });
+      }
+    } finally {
+      setIsAddingProp(false);
     }
   };
 
@@ -523,6 +536,8 @@ export default function Settings() {
       }
       await db.entities.Property.delete(id);
       setPropDeleteTarget(null);
+      setPropMsg("Property removed.");
+      setPropMsgType("success");
       refetchProps();
       queryClientInstance.invalidateQueries({ queryKey: ["properties"] });
       queryClientInstance.invalidateQueries({ queryKey: ["occupancy"] });
@@ -534,6 +549,7 @@ export default function Settings() {
       rotateCsrfToken();
     } catch (e) {
       setPropMsg(e.message || "Could not delete property.");
+      setPropMsgType("error");
     }
   };
 
@@ -1055,7 +1071,15 @@ export default function Settings() {
               </div>
             </div>
           ))}
-          {!properties.length && <p className="text-sm text-slate-500">No properties yet. Add your first property below.</p>}
+          {propertiesQ.isLoading && (
+            <div className="flex items-center gap-2 py-3 text-sm text-slate-400">
+              <Loader2 className="h-4 w-4 animate-spin text-[#00D4FF]" />
+              Loading properties...
+            </div>
+          )}
+          {!propertiesQ.isLoading && !properties.length && (
+            <p className="text-sm text-slate-500">No properties yet. Add your first property below.</p>
+          )}
         </div>
 
         <AlertDialog open={!!propDeleteTarget} onOpenChange={(open) => { if (!open) setPropDeleteTarget(null); }}>
@@ -1067,7 +1091,7 @@ export default function Settings() {
                 report rows (occupancy, sources, gross revenue, payments, clerk records, expenses, payroll, and uploaded
                 report history). This cannot be undone.
               </AlertDialogDescription>
-              {propMsg.includes("Could not delete") && <p className="text-sm text-[#FF6B6B]">{propMsg}</p>}
+              {propMsg && propMsgType === "error" && <p className="text-sm text-[#FF6B6B]">{propMsg}</p>}
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel className="border-white/10 bg-[#0A1628] text-slate-300 hover:bg-[#1a2a40] hover:text-white">
@@ -1089,14 +1113,16 @@ export default function Settings() {
             value={newPropCode}
             onChange={(e) => setNewPropCode(e.target.value)}
             placeholder="Code (e.g. RRI1416)"
-            className="rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]"
+            disabled={isAddingProp}
+            className="rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF] disabled:opacity-50"
           />
           <input
             type="text"
             value={newPropName}
             onChange={(e) => setNewPropName(e.target.value)}
             placeholder="Property name"
-            className="sm:col-span-2 rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]"
+            disabled={isAddingProp}
+            className="sm:col-span-2 rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF] disabled:opacity-50"
           />
           <input
             type="number"
@@ -1104,24 +1130,31 @@ export default function Settings() {
             value={newPropRooms}
             onChange={(e) => setNewPropRooms(e.target.value)}
             placeholder="Rooms"
-            className="rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]"
+            disabled={isAddingProp}
+            className="rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF] disabled:opacity-50"
           />
         </div>
         <div className="mt-3 flex items-center gap-3">
           <button
             onClick={handleAddProperty}
-            disabled={!newPropCode.trim() || !newPropName.trim()}
+            disabled={isAddingProp || propertiesQ.isLoading || !newPropCode.trim() || !newPropName.trim()}
             className="flex items-center gap-2 rounded-lg bg-[#6C63FF] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#5b52e8] disabled:opacity-50"
           >
-            <Plus className="h-4 w-4" /> Add Property
+            {isAddingProp ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            {isAddingProp ? "Adding Property..." : "Add Property"}
           </button>
           <button
             onClick={() => { refetchProps(); queryClientInstance.invalidateQueries({ queryKey: ["properties"] }); }}
-            className="flex items-center gap-2 rounded-lg border border-white/10 px-4 py-2.5 text-sm text-slate-400 transition-colors hover:border-[#00D4FF]/60 hover:text-white"
+            disabled={propertiesQ.isFetching}
+            className="flex items-center gap-2 rounded-lg border border-white/10 px-4 py-2.5 text-sm text-slate-400 transition-colors hover:border-[#00D4FF]/60 hover:text-white disabled:opacity-50"
           >
-            <RefreshCw className="h-4 w-4" /> Refresh
+            <RefreshCw className={`h-4 w-4 ${propertiesQ.isFetching ? "animate-spin text-[#00D4FF]" : ""}`} /> Refresh
           </button>
-          {propMsg && <span className="text-sm text-[#00E096]">{propMsg}</span>}
+          {propMsg && (
+            <span className={`text-sm ${propMsgType === "error" ? "text-[#FF6B6B]" : "text-[#00E096]"}`}>
+              {propMsg}
+            </span>
+          )}
         </div>
       </Card>
 

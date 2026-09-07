@@ -6380,6 +6380,32 @@ API needs a user-scoped token with Workers Builds Configuration:Edit, mintable
 only at dash.cloudflare.com/profile/api-tokens. No trigger was created, modified,
 or deleted; live `boston-project` re-verified 200 throughout.
 
+## 64. Settings Property Management roster cache healing and Add Property error UX (2026-09-07)
+
+Settings → Property Management previously rendered "No properties yet" and "0 properties"
+when a client held valid `BusinessSyncState` with no property records in local IndexedDB.
+Attempting to create `RRI1416` generated a new random client-side UUID, prompting the
+Worker to reject the creation with HTTP 409 (`property code is already mapped` or `belongs to another property`).
+Settings caught the error and rendered it in green text (`text-[#00E096]`) while inputs remained populated,
+giving the appearance of an inert or silently failing form.
+
+Resolution:
+1. `src/api/businessSync.js`:
+   - `hydrate()` checks `localDb.Property.count()`. If zero and `empty_roster_confirmed` is not set,
+     it falls through to `fetchSnapshot()` to heal the missing roster unless inside an active transaction (`allowDuringTransaction || transactionPending`).
+   - `fetchSnapshot()` records `empty_roster_confirmed: snapshot.byEntity.Property.length === 0` in `BusinessSyncState`.
+   - `wrapEntity.create('Property')` catches HTTP 409 collisions and triggers `hydrate({ force: true })`
+     so the client immediately syncs the authoritative property roster from D1.
+2. `src/pages/Settings.jsx`:
+   - Added `isAddingProp` loading state and disable guards on input fields and "Add Property" button during mutation.
+   - Shows a loading indicator (`Loader2`) while `propertiesQ.isLoading` rather than prematurely stating "No properties yet".
+   - Differentiates error and success messaging (`propMsgType`), styling errors with `text-[#FF6B6B]` (red) and success with `text-[#00E096]` (green).
+   - Automatically triggers `refetchProps()` and query invalidation on 409 mapped code collisions.
+3. Automated verification:
+   - Added unit tests in `src/api/businessSync.test.js` covering cache roster healing and 409 rehydration.
+   - All 49 test files and 421 tests passed; typecheck, lint, build, and verify:v3 green.
+
+
 
 
 

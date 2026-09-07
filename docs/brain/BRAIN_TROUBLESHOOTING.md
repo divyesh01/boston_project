@@ -6361,6 +6361,17 @@ reads wrote zero business rows. NOT done (no owner session available): controlle
 1-row transaction + rollback, and the authenticated Browser A → B → C disposable CRUD.
 No test rows created, no data re-uploaded, no rollback executed on prod.
 
+CI MISBINDING (same night, owner action required): the connected Cloudflare Builds
+project targets Worker `divyesh`, not `boston-project`, so its deploy overrides the
+`wrangler.jsonc` name and then fails on the missing `PASSWORD_PEPPER_V1` secret —
+build green, deploy red. Laptop deploys are unaffected: `boston-project` is live on
+`c5d9e0d0` at 100% and `wrangler secret list` confirms the pepper binding exists
+there (names only, value never read). Do NOT add the pepper to `divyesh` and do NOT
+merge any auto-PR renaming the config to `divyesh`. Fix is dashboard-side: disconnect
+the repo under worker `divyesh` (Settings → Builds → Disconnect), then connect it
+under worker `boston-project` (Settings → Builds → Connect, branch main), then retry
+the build and confirm the new version promotes on `boston-project`.
+
 
 
 

@@ -6371,6 +6371,14 @@ merge any auto-PR renaming the config to `divyesh`. Fix is dashboard-side: disco
 the repo under worker `divyesh` (Settings → Builds → Disconnect), then connect it
 under worker `boston-project` (Settings → Builds → Connect, branch main), then retry
 the build and confirm the new version promotes on `boston-project`.
+AUTOMATED-FIX ATTEMPT (same night, blocked): the Builds REST API would allow
+recreating the trigger on `boston-project` (worker tags resolved: `boston-project`
+8f22adcbf50c4de480fb9bd72e6588b7, `divyesh` a1520e3d854f421980eca2f7a656f0ac),
+but GET /builds/workers/{tag}/triggers rejects the wrangler OAuth token twice
+with code 10000 while the same token reads /workers/scripts fine — the Builds
+API needs a user-scoped token with Workers Builds Configuration:Edit, mintable
+only at dash.cloudflare.com/profile/api-tokens. No trigger was created, modified,
+or deleted; live `boston-project` re-verified 200 throughout.
 
 
 

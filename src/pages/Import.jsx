@@ -588,7 +588,7 @@ export default function Import() {
       // named only the data tables — so a clear-all left the rollback ledger and the
       // import history behind, and the page went on offering "Undo" for imports whose
       // rows were gone (scripts/probe-clear-all-rollback.mjs).
-      const removed = await clearAllImportedData();
+      const removed = await clearAllImportedData({ propertyId: "all" });
       queryClientInstance.invalidateQueries({ queryKey: ["daily-aggregates"] });
       setQueue([]);
       setResults([]);

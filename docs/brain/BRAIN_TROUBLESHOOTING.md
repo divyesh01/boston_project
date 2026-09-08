@@ -6776,3 +6776,35 @@ A deep forensic verification across client stores, calculation engines, worker v
    - Receiving remote settings triggered `subscribeSettingsChange`, updating React state in `Settings.jsx`, which then triggered auto-save `useEffect` hooks that re-sent the identical settings back to the cloud. Furthermore, `Payments.jsx`, `OtaChannels.jsx`, `MonthlyCalendar.jsx`, and `Pricing.jsx` did not subscribe to `useSettingsVersion()`.
    - Fix: Added `isRemoteUpdate` ref in `src/pages/Settings.jsx` to prevent circular re-saves, and wired `useSettingsVersion()` into `Payments.jsx`, `OtaChannels.jsx`, `MonthlyCalendar.jsx`, and `Pricing.jsx` so calculations and form states automatically re-render when remote changes arrive.
 
+## 71. Authoritative Scoped Data Deletion & Reset (#65) (2026-09-08)
+
+### Symptoms & Root Cause
+When an operator clicked **"Clear all imported data"** on `/upload`, the client threw:
+`boston-project.divyesh-boston.workers.dev says: Could not clear data: Authoritative sync does not permit an unscoped clear. Delete records through a scoped, auditable workflow.`
+
+In legacy versions, `clearAllImportedData` called Dexie's `table.clear()` across local stores. When Cloudflare D1 Authoritative Sync was introduced as the single source of truth for 38,687 business records, `wrapEntity` added a guard `throw new Error('Authoritative sync does not permit an unscoped clear...')` to prevent accidental un-audited server wipes. However:
+1. `clearAllImportedData` in `src/lib/importReset.js` was never upgraded to use an authoritative server workflow.
+2. Simply wiping local Dexie without updating Cloudflare D1 caused background `hydrate()` to treat local store as missing records and immediately re-download all deleted records (the "zombie data" trap).
+3. Dexie transactions break and auto-commit if an asynchronous `fetch` network call is awaited inside them, requiring the server reset call to occur strictly outside the Dexie transaction zone.
+
+### Permanent Core Fix
+1. **Cloudflare Worker Backend (`worker/business-sync.js`)**:
+   - Added `POST /api/business-sync/reset` handler with RBAC enforcement (`requireMutationRole(scope)`, owner/admin only, `scope.all` required for portfolio-wide reset).
+   - Enforced `RESETTABLE_ENTITIES` (`OccupancyDay`, `SourceDay`, `GrossRevenueDay`, `PaymentDay`, `ClerkShiftRecord`, `UploadedReport`, `HotelMetric`, `TransactionLine`, `AnomalyAlert`, `AdjustmentRefund`, `DailyFinancialAggregate`, `ScanResult`, `TimecardPunch`).
+   - Hard-blocked deletion of protected configuration (`Property`, `User`, `Staff`, `PayrollRun`, `Expense`, `Room`, `RoomType`, `ChannelMap`). Any attempt to reset them returns 422.
+   - Atomically deletes target rows from `business_record` and `business_change`, advances `business_sync_state.revision`, and inserts a `property_delete` change row to instruct other tabs/browsers that a feed rebuild is required.
+2. **Client Sync Engine (`src/api/businessSync.js`)**:
+   - Implemented `resetImportedData({ propertyId = 'all', entities = null })` in `createBusinessSyncClient`. Sends request to `POST /api/business-sync/reset`, sweeps `BusinessSyncOutbox` for affected entities, updates local `BusinessSyncState` revision, and publishes reset events.
+   - Updated `wrapEntity(entity).clear()`: delegates to `resetImportedData({ entities: [entity] })` for resettable entities instead of throwing, and preserves strict refusal for persistent entities.
+3. **Import Reset Pipeline (`src/lib/importReset.js`)**:
+   - Updated `clearAllImportedData({ propertyId = 'all' } = {})` to invoke `db.businessData.resetImportedData({ propertyId })` first outside the Dexie transaction zone.
+   - Executes local Dexie clear inside a single `rw` transaction and wipes import lifecycle sessions in `secureStore`.
+4. **Import Page UI (`src/pages/Import.jsx`)**:
+   - Updated `handleClearAll` to call `clearAllImportedData({ propertyId: "all" })` and invalidate queries.
+5. **Verification**:
+   - Proved with `scripts/probe-business-sync-reset.mjs` (6 of 6 checks passed).
+   - Proved with `scripts/probe-worker-business-sync.mjs` (37 of 37 passed).
+   - Proved with `scripts/probe-clear-all-rollback.mjs` (42 of 42 passed).
+   - Proved with `src/api/businessSync.test.js` (29 of 29 tests passed).
+
+

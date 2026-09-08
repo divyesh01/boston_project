@@ -18,6 +18,14 @@ export const BUSINESS_ENTITIES = Object.freeze([
 ]);
 const ENTITY_SET = new Set(BUSINESS_ENTITIES);
 
+export const RESETTABLE_ENTITIES = Object.freeze([
+  "OccupancyDay", "SourceDay", "GrossRevenueDay", "PaymentDay",
+  "ClerkShiftRecord", "UploadedReport", "HotelMetric", "TransactionLine",
+  "AnomalyAlert", "AdjustmentRefund", "DailyFinancialAggregate", "ScanResult",
+  "TimecardPunch",
+]);
+const RESETTABLE_SET = new Set(RESETTABLE_ENTITIES);
+
 class SyncRequestError extends Error {
   constructor(message, status = 400, details = {}) {
     super(message);
@@ -1260,9 +1268,102 @@ async function reserveIdSequence(request, env, scope) {
   return Response.json({ prefix, sequence: Number(row.last_seq) });
 }
 
+async function resetImportedData(request, env, scope) {
+  requireMutationRole(scope);
+  const role = String(scope.user.role || "").toLowerCase();
+  if (!["owner", "admin"].includes(role)) {
+    throw new SyncRequestError("only owner or admin can reset imported data", 403);
+  }
+  const body = await readBody(request).catch(() => ({}));
+  const propertyId = body?.property_id ? String(body.property_id).trim() : "all";
+  const isAllProperties = !propertyId || propertyId === "all";
+
+  if (isAllProperties) {
+    if (!scope.all) {
+      throw new SyncRequestError("only an all-property owner or admin can reset all properties", 403);
+    }
+  } else {
+    assertPropertyInScope(scope, propertyId);
+  }
+
+  let targetEntities = RESETTABLE_ENTITIES;
+  if (Array.isArray(body?.entities) && body.entities.length > 0) {
+    for (const ent of body.entities) {
+      if (!RESETTABLE_SET.has(ent)) {
+        throw new SyncRequestError(`entity ${ent} is not resettable`, 422);
+      }
+    }
+    targetEntities = body.entities;
+  }
+
+  const pointer = await queryFirst(env, "SELECT active_generation_id FROM business_dataset_pointer WHERE account_id=?", [scope.accountId]);
+  if (!pointer) {
+    return Response.json({ ok: true, deleted_records: 0, message: "no active dataset" });
+  }
+  const activeGenerationId = String(pointer.active_generation_id);
+
+  const placeholders = targetEntities.map(() => "?").join(",");
+  const countSql = isAllProperties
+    ? `SELECT COUNT(*) AS total FROM business_record WHERE account_id=? AND generation_id=? AND entity_name IN (${placeholders})`
+    : `SELECT COUNT(*) AS total FROM business_record WHERE account_id=? AND generation_id=? AND entity_name IN (${placeholders}) AND server_property_id=?`;
+  const countParams = isAllProperties
+    ? [scope.accountId, activeGenerationId, ...targetEntities]
+    : [scope.accountId, activeGenerationId, ...targetEntities, propertyId];
+  const countRow = await queryFirst(env, countSql, countParams);
+  const deletedCount = Number(countRow?.total || 0);
+
+  const currentRevisionRow = await queryFirst(env, "SELECT revision FROM business_sync_state WHERE account_id=?", [scope.accountId]);
+  const currentRevision = Number(currentRevisionRow?.revision || 0);
+  const newRevision = currentRevision + 1;
+  const now = new Date().toISOString();
+  const resetMutationId = `reset:${crypto.randomUUID()}`;
+  const resetHash = await sha256(canonicalJson({ action: "reset", property_id: propertyId, revision: newRevision, entities: targetEntities }));
+
+  const statements = [];
+  if (isAllProperties) {
+    statements.push(env.DB.prepare(
+      `DELETE FROM business_record WHERE account_id=? AND generation_id=? AND entity_name IN (${placeholders})`
+    ).bind(scope.accountId, activeGenerationId, ...targetEntities));
+    statements.push(env.DB.prepare(
+      `DELETE FROM business_change WHERE account_id=? AND entity_name IN (${placeholders})`
+    ).bind(scope.accountId, ...targetEntities));
+  } else {
+    statements.push(env.DB.prepare(
+      `DELETE FROM business_record WHERE account_id=? AND generation_id=? AND entity_name IN (${placeholders}) AND server_property_id=?`
+    ).bind(scope.accountId, activeGenerationId, ...targetEntities, propertyId));
+    statements.push(env.DB.prepare(
+      `DELETE FROM business_change WHERE account_id=? AND entity_name IN (${placeholders}) AND server_property_id=?`
+    ).bind(scope.accountId, ...targetEntities, propertyId));
+  }
+
+  statements.push(env.DB.prepare(
+    "INSERT INTO business_change (account_id,seq,generation_id,entity_name,record_key,server_property_id,operation,row_json,row_hash,mutation_id,request_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+  ).bind(scope.accountId, newRevision, activeGenerationId, targetEntities[0] || "OccupancyDay", "__reset__", isAllProperties ? null : propertyId, "property_delete", null, null, resetMutationId, resetHash, now));
+
+  statements.push(env.DB.prepare(
+    "UPDATE business_sync_state SET revision=? WHERE account_id=?"
+  ).bind(newRevision, scope.accountId));
+
+  statements.push(env.DB.prepare(
+    "UPDATE business_dataset_pointer SET updated_at=? WHERE account_id=?"
+  ).bind(now, scope.accountId));
+
+  await env.DB.batch(statements);
+
+  return Response.json({
+    ok: true,
+    deleted_records: deletedCount,
+    revision: newRevision,
+    updated_at: now,
+    property_id: propertyId,
+    entities: targetEntities,
+  });
+}
+
 export async function handleBusinessSyncRequest(request, env, scope, url, parts) {
   try {
     const action = parts[2] || "";
+    if (action === "reset" && request.method === "POST") return await resetImportedData(request, env, scope);
     if (action === "migration" && parts[3] === "start" && request.method === "POST") return await startMigration(request, env, scope);
     if (action === "migration" && parts[3] === "chunk" && request.method === "POST") return await uploadChunk(request, env, scope);
     if (action === "migration" && parts[3] === "activate" && request.method === "POST") return await activateMigration(request, env, scope);

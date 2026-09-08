@@ -104,11 +104,11 @@ export const IMPORT_LEDGER_TABLE = "ImportRecordIds";
  *                configuration — the dialog says these are kept.
  *
  * @returns {Promise<{deletedRows: number, deletedByTable: Record<string, number>,
- *                    ledgerRows: number, sessions: number}>}
+ *                    ledgerRows: number, sessions: number, serverReset?: any}>}
  *   Real counts, so the caller can tell the operator what was removed instead of
  *   asserting that something happened.
  */
-export async function clearAllImportedData() {
+export async function clearAllImportedData({ propertyId = "all" } = {}) {
   const tableNames = [...IMPORT_DATA_TABLES, ...DERIVED_CACHE_TABLES, IMPORT_LEDGER_TABLE];
 
   // Fail loudly on a name that is not a declared store, rather than clearing the
@@ -120,6 +120,22 @@ export async function clearAllImportedData() {
     throw new Error(`clearAllImportedData: not declared in localDb: ${unknown.join(", ")}`);
   }
 
+  // 1. Authoritative Cloudflare D1 server-side reset (outside Dexie transaction!)
+  // If online and businessData.resetImportedData is available, invoke it.
+  let serverReset = null;
+  try {
+    if (typeof db?.businessData?.resetImportedData === "function") {
+      serverReset = await db.businessData.resetImportedData({ propertyId });
+    }
+  } catch (err) {
+    // If unauthorized (403), rethrow to fail-closed and block unprivileged operators
+    if (err?.status === 403 || /forbidden|denied|only.*owner/i.test(err?.message || "")) {
+      throw err;
+    }
+    // Offline or sync disabled fallback: proceed with local clear
+    console.warn("[importReset] Server reset skipped or failed (offline?):", err?.message || err);
+  }
+
   /** @type {Record<string, number>} */
   const deletedByTable = {};
   await localDb.transaction(
@@ -129,7 +145,13 @@ export async function clearAllImportedData() {
       for (const name of tableNames) {
         // Counted before the clear so the caller reports what actually went.
         deletedByTable[name] = await localDb[name].count();
-        await db.entities[name].clear();
+        if (propertyId && propertyId !== "all" && name !== IMPORT_LEDGER_TABLE && name !== "DailyFinancialAggregate") {
+          const keys = await localDb[name].where("property_id").equals(propertyId).primaryKeys();
+          await localDb[name].bulkDelete(keys);
+          deletedByTable[name] = keys.length;
+        } else {
+          await localDb[name].clear();
+        }
       }
     }
   );
@@ -141,5 +163,5 @@ export async function clearAllImportedData() {
   // After the transaction: secureStore is not Dexie.
   const sessions = await clearImportSessions();
 
-  return { deletedRows, deletedByTable, ledgerRows, sessions };
+  return { deletedRows, deletedByTable, ledgerRows, sessions, serverReset };
 }

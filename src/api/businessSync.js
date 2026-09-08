@@ -10,6 +10,14 @@ export const BUSINESS_ENTITIES = Object.freeze([
   'RoomType', 'ChannelMap',
 ]);
 const ENTITY_SET = new Set(BUSINESS_ENTITIES);
+
+export const RESETTABLE_ENTITIES = Object.freeze([
+  'OccupancyDay', 'SourceDay', 'GrossRevenueDay', 'PaymentDay',
+  'ClerkShiftRecord', 'UploadedReport', 'HotelMetric', 'TransactionLine',
+  'AnomalyAlert', 'AdjustmentRefund', 'DailyFinancialAggregate', 'ScanResult',
+  'TimecardPunch',
+]);
+const RESETTABLE_SET = new Set(RESETTABLE_ENTITIES);
 const CHUNK_SIZE = 40;
 const TRANSACTION_CHUNK_SIZE = 13;
 const SYNC_STATE_KEY = 'authoritative-business-data';
@@ -933,10 +941,37 @@ export function createBusinessSyncClient({
       },
       async clear() {
         if (activeTransaction) throw new Error('Authoritative business transactions do not permit an unscoped clear.');
-        throw new Error('Authoritative sync does not permit an unscoped clear. Delete records through a scoped, auditable workflow.');
+        if (RESETTABLE_SET.has(entity)) {
+          return resetImportedData({ entities: [entity] });
+        }
+        throw new Error(`Authoritative sync does not permit an unscoped clear of persistent entity ${entity}. Delete records through a scoped, auditable workflow.`);
       },
     };
     return wrapped;
+  }
+
+  async function resetImportedData({ propertyId = 'all', entities = null } = {}) {
+    const targetEntities = Array.isArray(entities) && entities.length > 0 ? entities : RESETTABLE_ENTITIES;
+    const res = await request('business-sync/reset', {
+      method: 'POST',
+      body: JSON.stringify({ property_id: propertyId, entities: targetEntities }),
+    });
+    try {
+      await localDb.BusinessSyncOutbox.where('entity').anyOf(targetEntities).delete();
+    } catch {
+      // Outbox sweep is best-effort
+    }
+    const state = await localDb.BusinessSyncState.get(SYNC_STATE_KEY);
+    if (state && res?.revision) {
+      await localDb.BusinessSyncState.put({
+        ...state,
+        revision: res.revision,
+        updated_at: res.updated_at || new Date().toISOString(),
+      });
+    }
+    publish('dataset', 'reset', { propertyId, entities: targetEntities, revision: res?.revision });
+    notify('dataset', 'reset', { propertyId });
+    return res;
   }
 
   return {
@@ -954,6 +989,7 @@ export function createBusinessSyncClient({
       rollbackTransaction: (txId) => request('business-sync/transaction/rollback', { method: 'POST', body: JSON.stringify({ tx_id: txId }) }),
       deferImportRecordIds,
       recoverPendingTransactions,
+      resetImportedData,
     },
   };
 }

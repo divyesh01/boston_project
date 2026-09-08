@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import localDb from '@/api/localDb';
 import {
   BUSINESS_ENTITIES,
+  RESETTABLE_ENTITIES,
   canonicalJson,
   createBusinessSyncClient,
   inspectLocalBusinessData,
@@ -550,5 +551,114 @@ describe('authoritative business transactions', () => {
     await client.api.hydrateFromServer();
     expect(events).toContainEqual(['Expense', 'hydrate', { records: [{ id: 9, property_id: 7, amount: 9 }] }]);
     expect(published).toContainEqual(['Expense', 'hydrate', { records: [{ id: 9, property_id: 7, amount: 9 }] }]);
+  });
+
+  it('exports RESETTABLE_ENTITIES containing all 13 report and derived entities', () => {
+    expect(RESETTABLE_ENTITIES).toContain('OccupancyDay');
+    expect(RESETTABLE_ENTITIES).toContain('SourceDay');
+    expect(RESETTABLE_ENTITIES).toContain('GrossRevenueDay');
+    expect(RESETTABLE_ENTITIES).toContain('PaymentDay');
+    expect(RESETTABLE_ENTITIES).toContain('ClerkShiftRecord');
+    expect(RESETTABLE_ENTITIES).toContain('UploadedReport');
+    expect(RESETTABLE_ENTITIES).toContain('HotelMetric');
+    expect(RESETTABLE_ENTITIES).toContain('TransactionLine');
+    expect(RESETTABLE_ENTITIES).toContain('AnomalyAlert');
+    expect(RESETTABLE_ENTITIES).toContain('AdjustmentRefund');
+    expect(RESETTABLE_ENTITIES).toContain('DailyFinancialAggregate');
+    expect(RESETTABLE_ENTITIES).toContain('ScanResult');
+    expect(RESETTABLE_ENTITIES).toContain('TimecardPunch');
+    expect(RESETTABLE_ENTITIES).not.toContain('Property');
+    expect(RESETTABLE_ENTITIES).not.toContain('User');
+    expect(RESETTABLE_ENTITIES).not.toContain('Staff');
+    expect(RESETTABLE_ENTITIES).not.toContain('PayrollRun');
+    expect(RESETTABLE_ENTITIES).not.toContain('Expense');
+  });
+
+  it('resetImportedData sends POST to business-sync/reset and clears outbox', async () => {
+    const requests = [];
+    const events = [];
+    const published = [];
+    await localDb.BusinessSyncState.put({
+      key: 'authoritative-business-data',
+      generation_id: 'gen-1',
+      revision: 10,
+      scope_fingerprint: 'fp-1',
+      updated_at: new Date().toISOString(),
+    });
+    await localDb.BusinessSyncOutbox.put({
+      mutation_id: 'm1',
+      entity: 'OccupancyDay',
+      created_at: new Date().toISOString(),
+      payload: {},
+    });
+    await localDb.BusinessSyncOutbox.put({
+      mutation_id: 'm2',
+      entity: 'Property',
+      created_at: new Date().toISOString(),
+      payload: {},
+    });
+
+    const request = async (path, options) => {
+      requests.push({ path, options, body: options?.body ? JSON.parse(options.body) : null });
+      if (path === 'business-sync/reset') {
+        return { ok: true, deleted_records: 42, revision: 11, updated_at: '2026-09-08T12:00:00.000Z' };
+      }
+      throw new Error(`unexpected request ${path}`);
+    };
+
+    const client = createBusinessSyncClient({
+      request,
+      notify: (...args) => events.push(args),
+      publish: (...args) => published.push(args),
+    });
+
+    const res = await client.api.resetImportedData({ propertyId: 'all' });
+    expect(res.ok).toBe(true);
+    expect(res.deleted_records).toBe(42);
+    expect(requests[0].path).toBe('business-sync/reset');
+    expect(requests[0].body.property_id).toBe('all');
+    expect(requests[0].body.entities).toEqual(expect.arrayContaining(['OccupancyDay', 'UploadedReport']));
+
+    // OccupancyDay outbox cleared, Property outbox preserved
+    const outboxAfter = await localDb.BusinessSyncOutbox.toArray();
+    expect(outboxAfter.map((o) => o.entity)).toEqual(['Property']);
+
+    // State revision updated
+    const stateAfter = await localDb.BusinessSyncState.get('authoritative-business-data');
+    expect(stateAfter.revision).toBe(11);
+
+    // Event notifications fired
+    expect(published).toContainEqual(['dataset', 'reset', expect.objectContaining({ propertyId: 'all', revision: 11 })]);
+    expect(events).toContainEqual(['dataset', 'reset', { propertyId: 'all' }]);
+  });
+
+  it('wrapEntity clear delegates to resetImportedData for resettable entities', async () => {
+    let resetCalled = false;
+    const request = async (path, options) => {
+      if (path === 'business-sync/reset') {
+        resetCalled = true;
+        const body = JSON.parse(options.body);
+        expect(body.entities).toEqual(['OccupancyDay']);
+        return { ok: true, deleted_records: 5, revision: 12 };
+      }
+      throw new Error(`unexpected ${path}`);
+    };
+
+    const client = createBusinessSyncClient({ request });
+    const occupancyProxy = client.wrapEntity('OccupancyDay', {});
+    await occupancyProxy.clear();
+    expect(resetCalled).toBe(true);
+  });
+
+  it('wrapEntity clear rejects unscoped clear for protected persistent entities', async () => {
+    const client = createBusinessSyncClient({ request: async () => ({}) });
+    const propertyProxy = client.wrapEntity('Property', {});
+    await expect(propertyProxy.clear()).rejects.toThrow(/persistent entity Property/);
+
+    const staffProxy = client.wrapEntity('Staff', {});
+    await expect(staffProxy.clear()).rejects.toThrow(/persistent entity Staff/);
+
+    const payrollProxy = client.wrapEntity('PayrollRun', {});
+    await expect(payrollProxy.clear()).rejects.toThrow(/persistent entity PayrollRun/);
   });
 });

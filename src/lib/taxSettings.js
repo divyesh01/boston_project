@@ -15,8 +15,8 @@ const num = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 
-export function getTaxSettings() {
-  const raw = readJsonSetting(TAX_SETTINGS_KEY, []);
+export function getTaxSettings(propertyId = "*") {
+  const raw = readJsonSetting(TAX_SETTINGS_KEY, [], propertyId);
   if (Array.isArray(raw)) return raw;
   // Dropping this silently discards every configured tax period, and the caller
   // then falls back to the single legacy rate as though none had been set up.
@@ -26,12 +26,13 @@ export function getTaxSettings() {
 
 /**
  * @param {Array} list
+ * @param {string} [propertyId]
  * @returns {boolean} true only if the tax periods are now stored. A false return
  *   means the PREVIOUS tax periods are still what every tax figure is computed
  *   from, so a caller that reports success must check it.
  */
-export function saveTaxSettings(list) {
-  const saved = writeJsonSetting(TAX_SETTINGS_KEY, list || []);
+export function saveTaxSettings(list, propertyId = "*") {
+  const saved = writeJsonSetting(TAX_SETTINGS_KEY, list || [], propertyId);
   notifySettingsChanged();
   return saved;
 }
@@ -40,7 +41,21 @@ export function saveTaxSettings(list) {
 // Falls back to the legacy combined tax rate (state) when nothing is configured.
 export function getEffectiveTaxRates(propertyId, dateStr) {
   const q = String(dateStr || "").slice(0, 10) || "9999-12-31";
-  const recs = getTaxSettings().filter(
+  const allRecs = [
+    ...getTaxSettings(propertyId),
+    ...(propertyId && propertyId !== "*" ? getTaxSettings("*") : []),
+  ];
+  const seen = new Set();
+  const dedupedRecs = [];
+  for (const r of allRecs) {
+    const sig = `${r.property_id || "*"}|${r.effective_start || ""}|${r.effective_end || ""}|${r.state_rate}|${r.city_rate}|${r.other_rate}`;
+    if (!seen.has(sig)) {
+      seen.add(sig);
+      dedupedRecs.push(r);
+    }
+  }
+
+  const recs = dedupedRecs.filter(
     (r) =>
       (r.property_id === propertyId || r.property_id === "*" || !r.property_id) &&
       (!r.effective_start || q >= String(r.effective_start).slice(0, 10)) &&
@@ -49,7 +64,7 @@ export function getEffectiveTaxRates(propertyId, dateStr) {
   const specific = recs.filter((r) => r.property_id === propertyId);
   const pool = specific.length ? specific : recs;
   if (!pool.length) {
-    const legacy = Math.max(0, Math.min(1, getTaxRate() || 0));
+    const legacy = Math.max(0, Math.min(1, getTaxRate(propertyId) || 0));
     return { state: legacy, city: 0, other: 0, legacy: true };
   }
   const best = [...pool].sort((a, b) =>

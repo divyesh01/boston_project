@@ -87,9 +87,21 @@ export function reportFailedWrite(key, err) {
  *
  * @param {string} key
  * @param {*} [fallback] - returned when the key is absent or unreadable
+ * @param {string} [propertyId] - property scope
  * @returns {*} the stored string, or `fallback`
  */
-export function readRawSetting(key, fallback = null) {
+export function readRawSetting(key, fallback = null, propertyId = "*") {
+  if (propertyId && propertyId !== "*") {
+    try {
+      const byPropRaw = localStorage.getItem("rri_settings_by_property");
+      if (byPropRaw) {
+        const byProp = JSON.parse(byPropRaw);
+        if (byProp?.[propertyId]?.[key] !== undefined) {
+          return String(byProp[propertyId][key]);
+        }
+      }
+    } catch {}
+  }
   try {
     const raw = localStorage.getItem(key);
     return raw === null ? fallback : raw;
@@ -104,9 +116,21 @@ export function readRawSetting(key, fallback = null) {
  *
  * @param {string} key
  * @param {*} fallback - returned when the key is absent, unreadable or unparseable
+ * @param {string} [propertyId] - property scope
  * @returns {*} the parsed value, or `fallback`
  */
-export function readJsonSetting(key, fallback) {
+export function readJsonSetting(key, fallback, propertyId = "*") {
+  if (propertyId && propertyId !== "*") {
+    try {
+      const byPropRaw = localStorage.getItem("rri_settings_by_property");
+      if (byPropRaw) {
+        const byProp = JSON.parse(byPropRaw);
+        if (byProp?.[propertyId]?.[key] !== undefined) {
+          return byProp[propertyId][key];
+        }
+      }
+    } catch {}
+  }
   let raw;
   try {
     raw = localStorage.getItem(key);
@@ -134,10 +158,11 @@ export function readJsonSetting(key, fallback) {
  *
  * @param {string} key
  * @param {Object} fallback
+ * @param {string} [propertyId] - property scope
  * @returns {Object} the parsed object, or `fallback`
  */
-export function readObjectSetting(key, fallback) {
-  const parsed = readJsonSetting(key, undefined);
+export function readObjectSetting(key, fallback, propertyId = "*") {
+  const parsed = readJsonSetting(key, undefined, propertyId);
   if (parsed === undefined) return fallback;
   if (typeof parsed !== "object" || Array.isArray(parsed)) {
     reportDiscardedSetting(key, `expected an object, stored value is ${Array.isArray(parsed) ? "a list" : typeof parsed}`);
@@ -155,10 +180,26 @@ export const SYNCABLE_SETTING_KEYS = Object.freeze(new Set([
   "rri_tax_config_v1",
   "rri_tax_settings_v1",
   "rri_tax_settings_v2",
+  "rri_alert_thresholds",
   "rri_alert_thresholds_v1",
+  "rri_revenue_thresholds",
   "rri_revenue_thresholds_v1",
+  "rri_pricing_config",
   "rri_pricing_config_v1",
+  "rri_weather_config",
+  "rri_weather_config_v1",
 ]));
+
+export const KEY_ALIASES = Object.freeze({
+  "rri_alert_thresholds_v1": "rri_alert_thresholds",
+  "rri_alert_thresholds": "rri_alert_thresholds_v1",
+  "rri_revenue_thresholds_v1": "rri_revenue_thresholds",
+  "rri_revenue_thresholds": "rri_revenue_thresholds_v1",
+  "rri_pricing_config_v1": "rri_pricing_config",
+  "rri_pricing_config": "rri_pricing_config_v1",
+  "rri_weather_config_v1": "rri_weather_config",
+  "rri_weather_config": "rri_weather_config_v1",
+});
 
 let syncTimer = null;
 const pendingCloudSync = new Map();
@@ -370,6 +411,14 @@ export async function pullRemoteSettings(force = false) {
         localStorage.setItem(key, newRaw);
         changed = true;
       }
+      const alias = KEY_ALIASES[key];
+      if (alias) {
+        const aliasRaw = localStorage.getItem(alias);
+        if (aliasRaw !== newRaw) {
+          localStorage.setItem(alias, newRaw);
+          changed = true;
+        }
+      }
     }
 
     if (changed) {
@@ -401,7 +450,18 @@ export async function pullRemoteSettings(force = false) {
 export function writeRawSetting(key, value, propertyId = "*") {
   try {
     const str = String(value);
-    localStorage.setItem(key, str);
+    if (propertyId && propertyId !== "*") {
+      let byProp = {};
+      try {
+        const existing = localStorage.getItem("rri_settings_by_property");
+        if (existing) byProp = JSON.parse(existing) || {};
+      } catch {}
+      if (!byProp[propertyId]) byProp[propertyId] = {};
+      byProp[propertyId][key] = str;
+      localStorage.setItem("rri_settings_by_property", JSON.stringify(byProp));
+    } else {
+      localStorage.setItem(key, str);
+    }
     if (SYNCABLE_SETTING_KEYS.has(key)) {
       queueCloudSettingSync(key, value, propertyId);
     }
@@ -438,7 +498,18 @@ export function writeJsonSetting(key, value, propertyId = "*") {
     return false;
   }
   try {
-    localStorage.setItem(key, text);
+    if (propertyId && propertyId !== "*") {
+      let byProp = {};
+      try {
+        const existing = localStorage.getItem("rri_settings_by_property");
+        if (existing) byProp = JSON.parse(existing) || {};
+      } catch {}
+      if (!byProp[propertyId]) byProp[propertyId] = {};
+      byProp[propertyId][key] = value;
+      localStorage.setItem("rri_settings_by_property", JSON.stringify(byProp));
+    } else {
+      localStorage.setItem(key, text);
+    }
     if (SYNCABLE_SETTING_KEYS.has(key)) {
       queueCloudSettingSync(key, value, propertyId);
     }

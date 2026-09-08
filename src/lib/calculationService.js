@@ -148,7 +148,7 @@ export class CalculationService {
     return results.sort((a, b) => b.revenue - a.revenue);
   }
 
-  static calculateChannelMetrics(srcRows = []) {
+  static calculateChannelMetrics(srcRows = [], propertyId = "*") {
     // Gross accumulates in integer CENTS and the commission is applied with
     // multiply() (2026-08-20). Both mattered: the previous float `cur.gross +=`
     // followed by a float `c.gross * info.rate` meant the commission for a channel
@@ -168,7 +168,7 @@ export class CalculationService {
     return [...map.values()]
       .filter((c) => c.grossCents > 0 || c.stays > 0)
       .map((c) => {
-        const info = commissionFor(c.source);
+        const info = commissionFor(c.source, propertyId);
         const gross = fromCents(c.grossCents);
         let commissionCents = 0;
         if (info.type === 'percentage') commissionCents = multiply(gross, info.rate);

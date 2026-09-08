@@ -13,11 +13,13 @@ import { getRevenueThresholds, getRevenueColor, getRevenueGroup, getRevenueGroup
 import { calendarMonths, daysInMonth, MAX_GRIDS } from "@/lib/calendarGrids";
 import { getEventsInRange, DEMAND_ORDER, DEMAND_COLORS, peakDemand, distanceColor } from "@/lib/eventSchedule";
 import { ErrorState } from "@/components/ui/status";
+import { useSettingsVersion } from "@/hooks/useSettingsVersion";
 
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function MonthlyCalendar() {
   const { dateRange, property, properties, year, months, period } = useGlobalFilters();
+  const settingsVersion = useSettingsVersion();
   const occQ = useOccupancy(dateRange, property, months);
   const sourcesQ = useSources(dateRange, property, months);
   const { data: occ = [] } = occQ;
@@ -25,7 +27,7 @@ export default function MonthlyCalendar() {
   const [selectedDay, setSelectedDay] = useState(null);
   const [eventPopupDay, setEventPopupDay] = useState(null);
   // Read the configured thresholds so the legend cannot drift from the colours.
-  const revThresholds = getRevenueThresholds();
+  const revThresholds = useMemo(() => getRevenueThresholds(), [settingsVersion]);
 
   const occRows = useMemo(
     () => occ.filter((r) => inRange(r.date, dateRange.from, dateRange.to)),
@@ -198,7 +200,7 @@ export default function MonthlyCalendar() {
         // Revenue" but used to set commission: 0 and net = gross, so an OTA
         // booking outranked a direct booking of the same value.
         const gross = s.net_revenue || 0;
-        const info = commissionFor(s.source || s.code);
+        const info = commissionFor(s.source || s.code, s.property_id || property || "*");
         let commission = 0;
         if (info.type === "percentage") commission = gross * info.rate;
         else if (info.type === "fixed") commission = info.rate * (s.stays || 0);
@@ -214,7 +216,7 @@ export default function MonthlyCalendar() {
       .sort((a, b) => b.net - a.net);
     const total = ranked.reduce((a, r) => a + r.net, 0);
     return ranked.map((r, i) => ({ ...r, rank: i + 1, pct: total > 0 ? r.net / total : 0 }));
-  }, [selectedSources]);
+  }, [selectedSources, property, settingsVersion]);
 
   return (
     <div className="space-y-6">

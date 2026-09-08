@@ -1,4 +1,5 @@
 import { readObjectSetting, writeJsonSetting } from "@/lib/settingsStore";
+import { notifySettingsChanged } from "@/lib/settingsBus";
 
 const KEY = "rri_revenue_thresholds";
 
@@ -7,16 +8,19 @@ const DEFAULTS = {
   mediumRevenueThreshold: 3500,
 };
 
-export function getRevenueThresholds() {
-  return { ...DEFAULTS, ...readObjectSetting(KEY, {}) };
+export function getRevenueThresholds(propertyId = "*") {
+  return { ...DEFAULTS, ...readObjectSetting(KEY, {}, propertyId) };
 }
 
 /**
  * @param {Object} thresholds
+ * @param {string} [propertyId]
  * @returns {boolean} true only if the thresholds are now stored
  */
-export function saveRevenueThresholds(thresholds) {
-  return writeJsonSetting(KEY, thresholds);
+export function saveRevenueThresholds(thresholds, propertyId = "*") {
+  const saved = writeJsonSetting(KEY, thresholds, propertyId);
+  notifySettingsChanged();
+  return saved;
 }
 
 export function getRevenueColor(revenue) {

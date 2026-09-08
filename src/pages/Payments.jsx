@@ -16,6 +16,7 @@ import { getTaxConfig, formatTaxRate } from "@/lib/taxConfig";
 import { getEffectiveTaxRates } from "@/lib/taxSettings";
 import CalculationService from "@/lib/calculationService";
 import { exportReconciliationToCsv } from "@/lib/reconciliationExport";
+import { useSettingsVersion } from "@/hooks/useSettingsVersion";
 
 export default function Payments() {
   const { dateRange, property, properties, paymentType, months } = useGlobalFilters();
@@ -218,9 +219,7 @@ export default function Payments() {
   const propName = property === "all" ? "All Properties" : (Array.isArray(property) ? `${property.length} Properties` : (properties.find((p) => p.id === property)?.name || "Property"));
   const periodLabel = `${dateRange.from || "—"} → ${dateRange.to || "—"}`;
 
-  // Tax configuration
-  const [taxModalOpen, setTaxModalOpen] = useState(false);
-  const [taxConfig, setTaxConfig] = useState(getTaxConfig());
+  const settingsVersion = useSettingsVersion();
 
   // Authoritative tax liability — the SAME per-property, date-windowed engine the
   // MoneyKept dashboard deducts from (CalculationService.calculateTaxLiability), so
@@ -235,9 +234,13 @@ export default function Payments() {
   const resolvedPropertyId =
     property && property !== "all" && !Array.isArray(property) ? property : null;
 
+  // Tax configuration
+  const [taxModalOpen, setTaxModalOpen] = useState(false);
+  const taxConfig = useMemo(() => getTaxConfig(resolvedPropertyId || "*"), [resolvedPropertyId, settingsVersion]);
+
   const taxLiability = useMemo(
     () => CalculationService.calculateTaxLiability(srcRows, grossRows, resolvedPropertyId, dateRange),
-    [srcRows, grossRows, resolvedPropertyId, dateRange]
+    [srcRows, grossRows, resolvedPropertyId, dateRange, settingsVersion]
   );
 
   // Effective rates for the header labels only (the money above is cent-exact from
@@ -245,7 +248,7 @@ export default function Payments() {
   // of the selected period — the most recent rate that applies to it.
   const effectiveRates = useMemo(
     () => getEffectiveTaxRates(resolvedPropertyId, dateRange.to || dateRange.from || ""),
-    [resolvedPropertyId, dateRange]
+    [resolvedPropertyId, dateRange, settingsVersion]
   );
 
   if (isLoading) return <p className="text-slate-500">Loading payment data…</p>;
@@ -341,7 +344,7 @@ export default function Payments() {
             </p>
           </div>
         </div>
-        <TaxConfigModal open={taxModalOpen} onClose={() => { setTaxModalOpen(false); setTaxConfig(getTaxConfig()); }} />
+        <TaxConfigModal open={taxModalOpen} onClose={() => setTaxModalOpen(false)} propertyId={resolvedPropertyId || "*"} />
       </Card>
 
       {payRows.length === 0 ? (

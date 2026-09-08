@@ -23,8 +23,8 @@ export function getOccThreshold() {
   return getAlertThresholds().occupancyThreshold ?? 0.60;
 }
 
-export function commissionFor(source = "") {
-  const rates = getCommissionRates();
+export function commissionFor(source = "", propertyId = "*") {
+  const rates = getCommissionRates(propertyId);
   const n = String(source).toUpperCase();
   let best = null;
   let bestLen = 0;

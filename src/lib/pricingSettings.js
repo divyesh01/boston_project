@@ -7,6 +7,7 @@
 // lives in pricingEngine.js so it can be unit-tested in Node.
 
 import { readObjectSetting, writeJsonSetting } from "@/lib/settingsStore";
+import { notifySettingsChanged } from "@/lib/settingsBus";
 
 const KEY = "rri_pricing_config";
 
@@ -48,18 +49,21 @@ export const DEFAULT_PRICING_CONFIG = {
   baseRates: { ...DEFAULT_BASE_RATES },
 };
 
-export function getPricingConfig() {
-  return { ...DEFAULT_PRICING_CONFIG, ...readObjectSetting(KEY, {}) };
+export function getPricingConfig(propertyId = "*") {
+  return { ...DEFAULT_PRICING_CONFIG, ...readObjectSetting(KEY, {}, propertyId) };
 }
 
 /**
  * @param {Object} cfg - merged over the stored config
+ * @param {string} [propertyId]
  * @returns {boolean} true only if the config is now stored
  */
-export function savePricingConfig(cfg) {
-  return writeJsonSetting(KEY, { ...getPricingConfig(), ...cfg });
+export function savePricingConfig(cfg, propertyId = "*") {
+  const saved = writeJsonSetting(KEY, { ...getPricingConfig(propertyId), ...cfg }, propertyId);
+  notifySettingsChanged();
+  return saved;
 }
 
-export function isPricingEnabled() {
-  return Boolean(getPricingConfig().enabled);
+export function isPricingEnabled(propertyId = "*") {
+  return Boolean(getPricingConfig(propertyId).enabled);
 }

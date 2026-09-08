@@ -54,8 +54,10 @@ export default function Settings() {
   const [revThresholds, setRevThresholds] = useState(() => getRevenueThresholds());
   const [revSaved, setRevSaved] = useState(false);
   const isInitialMount = useRef(true);
+  const isRemoteUpdate = useRef(false);
 
   useEffect(() => {
+    isInitialMount.current = false;
     return () => {
       setEditingSettingsLock(false);
     };
@@ -65,12 +67,16 @@ export default function Settings() {
   useEffect(() => {
     const unsubChange = subscribeSettingsChange(() => {
       if (!isEditingSettingsLocked()) {
+        isRemoteUpdate.current = true;
         setRates(getCommissionRates());
         setCcFee(getCcFeeRate());
         setCcRefunds(getCcFeeOnRefunds());
         setTaxRows(getTaxSettings());
         setThresholds(getAlertThresholds());
         setRevThresholds(getRevenueThresholds());
+        queueMicrotask(() => {
+          isRemoteUpdate.current = false;
+        });
       }
     });
 
@@ -132,32 +138,29 @@ export default function Settings() {
   const [restorePhrase, setRestorePhrase] = useState("");
   const restoreInputRef = useRef(null);
 
-  // Auto-save commission rates & CC fee to localStorage on change (skip on mount)
+  // Auto-save commission rates & CC fee to localStorage on change (skip on mount or remote sync)
   useEffect(() => {
-    if (isInitialMount.current) return;
+    if (isInitialMount.current || isRemoteUpdate.current) return;
     setCommissionRates(rates);
     setCcFeeRate(ccFee);
     setCcFeeOnRefunds(ccRefunds);
   }, [rates, ccFee, ccRefunds]);
 
-  // Auto-save alert thresholds (skip on mount)
+  // Auto-save alert thresholds (skip on mount or remote sync)
   useEffect(() => {
-    if (isInitialMount.current) return;
+    if (isInitialMount.current || isRemoteUpdate.current) return;
     saveAlertThresholds(thresholds);
   }, [thresholds]);
 
-  // Auto-save revenue thresholds (skip on mount)
+  // Auto-save revenue thresholds (skip on mount or remote sync)
   useEffect(() => {
-    if (isInitialMount.current) return;
+    if (isInitialMount.current || isRemoteUpdate.current) return;
     saveRevenueThresholds(revThresholds);
   }, [revThresholds]);
 
-  // Auto-save tax settings (skip on mount)
+  // Auto-save tax settings (skip on mount or remote sync)
   useEffect(() => {
-    if (isInitialMount.current) {
-      isInitialMount.current = false;
-      return;
-    }
+    if (isInitialMount.current || isRemoteUpdate.current) return;
     const clean = taxRows.map(({ _key, ...rest }) => rest);
     saveTaxSettings(clean);
   }, [taxRows]);

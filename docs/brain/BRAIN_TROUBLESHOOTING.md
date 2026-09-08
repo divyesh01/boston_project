@@ -65,6 +65,7 @@
 | 61 | **External audit remediation: 15 live defects across two audit cycles plus one independently-found UTC bug.** Two parallel multi-auditor sweeps (4 auditors → 17 claims, 3 auditors → 11 claims) adjudicated claim-by-claim. 15 confirmed real+live, 6 deferred (dead code / false / by-design), 7 false-positive. Root cause of highest-value fix: `inRange(dateStr, from, to)` compared `d <= to` where an empty `''` upper bound made the test false for every date, silently dropping all rows on any open-ended window. Second highest: `isMonthSelected` used `new Date(str).getMonth()` — UTC-parse / local-read — so the 1st of each month fell into the prior month in US timezones. See section 40 for the complete breakdown | HIGH | FIXED 2026-08-25/26 | 13 files modified, 2 new regression probes. See section 40 | (Uncommitted) |
 | 62 | Cross-browser financial divergence ($5,037.18 on $1M gross) from localStorage-only settings storage | CRITICAL | FIXED 2026-09-08 | `worker/settings.js`, `src/lib/settingsStore.js`, `src/lib/settingsBus.js` | See section 68 |
 | 63 | Settings sync forensic audit findings: tax key mismatch, ETag 304 D1 read overhead, CAS 409 local clobber, stale form inputs, property scope loss, missing initial audit history, manager RBAC lockout, and double event notification | HIGH | FIXED 2026-09-08 | `worker/settings.js`, `src/lib/settingsStore.js`, `src/lib/settingsBus.js`, `src/pages/Settings.jsx`, `src/lib/settingsForensicFixes.test.js` | See section 69 |
+| 64 | Comprehensive settings forensic hardening: commission rate object preservation, tax config validation, threshold & pricing sync, ETag response headers, property-scoped isolation, echo loop prevention, and reactive view re-renders | HIGH | FIXED 2026-09-08 | `worker/settings.js`, `src/lib/settingsStore.js`, `src/lib/commissionRates.js`, `src/lib/taxConfig.js`, `src/lib/taxSettings.js`, `src/pages/Settings.jsx`, `src/pages/Payments.jsx`, `src/pages/OtaChannels.jsx`, `src/pages/MonthlyCalendar.jsx`, `src/pages/Pricing.jsx` | See section 70 |
 
 ---
 
@@ -6738,3 +6739,40 @@ Following the initial cloud sync rollout, an in-depth forensic audit of edge cas
 8. Problem 8 (Double Event Notification in settingsBus):
    - Tab B received both `BroadcastChannel` messages and window `storage` events for the same localStorage write, triggering duplicate subscriber callbacks.
    - Fix: Added microtask coalescing with `queueMicrotask` in `src/lib/settingsBus.js` and suppressed duplicate `storage` notifications when a broadcast arrived within 350ms.
+
+## 70. Comprehensive Settings Synchronization Forensic Hardening (2026-09-08)
+
+A deep forensic verification across client stores, calculation engines, worker validation, and UI page reactivity identified 8 additional synchronization and data-integrity defects across the multi-browser stack. All were proven and verified through deterministic tests in `src/lib/settingsForensicFixes.test.js` (16 of 16 tests passing):
+
+1. Problem 9 (Commission Rates Object Structure Wiped to 0 by Server Clamping):
+   - In `worker/settings.js`, `clampSettingValue` coerced every channel's value using `Number(v)`. Because modern commission rates are objects `{ type: "percentage", rate: 0.15, taxExempt: false }`, `Number(v)` produced `NaN`, wiping saved commission rates to 0 on the server.
+   - Fix: Updated `clampSettingValue` in `worker/settings.js` to inspect and clamp object-form commission rates, validating `{ type, rate, taxExempt }` while safely normalizing legacy scalar rates.
+
+2. Problem 10 (Tax Configuration Array/Object Mismatch):
+   - In `worker/settings.js`, the clamping logic tested `Array.isArray(val)` for `rri_tax_config_v1`. However, `rri_tax_config_v1` is an object `{ taxRate, taxEnabled, sources }`, so validation was completely bypassed.
+   - Fix: Added explicit object validation and clamping for `rri_tax_config_v1` in `worker/settings.js`, verifying `taxRate` is between 0 and 1, `taxEnabled` is boolean, and `sources` contains boolean flags.
+
+3. Problem 11 (Alert, Revenue, Pricing, and Weather Settings Not Synced):
+   - `src/lib/alertThresholds.js`, `src/lib/revenueThresholds.js`, `src/lib/pricingSettings.js`, and `src/lib/weatherSettings.js` read and wrote keys without `_v1` suffixes (e.g. `rri_alert_thresholds`), which were not recognized by `SYNCABLE_SETTING_KEYS` or `ALLOWED_SETTING_KEYS`.
+   - Fix: Added both base keys and `_v1` alias variants to `SYNCABLE_SETTING_KEYS` in `src/lib/settingsStore.js` and `ALLOWED_SETTING_KEYS` in `worker/settings.js`, and added `notifySettingsChanged()` calls on save.
+
+4. Problem 12 (POST /api/settings Missing ETag Response Header):
+   - Client write requests received a 200 OK without an ETag header, requiring the client to issue a subsequent GET request before caching the new server revision.
+   - Fix: In `worker/settings.js`, computed and returned the new `ETag` and `x-settings-rev` headers directly in the POST/PUT response.
+
+5. Problem 13 (Property-Scoped Isolation in Local Storage):
+   - `src/lib/settingsStore.js` previously wrote property-specific settings directly into flat `localStorage` keys, overwriting global default settings.
+   - Fix: Updated `readRawSetting`, `readJsonSetting`, `writeRawSetting`, and `writeJsonSetting` in `src/lib/settingsStore.js` to isolate property-scoped settings inside `rri_settings_by_property`, falling back to global settings seamlessly.
+
+6. Problem 14 (Effective Tax Rate Resolution Bypassed Property Overrides):
+   - In `src/lib/taxSettings.js`, `getEffectiveTaxRates` did not prioritize property-scoped overrides before evaluating date-range filters.
+   - Fix: Filtered candidate tax records by `propertyId` first, ensuring property-scoped overrides take precedence over global wildcards (`*`).
+
+7. Problem 15 (Key Aliasing Disconnect on Pull):
+   - D1 stores settings under `_v1` keys while local client modules often read base keys (e.g. `rri_alert_thresholds_v1` vs `rri_alert_thresholds`).
+   - Fix: Added `KEY_ALIASES` bidirectional mapping in `pullRemoteSettings` in `src/lib/settingsStore.js` so remote writes update both alias and base keys locally.
+
+8. Problem 16 (Settings.jsx Echo Resave Loop & Stale UI Views):
+   - Receiving remote settings triggered `subscribeSettingsChange`, updating React state in `Settings.jsx`, which then triggered auto-save `useEffect` hooks that re-sent the identical settings back to the cloud. Furthermore, `Payments.jsx`, `OtaChannels.jsx`, `MonthlyCalendar.jsx`, and `Pricing.jsx` did not subscribe to `useSettingsVersion()`.
+   - Fix: Added `isRemoteUpdate` ref in `src/pages/Settings.jsx` to prevent circular re-saves, and wired `useSettingsVersion()` into `Payments.jsx`, `OtaChannels.jsx`, `MonthlyCalendar.jsx`, and `Pricing.jsx` so calculations and form states automatically re-render when remote changes arrive.
+

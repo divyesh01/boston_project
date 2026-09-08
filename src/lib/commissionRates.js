@@ -50,8 +50,8 @@ function normalizeRate(val) {
   return r;
 }
 
-export function getCommissionRates() {
-  const stored = readObjectSetting(RATES_KEY, {});
+export function getCommissionRates(propertyId = "*") {
+  const stored = readObjectSetting(RATES_KEY, {}, propertyId);
   const out = {};
   for (const [key, val] of Object.entries({ ...DEFAULT_RATES, ...stored })) {
     out[key] = normalizeRate(val);
@@ -61,18 +61,19 @@ export function getCommissionRates() {
 
 /**
  * @param {Object} rates
+ * @param {string} [propertyId]
  * @returns {boolean} true only if the rates are now stored. A false return means
  *   the app is still computing commission at the PREVIOUS rates, so a caller that
  *   shows a "Saved" affordance must check it.
  */
-export function setCommissionRates(rates) {
-  const saved = writeJsonSetting(RATES_KEY, rates);
+export function setCommissionRates(rates, propertyId = "*") {
+  const saved = writeJsonSetting(RATES_KEY, rates, propertyId);
   notifySettingsChanged();
   return saved;
 }
 
-export function getCcFeeRate() {
-  const v = readRawSetting(CC_FEE_KEY);
+export function getCcFeeRate(propertyId = "*") {
+  const v = readRawSetting(CC_FEE_KEY, null, propertyId);
   if (v === null) return DEFAULT_CC_FEE;
   const n = parseFloat(v);
   if (Number.isNaN(n)) {
@@ -84,27 +85,29 @@ export function getCcFeeRate() {
 
 /**
  * @param {number} rate
+ * @param {string} [propertyId]
  * @returns {boolean} true only if the fee is now stored.
  */
-export function setCcFeeRate(rate) {
+export function setCcFeeRate(rate, propertyId = "*") {
   let n = Number(rate);
   if (Number.isNaN(n)) n = DEFAULT_CC_FEE;
-  const saved = writeRawSetting(CC_FEE_KEY, String(Math.max(0, Math.min(0.9999, n))));
+  const saved = writeRawSetting(CC_FEE_KEY, String(Math.max(0, Math.min(0.9999, n))), propertyId);
   notifySettingsChanged();
   return saved;
 }
 
 // Whether the card processing fee also applies to card refunds
-export function getCcFeeOnRefunds() {
-  return readRawSetting(CC_REFUNDS_KEY) === "1";
+export function getCcFeeOnRefunds(propertyId = "*") {
+  return readRawSetting(CC_REFUNDS_KEY, null, propertyId) === "1";
 }
 
 /**
  * @param {boolean} enabled
+ * @param {string} [propertyId]
  * @returns {boolean} true only if the switch is now stored.
  */
-export function setCcFeeOnRefunds(enabled) {
-  const saved = writeRawSetting(CC_REFUNDS_KEY, enabled ? "1" : "0");
+export function setCcFeeOnRefunds(enabled, propertyId = "*") {
+  const saved = writeRawSetting(CC_REFUNDS_KEY, enabled ? "1" : "0", propertyId);
   notifySettingsChanged();
   return saved;
 }

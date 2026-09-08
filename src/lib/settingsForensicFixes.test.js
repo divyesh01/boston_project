@@ -20,6 +20,13 @@ import {
   getSettingsVersion,
 } from "./settingsBus";
 import { handleSettingsRequest } from "../../worker/settings";
+import { getCommissionRates, setCommissionRates } from "./commissionRates";
+import { getTaxConfig, setTaxConfig } from "./taxConfig";
+import { getTaxSettings, saveTaxSettings, getEffectiveTaxRates } from "./taxSettings";
+import { getAlertThresholds, saveAlertThresholds } from "./alertThresholds";
+import { getRevenueThresholds, saveRevenueThresholds } from "./revenueThresholds";
+import { getPricingConfig, savePricingConfig } from "./pricingSettings";
+import { getWeatherConfig, saveWeatherConfig } from "./weatherSettings";
 
 function createMockD1({ existingSettings = [], scalarMeta = null } = {}) {
   const executedStmts = [];
@@ -365,6 +372,214 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
     // In microtask queue, listener is called ONCE with latest version
     expect(callCount).toBe(1);
 
+    unsub();
+  });
+
+  // ─── Fix 9: Commission Rates Object Preservation ──────────────────────────
+  it("Fix 9: worker preserves commission rate objects { type, rate, taxExempt } without wiping to 0", async () => {
+    const { mockDb, executedStmts } = createMockD1({ existingSettings: [] });
+    const mockEnv = /** @type {any} */ ({ DB: mockDb });
+    const mockScope = /** @type {any} */ ({ accountId: "acc_test", user: { id: "user_owner", role: "owner" } });
+
+    const ratePayload = {
+      expedia: { type: "percentage", rate: 0.15, taxExempt: false },
+      booking: { type: "fixed", rate: 25, taxExempt: true },
+      airbnb: 0.14,
+      invalid: "not-a-number",
+    };
+
+    const req = new Request("https://example.com/api/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        key: "rri_commission_rates_v2",
+        value: ratePayload,
+      }),
+    });
+
+    const res = await handleSettingsRequest(req, mockEnv, mockScope, new URL(req.url), ["settings"]);
+    expect(res.status).toBe(200);
+
+    const upsertStmt = executedStmts.find((s) => s.sql.includes("INSERT INTO app_setting ("));
+    expect(upsertStmt).toBeDefined();
+    const savedVal = JSON.parse(upsertStmt.args[3]);
+    // Verify object format was preserved!
+    expect(savedVal.expedia).toEqual({ type: "percentage", rate: 0.15, taxExempt: false });
+    expect(savedVal.booking).toEqual({ type: "fixed", rate: 25, taxExempt: true });
+    expect(savedVal.airbnb).toEqual({ type: "percentage", rate: 0.14, taxExempt: false });
+    expect(savedVal.invalid).toEqual({ type: "percentage", rate: 0, taxExempt: false });
+  });
+
+  // ─── Fix 10: Tax Config Object Clamping ─────────────────────────────────────
+  it("Fix 10: worker clamps rri_tax_config_v1 object structure correctly", async () => {
+    const { mockDb, executedStmts } = createMockD1({ existingSettings: [] });
+    const mockEnv = /** @type {any} */ ({ DB: mockDb });
+    const mockScope = /** @type {any} */ ({ accountId: "acc_test", user: { id: "user_owner", role: "owner" } });
+
+    const taxConfigPayload = {
+      taxRate: 0.1445,
+      taxEnabled: true,
+      sources: {
+        expedia: true,
+        direct: false,
+      },
+      extra: "ignore",
+    };
+
+    const req = new Request("https://example.com/api/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        key: "rri_tax_config_v1",
+        value: taxConfigPayload,
+      }),
+    });
+
+    const res = await handleSettingsRequest(req, mockEnv, mockScope, new URL(req.url), ["settings"]);
+    expect(res.status).toBe(200);
+
+    const upsertStmt = executedStmts.find((s) => s.sql.includes("INSERT INTO app_setting ("));
+    expect(upsertStmt).toBeDefined();
+    const savedVal = JSON.parse(upsertStmt.args[3]);
+    expect(savedVal.taxRate).toBe(0.1445);
+    expect(savedVal.taxEnabled).toBe(true);
+    expect(savedVal.sources.expedia).toBe(true);
+    expect(savedVal.sources.direct).toBe(false);
+  });
+
+  // ─── Fix 11: Thresholds & Pricing Sync Keys ────────────────────────────────
+  it("Fix 11: verifies alert, revenue, pricing, and weather settings are syncable and allowed on worker", async () => {
+    const newKeys = [
+      "rri_alert_thresholds",
+      "rri_alert_thresholds_v1",
+      "rri_revenue_thresholds",
+      "rri_revenue_thresholds_v1",
+      "rri_pricing_config",
+      "rri_pricing_config_v1",
+      "rri_weather_config",
+      "rri_weather_config_v1",
+    ];
+    for (const k of newKeys) {
+      expect(SYNCABLE_SETTING_KEYS.has(k)).toBe(true);
+    }
+
+    const { mockDb } = createMockD1({ existingSettings: [] });
+    const mockEnv = /** @type {any} */ ({ DB: mockDb });
+    const mockScope = /** @type {any} */ ({ accountId: "acc_test", user: { id: "user_owner", role: "owner" } });
+
+    const req = new Request("https://example.com/api/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        key: "rri_pricing_config",
+        value: { minRate: 75, maxRate: 450, targetOccupancy: 80 },
+      }),
+    });
+
+    const res = await handleSettingsRequest(req, mockEnv, mockScope, new URL(req.url), ["settings"]);
+    expect(res.status).toBe(200);
+  });
+
+  // ─── Fix 12: ETag on POST response ─────────────────────────────────────────
+  it("Fix 12: POST /api/settings returns computed ETag and x-settings-rev in response headers", async () => {
+    const { mockDb } = createMockD1({ existingSettings: [] });
+    const mockEnv = /** @type {any} */ ({ DB: mockDb });
+    const mockScope = /** @type {any} */ ({ accountId: "acc_test", user: { id: "user_owner", role: "owner" } });
+
+    const req = new Request("https://example.com/api/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        key: "rri_cc_fee_rate",
+        value: 0.029,
+      }),
+    });
+
+    const res = await handleSettingsRequest(req, mockEnv, mockScope, new URL(req.url), ["settings"]);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("ETag")).toMatch(/^W\/"rev-2-/);
+    expect(res.headers.get("x-settings-rev")).toBe("2");
+  });
+
+  // ─── Fix 13: Property-scoped isolation ─────────────────────────────────────
+  it("Fix 13: property-scoped commission rates and tax configs isolate by propertyId and fall back to global", () => {
+    // Set global commission rate
+    setCommissionRates({ expedia: { type: "percentage", rate: 0.15 } }, "*");
+    expect(getCommissionRates("*").expedia.rate).toBe(0.15);
+
+    // Set property-specific override
+    setCommissionRates({ expedia: { type: "percentage", rate: 0.18 } }, "prop_east_boston");
+    expect(getCommissionRates("prop_east_boston").expedia.rate).toBe(0.18);
+    // Global remains untouched
+    expect(getCommissionRates("*").expedia.rate).toBe(0.15);
+    // Other property falls back to global
+    expect(getCommissionRates("prop_other").expedia.rate).toBe(0.15);
+
+    // Tax config property scoping
+    setTaxConfig({ taxRate: 0.12, taxEnabled: true, sources: {} }, "*");
+    setTaxConfig({ taxRate: 0.1445, taxEnabled: true, sources: {} }, "prop_downtown");
+    expect(getTaxConfig("*").taxRate).toBe(0.12);
+    expect(getTaxConfig("prop_downtown").taxRate).toBe(0.1445);
+    expect(getTaxConfig("prop_other").taxRate).toBe(0.12);
+  });
+
+  // ─── Fix 14: Effective tax rates resolution ────────────────────────────────
+  it("Fix 14: getEffectiveTaxRates resolves property-scoped overrides before falling back to global", () => {
+    saveTaxSettings([
+      { property_id: "*", state_rate: 0.057, city_rate: 0.06, other_rate: 0.0275 },
+      { property_id: "prop_special", state_rate: 0.05, city_rate: 0.05, other_rate: 0.01 },
+    ], "*");
+
+    const globalRates = getEffectiveTaxRates("*");
+    const globalTotal = globalRates.state + globalRates.city + globalRates.other;
+    expect(globalTotal).toBeCloseTo(0.1445, 4);
+
+    const specialRates = getEffectiveTaxRates("prop_special");
+    const specialTotal = specialRates.state + specialRates.city + specialRates.other;
+    expect(specialTotal).toBeCloseTo(0.11, 4);
+
+    const fallbackRates = getEffectiveTaxRates("prop_unknown");
+    const fallbackTotal = fallbackRates.state + fallbackRates.city + fallbackRates.other;
+    expect(fallbackTotal).toBeCloseTo(0.1445, 4);
+  });
+
+  // ─── Fix 15: pullRemoteSettings alias mapping ──────────────────────────────
+  it("Fix 15: pullRemoteSettings maps server _v1 keys to clean local keys", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({ ETag: 'W/"rev-20-100"', "x-settings-rev": "20" }),
+      json: async () => ({
+        ok: true,
+        settings: {
+          rri_alert_thresholds_v1: { occupancy_drop_pct: 20 },
+          rri_pricing_config_v1: { minRate: 80 },
+        },
+      }),
+    });
+
+    const pulled = await pullRemoteSettings(true);
+    expect(pulled).toBe(true);
+
+    const alertLocal = readJsonSetting("rri_alert_thresholds");
+    expect(alertLocal).toEqual({ occupancy_drop_pct: 20 });
+    const pricingLocal = readJsonSetting("rri_pricing_config");
+    expect(pricingLocal).toEqual({ minRate: 80 });
+  });
+
+  // ─── Fix 16: Module saves trigger bus notification ─────────────────────────
+  it("Fix 16: saves to threshold and pricing modules trigger settingsBus notifications", async () => {
+    let busNotified = 0;
+    const unsub = subscribeSettingsChange(() => {
+      busNotified += 1;
+    });
+
+    saveAlertThresholds({ occupancy_drop_pct: 25 }, "prop_1");
+    saveRevenueThresholds({ daily_revenue_target: 5000 }, "prop_1");
+    savePricingConfig({ minRate: 90 }, "prop_1");
+    saveWeatherConfig({ enabled: true }, "prop_1");
+
+    await Promise.resolve();
+    expect(busNotified).toBeGreaterThan(0);
     unsub();
   });
 });

@@ -7,6 +7,7 @@
 // the key is never shipped to or stored in the browser.
 
 import { readObjectSetting, writeJsonSetting } from "@/lib/settingsStore";
+import { notifySettingsChanged } from "@/lib/settingsBus";
 
 const KEY = "rri_weather_config";
 
@@ -15,12 +16,13 @@ const DEFAULTS = {
   lon: -70.91,
 };
 
-export function getWeatherConfig() {
-  return { ...DEFAULTS, ...readObjectSetting(KEY, {}) };
+export function getWeatherConfig(propertyId = "*") {
+  return { ...DEFAULTS, ...readObjectSetting(KEY, {}, propertyId) };
 }
 
 /**
  * @param {Object} cfg
+ * @param {string} [propertyId]
  * @returns {boolean} true only if the coordinates are now stored.
  *
  * A false return matters beyond the weather card. Traced 2026-08-24: these
@@ -31,12 +33,14 @@ export function getWeatherConfig() {
  * leaves the forecast AND the weather leg of every recommended rate describing
  * the PREVIOUS location, with nothing on screen to say so.
  */
-export function saveWeatherConfig(cfg) {
+export function saveWeatherConfig(cfg, propertyId = "*") {
   // Never persist an apiKey — the key is server-side only. Strip it defensively
   // in case an older client wrote one to the same storage key.
   const { apiKey, ...safe } = cfg || {};
   void apiKey;
-  return writeJsonSetting(KEY, { ...getWeatherConfig(), ...safe });
+  const saved = writeJsonSetting(KEY, { ...getWeatherConfig(propertyId), ...safe }, propertyId);
+  notifySettingsChanged();
+  return saved;
 }
 
 export function hasApiKey() {

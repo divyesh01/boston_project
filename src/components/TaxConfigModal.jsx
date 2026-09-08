@@ -1,9 +1,10 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { X, Percent, ToggleLeft, ToggleRight, Save } from "lucide-react";
 import { getTaxConfig, setTaxConfig, formatTaxRate } from "@/lib/taxConfig";
+import { setEditingSettingsLock } from "@/lib/settingsStore";
 
-export default function TaxConfigModal({ open, onClose }) {
-  const [config, setConfig] = useState(getTaxConfig());
+export default function TaxConfigModal({ open, onClose, propertyId = "*" }) {
+  const [config, setConfig] = useState(() => getTaxConfig(propertyId));
   // Closing the dialog is this component's only "saved" signal, so it must not
   // close on a write the browser refused: the tax rate every charge is computed
   // from would still be the old one, with nothing on screen to say so.
@@ -13,12 +14,28 @@ export default function TaxConfigModal({ open, onClose }) {
   // "8.25" collapses to "8.20" mid-type and can't be entered. The draft holds
   // exactly what the operator typed; config is committed live and the draft is
   // normalized on blur.
-  const [rateDraft, setRateDraft] = useState(() => ((Number(getTaxConfig().taxRate) || 0) * 100).toFixed(2));
+  const [rateDraft, setRateDraft] = useState(() => ((Number(getTaxConfig(propertyId).taxRate) || 0) * 100).toFixed(2));
+
+  useEffect(() => {
+    if (open) {
+      setEditingSettingsLock(true);
+      const fresh = getTaxConfig(propertyId);
+      setConfig(fresh);
+      setRateDraft(((Number(fresh.taxRate) || 0) * 100).toFixed(2));
+      setSaveError("");
+    } else {
+      setEditingSettingsLock(false);
+    }
+    return () => {
+      setEditingSettingsLock(false);
+    };
+  }, [open, propertyId]);
 
   if (!open) return null;
 
   const handleSave = () => {
-    if (!setTaxConfig(config)) {
+    setEditingSettingsLock(false);
+    if (!setTaxConfig(config, propertyId)) {
       setSaveError(
         "The browser refused to store this tax configuration. The previous tax rate is still being applied to every charge. Storage may be full, or this window may be in private browsing — check the browser console for the key that failed."
       );

@@ -64,6 +64,15 @@ export default defineConfig({
     // Tests exercise the local/offline auth shim, so opt into local auth mode.
     env: { VITE_USE_LOCAL_AUTH: "true" },
     css: false,
+    testTimeout: 15000,
+    hookTimeout: 20000,
+    pool: "forks",
+    poolOptions: {
+      forks: {
+        maxForks: 4,
+        minForks: 1,
+      },
+    },
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "html"],

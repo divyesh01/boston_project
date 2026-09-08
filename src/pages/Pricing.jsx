@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Settings2, RefreshCw, ArrowUpRight, CheckCircle, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
@@ -11,6 +11,7 @@ import { fromCents } from "@/lib/decimal";
 import { useRealtimeInvalidation } from "@/lib/realtime";
 import { applyDynamicRateOverride } from "@/lib/pricingOverride";
 import { ErrorState } from "@/components/ui/status";
+import { useSettingsVersion } from "@/hooks/useSettingsVersion";
 
 const toCentsFromDollars = (d) => Math.round((Number(d) || 0) * 100);
 
@@ -29,6 +30,7 @@ const PRESETS = {
 
 export default function Pricing() {
   const { property, properties } = useGlobalFilters();
+  const settingsVersion = useSettingsVersion();
   const roomsQ = useRooms(property);
   const { data: rooms = [] } = roomsQ;
   useRealtimeInvalidation(["rooms", "reservations", "weather"]);
@@ -39,7 +41,12 @@ export default function Pricing() {
     ? (Array.isArray(property) ? `${property.length} Properties` : "Portfolio")
     : (properties.find((p) => p.id === property)?.name || "Property");
 
-  const [cfg, setCfg] = useState(() => getPricingConfig());
+  const [cfg, setCfg] = useState(() => getPricingConfig(singlePropertyId || "*"));
+
+  useEffect(() => {
+    setCfg(getPricingConfig(singlePropertyId || "*"));
+  }, [settingsVersion, singlePropertyId]);
+
   const [expanded, setExpanded] = useState(false);
   const [notice, setNotice] = useState(null);
   const [pushing, setPushing] = useState(false);
@@ -50,7 +57,7 @@ export default function Pricing() {
   const update = (patch) => {
     const next = { ...cfg, ...patch };
     setCfg(next);
-    const stored = savePricingConfig(next);
+    const stored = savePricingConfig(next, singlePropertyId || "*");
     // Clear only this page's own storage warning on a later success — any other
     // notice (a preset confirmation, a push result) is left where it was.
     setNotice((prev) =>

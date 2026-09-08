@@ -12,6 +12,8 @@ import { CalculationService } from "@/lib/calculationService";
 import { sumCents, fromCents } from "@/lib/decimal";
 import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, COMMISSION_TYPES } from "@/lib/commissionRates";
 import { ErrorState } from "@/components/ui/status";
+import { useSettingsVersion } from "@/hooks/useSettingsVersion";
+import { useEffect } from "react";
 
 // Shown when localStorage refuses a write. The typed value is deliberately left
 // in the input rather than snapped back: updateRate fires on every keystroke, so
@@ -23,12 +25,19 @@ const WRITE_REFUSED =
 
 export default function OtaChannels() {
   const { dateRange, property, months } = useGlobalFilters();
+  const settingsVersion = useSettingsVersion();
   const sourcesQ = useSources(dateRange, property, months);
   const payQ = usePaymentData(dateRange, property, months);
   const { data: sources = [], refetch } = sourcesQ;
   const { data: payRows = [], refetch: refPay } = payQ;
-  const [rates, setRates] = useState(getCommissionRates());
-  const [ccFee, setCcFee] = useState(getCcFeeRate());
+  const [rates, setRates] = useState(() => getCommissionRates(property || "*"));
+  const [ccFee, setCcFee] = useState(() => getCcFeeRate(property || "*"));
+
+  useEffect(() => {
+    setRates(getCommissionRates(property || "*"));
+    setCcFee(getCcFeeRate(property || "*"));
+  }, [settingsVersion, property]);
+
   const [newSource, setNewSource] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState(null);
@@ -53,8 +62,8 @@ export default function OtaChannels() {
   // inline rate edit (which writes storage before setRates) re-runs the memo, and
   // commissionFor inside the engine reads that same live storage.
   const channels = useMemo(
-    () => CalculationService.calculateChannelMetrics(srcRows),
-    [srcRows, rates]
+    () => CalculationService.calculateChannelMetrics(srcRows, property || "*"),
+    [srcRows, rates, property, settingsVersion]
   );
 
   const totalGross = fromCents(sumCents(channels.map((c) => c.gross)));
@@ -78,7 +87,7 @@ export default function OtaChannels() {
     // re-enter it in the new unit.
     if (field === "type") updated[source].rate = 0;
     setRates(updated);
-    setSaveError(setCommissionRates(updated) ? "" : "rates");
+    setSaveError(setCommissionRates(updated, property || "*") ? "" : "rates");
   };
 
   const addSource = () => {
@@ -86,7 +95,7 @@ export default function OtaChannels() {
     const key = newSource.trim().toUpperCase();
     const updated = { ...rates, [key]: { type: "percentage", rate: 0, taxExempt: false } };
     setRates(updated);
-    setSaveError(setCommissionRates(updated) ? "" : "rates");
+    setSaveError(setCommissionRates(updated, property || "*") ? "" : "rates");
     setNewSource("");
   };
 
@@ -94,7 +103,7 @@ export default function OtaChannels() {
     const updated = { ...rates };
     delete updated[source];
     setRates(updated);
-    setSaveError(setCommissionRates(updated) ? "" : "rates");
+    setSaveError(setCommissionRates(updated, property || "*") ? "" : "rates");
   };
 
   // Memoised: this used to be an inline `.filter(...)` in the JSX, which handed
@@ -110,7 +119,7 @@ export default function OtaChannels() {
     const val = parseFloat(v) || 0;
     const frac = Math.min(0.9999, Math.max(0, val / 100));
     setCcFee(frac);
-    setSaveError(setCcFeeRate(frac) ? "" : "ccFee");
+    setSaveError(setCcFeeRate(frac, property || "*") ? "" : "ccFee");
   };
 
   const writeRefusedBanner = (

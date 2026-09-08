@@ -24,8 +24,8 @@ const DEFAULT_CONFIG = {
   sources: TAX_SOURCES,
 };
 
-export function getTaxConfig() {
-  const stored = readObjectSetting(TAX_KEY, {});
+export function getTaxConfig(propertyId = "*") {
+  const stored = readObjectSetting(TAX_KEY, {}, propertyId);
   return {
     taxRate: typeof stored.taxRate === "number" ? stored.taxRate : DEFAULT_CONFIG.taxRate,
     taxEnabled: stored.taxEnabled !== undefined ? stored.taxEnabled : DEFAULT_CONFIG.taxEnabled,
@@ -35,14 +35,15 @@ export function getTaxConfig() {
 
 /**
  * @param {Object} config
+ * @param {string} [propertyId]
  * @returns {boolean} true only if the config AND the default tax period it syncs
  *   are now stored. A false return means the PREVIOUS tax rate is still what every
  *   tax figure is computed from, so a caller that closes a dialog on success — as
  *   TaxConfigModal does — must check it.
  */
-export function setTaxConfig(config) {
-  const saved = writeJsonSetting(TAX_KEY, config);
-  const synced = syncDefaultTaxSetting(config.taxRate);
+export function setTaxConfig(config, propertyId = "*") {
+  const saved = writeJsonSetting(TAX_KEY, config, propertyId);
+  const synced = syncDefaultTaxSetting(config.taxRate, propertyId);
   notifySettingsChanged();
   return saved && synced;
 }
@@ -51,30 +52,31 @@ export function setTaxConfig(config) {
  * Mirrors the single legacy tax rate onto the newest catch-all tax period.
  *
  * @param {number} rate
+ * @param {string} [propertyId]
  * @returns {boolean} true when there was nothing to write or the write landed
  */
-function syncDefaultTaxSetting(rate) {
+function syncDefaultTaxSetting(rate, propertyId = "*") {
   const r = Number(rate);
   if (!Number.isFinite(r) || r <= 0) return true;
-  const list = getTaxSettings();
+  const list = getTaxSettings(propertyId);
   const defaults = list
     .map((rec, i) => ({ ...rec, _i: i }))
-    .filter((rec) => rec.property_id === "*" || !rec.property_id);
+    .filter((rec) => rec.property_id === "*" || !rec.property_id || rec.property_id === propertyId);
   if (!defaults.length) return true;
   defaults.sort((a, b) => String(b.effective_start || "").localeCompare(String(a.effective_start || "")));
   const idx = defaults[0]._i;
   const next = [...list];
   const { _i, ...rest } = { ...next[idx], state_rate: r, city_rate: 0, other_rate: 0 };
   next[idx] = rest;
-  return saveTaxSettings(next);
+  return saveTaxSettings(next, propertyId);
 }
 
-export function getTaxRate() {
-  return getTaxConfig().taxRate;
+export function getTaxRate(propertyId = "*") {
+  return getTaxConfig(propertyId).taxRate;
 }
 
-export function isSourceTaxable(sourceKey) {
-  const cfg = getTaxConfig();
+export function isSourceTaxable(sourceKey, propertyId = "*") {
+  const cfg = getTaxConfig(propertyId);
   if (!cfg.taxEnabled) return false;
   const src = cfg.sources.find((s) => s.key === sourceKey);
   return src ? src.taxable : false;
@@ -89,10 +91,10 @@ export function isSourceTaxable(sourceKey) {
 // per-property tax in CalculationService, which computes the same product via
 // decimal.multiply. Route through the same helper so both models round a taxed
 // line to the cent identically.
-export function calculateTax(roomRent, sourceKey) {
+export function calculateTax(roomRent, sourceKey, propertyId = "*") {
   const rent = Number(roomRent) || 0;
-  if (!isSourceTaxable(sourceKey)) return 0;
-  return fromCents(multiply(rent, getTaxRate()));
+  if (!isSourceTaxable(sourceKey, propertyId)) return 0;
+  return fromCents(multiply(rent, getTaxRate(propertyId)));
 }
 
 export function formatTaxRate(rate) {

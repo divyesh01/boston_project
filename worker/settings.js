@@ -21,9 +21,14 @@ const ALLOWED_SETTING_KEYS = new Set([
   "rri_tax_config_v1",
   "rri_tax_settings_v1",
   "rri_tax_settings_v2",
+  "rri_alert_thresholds",
   "rri_alert_thresholds_v1",
+  "rri_revenue_thresholds",
   "rri_revenue_thresholds_v1",
+  "rri_pricing_config",
   "rri_pricing_config_v1",
+  "rri_weather_config",
+  "rri_weather_config_v1",
 ]);
 
 const jsonResponse = (body, status = 200, extraHeaders = {}) =>
@@ -42,24 +47,87 @@ function clampSettingValue(key, val) {
     if (isNaN(num)) return 0.03;
     return Math.max(0, Math.min(0.1, num));
   }
+  if (key === "rri_cc_fee_refunds_v1") {
+    return val === "1" || val === 1 || val === true || val === "true" ? "1" : "0";
+  }
   if (key === "rri_commission_rates_v2" && typeof val === "object" && val !== null) {
     const clamped = {};
     for (const [k, v] of Object.entries(val)) {
-      const num = Number(v);
-      clamped[k] = isNaN(num) ? 0 : Math.max(0, Math.min(0.4, num));
+      if (v && typeof v === "object") {
+        const validTypes = ["percentage", "fixed", "actual", "none"];
+        const type = validTypes.includes(v.type) ? v.type : "percentage";
+        const rateNum = Number(v.rate);
+        const rate = isNaN(rateNum) ? 0 : (type === "percentage" ? Math.max(0, Math.min(0.9999, rateNum)) : Math.max(0, rateNum));
+        clamped[k] = {
+          type,
+          rate,
+          taxExempt: Boolean(v.taxExempt),
+        };
+      } else {
+        const num = Number(v);
+        clamped[k] = {
+          type: "percentage",
+          rate: isNaN(num) ? 0 : Math.max(0, Math.min(0.9999, num)),
+          taxExempt: false,
+        };
+      }
     }
     return clamped;
   }
+  if (key === "rri_tax_config_v1" && typeof val === "object" && val !== null && !Array.isArray(val)) {
+    const rateNum = Number(val.taxRate);
+    const taxRate = isNaN(rateNum) ? 0.117 : Math.max(0, Math.min(0.35, rateNum));
+    const taxEnabled = val.taxEnabled !== undefined ? Boolean(val.taxEnabled) : true;
+    let sources = val.sources;
+    if (Array.isArray(sources)) {
+      sources = sources.map((s) => ({
+        key: String(s?.key || "").slice(0, 50),
+        label: String(s?.label || s?.key || "").slice(0, 100),
+        taxable: Boolean(s?.taxable),
+      }));
+    }
+    return { taxRate, taxEnabled, ...(sources ? { sources } : {}) };
+  }
   if (
-    (key === "rri_tax_settings_v1" || key === "rri_tax_settings_v2" || key === "rri_tax_config_v1") &&
+    (key === "rri_tax_settings_v1" || key === "rri_tax_settings_v2") &&
     Array.isArray(val)
   ) {
     return val.map((row) => ({
       ...row,
+      property_id: String(row.property_id || "*"),
       state_rate: Math.max(0, Math.min(0.35, Number(row.state_rate) || 0)),
       city_rate: Math.max(0, Math.min(0.35, Number(row.city_rate) || 0)),
       other_rate: Math.max(0, Math.min(0.35, Number(row.other_rate) || 0)),
+      effective_start: String(row.effective_start || "").slice(0, 10),
+      effective_end: row.effective_end ? String(row.effective_end).slice(0, 10) : "",
     }));
+  }
+  if ((key === "rri_alert_thresholds" || key === "rri_alert_thresholds_v1") && typeof val === "object" && val !== null) {
+    return {
+      revenueDecreasePct: Math.max(0, Math.min(1, Number(val.revenueDecreasePct) || 0.10)),
+      occupancyDecreasePoints: Math.max(0, Math.min(1, Number(val.occupancyDecreasePoints) || 0.10)),
+      occupancyThreshold: Math.max(0, Math.min(1, Number(val.occupancyThreshold) || 0.60)),
+    };
+  }
+  if ((key === "rri_revenue_thresholds" || key === "rri_revenue_thresholds_v1") && typeof val === "object" && val !== null) {
+    return {
+      highRevenueThreshold: Math.max(0, Number(val.highRevenueThreshold) || 6000),
+      mediumRevenueThreshold: Math.max(0, Number(val.mediumRevenueThreshold) || 3500),
+    };
+  }
+  if ((key === "rri_pricing_config" || key === "rri_pricing_config_v1") && typeof val === "object" && val !== null) {
+    return {
+      ...val,
+      enabled: Boolean(val.enabled !== false),
+      minMultiplier: Math.max(0.1, Math.min(2.0, Number(val.minMultiplier) || 0.75)),
+      maxMultiplier: Math.max(1.0, Math.min(5.0, Number(val.maxMultiplier) || 1.6)),
+    };
+  }
+  if ((key === "rri_weather_config" || key === "rri_weather_config_v1") && typeof val === "object" && val !== null) {
+    return {
+      lat: Math.max(-90, Math.min(90, Number(val.lat) || 41.89)),
+      lon: Math.max(-180, Math.min(180, Number(val.lon) || -70.91)),
+    };
   }
   return val;
 }
@@ -309,7 +377,7 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
         ) {
           return false;
         }
-        if (["rri_pricing_config_v1"].includes(item.key) && hasPricingPermission) {
+        if (["rri_pricing_config", "rri_pricing_config_v1"].includes(item.key) && hasPricingPermission) {
           return false;
         }
         return true;
@@ -381,6 +449,14 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
       );
       const revision = revRow?.max_rev || 1;
 
+      const totalRow = await queryFirst(
+        env,
+        `SELECT COUNT(1) as total_count FROM app_setting WHERE account_id = ?`,
+        [accountId]
+      );
+      const totalCount = Number(totalRow?.total_count || 0);
+      const etag = `W/"rev-${revision}-${totalCount}-${new Date(now).getTime()}"`;
+
       return jsonResponse(
         {
           ok: true,
@@ -390,7 +466,10 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
           updated_at: now,
         },
         200,
-        { "x-settings-rev": String(revision) }
+        {
+          ETag: etag,
+          "x-settings-rev": String(revision),
+        }
       );
     } catch (err) {
       console.error("[settings] save error:", err);

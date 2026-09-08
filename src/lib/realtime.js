@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { queryClientInstance } from "./query-client.js";
+import { pullRemoteSettings } from "./settingsStore.js";
 
 // Cross-tab realtime channel for the operational modules (Room Board,
 // Housekeeping, Weather, Reviews) and the Executive Dashboard.
@@ -322,7 +323,7 @@ export const APP_SYNC_PREFIXES = [
   "occupancy", "sources", "gross", "clerk", "payments", "expenses",
   "payroll", "anomaly-alerts", "rooms", "reservations", "weather",
   "daily-aggregates", "properties", "staff", "room-stays",
-  "housekeeping", "reviews",
+  "housekeeping", "reviews", "settings",
 ];
 
 // Shared per-tab poll coordination. Each useRealtimeInvalidation instance
@@ -411,6 +412,7 @@ async function runSharedPoll() {
           try { client.notify(); } catch {}
         }
         await invalidatePrefixList(union);
+        pullRemoteSettings().catch(() => {});
         const ch = getLeaderChannel();
         if (ch) {
           try {

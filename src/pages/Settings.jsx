@@ -10,6 +10,8 @@ import { getAlertThresholds, saveAlertThresholds } from "@/lib/alertThresholds";
 import { getRevenueThresholds, saveRevenueThresholds } from "@/lib/revenueThresholds";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { getTaxSettings, saveTaxSettings } from "@/lib/taxSettings";
+import { flushCloudSettingSync } from "@/lib/settingsStore";
+import { rebuildDailyAggregates } from "@/lib/dailyAggregates";
 import { toast } from "@/components/ui/use-toast";
 
 import localDb from '@/api/localDb';
@@ -198,8 +200,11 @@ export default function Settings() {
         description: `The new commission rates are in effect, but the audit log entry could not be written (${e?.message || e}). Note the change manually — Audit Log will not show it.`,
       });
     }
+    flushCloudSettingSync().catch(() => {});
     queryClientInstance.invalidateQueries({ queryKey: ["sources"] });
     queryClientInstance.invalidateQueries({ queryKey: ["payments"] });
+    queryClientInstance.invalidateQueries({ queryKey: ["daily-aggregates"] });
+    rebuildDailyAggregates({ propertyId: "all" }).catch(() => {});
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
     rotateCsrfToken();
@@ -276,12 +281,15 @@ export default function Settings() {
         description: `The new tax settings are in effect, but the audit log entry could not be written (${e?.message || e}). Note the change manually — Audit Log will not show it.`,
       });
     }
+    flushCloudSettingSync().catch(() => {});
     queryClientInstance.invalidateQueries({ queryKey: ["payments"] });
     queryClientInstance.invalidateQueries({ queryKey: ["sources"] });
     queryClientInstance.invalidateQueries({ queryKey: ["occupancy"] });
     queryClientInstance.invalidateQueries({ queryKey: ["gross"] });
     queryClientInstance.invalidateQueries({ queryKey: ["expenses"] });
     queryClientInstance.invalidateQueries({ queryKey: ["payroll"] });
+    queryClientInstance.invalidateQueries({ queryKey: ["daily-aggregates"] });
+    rebuildDailyAggregates({ propertyId: "all" }).catch(() => {});
     setTaxSaved(true);
     setTimeout(() => setTaxSaved(false), 2000);
     rotateCsrfToken();
@@ -434,6 +442,7 @@ export default function Settings() {
       rotateCsrfToken();
       return;
     }
+    flushCloudSettingSync().catch(() => {});
     setThresholdSaved(true);
     setTimeout(() => setThresholdSaved(false), 2000);
     rotateCsrfToken();
@@ -460,6 +469,7 @@ export default function Settings() {
       rotateCsrfToken();
       return;
     }
+    flushCloudSettingSync().catch(() => {});
     setRevSaved(true);
     setTimeout(() => setRevSaved(false), 2000);
     rotateCsrfToken();

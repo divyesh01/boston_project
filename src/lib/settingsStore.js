@@ -162,6 +162,131 @@ export function readObjectSetting(key, fallback) {
   return parsed;
 }
 
+import { notifySettingsChanged } from "./settingsBus.js";
+
+export const SYNCABLE_SETTING_KEYS = Object.freeze(new Set([
+  "rri_commission_rates_v2",
+  "rri_cc_fee_rate",
+  "rri_cc_fee_refunds_v1",
+  "rri_tax_config_v1",
+  "rri_tax_settings_v2",
+  "rri_alert_thresholds_v1",
+  "rri_revenue_thresholds_v1",
+  "rri_pricing_config_v1",
+]));
+
+let syncTimer = null;
+const pendingCloudSync = new Map();
+
+/**
+ * Queue a setting to be saved to Cloudflare D1 in the background.
+ * Debounced to batch rapid consecutive changes into a single network call.
+ *
+ * @param {string} key
+ * @param {*} value
+ * @param {string} [propertyId]
+ */
+export function queueCloudSettingSync(key, value, propertyId = "*") {
+  if (typeof window === "undefined" || !SYNCABLE_SETTING_KEYS.has(key)) return;
+
+  let val = value;
+  if (typeof value === "string") {
+    try { val = JSON.parse(value); } catch {}
+  }
+  pendingCloudSync.set(key, { value: val, propertyId });
+
+  if (syncTimer) clearTimeout(syncTimer);
+  syncTimer = setTimeout(flushCloudSettingSync, 300);
+}
+
+function getSettingsUrl() {
+  if (typeof window !== "undefined" && window.location?.origin && /^https?:\/\//.test(window.location.origin)) {
+    return `${window.location.origin}/api/settings`;
+  }
+  return "/api/settings";
+}
+
+/**
+ * Immediately flush queued settings to Cloudflare D1.
+ */
+export async function flushCloudSettingSync() {
+  if (!pendingCloudSync.size || typeof fetch === "undefined") return;
+  if (syncTimer) {
+    clearTimeout(syncTimer);
+    syncTimer = null;
+  }
+  const items = {};
+  for (const [k, v] of pendingCloudSync.entries()) {
+    items[k] = v.value;
+  }
+  pendingCloudSync.clear();
+
+  try {
+    const res = await fetch(getSettingsUrl(), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ settings: items }),
+    });
+    if (!res.ok) {
+      console.warn("[settings] cloud sync returned status", res.status);
+    }
+  } catch (err) {
+    if (!err?.message?.includes("Failed to parse URL")) {
+      console.warn("[settings] cloud sync network error:", err?.message);
+    }
+  }
+}
+
+let isPullingSettings = false;
+let lastPullTs = 0;
+
+/**
+ * Pull latest settings from Cloudflare D1 and update local storage if changed.
+ *
+ * @param {boolean} [force]
+ * @returns {Promise<boolean>} true if settings were updated from cloud
+ */
+export async function pullRemoteSettings(force = false) {
+  if (typeof window === "undefined" || typeof fetch === "undefined") return false;
+  const now = Date.now();
+  if (!force && now - lastPullTs < 5000) return false;
+  if (isPullingSettings) return false;
+  isPullingSettings = true;
+  lastPullTs = now;
+
+  try {
+    const res = await fetch(getSettingsUrl(), {
+      headers: { accept: "application/json" },
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (!data || !data.ok || !data.settings) return false;
+
+    let changed = false;
+    for (const [key, val] of Object.entries(data.settings)) {
+      if (key === "_byProperty" || !SYNCABLE_SETTING_KEYS.has(key)) continue;
+      const currentRaw = localStorage.getItem(key);
+      const newRaw = typeof val === "string" ? val : JSON.stringify(val);
+      if (currentRaw !== newRaw) {
+        localStorage.setItem(key, newRaw);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      notifySettingsChanged();
+    }
+    return true;
+  } catch (err) {
+    if (!err?.message?.includes("Failed to parse URL")) {
+      console.warn("[settings] remote pull failed:", err?.message);
+    }
+    return false;
+  } finally {
+    isPullingSettings = false;
+  }
+}
+
 /**
  * Writes a raw string setting.
  *
@@ -171,7 +296,11 @@ export function readObjectSetting(key, fallback) {
  */
 export function writeRawSetting(key, value) {
   try {
-    localStorage.setItem(key, String(value));
+    const str = String(value);
+    localStorage.setItem(key, str);
+    if (SYNCABLE_SETTING_KEYS.has(key)) {
+      queueCloudSettingSync(key, value);
+    }
     return true;
   } catch (err) {
     reportFailedWrite(key, err);
@@ -206,5 +335,15 @@ export function writeJsonSetting(key, value) {
     );
     return false;
   }
-  return writeRawSetting(key, text);
+  try {
+    localStorage.setItem(key, text);
+    if (SYNCABLE_SETTING_KEYS.has(key)) {
+      queueCloudSettingSync(key, value);
+    }
+    return true;
+  } catch (err) {
+    reportFailedWrite(key, err);
+    return false;
+  }
 }
+

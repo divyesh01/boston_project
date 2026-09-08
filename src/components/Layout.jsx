@@ -10,6 +10,7 @@ import { useAuth } from "@/lib/AuthContext";
 import CommandMenu from "@/components/CommandMenu";
 import { NAV, PRIMARY, MORE } from "@/lib/navigation";
 import { useRealtimeInvalidation, APP_SYNC_PREFIXES } from "@/lib/realtime";
+import { pullRemoteSettings } from "@/lib/settingsStore";
 
 function SidebarBrand() {
   const { property, properties } = useGlobalFilters();
@@ -41,6 +42,11 @@ export default function Layout() {
   const isPrimary = PRIMARY.some((n) => n.to === pathname && canAccessRoute(n.to));
   const inMore = MORE.some((n) => n.to === pathname && canAccessRoute(n.to));
   const reduceMotion = useReducedMotion();
+
+  // Reconcile cloud settings (taxes, commissions, fees) with local storage on load
+  useEffect(() => {
+    pullRemoteSettings();
+  }, []);
 
   useEffect(() => {
     const handler = () => setMoreOpen(false);

@@ -26,3 +26,13 @@ export function notifySettingsChanged() {
     }
   });
 }
+
+// Cross-tab synchronization within the same browser profile. When another tab
+// writes to localStorage, the storage event fires in every other open tab.
+if (typeof window !== "undefined" && window.addEventListener) {
+  window.addEventListener("storage", (ev) => {
+    if (ev && ev.key && ev.key.startsWith("rri_")) {
+      notifySettingsChanged();
+    }
+  });
+}

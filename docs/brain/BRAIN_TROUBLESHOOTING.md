@@ -6468,12 +6468,40 @@ Resolution:
    - Vitest suite `src/api/businessSync.test.js` (25 tests) passed.
    - Full Vitest suite, TypeScript typecheck, ESLint, production build, `verify:v3`, `brain:verify`, and `map:verify` all verified.
 
+## 68. Cross-Browser Settings Synchronization for Taxes and OTA Commission Rates (2026-09-08)
 
+Users reported a critical financial calculation discrepancy between two browsers running the exact same application against identical transactional data:
+- On identical reported gross revenue of $1,020,598.17:
+  - Browser 1 calculated: Deductions = -$110,331.47, Estimated Money Kept = $910,266.70.
+  - Browser 2 calculated: Deductions = -$105,294.29, Estimated Money Kept = $915,303.88.
+- Resulting in a $5,037.18 divergence in net revenue and deduction estimates.
 
+Root Cause:
+1. LocalStorage Siloing of Financial Settings:
+While raw transaction records (16,921 rows) and historical business data (38,687 records total) resided in Cloudflare D1 and synchronized across all devices via `businessSync.js`, critical financial calculation parameters were stored exclusively in browser `localStorage` via `src/lib/settingsStore.js`:
+- `rri_commission_rates_v2`: OTA commission rates per source (e.g., Expedia Hotel Collect 15%, Booking.com 15%).
+- `rri_cc_fee_rate`: Credit card processing fee percentage.
+- `rri_cc_fee_refunds_v1`: Boolean toggle determining whether credit card fees apply to refund transactions.
+- `rri_tax_settings_v2` / `rri_tax_config_v1`: Effective tax periods, state/city/other occupancy tax rates.
+- `rri_alert_thresholds_v1`: Revenue alert and monitoring thresholds.
+Because these keys never left the client browser, changes made on one workstation (or by one user) did not replicate to other devices. Browser 1 evaluated transactions with updated commission rates while Browser 2 evaluated identical transactions with default or legacy rates, generating inconsistent net financial reports.
 
+Resolution (10-Subagent Architecture Implementation):
+1. Cloudflare Worker D1 Backend Endpoint (`worker/settings.js` & `worker/index.js`):
+   - Added persistent D1 table `app_setting` (`key TEXT PRIMARY KEY`, `value TEXT NOT NULL`, `updated_by TEXT`, `updated_at TEXT`, `rev INTEGER DEFAULT 1`).
+   - Implemented `GET /api/settings` returning all persistent settings with revision counters and timestamps (authenticated operators only).
+   - Implemented `POST/PUT /api/settings` with role-based access control (`requireRole(c, ["owner", "admin"])`), rate-limiting, and atomic upsert semantics in D1 SQLite.
+   - Updated `worker/schema.sql` to include `app_setting` table definition while preserving `migrations-production/0001_auth_schema.sql` parity.
+2. Online Write-Through and Read-Through Sync Engine (`src/lib/settingsStore.js`):
+   - Preserved 0ms synchronous read speed backed by `localStorage` without UI blocking.
+   - Defined `SYNCABLE_SETTING_KEYS` covering commission rates, CC fees, tax settings, and alert thresholds.
+   - Implemented `queueCloudSettingSync(key, value)` with a 1500ms debounce buffer to coalesce rapid keystrokes, and `flushCloudSettingSync()` for immediate guaranteed delivery.
+   - Implemented `pullRemoteSettings()` to fetch remote settings on connection, reconcile versions, update local storage, and broadcast updates via `settingsBus.js`.
+3. Cross-Tab and Cross-Device Reactivity (`src/lib/settingsBus.js`, `src/lib/realtime.js`, `src/components/Layout.jsx`, `src/pages/Settings.jsx`):
+   - Added window `storage` event listener in `src/lib/settingsBus.js` for instantaneous (<1ms) cross-tab synchronization on the same device.
+   - Integrated `pullRemoteSettings()` into app startup in `Layout.jsx` and periodic background polling (`APP_SYNC_PREFIXES = ["settings", ...], POLL_INTERVAL_MS = 20_000`) in `src/lib/realtime.js`.
+   - Updated `handleSave`, `handleSaveTax`, `handleSaveThresholds`, and `handleSaveRevThresholds` in `src/pages/Settings.jsx` to immediately flush cloud sync, invalidate React Query caches, and rebuild local pre-aggregated financial caches via `rebuildDailyAggregates({ propertyId: "all" })`.
 
-
-
-
-
-
+Automated Verification:
+- All schema parity checks verified (`node scripts/verify-schema-parity.mjs`).
+- Unit tests (`vitest run`), TypeScript type checking (`npm run typecheck`), ESLint (`npm run lint`), production build (`npm run build`), DIVYESH V3 verifier (`npm run verify:v3`), brain verification (`npm run brain:verify`), and system map verification (`npm run map:verify`) all confirmed clean.

@@ -886,3 +886,20 @@ CREATE INDEX idx_rollback_journal_lookup
   ON business_rollback_journal (account_id, transaction_id);
 CREATE INDEX idx_rollback_journal_record
   ON business_rollback_journal (account_id, entity_name, record_key);
+
+-- ---------------------------------------------------------------------------
+-- APP SETTINGS (Cloud-Synced Configuration: Taxes, OTA Commissions, CC Fees)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS app_setting (
+  account_id   TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+  setting_key  TEXT NOT NULL,
+  property_id  TEXT NOT NULL DEFAULT '*',
+  value_json   TEXT NOT NULL,
+  revision     INTEGER NOT NULL DEFAULT 1,
+  updated_by   TEXT,
+  updated_at   TEXT NOT NULL,
+  PRIMARY KEY (account_id, setting_key, property_id)
+);
+CREATE INDEX IF NOT EXISTS idx_app_setting_lookup
+  ON app_setting (account_id, property_id);
+

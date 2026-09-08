@@ -903,3 +903,17 @@ CREATE TABLE IF NOT EXISTS app_setting (
 CREATE INDEX IF NOT EXISTS idx_app_setting_lookup
   ON app_setting (account_id, property_id);
 
+CREATE TABLE IF NOT EXISTS app_setting_history (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id   TEXT NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+  setting_key  TEXT NOT NULL,
+  property_id  TEXT NOT NULL DEFAULT '*',
+  old_value    TEXT,
+  new_value    TEXT NOT NULL,
+  revision     INTEGER NOT NULL,
+  changed_by   TEXT,
+  changed_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_app_setting_history
+  ON app_setting_history (account_id, setting_key, property_id);
+

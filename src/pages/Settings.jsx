@@ -10,7 +10,7 @@ import { getAlertThresholds, saveAlertThresholds } from "@/lib/alertThresholds";
 import { getRevenueThresholds, saveRevenueThresholds } from "@/lib/revenueThresholds";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { getTaxSettings, saveTaxSettings } from "@/lib/taxSettings";
-import { flushCloudSettingSync } from "@/lib/settingsStore";
+import { flushCloudSettingSync, setEditingSettingsLock } from "@/lib/settingsStore";
 import { rebuildDailyAggregates } from "@/lib/dailyAggregates";
 import { toast } from "@/components/ui/use-toast";
 
@@ -52,6 +52,12 @@ export default function Settings() {
   const [thresholdSaved, setThresholdSaved] = useState(false);
   const [revThresholds, setRevThresholds] = useState(() => getRevenueThresholds());
   const [revSaved, setRevSaved] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      setEditingSettingsLock(false);
+    };
+  }, []);
   // Query OBJECT kept alongside the data: propertiesQ.isError drives the banner
   // above. `?? []` instead of `= []` so a failure is never laundered into an
   // ordinary empty list.
@@ -858,7 +864,15 @@ export default function Settings() {
   const entries = Object.entries(rates).sort((a, b) => a[0].localeCompare(b[0]));
 
   return (
-    <div className="space-y-6">
+    <div
+      className="space-y-6"
+      onFocusCapture={() => setEditingSettingsLock(true)}
+      onBlurCapture={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) {
+          setEditingSettingsLock(false);
+        }
+      }}
+    >
       <header>
         <p className="text-[11px] uppercase tracking-[0.3em] text-[#00D4FF]">Configuration</p>
         <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Settings</h1>

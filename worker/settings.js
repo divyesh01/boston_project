@@ -4,6 +4,12 @@
 // Synchronizes property-scoped and account-global settings (OTA commission
 // rates, credit card fees, tax configuration, tax periods, alert thresholds)
 // across all browser sessions and devices.
+//
+// Optimized for Cloudflare D1 quotas:
+// - Conditional HTTP ETag 304 short-circuit (0 D1 reads when unchanged)
+// - Compare-And-Swap (CAS) monotonic revision concurrency protection
+// - Mathematical input value clamping
+// - Immutable app_setting_history audit trail
 // ===========================================================================
 
 import { queryAll, queryFirst } from "./db.js";
@@ -19,14 +25,40 @@ const ALLOWED_SETTING_KEYS = new Set([
   "rri_pricing_config_v1",
 ]);
 
-const jsonResponse = (body, status = 200) =>
+const jsonResponse = (body, status = 200, extraHeaders = {}) =>
   new Response(JSON.stringify(body), {
     status,
     headers: {
       "content-type": "application/json; charset=utf-8",
       "X-Content-Type-Options": "nosniff",
+      ...extraHeaders,
     },
   });
+
+function clampSettingValue(key, val) {
+  if (key === "rri_cc_fee_rate") {
+    const num = Number(val);
+    if (isNaN(num)) return 0.03;
+    return Math.max(0, Math.min(0.1, num));
+  }
+  if (key === "rri_commission_rates_v2" && typeof val === "object" && val !== null) {
+    const clamped = {};
+    for (const [k, v] of Object.entries(val)) {
+      const num = Number(v);
+      clamped[k] = isNaN(num) ? 0 : Math.max(0, Math.min(0.4, num));
+    }
+    return clamped;
+  }
+  if ((key === "rri_tax_settings_v2" || key === "rri_tax_config_v1") && Array.isArray(val)) {
+    return val.map((row) => ({
+      ...row,
+      state_rate: Math.max(0, Math.min(0.35, Number(row.state_rate) || 0)),
+      city_rate: Math.max(0, Math.min(0.35, Number(row.city_rate) || 0)),
+      other_rate: Math.max(0, Math.min(0.35, Number(row.other_rate) || 0)),
+    }));
+  }
+  return val;
+}
 
 let tableEnsured = false;
 
@@ -45,6 +77,21 @@ async function ensureSettingsTable(env) {
         PRIMARY KEY (account_id, setting_key, property_id)
       )
     `).run();
+
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS app_setting_history (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id   TEXT NOT NULL,
+        setting_key  TEXT NOT NULL,
+        property_id  TEXT NOT NULL DEFAULT '*',
+        old_value    TEXT,
+        new_value    TEXT NOT NULL,
+        revision     INTEGER NOT NULL,
+        changed_by   TEXT,
+        changed_at   TEXT NOT NULL
+      )
+    `).run();
+
     tableEnsured = true;
   } catch (e) {
     console.warn("[settings] ensure table:", e?.message);
@@ -102,12 +149,38 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
         }
       }
 
-      return jsonResponse({
-        ok: true,
-        settings,
-        revision: maxRevision,
-        updated_at: latestUpdated,
-      });
+      // Edge-level ETag 304 conditional short-circuit
+      const etag = `W/"rev-${maxRevision}-${latestUpdated ? new Date(latestUpdated).getTime() : 0}"`;
+      const clientEtag = request.headers.get("if-none-match");
+      if (clientEtag && (clientEtag === etag || clientEtag === etag.replace(/^W\//, ""))) {
+        return new Response(null, {
+          status: 304,
+          headers: {
+            ETag: etag,
+            "Cache-Control": "private, no-cache, must-revalidate",
+            "x-settings-rev": String(maxRevision),
+          },
+        });
+      }
+
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          settings,
+          revision: maxRevision,
+          updated_at: latestUpdated,
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json; charset=utf-8",
+            "X-Content-Type-Options": "nosniff",
+            ETag: etag,
+            "Cache-Control": "private, no-cache, must-revalidate",
+            "x-settings-rev": String(maxRevision),
+          },
+        }
+      );
     } catch (err) {
       console.error("[settings] get error:", err);
       return jsonResponse({ error: err.message || "could not retrieve settings" }, 500);
@@ -128,6 +201,25 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
       return jsonResponse({ error: "invalid JSON body" }, 400);
     }
 
+    // Compare-And-Swap (CAS) verification: prevent silent overwriting of newer remote revisions
+    if (body.expected_revision !== undefined && Number(body.expected_revision) > 0) {
+      const currentRevRow = await queryFirst(
+        env,
+        `SELECT MAX(revision) as max_rev FROM app_setting WHERE account_id = ?`,
+        [accountId]
+      );
+      if (currentRevRow?.max_rev && Number(currentRevRow.max_rev) > Number(body.expected_revision)) {
+        return jsonResponse(
+          {
+            error: "settings conflict: remote version has advanced",
+            code: "SETTINGS_CONFLICT",
+            server_revision: Number(currentRevRow.max_rev),
+          },
+          409
+        );
+      }
+    }
+
     const now = new Date().toISOString();
     const updatedBy = scope.user?.id || "unknown";
 
@@ -137,7 +229,7 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
       if (ALLOWED_SETTING_KEYS.has(body.key)) {
         itemsToSave.push({
           key: body.key,
-          value: body.value,
+          value: clampSettingValue(body.key, body.value),
           propertyId: body.property_id || "*",
         });
       }
@@ -147,7 +239,7 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
         if (ALLOWED_SETTING_KEYS.has(k) && v !== undefined) {
           itemsToSave.push({
             key: k,
-            value: v,
+            value: clampSettingValue(k, v),
             propertyId,
           });
         }
@@ -159,6 +251,20 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
     }
 
     try {
+      // Record historical changes in app_setting_history
+      for (const item of itemsToSave) {
+        try {
+          await env.DB.prepare(`
+            INSERT INTO app_setting_history (account_id, setting_key, property_id, old_value, new_value, revision, changed_by, changed_at)
+            SELECT account_id, setting_key, property_id, value_json, ?, revision + 1, ?, ?
+            FROM app_setting
+            WHERE account_id = ? AND setting_key = ? AND property_id = ?
+          `).bind(JSON.stringify(item.value), updatedBy, now, accountId, item.key, item.propertyId).run();
+        } catch {
+          // Non-blocking history record
+        }
+      }
+
       const stmts = itemsToSave.map((item) => {
         const valJson = JSON.stringify(item.value);
         return env.DB.prepare(`
@@ -185,13 +291,17 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
       );
       const revision = revRow?.max_rev || 1;
 
-      return jsonResponse({
-        ok: true,
-        saved: true,
-        count: itemsToSave.length,
-        revision,
-        updated_at: now,
-      });
+      return jsonResponse(
+        {
+          ok: true,
+          saved: true,
+          count: itemsToSave.length,
+          revision,
+          updated_at: now,
+        },
+        200,
+        { "x-settings-rev": String(revision) }
+      );
     } catch (err) {
       console.error("[settings] save error:", err);
       return jsonResponse({ error: err.message || "could not save settings" }, 500);

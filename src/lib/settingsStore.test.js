@@ -6,6 +6,7 @@ import {
   readJsonSetting,
   pullRemoteSettings,
   flushCloudSettingSync,
+  setEditingSettingsLock,
   SYNCABLE_SETTING_KEYS,
 } from "./settingsStore";
 import { subscribeSettingsChange } from "./settingsBus";
@@ -17,6 +18,7 @@ describe("settingsStore cloud sync and persistence", () => {
   beforeEach(() => {
     store = {};
     fetchMock = vi.fn();
+    setEditingSettingsLock(false);
     vi.stubGlobal("localStorage", {
       getItem: vi.fn((k) => store[k] ?? null),
       setItem: vi.fn((k, v) => {
@@ -33,6 +35,7 @@ describe("settingsStore cloud sync and persistence", () => {
   });
 
   afterEach(() => {
+    setEditingSettingsLock(false);
     vi.restoreAllMocks();
   });
 
@@ -48,6 +51,7 @@ describe("settingsStore cloud sync and persistence", () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ ok: true }),
+      headers: new Headers(),
     });
 
     const success = writeJsonSetting("rri_commission_rates_v2", {
@@ -78,6 +82,7 @@ describe("settingsStore cloud sync and persistence", () => {
 
     fetchMock.mockResolvedValueOnce({
       ok: true,
+      headers: new Headers({ ETag: 'W/"rev-5-12345"', "x-settings-rev": "5" }),
       json: async () => ({
         ok: true,
         settings: {
@@ -96,5 +101,25 @@ describe("settingsStore cloud sync and persistence", () => {
     expect(notified).toBe(true);
 
     unsub();
+  });
+
+  it("handles HTTP 304 Not Modified without rewriting local storage", async () => {
+    fetchMock.mockResolvedValueOnce({
+      status: 304,
+      ok: false,
+      headers: new Headers(),
+    });
+
+    store["rri_cc_fee_rate"] = "0.03";
+    const result = await pullRemoteSettings(true);
+    expect(result).toBe(true);
+    expect(store["rri_cc_fee_rate"]).toBe("0.03");
+  });
+
+  it("suppresses non-forced pull while user is actively editing settings", async () => {
+    setEditingSettingsLock(true);
+    const result = await pullRemoteSettings(false);
+    expect(result).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

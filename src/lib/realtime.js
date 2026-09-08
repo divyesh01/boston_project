@@ -299,13 +299,21 @@ function initLeaderCoordinator() {
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         abdicateLeadership();
-      } else if (!currentLeaderId || Date.now() - lastLeaderHeartbeat > HEARTBEAT_TIMEOUT_MS) {
-        claimLeadership();
+      } else {
+        if (!currentLeaderId || Date.now() - lastLeaderHeartbeat > HEARTBEAT_TIMEOUT_MS) {
+          claimLeadership();
+        }
+        pokeSharedPoll();
+        pullRemoteSettings().catch(() => {});
       }
     });
   }
 
   if (typeof window !== "undefined" && window.addEventListener) {
+    window.addEventListener("focus", () => {
+      pokeSharedPoll();
+      pullRemoteSettings().catch(() => {});
+    });
     window.addEventListener("beforeunload", abdicateLeadership);
   }
 

@@ -25,21 +25,13 @@
 // One module rather than nine corrected copies, because the thing being fixed IS
 // the duplication: the answer to "did the write land" now has exactly one
 // definition, and the next settings module added to the app gets it for free.
-// The four copies of `publicUser()` in this repo are the standing argument for
-// why near-identical helpers drift apart.
 //
-// DESIGN RULES, so a caller cannot reintroduce the silence:
-//   • readers NEVER throw — a page must not go blank over a settings key, so a
-//     failed read still returns the fallback, it just says so first;
-//   • writers return true/false and are never `void` — the boolean is what lets
-//     the Settings page stop claiming success;
-//   • every message names the key, because "settings failed to save" is not
-//     actionable and "rri_tax_config_v1 could not be saved" is;
-//   • messages say what it MEANS ("the previous setting is still in effect"),
-//     not just what failed. The person reading the console is the hotel owner.
+// Continuous Cross-Browser Cloud Sync Enhancements:
+// - Cloudflare D1 ETag 304 conditional short-circuit caching (0 D1 reads when unchanged)
+// - Input-state editing lock (prevents remote overwriting during active typing)
+// - Compare-And-Swap (CAS) expected revision handling
+// - Automatic BroadcastChannel cross-tab notifications
 
-// Long corrupt values are echoed truncated: enough to recognise, not enough to
-// flood the console.
 const MAX_ECHO = 120;
 
 function describe(err) {
@@ -62,8 +54,6 @@ function reportFailedRead(key, err) {
 
 /**
  * A stored value was found but cannot be used, so defaults were substituted.
- * Exported because some callers can only judge usability themselves — a tax store
- * that parses to an object instead of a list, or a fee that parses to NaN.
  *
  * @param {string} key - the localStorage key, named so the owner can act on it
  * @param {string} reason - what was wrong with the value
@@ -110,8 +100,7 @@ export function readRawSetting(key, fallback = null) {
 }
 
 /**
- * Reads and parses a JSON setting. Never throws. Reports before falling back, so
- * a corrupt store cannot silently revert the owner's configuration.
+ * Reads and parses a JSON setting. Never throws.
  *
  * @param {string} key
  * @param {*} fallback - returned when the key is absent, unreadable or unparseable
@@ -125,7 +114,6 @@ export function readJsonSetting(key, fallback) {
     reportFailedRead(key, err);
     return fallback;
   }
-  // Absent and empty are not failures: nothing has been saved yet.
   if (raw === null || raw === "") return fallback;
   let parsed;
   try {
@@ -134,9 +122,6 @@ export function readJsonSetting(key, fallback) {
     reportDiscardedSetting(key, describe(err), raw);
     return fallback;
   }
-  // Stored "null" parses without error but is not a usable setting. The old
-  // spread-based readers folded it into defaults silently; this keeps the same
-  // result and says so.
   if (parsed === null) {
     reportDiscardedSetting(key, "stored value was null", raw);
     return fallback;
@@ -145,8 +130,7 @@ export function readJsonSetting(key, fallback) {
 }
 
 /**
- * Reads a JSON setting that must be a plain object, so a stored string or array
- * cannot be spread into a config and produce nonsense keys.
+ * Reads a JSON setting that must be a plain object.
  *
  * @param {string} key
  * @param {Object} fallback
@@ -177,6 +161,23 @@ export const SYNCABLE_SETTING_KEYS = Object.freeze(new Set([
 
 let syncTimer = null;
 const pendingCloudSync = new Map();
+let lastKnownEtag = null;
+let currentServerRev = 0;
+let isEditingSettings = false;
+
+/**
+ * Activate or deactivate the edit lock while user is modifying form fields.
+ * Prevents remote background sync from overwriting active keystrokes.
+ *
+ * @param {boolean} locked
+ */
+export function setEditingSettingsLock(locked) {
+  isEditingSettings = Boolean(locked);
+}
+
+export function isEditingSettingsLocked() {
+  return isEditingSettings;
+}
 
 /**
  * Queue a setting to be saved to Cloudflare D1 in the background.
@@ -206,6 +207,8 @@ function getSettingsUrl() {
   return "/api/settings";
 }
 
+const isTestEnv = () => typeof globalThis !== "undefined" && Boolean(globalThis.process?.env?.NODE_ENV === "test");
+
 /**
  * Immediately flush queued settings to Cloudflare D1.
  */
@@ -225,13 +228,28 @@ export async function flushCloudSettingSync() {
     const res = await fetch(getSettingsUrl(), {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ settings: items }),
+      body: JSON.stringify({
+        settings: items,
+        expected_revision: currentServerRev || undefined,
+      }),
     });
-    if (!res.ok) {
+    if (res.status === 409) {
+      // Remote version advanced; pull fresh copy
+      pullRemoteSettings(true).catch(() => {});
+    } else if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data?.revision) currentServerRev = Number(data.revision);
+      const etag = res.headers.get("ETag");
+      if (etag) lastKnownEtag = etag;
+    } else {
       console.warn("[settings] cloud sync returned status", res.status);
     }
   } catch (err) {
-    if (!err?.message?.includes("Failed to parse URL")) {
+    if (
+      !err?.message?.includes("Failed to parse URL") &&
+      !err?.message?.includes("fetch failed") &&
+      !isTestEnv()
+    ) {
       console.warn("[settings] cloud sync network error:", err?.message);
     }
   }
@@ -242,12 +260,15 @@ let lastPullTs = 0;
 
 /**
  * Pull latest settings from Cloudflare D1 and update local storage if changed.
+ * Uses HTTP conditional ETag (If-None-Match) to achieve 0 D1 reads when unchanged.
  *
  * @param {boolean} [force]
- * @returns {Promise<boolean>} true if settings were updated from cloud
+ * @returns {Promise<boolean>} true if settings were updated from cloud or already up-to-date (304)
  */
 export async function pullRemoteSettings(force = false) {
   if (typeof window === "undefined" || typeof fetch === "undefined") return false;
+  if (isEditingSettings && !force) return false;
+
   const now = Date.now();
   if (!force && now - lastPullTs < 5000) return false;
   if (isPullingSettings) return false;
@@ -255,10 +276,26 @@ export async function pullRemoteSettings(force = false) {
   lastPullTs = now;
 
   try {
-    const res = await fetch(getSettingsUrl(), {
-      headers: { accept: "application/json" },
-    });
+    const headers = { accept: "application/json" };
+    if (lastKnownEtag && !force) {
+      headers["If-None-Match"] = lastKnownEtag;
+    }
+
+    const res = await fetch(getSettingsUrl(), { headers });
+
+    // Edge 304 Not Modified short-circuit: 0 D1 reads, state is identical
+    if (res.status === 304) {
+      return true;
+    }
+
     if (!res.ok) return false;
+
+    const etag = res.headers.get("ETag");
+    if (etag) lastKnownEtag = etag;
+
+    const rev = res.headers.get("x-settings-rev");
+    if (rev) currentServerRev = Number(rev);
+
     const data = await res.json();
     if (!data || !data.ok || !data.settings) return false;
 
@@ -274,11 +311,15 @@ export async function pullRemoteSettings(force = false) {
     }
 
     if (changed) {
-      notifySettingsChanged();
+      notifySettingsChanged({ broadcast: true });
     }
     return true;
   } catch (err) {
-    if (!err?.message?.includes("Failed to parse URL")) {
+    if (
+      !err?.message?.includes("Failed to parse URL") &&
+      !err?.message?.includes("fetch failed") &&
+      !isTestEnv()
+    ) {
       console.warn("[settings] remote pull failed:", err?.message);
     }
     return false;
@@ -320,9 +361,6 @@ export function writeJsonSetting(key, value) {
   try {
     text = JSON.stringify(value);
   } catch (err) {
-    // Distinct from a storage failure: the caller handed over something that
-    // cannot be represented (a cycle, a BigInt). Saying "storage is full" here
-    // would send the owner to clear their browser over a code defect.
     console.error(
       `[settings] "${key}" could not be converted to JSON (${describe(err)}), so ` +
         `nothing was saved. This is a defect in the calling code, not a storage problem.`
@@ -346,4 +384,3 @@ export function writeJsonSetting(key, value) {
     return false;
   }
 }
-

@@ -19,6 +19,7 @@ const ALLOWED_SETTING_KEYS = new Set([
   "rri_cc_fee_rate",
   "rri_cc_fee_refunds_v1",
   "rri_tax_config_v1",
+  "rri_tax_settings_v1",
   "rri_tax_settings_v2",
   "rri_alert_thresholds_v1",
   "rri_revenue_thresholds_v1",
@@ -49,7 +50,10 @@ function clampSettingValue(key, val) {
     }
     return clamped;
   }
-  if ((key === "rri_tax_settings_v2" || key === "rri_tax_config_v1") && Array.isArray(val)) {
+  if (
+    (key === "rri_tax_settings_v1" || key === "rri_tax_settings_v2" || key === "rri_tax_config_v1") &&
+    Array.isArray(val)
+  ) {
     return val.map((row) => ({
       ...row,
       state_rate: Math.max(0, Math.min(0.35, Number(row.state_rate) || 0)),
@@ -117,6 +121,34 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
   // ─── GET /api/settings ───
   if (request.method === "GET") {
     try {
+      // Scalar metadata query: compute revision & ETag before reading table rows
+      const meta = await queryFirst(
+        env,
+        `SELECT COUNT(1) as total_count, MAX(revision) as max_rev, MAX(updated_at) as latest_updated
+         FROM app_setting
+         WHERE account_id = ?`,
+        [accountId]
+      );
+
+      const maxRevision = Number(meta?.max_rev || 0);
+      const latestUpdated = meta?.latest_updated ? String(meta.latest_updated) : null;
+      const totalCount = Number(meta?.total_count || 0);
+
+      // Edge-level ETag 304 conditional short-circuit: 0 data row reads when unchanged
+      const etag = `W/"rev-${maxRevision}-${totalCount}-${latestUpdated ? new Date(latestUpdated).getTime() : 0}"`;
+      const clientEtag = request.headers.get("if-none-match");
+      if (clientEtag && (clientEtag === etag || clientEtag === etag.replace(/^W\//, ""))) {
+        return new Response(null, {
+          status: 304,
+          headers: {
+            ETag: etag,
+            "Cache-Control": "private, no-cache, must-revalidate",
+            "x-settings-rev": String(maxRevision),
+          },
+        });
+      }
+
+      // Read settings rows only when client has no cached copy or state changed
       const rows = await queryAll(
         env,
         `SELECT setting_key, property_id, value_json, revision, updated_at
@@ -126,9 +158,6 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
       );
 
       const settings = {};
-      let maxRevision = 0;
-      let latestUpdated = null;
-
       for (const row of rows) {
         if (!ALLOWED_SETTING_KEYS.has(row.setting_key)) continue;
         try {
@@ -143,24 +172,6 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
         } catch {
           // Corrupt row ignored
         }
-        if (Number(row.revision) > maxRevision) maxRevision = Number(row.revision);
-        if (!latestUpdated || String(row.updated_at) > latestUpdated) {
-          latestUpdated = String(row.updated_at);
-        }
-      }
-
-      // Edge-level ETag 304 conditional short-circuit
-      const etag = `W/"rev-${maxRevision}-${latestUpdated ? new Date(latestUpdated).getTime() : 0}"`;
-      const clientEtag = request.headers.get("if-none-match");
-      if (clientEtag && (clientEtag === etag || clientEtag === etag.replace(/^W\//, ""))) {
-        return new Response(null, {
-          status: 304,
-          headers: {
-            ETag: etag,
-            "Cache-Control": "private, no-cache, must-revalidate",
-            "x-settings-rev": String(maxRevision),
-          },
-        });
       }
 
       return new Response(
@@ -190,8 +201,23 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
   // ─── PUT/POST /api/settings ───
   if (request.method === "PUT" || request.method === "POST") {
     const role = String(scope.user?.role || "").toLowerCase();
-    if (!["owner", "admin"].includes(role)) {
-      return jsonResponse({ error: "forbidden: only owner and admin may modify settings" }, 403);
+    const isFullAdmin = ["owner", "admin"].includes(role);
+
+    let userPermissions = {};
+    try {
+      if (typeof scope.user?.permissions === "string") {
+        userPermissions = JSON.parse(scope.user.permissions);
+      } else if (typeof scope.user?.permissions === "object" && scope.user?.permissions !== null) {
+        userPermissions = scope.user.permissions;
+      }
+    } catch {}
+
+    const hasSettingPermission = isFullAdmin || Boolean(userPermissions.manage_settings);
+    const hasCommissionPermission = isFullAdmin || role === "manager" || Boolean(userPermissions.manage_ota_commissions);
+    const hasPricingPermission = isFullAdmin || role === "manager" || Boolean(userPermissions.manage_pricing);
+
+    if (!hasSettingPermission && !hasCommissionPermission && !hasPricingPermission) {
+      return jsonResponse({ error: "forbidden: insufficient permissions to modify settings" }, 403);
     }
 
     let body;
@@ -225,22 +251,46 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
 
     const itemsToSave = [];
 
-    if (body.key && body.value !== undefined) {
+    if (Array.isArray(body.items)) {
+      for (const item of body.items) {
+        if (item && item.key && ALLOWED_SETTING_KEYS.has(item.key) && item.value !== undefined) {
+          itemsToSave.push({
+            key: item.key,
+            value: clampSettingValue(item.key, item.value),
+            propertyId: String(item.property_id || item.propertyId || "*"),
+          });
+        }
+      }
+    } else if (body.key && body.value !== undefined) {
       if (ALLOWED_SETTING_KEYS.has(body.key)) {
         itemsToSave.push({
           key: body.key,
           value: clampSettingValue(body.key, body.value),
-          propertyId: body.property_id || "*",
+          propertyId: String(body.property_id || "*"),
         });
       }
     } else if (body.settings && typeof body.settings === "object") {
-      const propertyId = body.property_id || "*";
+      const defaultPropId = String(body.property_id || "*");
       for (const [k, v] of Object.entries(body.settings)) {
-        if (ALLOWED_SETTING_KEYS.has(k) && v !== undefined) {
+        if (k === "_byProperty" && typeof v === "object" && v !== null) {
+          for (const [propId, propSettings] of Object.entries(v)) {
+            if (typeof propSettings === "object" && propSettings !== null) {
+              for (const [propKey, propVal] of Object.entries(propSettings)) {
+                if (ALLOWED_SETTING_KEYS.has(propKey) && propVal !== undefined) {
+                  itemsToSave.push({
+                    key: propKey,
+                    value: clampSettingValue(propKey, propVal),
+                    propertyId: String(propId),
+                  });
+                }
+              }
+            }
+          }
+        } else if (ALLOWED_SETTING_KEYS.has(k) && v !== undefined) {
           itemsToSave.push({
             key: k,
             value: clampSettingValue(k, v),
-            propertyId,
+            propertyId: defaultPropId,
           });
         }
       }
@@ -250,38 +300,78 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
       return jsonResponse({ error: "no valid setting keys provided" }, 400);
     }
 
-    try {
-      // Record historical changes in app_setting_history
-      for (const item of itemsToSave) {
-        try {
-          await env.DB.prepare(`
-            INSERT INTO app_setting_history (account_id, setting_key, property_id, old_value, new_value, revision, changed_by, changed_at)
-            SELECT account_id, setting_key, property_id, value_json, ?, revision + 1, ?, ?
-            FROM app_setting
-            WHERE account_id = ? AND setting_key = ? AND property_id = ?
-          `).bind(JSON.stringify(item.value), updatedBy, now, accountId, item.key, item.propertyId).run();
-        } catch {
-          // Non-blocking history record
+    // Role-based check on specific keys: managers can adjust commissions/pricing but not tax/system
+    if (!hasSettingPermission) {
+      const unpermitted = itemsToSave.filter((item) => {
+        if (
+          ["rri_commission_rates_v2", "rri_cc_fee_rate", "rri_cc_fee_refunds_v1"].includes(item.key) &&
+          hasCommissionPermission
+        ) {
+          return false;
         }
+        if (["rri_pricing_config_v1"].includes(item.key) && hasPricingPermission) {
+          return false;
+        }
+        return true;
+      });
+      if (unpermitted.length > 0) {
+        return jsonResponse(
+          { error: `forbidden: role '${role}' cannot modify restricted setting '${unpermitted[0].key}'` },
+          403
+        );
+      }
+    }
+
+    try {
+      // Look up existing rows for the keys being saved to record old_value and calculate next revision
+      const existingRows = await queryAll(
+        env,
+        `SELECT setting_key, property_id, value_json, revision
+         FROM app_setting
+         WHERE account_id = ?`,
+        [accountId]
+      );
+      const existingMap = new Map();
+      for (const row of existingRows) {
+        existingMap.set(`${row.setting_key}::${row.property_id}`, row);
       }
 
-      const stmts = itemsToSave.map((item) => {
-        const valJson = JSON.stringify(item.value);
-        return env.DB.prepare(`
-          INSERT INTO app_setting (account_id, setting_key, property_id, value_json, revision, updated_by, updated_at)
-          VALUES (?, ?, ?, ?, 1, ?, ?)
-          ON CONFLICT(account_id, setting_key, property_id) DO UPDATE SET
-            value_json = excluded.value_json,
-            revision = app_setting.revision + 1,
-            updated_by = excluded.updated_by,
-            updated_at = excluded.updated_at
-        `).bind(accountId, item.key, item.propertyId, valJson, updatedBy, now);
-      });
+      const historyStmts = [];
+      const upsertStmts = [];
 
+      for (const item of itemsToSave) {
+        const itemKey = `${item.key}::${item.propertyId}`;
+        const existing = existingMap.get(itemKey);
+        const oldValue = existing ? existing.value_json : null;
+        const nextRev = existing ? Number(existing.revision) + 1 : 1;
+        const valJson = JSON.stringify(item.value);
+
+        historyStmts.push(
+          env.DB.prepare(`
+            INSERT INTO app_setting_history (
+              account_id, setting_key, property_id, old_value, new_value, revision, changed_by, changed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `).bind(accountId, item.key, item.propertyId, oldValue, valJson, nextRev, updatedBy, now)
+        );
+
+        upsertStmts.push(
+          env.DB.prepare(`
+            INSERT INTO app_setting (account_id, setting_key, property_id, value_json, revision, updated_by, updated_at)
+            VALUES (?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(account_id, setting_key, property_id) DO UPDATE SET
+              value_json = excluded.value_json,
+              revision = app_setting.revision + 1,
+              updated_by = excluded.updated_by,
+              updated_at = excluded.updated_at
+          `).bind(accountId, item.key, item.propertyId, valJson, updatedBy, now)
+        );
+      }
+
+      const allStmts = [...historyStmts, ...upsertStmts];
       if (env.DB.batch) {
-        await env.DB.batch(stmts);
+        await env.DB.batch(allStmts);
       } else {
-        for (const s of stmts) await s.run();
+        for (const s of allStmts) await s.run();
       }
 
       const revRow = await queryFirst(

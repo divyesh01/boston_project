@@ -63,6 +63,8 @@
 | 59 | **The Dashboard card titled "Yield & ADR Optimizer" optimized nothing, and every figure in it was invented.** Five defects across three inline `if` branches in `YieldAdvisor.jsx`. (1) Literal **`$10–$15`** and **`$5–$8`** rate moves, derived from nothing at all — not from ADR, not from the room register, not from the pricing engine — presented as the output of a card whose title said *Optimizer*, directly below `PricingPanel`, which computes a real rate in integer cents. Two rate recommendations on one screen, one measured and one invented, free to disagree by any amount. (2) **`money2(adr * 1.05)`** — float multiplication on a dollar value, forbidden outright by CLAUDE.md's BUSINESS directive, and the 5% came from nowhere. The violation is the multiplication, not the formatter: `money2` is `formatCents(toCents(v), 2)` and is correct, but the float has already happened before `toCents` sees it. (3) The caption **"Occupancy vs 100-room capacity"** on a page whose `capacity` is already the real room-night total summed across the selected properties. 100 is only the per-property **fallback** applied when a statistics row carries no `total_rooms` (`CalculationService.js`, `capacityCents`), so the caption was false for any property that is not exactly 100 rooms and for **every** multi-property selection. (4) A hardcoded **`occupancy > 0.6`** band, while six other surfaces gate on the owner's configured `getOccThreshold()` — including `LowOccAlert`, **rendered on this same screen**. Set the occupancy target to 70% and the alert flagged a 65% day as low occupancy while this panel called it *Healthy Occupancy*: one screen, two answers, the same number. (5) With **nothing imported**, `occupancy` and `capacity` are both `0`, which fell through both `>` tests into the last branch — *"Soft Occupancy (0.0%). Drop rate $5–$8 on low-demand days"*. Rate advice for a period with no rows, which is CLAUDE.md §4 (`USER / UI: Truthful Experience`): an unmeasured period must read as unmeasured, not as a bad one | HIGH | FIXED 2026-08-25 | `src/lib/yieldAdvice.js` (**NEW**, 126 lines) owns the decision — `buildYieldAdvice({occupancy, capacity, roomsSold, threshold})` → `{band, target, occupancy, capacity, roomsSold, headline, action, basis}`. It left the `.jsx` because `_loader-boot.mjs` has **no JSX transform**, so logic inside a `.jsx` can only be checked by matching source text — which is exactly how the self-contradiction survived. The soft band is `occ < getOccThreshold()`, **LowOccAlert's own predicate**, so the two panels cannot disagree; `capacity <= 0` returns `band: 'unknown'` with no `$` anywhere in it, while `capacity > 0 && roomsSold === 0` stays soft with a real basis, because a genuine zero-sales week is not missing data; all three inputs use `Number.isFinite(Number(x)) ? … : 0` rather than `Number(x) \|\| 0`, since 0 is legal for each. It deliberately **recommends no rate** — `pricingEngine.js` is the only wired recommender of the three that exist and they disagree by up to $25.60/night, so every branch names the Dynamic Pricing panel instead. `src/components/dashboard/YieldAdvisor.jsx` rewritten (34 → 52 lines) to render it and add no arithmetic, with a per-band icon replacing a fixed `TrendingUp` that pointed *up* beside "below your target". `src/pages/Dashboard.jsx:513` — one line, passing `capacity`/`roomsSold`, both already in scope from `currentStats`. `scripts/probe-yield-advisor.mjs` (**NEW**, 226 lines, 55 assertions, RED 44/10 first) — 65 outputs across 5 targets × 13 occupancies with zero `$` in any of them, and section [7] asserts the two panels agree on all 65. See section 38 | (This commit) |
 | 60 | **The launch checklist's top blocker was "set a secret in a dashboard that is not the host", and nothing in the shipped build reads that secret.** `LAUNCH_READINESS_CHECKLIST.md` named **Vercel on 14 lines (20 occurrences)** and **Cloudflare zero times**, while `wrangler.jsonc:20`/`:23` have shipped a Cloudflare Worker serving `./dist` since section 33. No behaviour defect — the same class as #58, and dangerous for the same reason: this is the one artifact in the repo that tells a human to change something *outside* the repo, so when it is wrong the code stays correct and the deployment stays broken, and no gate can tell. Four defects. (1) The most-emphasised step, repeated in four places — *"set `AUDIT_CHAIN_SECRET` in Vercel"* — is **void, not relocated.** That name appears in exactly one place in the repository: `secrets.get('AUDIT_CHAIN_SECRET')` inside `base44/functions/**` (`audit_log/entry.js:70`, `audit_verify/entry.js:93`, `autoPayroll/entry.ts:489`, `custom_auth_login/entry.js:221`, `custom_auth_reset_password/entry.js:74`, `custom_user_admin/entry.js:320` and `:538`, `deleteAccount/entry.ts:126`) — never in `src/`. That backend is gone and `wrangler.jsonc` declares no vars or secrets at all, so there is no field to fill and no code left to read it. (2) *"Confirm `VITE_USE_LOCAL_AUTH` is absent from production"* — **inverted, and following it kills the site.** `src/main.jsx:26` refuses to boot a production build carrying only that flag; the standalone shape needs **both** it and `VITE_STANDALONE_LOCAL`, which is why `.env.production` is committed on purpose after two deploys died from their absence. (3) *"`dist/` is a build artifact, do not trust it"* — **backwards**: `wrangler.jsonc:23` serves the site *from* `./dist`, so here `dist/` **is** the site. (4) `vercel.json` looked like deletable dead config and is not: `probe-deploy-config.mjs` §1 parses it and §10/§11 diff `base44/config.jsonc` and `public/_headers` against it key by key, so deleting it breaks a passing gate and un-pins every security header | HIGH | FIXED 2026-08-25 | `LAUNCH_READINESS_CHECKLIST.md` (814 → 835 lines, CRLF preserved 835/835) — nine edits. A `> [!IMPORTANT]` **DEPLOYMENT CORRECTION** block after the verdict states the host, the silent second-Worker trap (a `name` mismatch does not fail, it creates another Worker — that is where `divyeshpro` came from, and both deploy paths read the same line), `vercel.json`-as-spec, all seven void call sites, and the flag rule with *"Do not 'fix' them."* The B9 checkbox is rewritten as VOID and **left unticked on purpose**, because nobody performed the step — it is simply no longer a step; the consequence the owner is knowingly accepting is stated in the item: **no server-side audit hash chain**, since the client-side chain in `securityUtils.js` is computed and stored in the same browser it protects. The replacement top blocker is **Cloudflare Access on the `boston-project` Worker** (Zero Trust → Access → Applications → *Protect one Worker*), recorded as **UNKNOWN** rather than guessed, because with auth verified in the browser an upstream identity gate is the only real boundary. `dist/` staleness is now stated as measured — 92 files, `dist/index.html` 2026-08-25 05:37, **8 tracked inputs newer, 4 of them bundled** — replacing three symptoms that had already been fixed. `.env.production:11` — one character, `section 6` → `section 7`, the same wrong citation I had first written myself (`probe-standalone-deploy.mjs` §7, not §6, owns `ENV_PROD_ALLOWED`); LF-only preserved, 34 lines / 0 CR. Verified: `probe-standalone-deploy` **57/0** rc=0, `probe-deploy-config` **121/0** rc=0. See section 39 | (This commit) |
 | 61 | **External audit remediation: 15 live defects across two audit cycles plus one independently-found UTC bug.** Two parallel multi-auditor sweeps (4 auditors → 17 claims, 3 auditors → 11 claims) adjudicated claim-by-claim. 15 confirmed real+live, 6 deferred (dead code / false / by-design), 7 false-positive. Root cause of highest-value fix: `inRange(dateStr, from, to)` compared `d <= to` where an empty `''` upper bound made the test false for every date, silently dropping all rows on any open-ended window. Second highest: `isMonthSelected` used `new Date(str).getMonth()` — UTC-parse / local-read — so the 1st of each month fell into the prior month in US timezones. See section 40 for the complete breakdown | HIGH | FIXED 2026-08-25/26 | 13 files modified, 2 new regression probes. See section 40 | (Uncommitted) |
+| 62 | Cross-browser financial divergence ($5,037.18 on $1M gross) from localStorage-only settings storage | CRITICAL | FIXED 2026-09-08 | `worker/settings.js`, `src/lib/settingsStore.js`, `src/lib/settingsBus.js` | See section 68 |
+| 63 | Settings sync forensic audit findings: tax key mismatch, ETag 304 D1 read overhead, CAS 409 local clobber, stale form inputs, property scope loss, missing initial audit history, manager RBAC lockout, and double event notification | HIGH | FIXED 2026-09-08 | `worker/settings.js`, `src/lib/settingsStore.js`, `src/lib/settingsBus.js`, `src/pages/Settings.jsx`, `src/lib/settingsForensicFixes.test.js` | See section 69 |
 
 ---
 
@@ -6497,6 +6499,201 @@ Resolution (10-Subagent Architecture Implementation):
    - Defined `SYNCABLE_SETTING_KEYS` covering commission rates, CC fees, tax settings, and alert thresholds.
    - Implemented `queueCloudSettingSync(key, value)` with a 1500ms debounce buffer to coalesce rapid keystrokes, and `flushCloudSettingSync()` for immediate guaranteed delivery.
    - Implemented `pullRemoteSettings()` to fetch remote settings on connection, reconcile versions, update local storage, and broadcast updates via `settingsBus.js`.
+now print an explicit `PASSED:` terminal line only after `run.done()` and a nonzero
+`process.exitCode` guard. The cross-browser probe deliberately evaluates that guard before
+its success line, so a failed assertion cannot leave false-green `PASSED:` text in CI logs.
+The GM property-access probe also exits explicitly after the guarded success verdict.
+
+`scripts/probe-no-real-credentials.mjs` documents the three cross-browser sign-in fixtures
+and the GM property-access fixture required by those probes. Every value is synthetic and
+probe-specific; the GM fixture uses a self-describing value instead of the generic
+`Password123!`, avoiding a broad blind spot in the value-based test-fixture allowlist. The
+allowlist's existing stale-entry check still requires every documented fixture to remain in
+real scanned test source.
+
+## 62. Rollback/feed race barriers plus one-per-tab sync coordinator (2026-09-07)
+
+Four server races were reproduced as 200-where-409/empty-page-advancing failures and
+fixed in `worker/business-sync.js`, each with a killing probe in
+`scripts/probe-sync-certification-races.mjs` (5/5; reverting the worker change kills
+exactly the covered cases): restricted-global rollback now fails closed on a null journal
+property id (403); rollback applies behind per-row CAS guards plus revision-conditional
+updates in one batch, tripping 409 ROLLBACK_CONFLICT instead of overwriting later state;
+the rollback CAS additionally pins the active generation, so a migration activation
+landing mid-rollback fails closed rather than writing into a retired generation; feed
+reads the revision before the page and reports `max(revision, tail)`, so an interleaved
+row is never skipped (the in-repo client advances per-item and consults
+`current_revision` only on empty pages). A fifth proposed change — marking the
+generation mutated on every direct `mutate` — was REVERTED, not shipped: the tracked
+`probe-worker-business-sync.mjs` pins that migration rollback still restores the prior
+roster after direct mutates (37/37 green), and the barrier keeps its documented meaning
+(staged-transaction commits only). Stale device writes were separately determined to be
+fail-closed already: direct `mutate` demands `base_row_hash` equality (409
+`sync_conflict`), deletes require it too, so neither silent overwrite nor resurrection
+is reachable.
+
+`src/lib/realtime.js` had N hook instances running N timer chains with N POLL_TICKs per
+interval, and 21 pages mounted no hook at all (sync depended on which page was open).
+There is now one shared per-tab poll loop over the ref-counted prefix union (unit-proven:
+two hooks sharing a prefix produce exactly one invalidation; last unmount stops the
+timer), and `Layout` mounts `APP_SYNC_PREFIXES` once so every authenticated page syncs.
+Cross-tab pulls cannot collapse further — each tab owns an independent IndexedDB cache,
+so the floor is one lightweight feed per tab per interval. Measured: 3 real browser
+contexts idle 10s produce 3 HTTP requests total with 0 business writes; CRUD E2E across
+A/B/C converges at mean ~9.9s, max ~10.2s (n=12); 10 tabs elect exactly 1 leader.
+`scripts/probe-three-browser-sync.mjs` passes 8/8 real-Chromium. Full sweep at this
+commit: 166 suites, 165 passed, 0 failed, 1 honest skip (no dev server); vitest 49/419;
+lint, typecheck, build, V3, brain, repo-map green.
+
+## 63. Production Option-D migration 0004 applied; 8d2ff4f deployed (2026-09-06 ~21:15 EDT)
+
+BEFORE (read-only): pointer `e66a1e74-…`, active rows exactly 38,687, journal 1-3,
+`business_record_staging`/`business_rollback_journal` absent. `wrangler.jsonc` binds
+the prod DB with `migrations_dir: migrations-production`, so only 0004 ran (DDL-only:
+2 tables, 3 indexes, 2 columns; zero data writes). AFTER: journal 1-4, both tables and
+both columns present, pointer unchanged, active rows still exactly 38,687, no pending
+migrations. Built clean 8d2ff4f, deployed worker version `c5d9e0d0`: `/` serves 200,
+`/api/account/status` fail-closed 401 unauthenticated, and a post-deploy count confirms
+reads wrote zero business rows. NOT done (no owner session available): controlled
+1-row transaction + rollback, and the authenticated Browser A → B → C disposable CRUD.
+No test rows created, no data re-uploaded, no rollback executed on prod.
+
+CI MISBINDING (same night, owner action required): the connected Cloudflare Builds
+project targets Worker `divyesh`, not `boston-project`, so its deploy overrides the
+`wrangler.jsonc` name and then fails on the missing `PASSWORD_PEPPER_V1` secret —
+build green, deploy red. Laptop deploys are unaffected: `boston-project` is live on
+`c5d9e0d0` at 100% and `wrangler secret list` confirms the pepper binding exists
+there (names only, value never read). Do NOT add the pepper to `divyesh` and do NOT
+merge any auto-PR renaming the config to `divyesh`. Fix is dashboard-side: disconnect
+the repo under worker `divyesh` (Settings → Builds → Disconnect), then connect it
+under worker `boston-project` (Settings → Builds → Connect, branch main), then retry
+the build and confirm the new version promotes on `boston-project`.
+AUTOMATED-FIX ATTEMPT (same night, blocked): the Builds REST API would allow
+recreating the trigger on `boston-project` (worker tags resolved: `boston-project`
+8f22adcbf50c4de480fb9bd72e6588b7, `divyesh` a1520e3d854f421980eca2f7a656f0ac),
+but GET /builds/workers/{tag}/triggers rejects the wrangler OAuth token twice
+with code 10000 while the same token reads /workers/scripts fine — the Builds
+API needs a user-scoped token with Workers Builds Configuration:Edit, mintable
+only at dash.cloudflare.com/profile/api-tokens. No trigger was created, modified,
+or deleted; live `boston-project` re-verified 200 throughout.
+
+## 64. Settings Property Management roster cache healing and Add Property error UX (2026-09-07)
+
+Settings → Property Management previously rendered "No properties yet" and "0 properties"
+when a client held valid `BusinessSyncState` with no property records in local IndexedDB.
+Attempting to create `RRI1416` generated a new random client-side UUID, prompting the
+Worker to reject the creation with HTTP 409 (`property code is already mapped` or `belongs to another property`).
+Settings caught the error and rendered it in green text (`text-[#00E096]`) while inputs remained populated,
+giving the appearance of an inert or silently failing form.
+
+Resolution:
+1. `src/api/businessSync.js`:
+   - Extracted dedicated `syncPropertyRoster()` helper that queries `business-sync/snapshot?entity=Property&limit=500` (<300ms, single HTTP request) and updates `localDb.Property` and `BusinessSyncState` with notifications.
+   - Decoupled `wrapEntity.create('Property')` 409 collision handling from monolithic `hydrate({ force: true })`. On HTTP 409 or `already mapped|belongs to another property`, it calls `syncPropertyRoster()` rather than forcing a 38,687-record download across 25 entities in 95 requests.
+   - In `wrapEntity('Property')`, `list()`, `filter()`, `count()`, and `get()` fast-path local IndexedDB rows immediately when `count() > 0` without waiting for in-flight snapshot promises for other entities, and fetch the roster quickly via `syncPropertyRoster()` if the table is empty.
+   - In `fetchSnapshot()`, writes `Property` to IndexedDB and notifies subscribers as soon as the first table finishes downloading.
+   - `hydrate()` delegates missing property roster sync to `syncPropertyRoster(applied.state)`.
+2. `src/pages/Settings.jsx`:
+   - `handleAddProperty` pre-checks local `Property` cache for duplicate codes before network submission, providing immediate feedback.
+   - Formats server 409 collisions into clear, actionable red error text (`Property code "..." is already mapped on the server.`) and invalidates `["properties"]` query cache.
+   - Ensures `isAddingProp: false` always resets in `finally`, preventing stuck button spinners.
+   - Refresh button fast-paths roster sync without blocking.
+3. Automated verification:
+   - Added tests in `src/api/businessSync.test.js` verifying Property fast-path without network and verifying only `Property` is queried on 409 collision.
+   - All tests, typecheck, lint, build, verify:v3, brain:verify, and map:verify green.
+
+## 65. Settings Property Management Icon, Active Toggle, Edit Modal, and Atomic Cascade Deletion (2026-09-07)
+
+Users reported three interrelated UX and operational issues in Settings → Property Management:
+1. The property icon rendered `Building2` (16×16px) which, on dark background with two small towers and cutout squares, visually resembled a padlock ("YOU ARE ADDING HIM AS A LOCK OR SOMETHING").
+2. The "Remove" button appeared broken or frozen indefinitely. `handleDeleteProperty` was iterating through 9 property tables in the browser, querying all records (38,686 rows), and attempting to delete them one-by-one with `db.entities[table].bulkDelete(ids)` over sequential HTTP requests, causing browser hangs and rate limits.
+3. Property owners who wanted to stop adding reports for a hotel had no way to deactivate it without permanently destroying all historical financial reporting data.
+
+Resolution:
+1. `src/pages/Settings.jsx`:
+   - Replaced `Building2` with a distinct `Hotel` icon enclosed in a styled cyan badge container (`bg-[#00D4FF]/10 text-[#00D4FF] border border-[#00D4FF]/20`), clearly representing a hotel building.
+   - Replaced the slow client-side deletion loop with a single authoritative call to `await db.entities.Property.delete(id)`. The Cloudflare Worker D1 backend already performs atomic cascade deletion in D1 (`DELETE FROM business_record ...; DELETE FROM property ...`) in <500ms. Local IndexedDB tables are cleaned up directly in milliseconds without network calls.
+   - Added an interactive `Active / Inactive` toggle badge button (`handleToggleActive`). Property owners can toggle a property's operational status with one click, preserving historical financial records while hiding inactive properties from daily operational views.
+   - Added an "Edit" button and Edit Property modal dialog (`Dialog`) to modify property name, total room count, city, and state.
+   - Upgraded Remove confirmation dialog (`AlertDialog`) with double safety: explains that properties can be marked Inactive instead of deleted, and requires typing the property code before permanent deletion is enabled.
+2. `src/api/businessSync.js`:
+   - Enhanced `exactLocalGet` to support numeric/string ID resolution and case-insensitive property code lookups.
+3. Automated verification:
+   - All 49 test suites and 422 vitest tests passed.
+   - TypeScript `npm run typecheck`, ESLint `npm run lint`, and production build `npm run build` passed.
+   - `verify:v3`, `brain:verify`, and `map:verify` passed.
+
+## 66. Property Management Infinite Buffering Resolution via Background Queue Decoupling (2026-09-07)
+
+Users observed infinite buffering spinners ("Adding Property...", "Saving...", "Deleting...") across all Property operations in Settings → Property Management. Hard-refreshing the page did not resolve the freeze and restarted the buffering loop.
+
+Root Cause:
+1. Monolithic Background Queue Blocking: In `src/api/businessSync.js`, `wrapEntity` called `await ensureFresh()` inside `create`, `update`, and `delete`. On a fresh tab or session, `ensureFresh()` initiated a full download of 38,687 historical records across 24 database entities spanning 95 sequential HTTP requests. Every Property action was queued behind this 95-request queue. A hard refresh aborted the in-flight download and restarted the 95 requests from zero on page load.
+2. D1 Record Key Invariant Mismatch: In `sendMutation`, the `record_key` for `Property` was generated directly from `effective.id`. In D1, canonical properties have numeric integer primary keys in `business_record` (e.g. `record_key: "n:1"` for RRI1416), while client-side state may refer to string identifiers, resulting in key mismatch during mutations.
+
+Resolution:
+1. `src/api/businessSync.js`:
+   - Decoupled `wrapEntity('Property')` (`get`, `create`, `update`, `delete`) from `await ensureFresh()`. Property mutations and lookups execute immediately against local IndexedDB or fast-path via `syncPropertyRoster()` (<200ms) without waiting for the 38k-record background download queue.
+   - In `sendMutation`, added canonical record ID resolution for `entity === 'Property'` to query `localDb.Property` and use the canonical numeric ID, ensuring `typedRecordKey(recordId)` yields `"n:1"` to match D1 `business_property_map`.
+2. `src/pages/Settings.jsx`:
+   - Introduced `withActionTimeout` helper enforcing an 8-second fail-safe timeout on `handleAddProperty`, `handleToggleActive`, `handleSaveEditProperty`, and `handleDeleteProperty`.
+   - Guaranteed UI loading states (`isAddingProp`, `isTogglingActive`, `isSavingEditProp`, `isDeletingProp`) always reset cleanly in `finally`, eliminating indefinite spinner locks even under adverse network conditions.
+3. Automated Verification:
+   - Vitest suite `src/api/businessSync.test.js` (25 tests) passed.
+   - TypeScript typecheck, ESLint, production build, `verify:v3`, `brain:verify`, and `map:verify` all passed.
+
+## 67. File Import Infinite Buffering and 10+ Minute Freeze Resolution (2026-09-07)
+
+Users reported that importing CSV files on the `/upload` (Import Reports) page froze on `Importing...` for 10+ minutes ("ITS HAAPNING FROM LAST 10 MIN", "its taking 10+ time"), blocking all queued files (e.g. 7 queued reports including Adjustments and Refunds Activity, All Transactions, and Hotel Statistics).
+
+Root Cause:
+1. Forced Full-Database Snapshot Re-download:
+In `src/api/businessSync.js`, `finalizeTransactionEntry(entry)` executed `await hydrate({ force: true })` whenever a transaction committed. Setting `force: true` bypassed incremental feed syncing and triggered `fetchSnapshot()`. The D1 database contains 38,687 business records across 14 tables (`TransactionLine`: 16,921; `AnomalyAlert`: 8,443; `SourceDay`: 7,918; `AdjustmentRefund`: 3,557; etc.). Because Cloudflare Worker D1 snapshot pages are capped at 200 rows (`MAX_PAGE_ROWS = 200`), downloading the snapshot required 194 sequential HTTP network requests. For a batch of 7 files, the browser attempted 7 × 194 = 1,358 sequential requests across the public internet, consuming 10–15 minutes and locking up the browser thread.
+2. Synchronous Table Gating on Duplicate Checks:
+In `src/api/businessSync.js`, `wrapEntity('UploadedReport')` was not exempted from `ensureFresh()`. When `Import.jsx` ran duplicate file detection (`UploadedReport.filter({ content_hash })`) before importing, the call blocked on full sync before `importReport` was even invoked.
+3. Lack of Timeout and Error Isolation in Import Queue:
+In `src/pages/Import.jsx`, `importSingle` lacked per-operation timeouts on `importReport` and `UploadedReport.create`. If an individual import request stalled or encountered network latency, the queue remained stuck on `Importing...` indefinitely, preventing remaining queued files from processing.
+
+Resolution:
+1. `src/api/businessSync.js`:
+   - Replaced `await hydrate({ force: true })` in `finalizeTransactionEntry(entry)` with `await hydrate({ force: false })`. File transactions now sync incrementally via `applyFeed` (<200ms, single HTTP request) instead of downloading 38,687 records across 194 requests.
+   - Fast-pathed `wrapEntity('UploadedReport')` (`filter`, `list`, `count`) against local IndexedDB (`localProxy`) when records exist, and bypassed `ensureFresh()` in `create` so recording import history does not trigger a full snapshot sync.
+2. `src/pages/Import.jsx`:
+   - Added `withActionTimeout` helper with a 35-second fail-safe timeout on `importReport` and 15-second timeouts on duplicate check and `UploadedReport.create`.
+   - Updated `handleImportAll` to isolate errors per file within a try/catch block. If an individual file encounters a timeout or failure, it is marked as `Failed` in the queue and the queue proceeds immediately to import subsequent files without freezing.
+3. Automated Verification:
+   - Vitest suite `src/api/businessSync.test.js` (25 tests) passed.
+   - Full Vitest suite, TypeScript typecheck, ESLint, production build, `verify:v3`, `brain:verify`, and `map:verify` all verified.
+
+## 68. Cross-Browser Settings Synchronization for Taxes and OTA Commission Rates (2026-09-08)
+
+Users reported a critical financial calculation discrepancy between two browsers running the exact same application against identical transactional data:
+- On identical reported gross revenue of $1,020,598.17:
+  - Browser 1 calculated: Deductions = -$110,331.47, Estimated Money Kept = $910,266.70.
+  - Browser 2 calculated: Deductions = -$105,294.29, Estimated Money Kept = $915,303.88.
+- Resulting in a $5,037.18 divergence in net revenue and deduction estimates.
+
+Root Cause:
+1. LocalStorage Siloing of Financial Settings:
+While raw transaction records (16,921 rows) and historical business data (38,687 records total) resided in Cloudflare D1 and synchronized across all devices via `businessSync.js`, critical financial calculation parameters were stored exclusively in browser `localStorage` via `src/lib/settingsStore.js`:
+- `rri_commission_rates_v2`: OTA commission rates per source (e.g., Expedia Hotel Collect 15%, Booking.com 15%).
+- `rri_cc_fee_rate`: Credit card processing fee percentage.
+- `rri_cc_fee_refunds_v1`: Boolean toggle determining whether credit card fees apply to refund transactions.
+- `rri_tax_settings_v2` / `rri_tax_config_v1`: Effective tax periods, state/city/other occupancy tax rates.
+- `rri_alert_thresholds_v1`: Revenue alert and monitoring thresholds.
+Because these keys never left the client browser, changes made on one workstation (or by one user) did not replicate to other devices. Browser 1 evaluated transactions with updated commission rates while Browser 2 evaluated identical transactions with default or legacy rates, generating inconsistent net financial reports.
+
+Resolution (10-Subagent Architecture Implementation):
+1. Cloudflare Worker D1 Backend Endpoint (`worker/settings.js` & `worker/index.js`):
+   - Added persistent D1 table `app_setting` (`key TEXT PRIMARY KEY`, `value TEXT NOT NULL`, `updated_by TEXT`, `updated_at TEXT`, `rev INTEGER DEFAULT 1`).
+   - Implemented `GET /api/settings` returning all persistent settings with revision counters and timestamps (authenticated operators only).
+   - Implemented `POST/PUT /api/settings` with role-based access control (`requireRole(c, ["owner", "admin"])`), rate-limiting, and atomic upsert semantics in D1 SQLite.
+   - Updated `worker/schema.sql` to include `app_setting` table definition while preserving `migrations-production/0001_auth_schema.sql` parity.
+2. Online Write-Through and Read-Through Sync Engine (`src/lib/settingsStore.js`):
+   - Preserved 0ms synchronous read speed backed by `localStorage` without UI blocking.
+   - Defined `SYNCABLE_SETTING_KEYS` covering commission rates, CC fees, tax settings, and alert thresholds.
+   - Implemented `queueCloudSettingSync(key, value)` with a 1500ms debounce buffer to coalesce rapid keystrokes, and `flushCloudSettingSync()` for immediate guaranteed delivery.
+   - Implemented `pullRemoteSettings()` to fetch remote settings on connection, reconcile versions, update local storage, and broadcast updates via `settingsBus.js`.
 3. Cross-Tab and Cross-Device Reactivity (`src/lib/settingsBus.js`, `src/lib/realtime.js`, `src/components/Layout.jsx`, `src/pages/Settings.jsx`):
    - Added window `storage` event listener in `src/lib/settingsBus.js` for instantaneous (<1ms) cross-tab synchronization on the same device.
    - Integrated `pullRemoteSettings()` into app startup in `Layout.jsx` and periodic background polling (`APP_SYNC_PREFIXES = ["settings", ...], POLL_INTERVAL_MS = 20_000`) in `src/lib/realtime.js`.
@@ -6505,3 +6702,39 @@ Resolution (10-Subagent Architecture Implementation):
 Automated Verification:
 - All schema parity checks verified (`node scripts/verify-schema-parity.mjs`).
 - Unit tests (`vitest run`), TypeScript type checking (`npm run typecheck`), ESLint (`npm run lint`), production build (`npm run build`), DIVYESH V3 verifier (`npm run verify:v3`), brain verification (`npm run brain:verify`), and system map verification (`npm run map:verify`) all confirmed clean.
+
+## 69. Forensic Audit and Hardening for Settings Synchronization (2026-09-08)
+
+Following the initial cloud sync rollout, an in-depth forensic audit of edge cases and concurrency vulnerabilities uncovered 8 defects across the stack. All 8 defects were resolved and verified through deterministic unit tests in `src/lib/settingsForensicFixes.test.js`:
+
+1. Problem 1 (Tax Key Mismatch):
+   - `src/lib/taxSettings.js` used key `rri_tax_settings_v1`, but `SYNCABLE_SETTING_KEYS` in `src/lib/settingsStore.js` and `ALLOWED_SETTING_KEYS` in `worker/settings.js` only listed `rri_tax_settings_v2`, causing tax period updates to be skipped from cloud sync.
+   - Fix: Added `rri_tax_settings_v1` to `ALLOWED_SETTING_KEYS` in `worker/settings.js` and `SYNCABLE_SETTING_KEYS` in `src/lib/settingsStore.js`.
+
+2. Problem 2 (ETag 304 D1 Read Overhead):
+   - `worker/settings.js` previously executed a full `SELECT setting_key, ... FROM app_setting` before checking `If-None-Match`.
+   - Fix: Added a scalar aggregate query (`SELECT COUNT(1) as total_count, MAX(revision) as max_rev, MAX(updated_at) as latest_updated FROM app_setting WHERE account_id = ?`) to compute ETag and immediately return 304 Not Modified with 0 table row reads when unchanged.
+
+3. Problem 3 (CAS 409 Silent Local Overwrite):
+   - `src/lib/settingsStore.js` cleared `pendingCloudSync` before the network call completed, and on 409 Conflict called `pullRemoteSettings(true)`, which silently erased local unsaved edits.
+   - Fix: Snapshotted queue; retained pending edits on 409; dispatched `notifySettingsConflict` via `src/lib/settingsBus.js`; suppressed destructive forced pull.
+
+4. Problem 4 (Settings.jsx Stale Input State & Mount Auto-Save Overwrite):
+   - `src/pages/Settings.jsx` initialized state once on mount and immediately ran auto-save `useEffect`s that wrote mount-time state back to storage, clobbering newer remote changes. It also did not subscribe to `subscribeSettingsChange`.
+   - Fix: Added `isInitialMount` guard to prevent mount-time auto-saves; subscribed to `subscribeSettingsChange` to update form fields when `!isEditingSettingsLocked()`; added lock management on input edit/save.
+
+5. Problem 5 (Multi-Property Scope Dropped):
+   - `pendingCloudSync` only keyed by `key` ignoring `propertyId`, and `pullRemoteSettings` skipped `_byProperty`.
+   - Fix: Keyed sync queue by `${key}::${propertyId}`; transmitted `items` array with `property_id`; parsed and stored `_byProperty` in localStorage under `rri_settings_by_property`.
+
+6. Problem 6 (Audit History Missing Initial Row):
+   - `worker/settings.js` used `INSERT INTO app_setting_history ... SELECT ... FROM app_setting`. For initial setting creation, the row didn't exist, so 0 history rows were inserted.
+   - Fix: Looked up existing settings first; set `old_value = null` and `revision = 1` on initial row creation; batched history and upsert operations using `env.DB.batch`.
+
+7. Problem 7 (Manager RBAC Lockout):
+   - `worker/settings.js` previously restricted all PUT/POST calls to `["owner", "admin"]`, locking out `manager` who has `manage_ota_commissions: true` and `manage_pricing: true`.
+   - Fix: Expanded RBAC checks in `worker/settings.js` to allow `manager` and users with `manage_ota_commissions` or `manage_pricing` to update commission rates, card fees, and pricing config, while restricting taxes and system settings to full admin/owner.
+
+8. Problem 8 (Double Event Notification in settingsBus):
+   - Tab B received both `BroadcastChannel` messages and window `storage` events for the same localStorage write, triggering duplicate subscriber callbacks.
+   - Fix: Added microtask coalescing with `queueMicrotask` in `src/lib/settingsBus.js` and suppressed duplicate `storage` notifications when a broadcast arrived within 350ms.

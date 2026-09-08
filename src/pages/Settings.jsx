@@ -10,7 +10,8 @@ import { getAlertThresholds, saveAlertThresholds } from "@/lib/alertThresholds";
 import { getRevenueThresholds, saveRevenueThresholds } from "@/lib/revenueThresholds";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { getTaxSettings, saveTaxSettings } from "@/lib/taxSettings";
-import { flushCloudSettingSync, setEditingSettingsLock } from "@/lib/settingsStore";
+import { flushCloudSettingSync, setEditingSettingsLock, isEditingSettingsLocked } from "@/lib/settingsStore";
+import { subscribeSettingsChange, subscribeSettingsConflict } from "@/lib/settingsBus";
 import { rebuildDailyAggregates } from "@/lib/dailyAggregates";
 import { toast } from "@/components/ui/use-toast";
 
@@ -52,10 +53,38 @@ export default function Settings() {
   const [thresholdSaved, setThresholdSaved] = useState(false);
   const [revThresholds, setRevThresholds] = useState(() => getRevenueThresholds());
   const [revSaved, setRevSaved] = useState(false);
+  const isInitialMount = useRef(true);
 
   useEffect(() => {
     return () => {
       setEditingSettingsLock(false);
+    };
+  }, []);
+
+  // Listen to remote changes or cross-tab settings updates
+  useEffect(() => {
+    const unsubChange = subscribeSettingsChange(() => {
+      if (!isEditingSettingsLocked()) {
+        setRates(getCommissionRates());
+        setCcFee(getCcFeeRate());
+        setCcRefunds(getCcFeeOnRefunds());
+        setTaxRows(getTaxSettings());
+        setThresholds(getAlertThresholds());
+        setRevThresholds(getRevenueThresholds());
+      }
+    });
+
+    const unsubConflict = subscribeSettingsConflict((conflict) => {
+      toast({
+        title: "Settings Conflict",
+        description: `Settings were modified on another workstation (rev ${conflict?.serverRevision || ""}). Please review before saving.`,
+        variant: "destructive",
+      });
+    });
+
+    return () => {
+      unsubChange();
+      unsubConflict();
     };
   }, []);
   // Query OBJECT kept alongside the data: propertiesQ.isError drives the banner
@@ -103,30 +132,38 @@ export default function Settings() {
   const [restorePhrase, setRestorePhrase] = useState("");
   const restoreInputRef = useRef(null);
 
-  // Auto-save commission rates & CC fee to localStorage on change
+  // Auto-save commission rates & CC fee to localStorage on change (skip on mount)
   useEffect(() => {
+    if (isInitialMount.current) return;
     setCommissionRates(rates);
     setCcFeeRate(ccFee);
     setCcFeeOnRefunds(ccRefunds);
   }, [rates, ccFee, ccRefunds]);
 
-  // Auto-save alert thresholds
+  // Auto-save alert thresholds (skip on mount)
   useEffect(() => {
+    if (isInitialMount.current) return;
     saveAlertThresholds(thresholds);
   }, [thresholds]);
 
-  // Auto-save revenue thresholds
+  // Auto-save revenue thresholds (skip on mount)
   useEffect(() => {
+    if (isInitialMount.current) return;
     saveRevenueThresholds(revThresholds);
   }, [revThresholds]);
 
-  // Auto-save tax settings
+  // Auto-save tax settings (skip on mount)
   useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
     const clean = taxRows.map(({ _key, ...rest }) => rest);
     saveTaxSettings(clean);
   }, [taxRows]);
 
   const handleChange = (key, field, val) => {
+    setEditingSettingsLock(true);
     const cur = rates[key] || { type: "percentage", rate: 0, taxExempt: false };
     if (field === "rate") {
       // Enter plain percentages for percentage types (e.g. 15 → 15%, not 0.15).
@@ -141,6 +178,7 @@ export default function Settings() {
   };
 
   const handleCcFeeChange = (val) => {
+    setEditingSettingsLock(true);
     const v = Number(val);
     setCcFee(v);
   };
@@ -160,6 +198,7 @@ export default function Settings() {
   };
 
   const handleSave = async () => {
+    setEditingSettingsLock(false);
     const rateLimit = sensitiveActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
@@ -217,6 +256,7 @@ export default function Settings() {
   };
 
   const handleReset = () => {
+    setEditingSettingsLock(false);
     const fresh = getCommissionRates();
     setRates(fresh);
     setCcFee(getCcFeeRate());
@@ -224,10 +264,12 @@ export default function Settings() {
   };
 
   const updateTaxRow = (i, patch) => {
+    setEditingSettingsLock(true);
     setTaxRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
   };
 
   const addTaxRow = () => {
+    setEditingSettingsLock(true);
     setTaxRows((prev) => [
       ...prev,
       {
@@ -243,10 +285,12 @@ export default function Settings() {
   };
 
   const removeTaxRow = (i) => {
+    setEditingSettingsLock(true);
     setTaxRows((prev) => prev.filter((_, idx) => idx !== i));
   };
 
   const handleSaveTax = async () => {
+    setEditingSettingsLock(false);
     const rateLimit = sensitiveActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });

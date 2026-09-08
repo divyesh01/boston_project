@@ -146,13 +146,14 @@ export function readObjectSetting(key, fallback) {
   return parsed;
 }
 
-import { notifySettingsChanged } from "./settingsBus.js";
+import { notifySettingsChanged, notifySettingsConflict } from "./settingsBus.js";
 
 export const SYNCABLE_SETTING_KEYS = Object.freeze(new Set([
   "rri_commission_rates_v2",
   "rri_cc_fee_rate",
   "rri_cc_fee_refunds_v1",
   "rri_tax_config_v1",
+  "rri_tax_settings_v1",
   "rri_tax_settings_v2",
   "rri_alert_thresholds_v1",
   "rri_revenue_thresholds_v1",
@@ -179,6 +180,22 @@ export function isEditingSettingsLocked() {
   return isEditingSettings;
 }
 
+export function getPendingSyncCount() {
+  return pendingCloudSync.size;
+}
+
+export function clearPendingCloudSyncForTest() {
+  pendingCloudSync.clear();
+}
+
+export function getCurrentServerRev() {
+  return currentServerRev;
+}
+
+export function setCurrentServerRev(rev) {
+  currentServerRev = Number(rev) || 0;
+}
+
 /**
  * Queue a setting to be saved to Cloudflare D1 in the background.
  * Debounced to batch rapid consecutive changes into a single network call.
@@ -194,7 +211,9 @@ export function queueCloudSettingSync(key, value, propertyId = "*") {
   if (typeof value === "string") {
     try { val = JSON.parse(value); } catch {}
   }
-  pendingCloudSync.set(key, { value: val, propertyId });
+  const propId = String(propertyId || "*");
+  const queueKey = `${key}::${propId}`;
+  pendingCloudSync.set(queueKey, { key, value: val, propertyId: propId });
 
   if (syncTimer) clearTimeout(syncTimer);
   syncTimer = setTimeout(flushCloudSettingSync, 300);
@@ -211,6 +230,7 @@ const isTestEnv = () => typeof globalThis !== "undefined" && Boolean(globalThis.
 
 /**
  * Immediately flush queued settings to Cloudflare D1.
+ * Preserves pending state across network failures and CAS 409 conflicts.
  */
 export async function flushCloudSettingSync() {
   if (!pendingCloudSync.size || typeof fetch === "undefined") return;
@@ -218,25 +238,56 @@ export async function flushCloudSettingSync() {
     clearTimeout(syncTimer);
     syncTimer = null;
   }
-  const items = {};
-  for (const [k, v] of pendingCloudSync.entries()) {
-    items[k] = v.value;
+  const inFlight = new Map(pendingCloudSync);
+
+  const items = Array.from(inFlight.values()).map((entry) => ({
+    key: entry.key,
+    value: entry.value,
+    property_id: entry.propertyId,
+  }));
+
+  const settingsDict = {};
+  for (const entry of inFlight.values()) {
+    if (entry.propertyId === "*") {
+      settingsDict[entry.key] = entry.value;
+    } else {
+      if (!settingsDict._byProperty) settingsDict._byProperty = {};
+      if (!settingsDict._byProperty[entry.propertyId]) settingsDict._byProperty[entry.propertyId] = {};
+      settingsDict._byProperty[entry.propertyId][entry.key] = entry.value;
+    }
   }
-  pendingCloudSync.clear();
 
   try {
     const res = await fetch(getSettingsUrl(), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        settings: items,
+        items,
+        settings: settingsDict,
         expected_revision: currentServerRev || undefined,
       }),
     });
+
     if (res.status === 409) {
-      // Remote version advanced; pull fresh copy
-      pullRemoteSettings(true).catch(() => {});
+      // Remote version advanced (Compare-And-Swap conflict).
+      // Preserve pendingCloudSync so user edits are not lost.
+      const conflictData = await res.json().catch(() => ({}));
+      const serverRev = Number(conflictData?.server_revision || 0);
+      if (serverRev) currentServerRev = serverRev;
+      notifySettingsConflict({
+        code: "SETTINGS_CONFLICT",
+        serverRevision: serverRev,
+        pendingKeys: items.map((i) => i.key),
+      });
+      // Gently pull latest if user isn't actively editing
+      pullRemoteSettings(false).catch(() => {});
     } else if (res.ok) {
+      // Remove only items from pendingCloudSync that succeeded and were not modified during in-flight
+      for (const [k, v] of inFlight.entries()) {
+        if (pendingCloudSync.get(k) === v) {
+          pendingCloudSync.delete(k);
+        }
+      }
       const data = await res.json().catch(() => null);
       if (data?.revision) currentServerRev = Number(data.revision);
       const etag = res.headers.get("ETag");
@@ -301,7 +352,18 @@ export async function pullRemoteSettings(force = false) {
 
     let changed = false;
     for (const [key, val] of Object.entries(data.settings)) {
-      if (key === "_byProperty" || !SYNCABLE_SETTING_KEYS.has(key)) continue;
+      if (key === "_byProperty") {
+        if (typeof val === "object" && val !== null) {
+          const prevRaw = localStorage.getItem("rri_settings_by_property");
+          const newRaw = JSON.stringify(val);
+          if (prevRaw !== newRaw) {
+            localStorage.setItem("rri_settings_by_property", newRaw);
+            changed = true;
+          }
+        }
+        continue;
+      }
+      if (!SYNCABLE_SETTING_KEYS.has(key)) continue;
       const currentRaw = localStorage.getItem(key);
       const newRaw = typeof val === "string" ? val : JSON.stringify(val);
       if (currentRaw !== newRaw) {
@@ -333,14 +395,15 @@ export async function pullRemoteSettings(force = false) {
  *
  * @param {string} key
  * @param {*} value - coerced with String()
+ * @param {string} [propertyId]
  * @returns {boolean} true only if the value is now stored
  */
-export function writeRawSetting(key, value) {
+export function writeRawSetting(key, value, propertyId = "*") {
   try {
     const str = String(value);
     localStorage.setItem(key, str);
     if (SYNCABLE_SETTING_KEYS.has(key)) {
-      queueCloudSettingSync(key, value);
+      queueCloudSettingSync(key, value, propertyId);
     }
     return true;
   } catch (err) {
@@ -354,9 +417,10 @@ export function writeRawSetting(key, value) {
  *
  * @param {string} key
  * @param {*} value
+ * @param {string} [propertyId]
  * @returns {boolean} true only if the value is now stored
  */
-export function writeJsonSetting(key, value) {
+export function writeJsonSetting(key, value, propertyId = "*") {
   let text;
   try {
     text = JSON.stringify(value);
@@ -376,7 +440,7 @@ export function writeJsonSetting(key, value) {
   try {
     localStorage.setItem(key, text);
     if (SYNCABLE_SETTING_KEYS.has(key)) {
-      queueCloudSettingSync(key, value);
+      queueCloudSettingSync(key, value, propertyId);
     }
     return true;
   } catch (err) {
@@ -384,3 +448,4 @@ export function writeJsonSetting(key, value) {
     return false;
   }
 }
+

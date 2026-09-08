@@ -392,7 +392,14 @@ export default function Import() {
     }
   };
 
-  const importSingle = async (item) => {    if (!item.scan || !propertyId || item.status === "done") return null;
+  const withActionTimeout = (promise, ms = 35000, message = "Operation timed out.") =>
+    Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+    ]);
+
+  const importSingle = async (item) => {
+    if (!item.scan || !propertyId || item.status === "done") return null;
     // Rate limiting for imports
     const rateLimit = sensitiveActionRateLimiter.check();
     if (!rateLimit.allowed) {
@@ -412,10 +419,14 @@ export default function Import() {
       // import before it touches any financial calculation. Only skipped when the
       // operator explicitly forces the re-import.
       if (item.contentHash && !forceImport) {
-        const existing = await db.entities.UploadedReport.filter({
-          content_hash: item.contentHash,
-          property_id: propertyId,
-        });
+        const existing = await withActionTimeout(
+          db.entities.UploadedReport.filter({
+            content_hash: item.contentHash,
+            property_id: propertyId,
+          }),
+          15000,
+          "Duplicate check timed out."
+        );
         if (existing && existing.length > 0) {
           setQueue((prev) => prev.map((q) => (q.key === item.key ? {
             ...q,
@@ -427,28 +438,36 @@ export default function Import() {
       }
       let result;
       try {
-        result = await importReport(item.scan, {
-          propertyId,
-          propertyName: selectedProperty?.name || "",
-          importId: item.importId,
-          sourceFile: item.name,
-          forceImport,
-        });
-        await db.entities.UploadedReport.create({
-          file_name: item.name,
-          report_type: item.scan.type || type,
-          rows_imported: result.count,
-          rows_skipped: result.excluded || 0,
-          rows_parsed: item.scan.totalRows ?? null,
-          file_url: item.file_url,
-          property_id: propertyId,
-          property_name: selectedProperty?.name || "",
-          import_id: result.importId || item.importId,
-          source_file: item.name,
-          content_hash: item.contentHash || null,
-          raw_rows: scanRawRows(item.scan),
-          raw_rows_ttl: rawRowsTtlExpiry(),
-        });
+        result = await withActionTimeout(
+          importReport(item.scan, {
+            propertyId,
+            propertyName: selectedProperty?.name || "",
+            importId: item.importId,
+            sourceFile: item.name,
+            forceImport,
+          }),
+          35000,
+          "File import timed out after 35s."
+        );
+        await withActionTimeout(
+          db.entities.UploadedReport.create({
+            file_name: item.name,
+            report_type: item.scan.type || type,
+            rows_imported: result.count,
+            rows_skipped: result.excluded || 0,
+            rows_parsed: item.scan.totalRows ?? null,
+            file_url: item.file_url,
+            property_id: propertyId,
+            property_name: selectedProperty?.name || "",
+            import_id: result.importId || item.importId,
+            source_file: item.name,
+            content_hash: item.contentHash || null,
+            raw_rows: scanRawRows(item.scan),
+            raw_rows_ttl: rawRowsTtlExpiry(),
+          }),
+          15000,
+          "Saving import history timed out."
+        );
       } catch (err) {
         // Roll back with the SESSION id, never our queue-local item.importId:
         // the ledger is keyed by the id createImportSession minted, so rolling
@@ -516,8 +535,14 @@ export default function Import() {
     const newResults = [];
     try {
       for (const item of pending) {
-        const r = await importSingle(item);
-        if (r) newResults.push(r);
+        try {
+          const r = await importSingle(item);
+          if (r) newResults.push(r);
+        } catch (itemErr) {
+          console.error(`[import] Error importing ${item.name}:`, itemErr);
+          setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: itemErr.message || "Import failed" } : q)));
+          newResults.push({ name: item.name, ok: false, error: itemErr.message || "Import failed" });
+        }
       }
       setResults(newResults);
     } catch (e) {

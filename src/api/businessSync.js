@@ -504,7 +504,7 @@ export function createBusinessSyncClient({
   }
 
   async function finalizeTransactionEntry(entry) {
-    await hydrate({ force: true });
+    await hydrate({ force: false });
     const deferred = Array.isArray(entry.payload?.deferred_import_records) ? entry.payload.deferred_import_records : [];
     const groupedDeferred = new Map();
     for (const item of deferred) {
@@ -762,6 +762,10 @@ export function createBusinessSyncClient({
               return localProxy.filter(query, sortField, limit);
             } catch {}
           }
+          if (entity === 'UploadedReport') {
+            const count = await table.count();
+            if (count > 0) return localProxy.filter(query, sortField, limit);
+          }
           await ensureFresh();
           return localProxy.filter(query, sortField, limit);
         }
@@ -778,6 +782,10 @@ export function createBusinessSyncClient({
               await syncPropertyRoster();
               return localProxy.list(sortField, limit);
             } catch {}
+          }
+          if (entity === 'UploadedReport') {
+            const count = await table.count();
+            if (count > 0) return localProxy.list(sortField, limit);
           }
           await ensureFresh();
           return localProxy.list(sortField, limit);
@@ -803,6 +811,10 @@ export function createBusinessSyncClient({
             const count = await table.count();
             if (count > 0) return localProxy.count(query);
           }
+          if (entity === 'UploadedReport') {
+            const count = await table.count();
+            if (count > 0) return localProxy.count(query);
+          }
           await ensureFresh();
           return localProxy.count(query);
         }
@@ -825,7 +837,7 @@ export function createBusinessSyncClient({
       },
       async create(data) {
         if (activeTransaction) return captureCreate(data);
-        if (entity !== 'Property') {
+        if (entity !== 'Property' && entity !== 'UploadedReport') {
           await ensureFresh();
         }
         const now = new Date().toISOString();

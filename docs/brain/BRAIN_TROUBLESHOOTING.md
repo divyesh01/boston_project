@@ -6445,6 +6445,30 @@ Resolution:
    - Vitest suite `src/api/businessSync.test.js` (25 tests) passed.
    - TypeScript typecheck, ESLint, production build, `verify:v3`, `brain:verify`, and `map:verify` all passed.
 
+## 67. File Import Infinite Buffering and 10+ Minute Freeze Resolution (2026-09-07)
+
+Users reported that importing CSV files on the `/upload` (Import Reports) page froze on `Importing...` for 10+ minutes ("ITS HAAPNING FROM LAST 10 MIN", "its taking 10+ time"), blocking all queued files (e.g. 7 queued reports including Adjustments and Refunds Activity, All Transactions, and Hotel Statistics).
+
+Root Cause:
+1. Forced Full-Database Snapshot Re-download:
+In `src/api/businessSync.js`, `finalizeTransactionEntry(entry)` executed `await hydrate({ force: true })` whenever a transaction committed. Setting `force: true` bypassed incremental feed syncing and triggered `fetchSnapshot()`. The D1 database contains 38,687 business records across 14 tables (`TransactionLine`: 16,921; `AnomalyAlert`: 8,443; `SourceDay`: 7,918; `AdjustmentRefund`: 3,557; etc.). Because Cloudflare Worker D1 snapshot pages are capped at 200 rows (`MAX_PAGE_ROWS = 200`), downloading the snapshot required 194 sequential HTTP network requests. For a batch of 7 files, the browser attempted 7 × 194 = 1,358 sequential requests across the public internet, consuming 10–15 minutes and locking up the browser thread.
+2. Synchronous Table Gating on Duplicate Checks:
+In `src/api/businessSync.js`, `wrapEntity('UploadedReport')` was not exempted from `ensureFresh()`. When `Import.jsx` ran duplicate file detection (`UploadedReport.filter({ content_hash })`) before importing, the call blocked on full sync before `importReport` was even invoked.
+3. Lack of Timeout and Error Isolation in Import Queue:
+In `src/pages/Import.jsx`, `importSingle` lacked per-operation timeouts on `importReport` and `UploadedReport.create`. If an individual import request stalled or encountered network latency, the queue remained stuck on `Importing...` indefinitely, preventing remaining queued files from processing.
+
+Resolution:
+1. `src/api/businessSync.js`:
+   - Replaced `await hydrate({ force: true })` in `finalizeTransactionEntry(entry)` with `await hydrate({ force: false })`. File transactions now sync incrementally via `applyFeed` (<200ms, single HTTP request) instead of downloading 38,687 records across 194 requests.
+   - Fast-pathed `wrapEntity('UploadedReport')` (`filter`, `list`, `count`) against local IndexedDB (`localProxy`) when records exist, and bypassed `ensureFresh()` in `create` so recording import history does not trigger a full snapshot sync.
+2. `src/pages/Import.jsx`:
+   - Added `withActionTimeout` helper with a 35-second fail-safe timeout on `importReport` and 15-second timeouts on duplicate check and `UploadedReport.create`.
+   - Updated `handleImportAll` to isolate errors per file within a try/catch block. If an individual file encounters a timeout or failure, it is marked as `Failed` in the queue and the queue proceeds immediately to import subsequent files without freezing.
+3. Automated Verification:
+   - Vitest suite `src/api/businessSync.test.js` (25 tests) passed.
+   - Full Vitest suite, TypeScript typecheck, ESLint, production build, `verify:v3`, `brain:verify`, and `map:verify` all verified.
+
+
 
 
 

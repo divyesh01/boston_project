@@ -6,6 +6,50 @@
 // app's csvParser.js) so import bugs cannot be masked by shared code.
 //
 // Usage: node scripts/acceptance-harness.mjs
+//
+// ENVIRONMENT. This harness exercises the fail-closed property boundary, so it
+// must run with the local-auth shim enabled — the same four variables
+// scripts/verify-all.mjs injects into every suite it spawns:
+//
+//   VITE_USE_LOCAL_AUTH=true  (required: without it db.auth.login attempts a
+//                             real HTTP call and dies ECONNREFUSED)
+//   VITE_TEST=1, NODE_ENV=production, VITE_SKIP_DEP_SCAN=1
+//
+// Bare `node scripts/acceptance-harness.mjs` without VITE_USE_LOCAL_AUTH=true
+// fails at sign-in. Prefer the discovered wrapper instead:
+//
+//   node --import ./scripts/_loader-boot.mjs scripts/probe-acceptance-contract.mjs
+//
+// which sets the environment, enforces the time budget from outside, and SKIPs
+// cleanly where the real-data exports are absent.
+//
+// DATA. The ten IMPORT_FILES below are REAL HotelKey exports in scripts/data/.
+// They are gitignored (real hotel data must never be committed), so a fresh
+// clone cannot run this harness: every import throws ENOENT and the run FAILs.
+// The wrapper converts that absence into an honest SKIP; a bare run reports the
+// ENOENT as a failure, never as a pass.
+//
+// TIME BUDGET. HARNESS_TIMEOUT_MS (default 1200000, 20 min) bounds the whole
+// run from inside: on expiry the harness prints FAILED and exits 124 instead of
+// hanging. Measured healthy runtime is ~500 s on Windows under load, so the
+// default holds ~2x headroom. The timer is cleared on the normal path, so a
+// healthy run never sees it fire. verify-all's per-suite --timeout remains the
+// outer bound.
+//
+// EXIT CONTRACT. Cleanup first, exit second: the finally block closes the Vite
+// server and the Dexie connection, the report section prints RESULT plus a
+// PASSED:/FAILED: verdict line (the suite-integrity summary contract), and only
+// then does the process exit with the verdict code. process.exit() AFTER
+// cleanup is the termination guarantee, not a cover-up: realtime.js and
+// sessionChannel.js cache module-scope poster BroadcastChannels with no close
+// API, and an unclosed BroadcastChannel keeps Node alive after the last line
+// runs (measured: useful output printed, process still alive at 120 s). Closing
+// what this harness owns and then exiting is what keeps a PASS from hanging.
+//
+// PROPERTY IDS. importReport() fail-closes on non-string propertyId
+// (IMPORT_PROPERTY_REQUIRED), and the app's Import.jsx holds it as a string, so
+// every entity boundary below uses PID1/PID2 (String() of the Dexie numeric
+// key). Numeric ids are kept only for the Property-table seed and its log line.
 
 import 'fake-indexeddb/auto';
 import { createServer } from 'vite';
@@ -377,8 +421,29 @@ function T(name, source, dashboard, diff, opts = {}) {
 const money = (v) => `$${Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const pct = (v) => `${(Number(v || 0) * 100).toFixed(1)}%`;
 
+// ───────────────────────── Hard time budget ─────────────────────────
+// A hung await (Vite SSR stall, fake-indexeddb sweep, never-resolving import)
+// must FAIL the run, not hang the gate. The watchdog stays referenced on
+// purpose — an unref'd timer cannot rescue a drained event loop — and the
+// normal path clears it before exiting, so a healthy run never sees it fire.
+// verify-all's per-suite --timeout is the outer bound; this is the inner one
+// for bare runs. Exit 124 is the conventional "timed out" code.
+const HARNESS_TIMEOUT_MS = Number(process.env.HARNESS_TIMEOUT_MS || '') || 1_200_000;
+let harnessTimedOut = false;
+const watchdog = setTimeout(() => {
+  harnessTimedOut = true;
+  failed += 1;
+  failures.push('harness exceeded its time budget');
+  console.error(`\nFAILED: acceptance-harness exceeded its ${Math.round(HARNESS_TIMEOUT_MS / 1000)}s budget — failing instead of hanging.`);
+  process.exit(124);
+}, HARNESS_TIMEOUT_MS);
+
 // ───────────────────────── Boot app modules ─────────────────────────
-const server = await createServer({
+let server = null;
+let dexieDb = null;
+let crashed = null;
+try {
+server = await createServer({
   root,
   logLevel: 'error',
   server: { middlewareMode: true, hmr: false },
@@ -388,12 +453,12 @@ const server = await createServer({
   resolve: { alias: [{ find: '@', replacement: path.resolve(root, 'src') }] },
 });
 const mod = (rel) => server.ssrLoadModule(rel);
-try {
 
 const clientMod = await mod('/src/api/base44Client.js');
 const db = clientMod.db || clientMod.default;
 const localDbMod = await mod('/src/api/localDb.js');
 const localDb = localDbMod.default;
+dexieDb = localDb;
 const parsers = await mod('/src/lib/reportParsers.js');
 const aiMod = await mod('/src/lib/aiEngine.js');
 const answerQuestion = aiMod.answerQuestion;
@@ -422,6 +487,11 @@ const PROP2 = { code: 'RRI9999', name: 'Red Roof Inn & Suites Testville', rooms:
 const pid1 = await localDb.Property.add({ ...PROP, active: 1, created_date: new Date().toISOString() });
 const pid2 = await localDb.Property.add({ ...PROP2, active: 1, created_date: new Date().toISOString() });
 console.log(`Properties seeded: #${pid1} ${PROP.name}, #${pid2} ${PROP2.name}\n`);
+// Entity boundaries take STRINGS (importReport fail-closes on a non-string
+// propertyId with IMPORT_PROPERTY_REQUIRED; Import.jsx holds it as a string).
+// The numeric Dexie keys survive only in the seed log line above.
+const PID1 = String(pid1);
+const PID2 = String(pid2);
 
 // Sign in before the first db.entities call.
 //
@@ -457,9 +527,9 @@ const IMPORT_FILES = [
 ];
 const importStats = {};
 for (const [name, expectedType] of IMPORT_FILES) {
-  const scan = await parsers.scanReport('auto', fileUrl(name), { propertyId: pid1, propertyName: PROP.name, sourceFile: name });
+  const scan = await parsers.scanReport('auto', fileUrl(name), { propertyId: PID1, propertyName: PROP.name, sourceFile: name });
   const typeOk = scan.type === expectedType;
-  const result = await parsers.importReport(scan, { propertyId: pid1, propertyName: PROP.name, sourceFile: name });
+  const result = await parsers.importReport(scan, { propertyId: PID1, propertyName: PROP.name, sourceFile: name });
   importStats[name] = { type: scan.type, expectedType, typeOk, count: result.count, excluded: result.excluded, cleaned: result.cleaned, rows: (scan.rowsToImport || []).length };
   const flag = typeOk ? 'OK' : 'WRONG-TYPE';
   console.log(`  ${name}: auto→${scan.type} (expected ${expectedType}) [${flag}] imported ${result.count}, excluded ${result.excluded}, cleaned ${result.cleaned}`);
@@ -482,8 +552,8 @@ console.log(`  TOTAL rows imported: ${totalRows}\n`);
 {
   const occRows = await db.entities.OccupancyDay.list('-date');
   const allProps = new Set(occRows.map((r) => String(r.property_id)));
-  T('All occupancy rows carry selected property_id', String(pid1), [...allProps].join(','), undefined, {
-    ok: allProps.size === 1 && allProps.has(String(pid1)),
+  T('All occupancy rows carry selected property_id', PID1, [...allProps].join(','), undefined, {
+    ok: allProps.size === 1 && allProps.has(PID1),
     note: `rows=${occRows.length}, property_ids=${[...allProps]}`,
   });
 }
@@ -581,7 +651,7 @@ console.log('\n=== 2. FINANCIAL METRICS: Dashboard vs Source ===');
   T('2.13 OTA commissions (Jan) — net×rate model', srcCommJan, commJan, srcCommJan - commJan, { note: `rates: EHC=${commission.getCommissionRates()['EXPEDIA']?.rate}, model documented (source nets OTA commission already)` });
 
   // taxes (no tax columns in source reports → estimated at configured rates)
-  const eff = taxSettings.getEffectiveTaxRates(String(pid1), '2026-01-15');
+  const eff = taxSettings.getEffectiveTaxRates(PID1, '2026-01-15');
   const taxable = srcJan.rows.filter((r) => taxConfig.TAX_SOURCES.find((s) => s.key === classifySrc(r.source || r.code))?.taxable);
   const taxBase = taxable.reduce((a, r) => a + r.net, 0);
   T('2.14 State tax (Jan) — estimated', taxBase * eff.state, taxBase * eff.state, 0, { ok: true, note: `No State Tax column in source reports; dashboard estimates taxable net × ${(eff.state * 100).toFixed(2)}% (configured rate). Expected diff = 0 by definition.` });
@@ -596,13 +666,13 @@ console.log('\n=== 2. FINANCIAL METRICS: Dashboard vs Source ===');
 
 // Money Kept (Jan window)
 console.log('\n=== 2b. ESTIMATED MONEY KEPT (Jan 2026) ===');
-const mk = await moneyKeptMirror({ from: JAN[0], to: JAN[1], pid: String(pid1), label: PROP.name });
+const mk = await moneyKeptMirror({ from: JAN[0], to: JAN[1], pid: PID1, label: PROP.name });
 {
   // independent expectation from source aggregates
   const srcA = aggWindow(occSrc, ...JAN);
   const pS = payWindow(paySrc, ...JAN);
   const ccRate = commission.getCcFeeRate();
-  const eff = taxSettings.getEffectiveTaxRates(String(pid1), '2026-01-15');
+  const eff = taxSettings.getEffectiveTaxRates(PID1, '2026-01-15');
   const taxBaseSrc = srcJan.rows.filter((r) => taxConfig.TAX_SOURCES.find((s) => s.key === classifySrc(r.source || r.code))?.taxable).reduce((a, r) => a + r.net, 0);
   const srcComm = srcJan.bySource.reduce((a, c) => {
     const info = hotel.commissionFor(c.name);
@@ -654,8 +724,8 @@ const mk = await moneyKeptMirror({ from: JAN[0], to: JAN[1], pid: String(pid1), 
 console.log('\n=== 3. IMPORT LIFECYCLE ===');
 if (!skipSection('3')) {
   // Duplicate import
-  const scan = await parsers.scanReport('auto', fileUrl('Occupancy Summary midelboro.csv'), { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Occupancy Summary midelboro.csv' });
-  const res2 = await parsers.importReport(scan, { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Occupancy Summary midelboro.csv' });
+  const scan = await parsers.scanReport('auto', fileUrl('Occupancy Summary midelboro.csv'), { propertyId: PID1, propertyName: PROP.name, sourceFile: 'Occupancy Summary midelboro.csv' });
+  const res2 = await parsers.importReport(scan, { propertyId: PID1, propertyName: PROP.name, sourceFile: 'Occupancy Summary midelboro.csv' });
   const before = occAll.length;
   const after = (await db.entities.OccupancyDay.list('date')).length;
   T('3.1 Duplicate import skipped (0 new rows)', 0, res2.count, 0 - res2.count, { ok: res2.count === 0 && before === after, note: `new=${res2.count} excluded=${res2.excluded} rows ${before}→${after}` });
@@ -679,8 +749,8 @@ if (!skipSection('3')) {
   T('3.2 Delete import removes only its rows', before - occWithImport.length, afterDel, (before - occWithImport.length) - afterDel, { ok: afterDel === before - occWithImport.length, note: `deleted ${occWithImport.length} rows (session ${occImportId || '(missing)'})` });
 
   // Re-import after delete (restore)
-  const scan3 = await parsers.scanReport('auto', fileUrl('Occupancy Summary midelboro.csv'), { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Occupancy Summary midelboro.csv' });
-  const res3 = await parsers.importReport(scan3, { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Occupancy Summary midelboro.csv' });
+  const scan3 = await parsers.scanReport('auto', fileUrl('Occupancy Summary midelboro.csv'), { propertyId: PID1, propertyName: PROP.name, sourceFile: 'Occupancy Summary midelboro.csv' });
+  const res3 = await parsers.importReport(scan3, { propertyId: PID1, propertyName: PROP.name, sourceFile: 'Occupancy Summary midelboro.csv' });
   const afterRe = (await db.entities.OccupancyDay.list('date')).length;
   T('3.3 Re-import after delete restores rows', before, afterRe, before - afterRe, { note: `new=${res3.count} rows ${afterDel}→${afterRe}` });
 
@@ -688,8 +758,8 @@ if (!skipSection('3')) {
   const allOcc = await db.entities.OccupancyDay.list('date');
   const revBefore = hotel.sum(allOcc, 'total_revenue_with_misc');
   await db.entities.OccupancyDay.bulkDelete(allOcc.map((r) => r.id));
-  const scan4 = await parsers.scanReport('auto', fileUrl('Occupancy Summary midelboro.csv'), { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Occupancy Summary midelboro.csv' });
-  await parsers.importReport(scan4, { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Occupancy Summary midelboro.csv' });
+  const scan4 = await parsers.scanReport('auto', fileUrl('Occupancy Summary midelboro.csv'), { propertyId: PID1, propertyName: PROP.name, sourceFile: 'Occupancy Summary midelboro.csv' });
+  await parsers.importReport(scan4, { propertyId: PID1, propertyName: PROP.name, sourceFile: 'Occupancy Summary midelboro.csv' });
   const revAfter = hotel.sum(await db.entities.OccupancyDay.list('date'), 'total_revenue_with_misc');
   T('3.4 Reprocess preserves totals (revenue unchanged)', revBefore, revAfter, revBefore - revAfter);
 
@@ -705,8 +775,8 @@ if (!skipSection('3')) {
     note: `row import_id=${src1ImportId || '(missing)'}`,
   });
   await mark(`bulkDelete ${oldSrc1Rows.length} rows`, () => db.entities.SourceDay.bulkDelete(oldSrc1Rows.map((r) => r.id)));
-  const scan5 = await mark('scanReport', () => parsers.scanReport('auto', fileUrl('Source Summary (1).csv'), { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Source Summary (1).csv' }));
-  await mark('importReport', () => parsers.importReport(scan5, { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Source Summary (1).csv' }));
+  const scan5 = await mark('scanReport', () => parsers.scanReport('auto', fileUrl('Source Summary (1).csv'), { propertyId: PID1, propertyName: PROP.name, sourceFile: 'Source Summary (1).csv' }));
+  await mark('importReport', () => parsers.importReport(scan5, { propertyId: PID1, propertyName: PROP.name, sourceFile: 'Source Summary (1).csv' }));
   const srcAfter = await mark('list after', () => db.entities.SourceDay.list('date'));
   T('3.5 Replace import: same-file rows replaced (count restored)', srcCountBefore, srcAfter.length, srcCountBefore - srcAfter.length, { ok: srcCountBefore === srcAfter.length, note: `old import ${oldSrc1Rows.length} rows → re-imported ${scan5.rowsToImport.length}; ${srcCountBefore}→${srcAfter.length}` });
   T('3.5b Replace import: net revenue restored (other files untouched)', srcRevBefore, hotel.sum(srcAfter, 'net_revenue'), srcRevBefore - hotel.sum(srcAfter, 'net_revenue'));
@@ -715,19 +785,19 @@ if (!skipSection('3')) {
 // ───────────────────────── 4. Property isolation / switching ─────────────────────────
 console.log('\n=== 4. PROPERTY ISOLATION & SWITCHING ===');
 if (!skipSection('4')) {
-  const occP1 = await db.entities.OccupancyDay.filter({ property_id: pid1 }, 'date');
-  const srcP1 = await db.entities.SourceDay.filter({ property_id: pid1 }, 'date');
-  const payP1 = await db.entities.PaymentDay.filter({ property_id: pid1 }, 'date');
-  const occP2 = await db.entities.OccupancyDay.filter({ property_id: pid2 }, 'date');
-  const srcP2 = await db.entities.SourceDay.filter({ property_id: pid2 }, 'date');
-  const payP2 = await db.entities.PaymentDay.filter({ property_id: pid2 }, 'date');
+  const occP1 = await db.entities.OccupancyDay.filter({ property_id: PID1 }, 'date');
+  const srcP1 = await db.entities.SourceDay.filter({ property_id: PID1 }, 'date');
+  const payP1 = await db.entities.PaymentDay.filter({ property_id: PID1 }, 'date');
+  const occP2 = await db.entities.OccupancyDay.filter({ property_id: PID2 }, 'date');
+  const srcP2 = await db.entities.SourceDay.filter({ property_id: PID2 }, 'date');
+  const payP2 = await db.entities.PaymentDay.filter({ property_id: PID2 }, 'date');
   T('4.1 Prop#1 rows present; Prop#2 empty', 0, occP2.length + srcP2.length + payP2.length, 0 - (occP2.length + srcP2.length + payP2.length), { ok: occP2.length + srcP2.length + payP2.length === 0 && occP1.length > 0, note: `P1: occ=${occP1.length} src=${srcP1.length} pay=${payP1.length}; P2: occ=${occP2.length} src=${srcP2.length} pay=${payP2.length}` });
   // switching to P2 shows nothing (no cross-property leakage)
   const revP2 = hotel.sum(occP2, 'room_revenue');
   T('4.2 Switching to Prop#2 → zero revenue (isolation)', 0, revP2, 0 - revP2);
 
   // ALL PROPERTIES / portfolio (weighted, real function from hotel.js)
-  const roomCounts = { [String(pid1)]: PROP.rooms, [String(pid2)]: PROP2.rooms };
+  const roomCounts = { [PID1]: PROP.rooms, [PID2]: PROP2.rooms };
   const ps = hotel.portfolioStats(occP1, roomCounts);
   // portfolioStats/occupancyStats are ROOM-metric engines (ADR, RevPAR), so the
   // independent expectation must be room revenue — the same basis. Comparing
@@ -742,8 +812,8 @@ if (!skipSection('4')) {
   T('4.6 Portfolio RevPAR (revenue/capacity)', revP1 / (daysP1 * PROP.rooms), ps.revpar, revP1 / (daysP1 * PROP.rooms) - ps.revpar);
 
   // per-property table
-  const per = hotel.perPropertyStats(occP1, [{ id: String(pid1), name: PROP.name, rooms: PROP.rooms }]);
-  T('4.7 Per-property stats (P1 ADR)', revP1 / soldP1, per.find((x) => String(x.property_id) === String(pid1))?.adr, revP1 / soldP1 - per.find((x) => String(x.property_id) === String(pid1))?.adr);
+  const per = hotel.perPropertyStats(occP1, [{ id: PID1, name: PROP.name, rooms: PROP.rooms }]);
+  T('4.7 Per-property stats (P1 ADR)', revP1 / soldP1, per.find((x) => String(x.property_id) === PID1)?.adr, revP1 / soldP1 - per.find((x) => String(x.property_id) === PID1)?.adr);
 }
 
 // ───────────────────────── 5. Date ranges / weekly / monthly / YoY ─────────────────────────
@@ -800,11 +870,11 @@ if (!skipSection('5')) {
   // _harness-auth.mjs, so 'all' is the truthful declaration — and if the engine
   // ever loosens null back into "everything", these checks stay honest because
   // they never relied on the loose behaviour.
-  const aiYoy = await answerQuestion({ question: 'Compare January 2026 with January 2025', propertyId: String(pid1), from: '', to: '', allowedPropertyIds: 'all' });
+  const aiYoy = await answerQuestion({ question: 'Compare January 2026 with January 2025', propertyId: PID1, from: '', to: '', allowedPropertyIds: 'all' });
   const yoyMissing = /2025|no imported|couldn't find/i.test(aiYoy.answer);
   T('5.6 YoY comparison reports missing 2025 data (documented)', 'missing-2025', aiYoy.summary?.range || aiYoy.answer.slice(0, 40), undefined, { ok: yoyMissing, note: `AI: ${aiYoy.answer.replace(/\n/g, ' | ').slice(0, 110)}` });
 
-  const aiJan = await answerQuestion({ question: 'What was my revenue in January 2026?', propertyId: String(pid1), from: '', to: '', allowedPropertyIds: 'all' });
+  const aiJan = await answerQuestion({ question: 'What was my revenue in January 2026?', propertyId: PID1, from: '', to: '', allowedPropertyIds: 'all' });
   const janExp = aggWindow(occSrc, '2026-01-01', '2026-01-31').revenue;
   const janExpTxt = `${Math.round(janExp).toLocaleString('en-US')}`;
   const janMatch = aiJan.answer.includes(janExpTxt);
@@ -817,15 +887,15 @@ let mk2;
 if (!skipSection('6')) {
   const [f, t] = JAN;
   // expense entry (real app path)
-  await db.entities.Expense.create({ property_id: pid1, expense_date: '2026-01-10', expense_name: 'Laundry supplies', vendor: 'Acme', category: 'laundry', amount: 250.75, frequency: 'one_time', payment_status: 'paid', created_date: new Date().toISOString() });
-  await db.entities.Expense.create({ property_id: pid1, expense_date: '2026-01-20', expense_name: 'Office rent', vendor: 'LLC', category: 'other', amount: 1200.00, frequency: 'one_time', payment_status: 'paid', created_date: new Date().toISOString() });
+  await db.entities.Expense.create({ property_id: PID1, expense_date: '2026-01-10', expense_name: 'Laundry supplies', vendor: 'Acme', category: 'laundry', amount: 250.75, frequency: 'one_time', payment_status: 'paid', created_date: new Date().toISOString() });
+  await db.entities.Expense.create({ property_id: PID1, expense_date: '2026-01-20', expense_name: 'Office rent', vendor: 'LLC', category: 'other', amount: 1200.00, frequency: 'one_time', payment_status: 'paid', created_date: new Date().toISOString() });
   // payroll entry (real app path)
-  await db.entities.PayrollRun.create({ property_id: pid1, pay_period_start: '2026-01-01', pay_period_end: '2026-01-15', employee_name: 'Front Desk', total_pay: 3400.00, payroll_status: 'completed', created_date: new Date().toISOString() });
+  await db.entities.PayrollRun.create({ property_id: PID1, pay_period_start: '2026-01-01', pay_period_end: '2026-01-15', employee_name: 'Front Desk', total_pay: 3400.00, payroll_status: 'completed', created_date: new Date().toISOString() });
   // recurring payroll (3 periods → totals counted in the window)
-  await db.entities.PayrollRun.create({ property_id: pid1, pay_period_start: '2026-01-16', pay_period_end: '2026-01-31', employee_name: 'Front Desk', total_pay: 3400.00, payroll_status: 'completed', created_date: new Date().toISOString() });
-  await db.entities.PayrollRun.create({ property_id: pid1, pay_period_start: '2026-02-01', pay_period_end: '2026-02-15', employee_name: 'Front Desk', total_pay: 3400.00, payroll_status: 'completed', created_date: new Date().toISOString() });
+  await db.entities.PayrollRun.create({ property_id: PID1, pay_period_start: '2026-01-16', pay_period_end: '2026-01-31', employee_name: 'Front Desk', total_pay: 3400.00, payroll_status: 'completed', created_date: new Date().toISOString() });
+  await db.entities.PayrollRun.create({ property_id: PID1, pay_period_start: '2026-02-01', pay_period_end: '2026-02-15', employee_name: 'Front Desk', total_pay: 3400.00, payroll_status: 'completed', created_date: new Date().toISOString() });
 
-  mk2 = await moneyKeptMirror({ from: f, to: t, pid: String(pid1), label: PROP.name });
+  mk2 = await moneyKeptMirror({ from: f, to: t, pid: PID1, label: PROP.name });
   const _expRow = mk2.items.find((i) => i.key === 'laundry' || i.key === 'other');
   T('6.1 Expense entry appears in deductions', 1450.75, (mk2.items.find((i) => i.key === 'laundry')?.amount || 0) + (mk2.items.find((i) => i.key === 'other')?.amount || 0), 1450.75 - ((mk2.items.find((i) => i.key === 'laundry')?.amount || 0) + (mk2.items.find((i) => i.key === 'other')?.amount || 0)));
   T('6.2 Payroll counted in window (Jan: 2 of 3 periods)', 6800, mk2.items.find((i) => i.key === 'payroll')?.amount || 0, 6800 - (mk2.items.find((i) => i.key === 'payroll')?.amount || 0), { note: 'recurring biweekly payroll; Feb period excluded from Jan window' });
@@ -835,7 +905,7 @@ if (!skipSection('6')) {
   const mkBefore = mk2.kept;
   commission.setCommissionRates({ 'EXPEDIA HOTEL COLLECT': { type: 'percentage', rate: 0.18, taxExempt: false } });
   commission.setCcFeeRate(0.03);
-  const mk3 = await moneyKeptMirror({ from: f, to: t, pid: String(pid1), label: PROP.name });
+  const mk3 = await moneyKeptMirror({ from: f, to: t, pid: PID1, label: PROP.name });
   const rowsAfter = JSON.stringify((await db.entities.SourceDay.list('date')).map((r) => r.id + r.date + r.net_revenue + r.stays));
   const commNew = mk3.items.find((i) => i.key === 'ota')?.amount || 0;
   const commOld = mk2.items.find((i) => i.key === 'ota')?.amount || 0;
@@ -845,8 +915,8 @@ if (!skipSection('6')) {
   console.log(`      kept before=${money(mkBefore)} after(18%+3%)=${money(mk3.kept)}`);
 
   // tax-rate change (state 11.7% → 8.0% effective for a future window via taxSettings)
-  taxSettings.saveTaxSettings([{ property_id: String(pid1), state_rate: 0.08, city_rate: 0.02, other_rate: 0, effective_start: '2026-01-01' }]);
-  const mk4 = await moneyKeptMirror({ from: f, to: t, pid: String(pid1), label: PROP.name });
+  taxSettings.saveTaxSettings([{ property_id: PID1, state_rate: 0.08, city_rate: 0.02, other_rate: 0, effective_start: '2026-01-01' }]);
+  const mk4 = await moneyKeptMirror({ from: f, to: t, pid: PID1, label: PROP.name });
   const taxBaseJan = srcJan.rows.filter((r) => taxConfig.TAX_SOURCES.find((s) => s.key === classifySrc(r.source || r.code))?.taxable).reduce((a, r) => a + r.net, 0);
   const expectedTaxNew = taxBaseJan * 0.08 + taxBaseJan * 0.02;
   T('6.5 Tax-rate change recalculates taxes (8%+2% on taxable base)', expectedTaxNew, (mk4.items.find((i) => i.key === 'taxes')?.amount || 0), expectedTaxNew - (mk4.items.find((i) => i.key === 'taxes')?.amount || 0), { tol: 0.02 });
@@ -874,7 +944,7 @@ if (!skipSection('7')) {
 console.log('\n=== 8. CLERK SHIFT & CASH AUDIT ===');
 if (!skipSection('8')) {
   const srcC = srcClerk('Clerk Shift.csv');
-  const scan = await parsers.scanReport('auto', fileUrl('Clerk Shift.csv'), { propertyId: pid1, propertyName: PROP.name, sourceFile: 'Clerk Shift.csv' });
+  const scan = await parsers.scanReport('auto', fileUrl('Clerk Shift.csv'), { propertyId: PID1, propertyName: PROP.name, sourceFile: 'Clerk Shift.csv' });
   const cRows = await db.entities.ClerkShiftRecord.list('created_date');
   const dropsDb = cRows.filter((r) => r.record_type === 'drop');
   const dropsScan = scan.drops || [];
@@ -926,7 +996,7 @@ if (!skipSection('9')) {
     const refunds = Math.abs(rows.reduce((a, r) => a + (Number(r.closed_balance_folio) || 0), 0)) + Math.abs(rows.reduce((a, r) => a + (Number(r.loyalty_discount) || 0), 0));
     return { payments, refunds };
   };
-  const ask = (q, from, to) => answerQuestion({ question: q, propertyId: String(pid1), from, to, allowedPropertyIds: 'all' });
+  const ask = (q, from, to) => answerQuestion({ question: q, propertyId: PID1, from, to, allowedPropertyIds: 'all' });
   const money0 = (v) => `$${Math.abs(Number(v) || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
   // Q1 ADR on a date
@@ -948,8 +1018,8 @@ if (!skipSection('9')) {
   const q4 = await ask('How much money did I keep in January 2026?', '', '');
   const occJ = occTotals(occ('2026-01-01', '2026-01-31'));
   const payJ = payTotals(pRows('2026-01-01', '2026-01-31'));
-  const expJ = (await db.entities.Expense.filter({ property_id: pid1 }, 'expense_date')).filter((e) => hotel.inRange(e.expense_date, '2026-01-01', '2026-01-31'));
-  const payrJAll = (await db.entities.PayrollRun.filter({ property_id: pid1 }, 'pay_period_start')).filter((p) => hotel.inRange(p.pay_period_start, '2026-01-01', '2026-01-31'));
+  const expJ = (await db.entities.Expense.filter({ property_id: PID1 }, 'expense_date')).filter((e) => hotel.inRange(e.expense_date, '2026-01-01', '2026-01-31'));
+  const payrJAll = (await db.entities.PayrollRun.filter({ property_id: PID1 }, 'pay_period_start')).filter((p) => hotel.inRange(p.pay_period_start, '2026-01-01', '2026-01-31'));
   //
   // COMMITTED PAYROLL ONLY, deliberately. The AI (and every money page since the
   // 2026-08-16 fixes) counts payroll that is approved/paid and ignores DRAFT runs —
@@ -1181,6 +1251,10 @@ function classifySrc(text) {
 // ───────────────────────── Report ─────────────────────────
 console.log(`\n${'='.repeat(70)}`);
 console.log(`RESULT: ${passed} passed, ${failed} failed  (${results.length} checks)`);
+// Verdict line for the suite-integrity summary contract (console.log opening
+// with PASSED:/FAILED:) and for verify-all's classifier, which reads the
+// "N passed, M failed" counts. Kept alongside RESULT, not instead of it.
+console.log(failed ? `FAILED: ${passed} passed, ${failed} failed` : `PASSED: ${passed} passed, ${failed} failed`);
 if (failures.length) {
   console.log('\nFAILED:');
   failures.forEach((f) => console.log('  - ' + f));
@@ -1199,7 +1273,30 @@ const report = {
 };
 fs.writeFileSync(path.join(__dirname, 'acceptance-report.json'), JSON.stringify(report, null, 2));
 console.log(`\nReport written to scripts/acceptance-report.json`);
+} catch (err) {
+  // A throw before the report (failed import, crashed Vite SSR load, refused
+  // sign-in) must still state a verdict: without this the process exits
+  // non-zero with a bare stack and no summary line, which reads as an
+  // environment accident rather than a failed acceptance run.
+  crashed = err;
+  failed += 1;
+  failures.push(`harness crashed before verdict: ${err?.message || err}`);
+  console.error(`\nFAILED: acceptance-harness crashed before verdict: ${err?.message || err}`);
 } finally {
-  await server.close();
+  // Cleanup BEFORE exit, never instead of it. The Vite server holds sockets;
+  // the Dexie connection holds the fake-indexeddb store. The process.exit()
+  // below is what terminates the module-cached poster BroadcastChannels
+  // (realtime.js / sessionChannel.js), which have no close API — see the
+  // EXIT CONTRACT note at the top of this file.
+  clearTimeout(watchdog);
+  if (dexieDb) {
+    try { await dexieDb.close(); } catch { /* already closed */ }
+  }
+  if (server) {
+    try { await server.close(); } catch { /* already closed */ }
+  }
 }
-process.exit(failed ? 1 : 0);
+if (crashed) {
+  console.error(String(crashed?.stack || crashed).split('\n').slice(0, 6).join('\n'));
+}
+process.exit(harnessTimedOut ? 124 : failed ? 1 : 0);

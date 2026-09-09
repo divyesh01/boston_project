@@ -119,7 +119,7 @@ npm run audit:gate    # scripts/audit-gate.mjs
 npm run brain:verify  # scripts/verify-brain.mjs
 ```
 
-Plus the existing harness: **107** `scripts/probe-*.mjs` and **16** `scripts/verify-*.mjs` (including `verify-transactions`, `verify-statistics`, `verify-money-kept`, `verify-coexistence`, `verify-import-rollback`, `verify_cross_module_impact`). Search this harness for an existing probe **before** writing a new one.
+Plus the existing harness: **147** `scripts/probe-*.mjs`, **21** `scripts/verify-*.mjs`, **1** `scripts/verify_*.mjs` (`verify_cross_module_impact` — matched by the `verify_` prefix since 2026-09-09, so it genuinely runs now) and **7** `scripts/test_*.mjs` — 170 suites discovered by `npm run verify:all -- --list` at list `85639186`, plus the committed synthetic HotelKey fixture corpus (`src/lib/__fixtures__/hotelkey/`, 10 files) proven by `src/lib/hotelKeyParserFixtures.test.js` (21), `src/lib/hotelKeyImportFixtures.test.js` (30) and `npm run hotelkey:mutate` (11 mutations). Counts rot; the `--list` fingerprint is the source of truth. Search this harness for an existing probe **before** writing a new one.
 
 ## 12. ESCALATION MATRIX
 

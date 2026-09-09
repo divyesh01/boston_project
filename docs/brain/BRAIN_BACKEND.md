@@ -566,15 +566,18 @@ never against a number copied out of a document.
 | `scripts/resolve-base44.mjs` | Custom ESM loader: redirects @base44/sdk to local stubs |
 | `scripts/stubs/base44-runtime.mjs` | In-memory Base44 host mock (secret store, entity DB) |
 | `scripts/stubs/base44-sdk.mjs` | In-memory SDK mock with -field sorting and monotonic sequences |
-| `scripts/acceptance-harness.mjs` | 11 stateful sections that must run in order. **It does NOT run all probe tests** — that is `npm run verify:all`. It is not even auto-discovered (its name matches neither `probe-*` nor `verify-*`), it needs `vite`, and section 3.5 deletes ~7918 rows through `fake-indexeddb` so it cannot finish in a Linux sandbox. Opt-in flags: `HARNESS_SKIP=3,4`, `HARNESS_TIMING=1` |
+| `scripts/acceptance-harness.mjs` | 11 stateful sections that must run in order. **It does NOT run all probe tests** — that is `npm run verify:all`. The harness file itself is not auto-discovered (its name matches neither `probe-*` nor `verify-*`), but since 2026-09-09 it IS gated through the discovered wrapper `scripts/probe-acceptance-contract.mjs` (SKIPs cleanly where vite or the gitignored real-data exports are absent; otherwise budgets the run and asserts its verdict). It needs `vite`, and section 3.5 deletes ~7918 rows through `fake-indexeddb` so it cannot finish in a Linux sandbox. Opt-in flags: `HARNESS_SKIP=3,4`, `HARNESS_TIMING=1`, `HARNESS_TIMEOUT_MS`. Authenticates via `scripts/_harness-auth.mjs`; entity boundaries take string property ids (importReport fail-closes on non-strings). |
+| `scripts/probe-acceptance-contract.mjs` | Discovered gate for the row above: vite + real-data pre-flights (honest SKIP), CSV-drift check against the harness IMPORT_FILES, then a budgeted child run asserting exit 0, a zero-failure PASSED verdict and a matching `acceptance-report.json`. Needs a generous outer budget (the harness measured 498 s on Windows under load; child watchdog 1200 s, probe budget 1500 s): `npm run verify:all -- --only probe-acceptance-contract --timeout 1600`. |
 | `scripts/probe-db-mock-rls.mjs` | **The only automated guard on `base44/**`.** Fails on any `__B44_DB__` shim or `db.*` call site in a serverless entry, deep-equals every property-scoped RLS rule against the canonical rule, then EXECUTES all 20 shipped rules against a 9-case access matrix. Mutation-self-tests every run: it rebuilds both historical RLS corruptions and fails if the matrix does not catch them. |
 | `scripts/probe-audit-chain.mjs` | Imports the REAL serverless entry files (via `resolve-base44.mjs`) and asserts all 7 copies of the canonical audit payload agree with the verifier |
 | `scripts/probe-deploy-config.mjs` | Parses (not pattern-matches) `manifest.json`, `vercel.json`, CSP headers |
 
 ### How To Run Tests
 ```powershell
-# EVERYTHING. Start here -- auto-discovers all 111 suites, distinguishes PASS / FAIL /
-# BROKEN (could not start) / TIMEOUT (could not finish) / BAD-EXIT / SKIP.
+# EVERYTHING. Start here -- auto-discovers all suites (170 at list 85639186 on
+# 2026-09-09; re-run --list rather than trusting this number), distinguishes
+# PASS / FAIL / BROKEN (could not start) / TIMEOUT (could not finish) /
+# BAD-EXIT / SKIP.
 npm run verify:all
 npm run verify:all -- --list            # the live list + why anything is excluded
 npm run verify:all -- --filter money    # one slice (plain substring match)

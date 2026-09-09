@@ -199,13 +199,13 @@ actual win here; the visual split is secondary. Risk LOW-MEDIUM. Benefit: medium
   auth or data path (see `PROJECT_MAP.md`). Decomposing dead-but-tracked code has
   negative value; the open question is retirement, not refactoring, and that is an owner
   decision.
-- Large probes (`probe-worker-import.mjs` 1,410; `acceptance-harness.mjs` 1,205;
+- Large probes (`probe-worker-import.mjs` 1,410; `acceptance-harness.mjs` ~1,270;
   `probe-business-sync-global-records.mjs` 1,165; `probe-auth-hardening.mjs` 1,037) —
-  test code, and length there buys coverage. One caveat worth knowing:
-  `acceptance-harness.mjs` is **never executed by any gate**, because
-  `scripts/verify-all.mjs` only discovers `probe-`, `verify-` and `test_` prefixes. It is
-  1,205 lines of verification nobody runs. That is a harness question, not a size
-  question.
+  test code, and length there buys coverage. The acceptance harness is gated
+  since 2026-09-09, not by renaming it but through the discovered wrapper
+  `scripts/probe-acceptance-contract.mjs`, which SKIPs cleanly where vite or
+  the gitignored real-data exports are absent and otherwise budgets the harness
+  run and asserts its verdict. That is a harness answer, not a size question.
 
 ---
 
@@ -215,11 +215,15 @@ actual win here; the visual split is secondary. Risk LOW-MEDIUM. Benefit: medium
    `src/lib/transactionNorm.js` both participate in the no-double-count invariant. Whoever
    splits either one must first write down which module owns the key.
 2. **`scripts/` membership is decided by filename.** A suite runs only if its basename
-   ends `.mjs` and starts `probe-`, `verify-` or `test_`. Files like
-   `verify_cross_module_impact.mjs` (393 lines, underscore) never run, and
-   `PROTOCOL_V2_ADDENDUM.md` incorrectly lists it among the `verify-*` suites. Renaming it
-   would *start* running a 393-line suite — a change to the gate surface that needs its own
-   verification, so it is reported here rather than done.
+   ends `.mjs` and starts `probe-`, `verify-`, `verify_` or `test_`. Until
+   2026-09-09 the `verify_` form was missing, so
+   `verify_cross_module_impact.mjs` (393 lines, underscore) never ran while
+   `PROTOCOL_V2_ADDENDUM.md` listed it among the `verify-*` suites. Fixed
+   without renaming: both discovery walks match `verify_` now (same precedent
+   as `test_`), the suite prints a `PASSED:`/`FAILED:` verdict the classifiers
+   read, and both discovery floors pin it — removing the prefix or the suite
+   fails the gate loudly instead of shrinking it. The rename question is closed;
+   do not reopen it without updating both walks and both floors.
 3. **Unreachable-but-tracked UI.** Eight `src/` components have zero importers and are
    marked UNWIRED in `docs/brain/BRAIN_FRONTEND.md`: `propertyMap.jsx`,
    `MFARecoveryModal.jsx`, `HousekeepingSettingsModal.jsx`, `AnomalySignoffModal.jsx`,

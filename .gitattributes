@@ -23,3 +23,14 @@ public/_headers text eol=lf
 # (.git/hooks/pre-commit, which .git/ keeps out of the repository), and CRLF
 # normalization would break that comparison on Windows checkouts alone.
 .githooks/pre-commit text eol=lf
+
+# The HotelKey parser regression corpus is byte-sensitive by design: two of its
+# tests re-encode a fixture as CRLF and require the parse to be identical. The
+# blobs are LF, but with only `* text=auto` a Windows checkout materializes
+# them as CRLF — and then `.replace(/\n/g, "\r\n")` produces CRCRLF, which the
+# parser reads as zero rows (measured 2026-09-09: 2 failed of 51, parser file
+# only, LF baseline green — a checkout-EOL defect, not a parser regression).
+# The corpus README already mandates LF; this pin makes a Windows checkout keep
+# it. No probe asserts the pin separately: the CRLF tests themselves are the
+# assertion, and they fail on exactly these bytes.
+src/lib/__fixtures__/hotelkey/*.csv text eol=lf

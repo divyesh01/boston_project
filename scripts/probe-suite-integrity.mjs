@@ -17,9 +17,10 @@ const FIXTURES_DIR = path.resolve(SCRIPTS_DIR, '_fixtures-suite-integrity');
 // this auditor cannot see is a file whose summary contract nobody enforces, and a file
 // verify-all cannot see is a file nobody runs. `test_` (underscore, not dash) was added
 // 2026-08-23: seven long-standing suites used that older convention and were invisible
-// to both walks. Defined once because the predicate was duplicated at two call sites
+// to both walks. `verify_` was added 2026-09-09 for scripts/verify_cross_module_impact.mjs,
+// the same class of gap. Defined once because the predicate was duplicated at two call sites
 // below and the two copies are exactly the kind of thing that drifts apart.
-const SUITE_PREFIXES = ['probe-', 'verify-', 'test_'];
+const SUITE_PREFIXES = ['probe-', 'verify-', 'verify_', 'test_'];
 const NOT_A_SUITE = new Set([
   'verify-all.mjs',              // the runner
   'verify-brain.mjs',            // documentation gate
@@ -458,7 +459,10 @@ async function runTreeAudit() {
   // STATIC walk (isSuiteFile), which is a different question. A file can be swept and yet
   // unaudited, so nobody enforces its summary contract; or audited and yet never run. Each
   // walk therefore carries its own floor, and NOT_A_SUITE above says why this name is on it.
-  const MUST_REMAIN_AUDITED = ['probe-auth-hardening.mjs'];
+  // verify_cross_module_impact.mjs and probe-acceptance-contract.mjs joined 2026-09-09:
+  // the first was unaudited AND unrunnable for months (underscore name, no prefix
+  // matched), the second is the sole static contract over the acceptance wrapper.
+  const MUST_REMAIN_AUDITED = ['probe-auth-hardening.mjs', 'verify_cross_module_impact.mjs', 'probe-acceptance-contract.mjs'];
   const unaudited = MUST_REMAIN_AUDITED
     .map((f) => ({ f, onDisk: fs.existsSync(path.join(SCRIPTS_DIR, f)) }))
     .filter(({ f, onDisk }) => !onDisk || !isSuiteFile(f));

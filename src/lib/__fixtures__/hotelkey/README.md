@@ -68,7 +68,9 @@ every column except `Amount`.
 
 1. Invent the data. If you are tempted to paste a real export, stop.
 2. Keep LF endings and the 19-column header unless the point of the fixture is
-   to break one of those.
+   to break one of those. (2026-09-09: the blobs are LF, but Windows checkouts
+   materialized CRLF until `.gitattributes` pinned `eol=lf` for this directory.
+   The CRLF byte-noise tests caught it — 2 failed of 51 on such a checkout.)
 3. Add the assertion to whichever suite owns the layer, then add or re-point a
    mutation in `scripts/probe-hotelkey-mutations.mjs` so the new coverage is
    proven to bite. A fixture with no mutation behind it is untested test code.

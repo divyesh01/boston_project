@@ -1,5 +1,12 @@
 // Cross-Module Integration Verification Script
 // Verifies that auth changes don't break existing functionality and have no side-effect collisions
+//
+// RUNS IN THE CANONICAL GATE. The underscore name predates the probe-/verify-
+// convention; scripts/verify-all.mjs and scripts/probe-suite-integrity.mjs both
+// match the `verify_` prefix (added 2026-09-09, same precedent as `test_`), so
+// this file is executed by `npm run verify:all` and audited by
+// probe-suite-integrity. Do not rename it to the dash form without updating
+// both walks and the references in PROTOCOL_V2_ADDENDUM.md and TECH_DEBT.md.
 
 import { hashPassword, verifyPassword, generateSalt, generateToken, validatePasswordStrength } from '../src/lib/security.js';
 
@@ -364,29 +371,46 @@ async function testStorageKeyCollisions() {
 // Run all tests
 async function runAllTests() {
   console.log('Starting Cross-Module Integration Verification...\n');
-  
+
+  // Sections run in order; a throw aborts the loop and the catch below states
+  // the verdict. Counting completions (not hardcoding "8") keeps the summary
+  // honest when a ninth section is added.
+  const sections = [
+    testSideEffectIsolation,
+    testPasswordHashConsistency,
+    testIdempotency,
+    testNullGuardHandling,
+    testAuditChainIntegrity,
+    testPermissionIsolation,
+    testRouteNonConflict,
+    testStorageKeyCollisions,
+  ];
+  let completed = 0;
   try {
-    await testSideEffectIsolation();
-    await testPasswordHashConsistency();
-    await testIdempotency();
-    await testNullGuardHandling();
-    await testAuditChainIntegrity();
-    await testPermissionIsolation();
-    await testRouteNonConflict();
-    await testStorageKeyCollisions();
-    
+    for (const fn of sections) {
+      await fn();
+      completed += 1;
+    }
+
     console.log('\n========================================');
     console.log('ALL INTEGRATION TESTS PASSED ✓');
     console.log('========================================\n');
-    
+
+    // Verdict line for the suite contracts: suite-integrity requires a
+    // console.log opening with PASSED:/FAILED:, and verify-all's classifier
+    // reads the "N passed, M failed" counts. Without this line the suite exits
+    // 0 stating no verdict, which the runner reports as NO-VERDICT (not green).
+    console.log(`PASSED: ${completed} passed, 0 failed`);
+
     // Run static checks
     console.log('Running static diagnostics...\n');
-    
+
   } catch (error) {
     console.error('\n========================================');
     console.error('INTEGRATION TEST FAILED ✗');
     console.error('========================================\n');
     console.error(error);
+    console.log(`FAILED: ${completed} passed, 1 failed (cross-module integration)`);
     process.exit(1);
   }
 }

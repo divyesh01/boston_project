@@ -391,7 +391,7 @@ const runList = (...args) => spawnSync(process.execPath, [VERIFY_ALL, "--list", 
 const selectedSuites = (stdout) => {
   const beforeExcluded = stdout.split(/\r?\nnot run \(/)[0];
   return beforeExcluded.split(/\r?\n/)
-    .map((line) => /^  ((?:probe-|verify-|test_).+\.mjs)$/.exec(line)?.[1])
+    .map((line) => /^  ((?:probe-|verify-|verify_|test_).+\.mjs)$/.exec(line)?.[1])
     .filter(Boolean);
 };
 const TARGET = "probe-active-vs-idle.mjs";
@@ -404,7 +404,7 @@ eq("GUARD: default --list discovers more than the targeted suite", baselineSuite
 const baselineListId = /list ([0-9a-f]{8}) \((\d+) discovered\)/.exec(baselineList.stdout)?.[0];
 eq("GUARD: default --list states its full-list identity", Boolean(baselineListId), true);
 
-// `test_` is the oldest of the three supported suite-name conventions. It cannot
+// `test_` is the oldest of the supported suite-name conventions. It cannot
 // share the runner's predicate here: comparing a predicate with itself would make
 // the oracle circular. Derive the expected names independently from the directory,
 // then compare them with the runner's black-box --list. This grows automatically
@@ -415,6 +415,19 @@ const expectedTestUnderscoreSuites = readdirSync(fileURLToPath(new URL(".", impo
 eq("GUARD: the test_ convention is non-vacuous in this repository", expectedTestUnderscoreSuites.length > 0, true);
 const missingTestUnderscoreSuites = expectedTestUnderscoreSuites.filter((file) => !baselineSuites.includes(file));
 eq("REGRESSION: verify-all discovers every test_ suite present on disk", JSON.stringify(missingTestUnderscoreSuites), "[]");
+
+// `verify_` joined 2026-09-09 for scripts/verify_cross_module_impact.mjs — the
+// same class of gap test_ once was (listed as a suite, matched by no prefix).
+// Same independent derivation, same non-circular comparison: without the
+// `verify_` alternative in selectedSuites above, the --shard=1/N probe below
+// divides the runner's N by the oracle's N-1 and fails with "expected 1, got
+// 2" — which is how this guard announced the gap on the day it was added.
+const expectedVerifyUnderscoreSuites = readdirSync(fileURLToPath(new URL(".", import.meta.url)))
+  .filter((file) => /^verify_.+\.mjs$/.test(file))
+  .sort();
+eq("GUARD: the verify_ convention is non-vacuous in this repository", expectedVerifyUnderscoreSuites.length > 0, true);
+const missingVerifyUnderscoreSuites = expectedVerifyUnderscoreSuites.filter((file) => !baselineSuites.includes(file));
+eq("REGRESSION: verify-all discovers every verify_ suite present on disk", JSON.stringify(missingVerifyUnderscoreSuites), "[]");
 
 for (const [label, args] of [
   ["exact filename", ["--only", TARGET]],

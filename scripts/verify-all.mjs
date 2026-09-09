@@ -141,6 +141,14 @@ const AS_JSON = flag("json");
 // underscore: these are test_foo.mjs, not test-foo.mjs, which is why no dash-based
 // prefix ever caught them.
 //
+// `verify_` was ADDED 2026-09-09 for the same reason, and it covers exactly one
+// file: verify_cross_module_impact.mjs (393 lines of auth cross-module checks).
+// It was listed among the `verify-*` suites in PROTOCOL_V2_ADDENDUM.md while no
+// prefix test matched it, so the gate never ran it. Renaming the file would move
+// it; extending the prefix keeps history stable and matches the test_ precedent.
+// See TECH_DEBT.md for the before-state, and keep this predicate in step with
+// SUITE_PREFIXES in scripts/probe-suite-integrity.mjs.
+//
 // EXCLUSIONS are listed with a reason, and each reason is a factual statement about
 // the file — not a judgement. A suite must never be excluded merely because it is
 // failing; that is the one thing this runner exists to surface.
@@ -234,7 +242,7 @@ const EXCLUDE = new Map([
 
 const isSuite = (f) =>
   f.endsWith(".mjs") &&
-  (f.startsWith("probe-") || f.startsWith("verify-") || f.startsWith("test_")) &&
+  (f.startsWith("probe-") || f.startsWith("verify-") || f.startsWith("verify_") || f.startsWith("test_")) &&
   !f.startsWith("_") &&
   !EXCLUDE.has(f);
 
@@ -274,7 +282,19 @@ const listId = `list ${LIST_ID} (${discovered.length} discovered)`;
 // scripts/probe-suite-integrity.mjs, which pins the same names into the static contract audit.
 // The two walks are separate by design and each one needs its own floor: a file can be swept
 // but unaudited, or audited but never run.
-const MUST_DISCOVER = ["probe-auth-hardening.mjs"];
+const MUST_DISCOVER = [
+  "probe-auth-hardening.mjs",
+  // Added 2026-09-09 with the verify_ prefix. verify_cross_module_impact.mjs was
+  // listed as a verify-* suite for months while matching no discovery prefix, so
+  // the gate quoted green over a set that never included it. If this name ever
+  // leaves the discovered set again, that must FAIL loudly, not shrink the run.
+  "verify_cross_module_impact.mjs",
+  // Added 2026-09-09 with the wrapper. probe-acceptance-contract.mjs is the
+  // SOLE gate over the real-data acceptance harness: without it, a drift like
+  // the IMPORT_PROPERTY_REQUIRED break (which killed the harness at its first
+  // import while every gate stayed green) goes unnoticed again.
+  "probe-acceptance-contract.mjs",
+];
 const undiscovered = MUST_DISCOVER.filter((f) => !discovered.includes(f));
 if (undiscovered.length) {
   console.error(`Discovery floor violated: ${undiscovered.length} required suite(s) are not in the discovered set.`);

@@ -413,3 +413,16 @@ carry controls that a blanket "reject every `s:0:`" fix would fail, because such
 a fix would destroy the account-global capability this section describes.
 
 ---
+
+# 19. WORKER API RESPONSE ENVELOPE (2026-09-09)
+
+Every `/api` and `/api/*` response now passes through one final Worker-owned
+security envelope, including authentication failures and unhandled errors. It
+adds HSTS and the baseline browser security headers and defaults responses to
+`Cache-Control: private, no-store`; a route that already supplied a stricter or
+more specific cache directive keeps it. Non-API asset responses are unchanged.
+`scripts/probe-worker-integration.mjs` pins the unauthenticated and authorized
+business-read cases so sensitive D1-backed responses cannot silently become
+cacheable or lose HSTS.
+
+---

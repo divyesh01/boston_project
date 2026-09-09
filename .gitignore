@@ -117,6 +117,7 @@ fix_user.py
 # scripts/_verdict.mjs (imported by scripts/verify-all.mjs) sat uncommitted long
 # enough for a `git commit -a` to have shipped a gate that cannot start.
 /.antigravity/
+/.wrangler/
 /gemini-out/
 /graphify-out/
 /verif-logs/

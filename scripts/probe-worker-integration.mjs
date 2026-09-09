@@ -54,6 +54,8 @@ await r.check("no credential => 401 before any handler runs", async () => {
   const { env } = buildEnv();
   const res = await worker.fetch(new Request("https://api.test/api/properties"), env, CTX);
   assertEqual(res.status, 401, "unauthenticated request must be 401");
+  assertEqual(res.headers.get("cache-control"), "private, no-store", "API errors must not be cached");
+  assertEqual(res.headers.get("strict-transport-security"), "max-age=63072000; includeSubDomains; preload", "API responses must carry HSTS");
 });
 
 await r.check("valid JWT but unprovisioned email => 403", async () => {
@@ -70,6 +72,7 @@ await r.check("provisioned specific-P_A caller: /api/properties returns only P_A
   const req = new Request("https://api.test/api/properties", { headers: { "Cf-Access-Jwt-Assertion": token } });
   const res = await worker.fetch(req, env, CTX);
   assertEqual(res.status, 200, "authorized read must be 200");
+  assertEqual(res.headers.get("cache-control"), "private, no-store", "business reads must not be cached");
   const body = await res.json();
   assertEqual(body.properties.length, 1, "only 1 property visible");
   assertEqual(body.properties[0].id, "P_A", "must be P_A only");

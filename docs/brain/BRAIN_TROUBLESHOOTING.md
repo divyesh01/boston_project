@@ -6838,3 +6838,23 @@ The verification audit after sections 68–71 found that green targeted tests di
 - Final `npm run verify:all`: 168 discovered, fingerprint `a833dca9`; 167 passed, 0 failed, 0 broken, 0 timed out, and 1 explicit skip. The skipped config-exposure probe received only 404 responses because the local Vite server did not mount the Base44 function backend, so this run makes no claim for that endpoint. The separate remote Worker authentication probe passed 8/8.
 
 No production data was changed and no production deployment was performed during this audit.
+
+## 73. Import Page Single Property Auto-Selection and Upload Guard (2026-09-09)
+
+### Problem & Root Cause
+In single-hotel operator accounts (e.g., Red Roof Middleboro), the `propertyId` state in `src/pages/Import.jsx` initialized to an empty string `""` without auto-selecting the accessible property. Consequently, files dropped or selected for import carried an empty `propertyId`. The property isolation safety boundary in `src/lib/reportParsers.js` correctly blocked the import to prevent unassociated or cross-property data writes, causing legitimate reports to fail with an empty property isolation error.
+
+### Core Fix
+1. **Auto-Selection for Single Accessible Property**:
+   - In `src/pages/Import.jsx`, derived `accessibleProperties` memoized via `canAccessProperty`.
+   - Added an effect that auto-selects `accessibleProperties[0].id` when `accessibleProperties.length === 1 && !propertyId`.
+   - Accounts with multiple accessible properties retain `propertyId = ""` until explicitly selected by the user.
+2. **Upload & Action Guards**:
+   - Added guard in `handleFiles()` alerting `"Select a property before importing reports."` if `!propertyId`.
+   - Added identical guards to `handleImportAll()`, `handleBrowseDrive()`, and `handleImportDrive()`.
+   - Disabled the drop zone, file input (`disabled={busy || !propertyId}`), and queue item import buttons when `!propertyId`.
+   - Displayed `"Select a property before importing reports."` helper text in the drop zone when unselected.
+3. **Automated Verification**:
+   - Added `src/pages/Import.test.jsx` covering single-property auto-selection, multi-property manual selection requirement, unselected drop-zone rejection with alert, and file input disabled/enabled states.
+   - All 53 test suites and 461 tests passed in `vitest`.
+   - Full verification verified clean: `npm run verify:v3`, `npm run lint`, `npm run typecheck`, and `npm run build`.

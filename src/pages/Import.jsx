@@ -1,13 +1,12 @@
 import { db, listImportSessions, rollbackImportSession } from '@/api/base44Client';
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { UploadCloud, CheckCircle2, FileSpreadsheet, XCircle, Search, Building2, Loader2, Eye, Trash2, ArrowDownToLine, RefreshCw, RotateCcw, X } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { EmptyState, ErrorState } from "@/components/ui/status";
 
 import { useUploads, useProperties } from "@/lib/useHotelData";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useRef } from "react";
 import { num } from "@/lib/hotel";
 import { REPORT_TYPES, scanReport, importReport } from "@/lib/reportParsers";
 import { clearAllImportedData } from "@/lib/importReset";
@@ -263,8 +262,18 @@ export default function Import() {
   const [incompleteImports, setIncompleteImports] = useState([]);
   const [checkingImports, setCheckingImports] = useState(false);
 
-  const propertyOpts = properties.filter((p) => canAccessProperty(p.id)).map((p) => [p.id, p.name]);
+  const accessibleProperties = useMemo(
+    () => properties.filter((p) => canAccessProperty(p.id)),
+    [properties, canAccessProperty]
+  );
+  const propertyOpts = accessibleProperties.map((p) => [p.id, p.name]);
   const selectedProperty = properties.find((p) => p.id === propertyId);
+
+  useEffect(() => {
+    if (accessibleProperties.length === 1 && !propertyId) {
+      setPropertyId(accessibleProperties[0].id);
+    }
+  }, [accessibleProperties, propertyId]);
 
   const importMeta = (sourceFile) => ({
     propertyId,
@@ -289,6 +298,11 @@ export default function Import() {
   };
 
   const handleFiles = async (fileList) => {
+    if (!propertyId) {
+      alert("Select a property before importing reports.");
+      return;
+    }
+
     const files = [];
 
     for (const f of Array.from(fileList)) {
@@ -542,6 +556,10 @@ export default function Import() {
   };
 
   const handleImportAll = async () => {
+    if (!propertyId) {
+      alert("Select a property before importing reports.");
+      return;
+    }
     const pending = queue.filter((q) => q.status === "ready" && q.scan);
     if (!pending.length || importing) return;
     // Rate limiting
@@ -661,6 +679,10 @@ export default function Import() {
   const batchExcluded = doneItems.reduce((a, r) => a + (r.excluded || 0), 0);
 
   const handleBrowseDrive = async () => {
+    if (!propertyId) {
+      alert("Select a property before importing reports.");
+      return;
+    }
     setDriveLoading(true);
     setDriveError("");
     try {
@@ -673,6 +695,10 @@ export default function Import() {
   };
 
   const handleImportDrive = async () => {
+    if (!propertyId) {
+      alert("Select a property before importing reports.");
+      return;
+    }
     if (!selectedFiles.size || !type) return;
     setDriveImporting(true);
     const meta = { ...importMeta(), forceImport };
@@ -777,7 +803,7 @@ export default function Import() {
       <Card title="Target property" subtitle="Select which property these reports belong to">
         <div className="flex items-center gap-3">
           <Building2 className="h-5 w-5 text-[#6C63FF]" />
-          {properties.length > 0 ? (
+          {accessibleProperties.length > 0 ? (
             <div className="min-w-[280px] flex-1">
               <ResponsiveSelect
                 value={propertyId}
@@ -833,14 +859,26 @@ export default function Import() {
         </div>
 
         <label
-          className={`mt-5 flex cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border border-dashed px-6 py-12 text-center transition-colors ${
-            !propertyId ? "cursor-not-allowed border-white/10 opacity-40" : "border-white/15 bg-[#0A1628]/60 hover:border-[#00D4FF]/60"
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            if (!propertyId) {
+              alert("Select a property before importing reports.");
+              return;
+            }
+            if (busy) return;
+            handleFiles(e.dataTransfer.files);
+          }}
+          className={`mt-5 flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed px-6 py-12 text-center transition-colors ${
+            !propertyId
+              ? "cursor-not-allowed border-white/10 opacity-40"
+              : "cursor-pointer border-white/15 bg-[#0A1628]/60 hover:border-[#00D4FF]/60"
           }`}
         >
           <UploadCloud className="h-7 w-7 text-[#00D4FF]" />
           <span className="text-sm text-slate-300">
             {!propertyId
-              ? "Select a property first to enable uploads"
+              ? "Select a property before importing reports."
               : busy
               ? `Scanning ${currentFile}…`
               : "Drop multiple .xlsx / .xls / .csv files here or click to browse"}
@@ -852,6 +890,10 @@ export default function Import() {
             className="hidden"
             disabled={busy || !propertyId}
             onChange={(e) => {
+              if (!propertyId) {
+                alert("Select a property before importing reports.");
+                return;
+              }
               handleFiles(e.target.files);
               e.target.value = "";
             }}
@@ -965,7 +1007,7 @@ export default function Import() {
                       {q.status === "ready" && (
                         <button
                           onClick={() => importSingle(q).then((r) => { if (r) { setResults((prev) => [...prev, r]); refetch(); } })}
-                          disabled={importing}
+                          disabled={importing || !propertyId}
                           className="rounded-lg bg-[#6C63FF]/20 px-3 py-1 text-xs text-[#6C63FF] transition-colors hover:bg-[#6C63FF]/35 disabled:opacity-40"
                         >
                           Import

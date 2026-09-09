@@ -123,6 +123,10 @@ if (!Number.isFinite(TIMEOUT_S) || TIMEOUT_S <= 0 || TIMEOUT_S * 1000 > 2_147_48
   console.error(`--timeout must be a positive finite number of seconds no greater than 2147483.647 (got ${JSON.stringify(TIMEOUT_RAW)}).`);
   process.exit(1);
 }
+// Whether the caller explicitly set --timeout. An explicit value is honoured
+// exactly for every suite (the caller's responsibility); otherwise the
+// per-suite overrides below apply. See SUITE_TIMEOUT_S.
+const TIMEOUT_WAS_SET = hasOption("timeout");
 const LIST_ONLY = flag("list");
 const BAIL = flag("bail");
 const AS_JSON = flag("json");
@@ -247,6 +251,29 @@ const isSuite = (f) =>
   !EXCLUDE.has(f);
 
 let suites = readdirSync(SCRIPTS_DIR).filter(isSuite).sort();
+
+// ── Per-suite time budgets ───────────────────────────────────────────────
+// ADDED 2026-09-09. The default --timeout (240 s) fits every fast probe and is
+// what gives them useful hang detection — do NOT raise it globally to
+// accommodate one slow suite. A suite lands in this map only with a MEASURED
+// workload that cannot fit the default AND a hard watchdog of its own, so a
+// genuine hang still fails visibly instead of burning the whole override.
+//
+// Precedence: an explicit --timeout flag is honoured exactly for every suite
+// (the caller's responsibility, e.g. a deliberately short smoke run); when the
+// flag is absent, an entry here wins over the 240 s default. The applied
+// budget travels into each child as VERIFY_ALL_SUITE_TIMEOUT_S so a budgeted
+// suite can refuse to start when its budget was shrunk below its own outer
+// timer — failing loudly instead of being SIGKILLed healthy halfway through.
+// It is also reported per suite as `timeoutS` in --json.
+const SUITE_TIMEOUT_S = new Map([
+  // Measured 325-498 s on Windows under load: ten real-data imports, the
+  // ~7918-row lifecycle delete through fake-indexeddb, and the AI sections.
+  // The wrapper enforces its own 1500 s outer budget and the harness its own
+  // 1200 s watchdog; this 1600 s is the runner-side kill above both.
+  ["probe-acceptance-contract.mjs", 1600],
+]);
+const budgetFor = (file) => (TIMEOUT_WAS_SET ? TIMEOUT_S : (SUITE_TIMEOUT_S.get(file) ?? TIMEOUT_S));
 
 // ── Suite-list fingerprint ───────────────────────────────────────────────────
 // ADDED 2026-08-20, after a measured near-miss. A sharded run is several separate
@@ -396,6 +423,14 @@ if (LIST_ONLY) {
     console.log(`\nnot run (${skipped.length}):`);
     skipped.forEach(([f, why]) => console.log(`  ${f} — ${why}`));
   }
+  // Pinned per-suite budgets, if any. Kept out of the suite-line shape on
+  // purpose: scripts/probe-verify-all-verdict.mjs parses the lines above as
+  // the selection contract, and a budget line shaped like a suite line would
+  // read as a selected suite.
+  if (SUITE_TIMEOUT_S.size) {
+    console.log(`\npinned budgets (default ${TIMEOUT_S}s):`);
+    for (const [f, s] of SUITE_TIMEOUT_S) console.log(`  budget ${f} = ${s}s`);
+  }
   process.exit(0);
 }
 
@@ -413,6 +448,7 @@ function runSuite(file) {
     const suitePath = path.join("scripts", file);
     const args = useBoot ? ["--import", BOOT, suitePath] : [suitePath];
     const started = Date.now();
+    const budgetS = budgetFor(file);
     const child = spawn(process.execPath, args, {
   cwd: REPO_ROOT,
   env: {
@@ -421,6 +457,7 @@ function runSuite(file) {
     VITE_TEST: '1',
     NODE_ENV: 'production',
     VITE_USE_LOCAL_AUTH: 'true',
+    VERIFY_ALL_SUITE_TIMEOUT_S: String(budgetS),
   }
 });
 
@@ -438,7 +475,7 @@ function runSuite(file) {
     const timer = setTimeout(() => {
       killed = true;
       child.kill("SIGKILL");
-    }, TIMEOUT_S * 1000);
+    }, budgetS * 1000);
 
     child.on("close", (code) => {
       clearTimeout(timer);
@@ -454,6 +491,7 @@ function runSuite(file) {
         code,
         ms,
         killed,
+        timeoutS: budgetS,
         broken: status === "BROKEN",
         lyingExitCode: status === "BAD-EXIT",
         skipped: status === "SKIP",
@@ -476,7 +514,7 @@ function runSuite(file) {
 const results = [];
 const label = { PASS: "PASS   ", FAIL: "FAIL   ", BROKEN: "BROKEN ", TIMEOUT: "TIMEOUT", "BAD-EXIT": "BADEXIT", SKIP: "SKIP   ", DIAGNOSTIC: "DIAG   ", "NO-VERDICT": "NO-VERD" };
 
-if (!AS_JSON) console.log(`Running ${suites.length} suite(s)${shardLabel}${onlyLabel}, ${TIMEOUT_S}s timeout each — ${listId}\n`);
+if (!AS_JSON) console.log(`Running ${suites.length} suite(s)${shardLabel}${onlyLabel}, ${TIMEOUT_S}s default timeout${SUITE_TIMEOUT_S.size && !TIMEOUT_WAS_SET ? ` (${SUITE_TIMEOUT_S.size} suite(s) with a pinned budget)` : ""} — ${listId}\n`);
 
 for (const file of suites) {
   const r = await runSuite(file);
@@ -663,8 +701,8 @@ if (AS_JSON) {
     console.log(`  Fix in the suite: print its own PASSED/FAILED summary, or declare "SKIP: <why>", or "DIAGNOSTIC: no assertions".`);
   }
   if (timedOut.length) {
-    console.log(`\nTIMED OUT after ${TIMEOUT_S}s:`);
-    timedOut.forEach((r) => console.log(`  ${r.file}`));
+    console.log(`\nTIMED OUT (per-suite budgets, default ${TIMEOUT_S}s):`);
+    timedOut.forEach((r) => console.log(`  ${r.file} (budget ${r.timeoutS ?? TIMEOUT_S}s)`));
   }
   if (failed.length) {
     console.log(`\nFAILED:`);

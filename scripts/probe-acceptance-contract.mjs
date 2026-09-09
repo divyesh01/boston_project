@@ -17,11 +17,13 @@
 //      assert exit 0 plus a PASSED verdict with zero failures, and propagate
 //      any failure loudly.
 //
-// Run it alone with a budget that fits the harness (measured ~500 s on the
-// owner's Windows machine under load; the default 240 s sweep budget does NOT
-// fit):
+// The default `npm run verify:all` fits this probe with no flags: the runner
+// pins a 1600 s budget for this file (SUITE_TIMEOUT_S in scripts/verify-all.mjs,
+// measured workload ~325-500 s on Windows under load) while every fast probe
+// keeps the 240 s default and its hang detection. An explicit --timeout flag is
+// still honoured exactly.
 //
-//   npm run verify:all -- --only probe-acceptance-contract --timeout 1600
+//   npm run verify:all -- --only probe-acceptance-contract
 //
 // Env passthrough: HARNESS_SKIP, HARNESS_TIMING and HARNESS_TIMEOUT_MS are
 // honoured by the child; ACCEPTANCE_BUDGET_MS overrides this probe's own outer
@@ -30,7 +32,7 @@
 // timeout here only catches a child that ignores even that).
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -96,6 +98,29 @@ check("wrapper CSV list matches the harness IMPORT_FILES", drift.length === 0, d
 
 // ── Run the harness as a budgeted child ────────────────────────────
 const BUDGET_MS = Number(process.env.ACCEPTANCE_BUDGET_MS || "") || 1_500_000;
+// A verdict must come from THIS run: remove any report a previous run left
+// behind, so a child that dies before writing cannot inherit a stale green.
+try { rmSync(REPORT, { force: true }); } catch { /* already gone */ }
+// The runner advertises the kill budget it will apply to THIS probe as
+// VERIFY_ALL_SUITE_TIMEOUT_S (pinned to 1600 s for this file in
+// SUITE_TIMEOUT_S in scripts/verify-all.mjs). Refuse to start when that outer
+// budget is smaller than this probe's own outer timer: otherwise a healthy
+// child is SIGKILLed mid-run and the gate reports TIMEOUT for a workload that
+// never had a chance. A bare run (no env) keeps the probe's own budget.
+const RUNNER_BUDGET_S = Number(process.env.VERIFY_ALL_SUITE_TIMEOUT_S || "");
+if (RUNNER_BUDGET_S) {
+  check(
+    `runner budget (${RUNNER_BUDGET_S}s) covers the probe outer budget (${Math.ceil(BUDGET_MS / 1000)}s)`,
+    RUNNER_BUDGET_S >= Math.ceil(BUDGET_MS / 1000),
+    "raise the SUITE_TIMEOUT_S entry in verify-all.mjs; do not shrink this probe to fit a smaller kill timer",
+  );
+  if (fail > 0) {
+    console.log(`\nFAILED: ${pass} passed, ${fail} failed`);
+    process.exit(1);
+  }
+} else {
+  console.log("  (runner budget not advertised — bare run; the probe's own outer budget applies)");
+}
 console.log(`\nSpawning acceptance-harness.mjs with a ${(BUDGET_MS / 1000).toFixed(0)}s outer budget…`);
 const t0 = Date.now();
 const r = spawnSync(process.execPath, [HARNESS], {
@@ -112,6 +137,17 @@ const r = spawnSync(process.execPath, [HARNESS], {
   },
 });
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
+// Child stdout AND stderr are read for the verdict, because a crash prints to
+// stderr. NOTE (2026-09-09 classification, no fix): one green run carried a
+// single stderr line, "WebSocket server error: Port 24678 is already in use",
+// which no file in this repository can emit (repo-wide grep: zero hits in
+// src/, scripts/ and backend/; nothing on the harness path binds a fixed
+// port — Vite runs middlewareMode, the harness spawns no children). It
+// appeared once during heavy concurrent-agent activity on the shared box;
+// three subsequent full harness runs stayed green. It cannot affect the
+// verdict: BROKEN signatures do not match it and the PASSED/FAILED counts
+// decide independently of stderr. Documented here so the next sighting is
+// recognised as external noise; do not build port logic around it.
 const out = `${r.stdout || ""}\n${r.stderr || ""}`;
 
 if (r.error && r.error.code === "ETIMEDOUT") {

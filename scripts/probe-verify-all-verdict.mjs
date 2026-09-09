@@ -25,7 +25,7 @@
 // make this green: each one encodes a runner behaviour that was wrong once.
 
 import { spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { classifySuiteRun } from "./_verdict.mjs";
 
@@ -472,6 +472,28 @@ eq("targeted JSON names the canonical match", targetedJson.targetMatched, "probe
 eq("targeted JSON counts one selected suite", targetedJson.selectedTotal, 1);
 eq("targeted JSON counts one executed suite", targetedJson.total, 1);
 eq("targeted JSON keeps the full discovery identity", targetedJson.fullSuiteListId, baselineListId?.split(" ")[1]);
+eq("targeted JSON carries the applied per-suite budget", targetedJson.suites[0].timeoutS, 30);
+
+// Per-suite budgets (SUITE_TIMEOUT_S in verify-all.mjs, added 2026-09-09 for
+// the acceptance wrapper). An explicit --timeout is honoured exactly;
+// otherwise a pinned entry wins over the 240 s default. Both directions are
+// asserted black-box on one cheap suite so this never silently becomes
+// "the flag is decorative".
+const defaultJsonRun = spawnSync(process.execPath, [VERIFY_ALL, "--only", "probe-ci-node-version", "--json"], {
+  encoding: "utf8",
+});
+eq("default-budget JSON run exits 0", defaultJsonRun.status, 0);
+eq("an unpinned suite keeps the 240 s default when the flag is absent", JSON.parse(defaultJsonRun.stdout).suites[0].timeoutS, 240);
+
+// The acceptance pin itself is asserted statically: running it black-box costs
+// ~8 minutes, and what must be pinned is the wiring (entry present, budget
+// above the probe's own 1500 s outer timer), not the workload.
+const runnerSrc = readFileSync(VERIFY_ALL, "utf8");
+eq(
+  "GUARD: the runner pins a sufficient budget for the acceptance suite",
+  /\["probe-acceptance-contract\.mjs",\s*1600\]/.test(runnerSrc),
+  true,
+);
 
 console.log("\n13. value-taking runner flags must fail closed (F-083)");
 

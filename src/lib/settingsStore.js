@@ -201,6 +201,15 @@ export const KEY_ALIASES = Object.freeze({
   "rri_weather_config": "rri_weather_config_v1",
 });
 
+function mirrorSettingAliases(values) {
+  const mirrored = { ...values };
+  for (const [key, value] of Object.entries(values || {})) {
+    const alias = KEY_ALIASES[key];
+    if (alias) mirrored[alias] = value;
+  }
+  return mirrored;
+}
+
 let syncTimer = null;
 const pendingCloudSync = new Map();
 let lastKnownEtag = null;
@@ -320,8 +329,6 @@ export async function flushCloudSettingSync() {
         serverRevision: serverRev,
         pendingKeys: items.map((i) => i.key),
       });
-      // Gently pull latest if user isn't actively editing
-      pullRemoteSettings(false).catch(() => {});
     } else if (res.ok) {
       // Remove only items from pendingCloudSync that succeeded and were not modified during in-flight
       for (const [k, v] of inFlight.entries()) {
@@ -395,8 +402,14 @@ export async function pullRemoteSettings(force = false) {
     for (const [key, val] of Object.entries(data.settings)) {
       if (key === "_byProperty") {
         if (typeof val === "object" && val !== null) {
+          const normalizedByProperty = {};
+          for (const [propertyId, propertySettings] of Object.entries(val)) {
+            if (propertySettings && typeof propertySettings === "object" && !Array.isArray(propertySettings)) {
+              normalizedByProperty[propertyId] = mirrorSettingAliases(propertySettings);
+            }
+          }
           const prevRaw = localStorage.getItem("rri_settings_by_property");
-          const newRaw = JSON.stringify(val);
+          const newRaw = JSON.stringify(normalizedByProperty);
           if (prevRaw !== newRaw) {
             localStorage.setItem("rri_settings_by_property", newRaw);
             changed = true;
@@ -519,4 +532,3 @@ export function writeJsonSetting(key, value, propertyId = "*") {
     return false;
   }
 }
-

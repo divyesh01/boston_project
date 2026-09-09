@@ -109,6 +109,12 @@ export const IMPORT_LEDGER_TABLE = "ImportRecordIds";
  *   asserting that something happened.
  */
 export async function clearAllImportedData({ propertyId = "all" } = {}) {
+  if (propertyId !== "all") {
+    throw new Error(
+      "clearAllImportedData only supports an all-property reset because import history is shared. " +
+      "A scoped clear would delete another property's undo/history records."
+    );
+  }
   const tableNames = [...IMPORT_DATA_TABLES, ...DERIVED_CACHE_TABLES, IMPORT_LEDGER_TABLE];
 
   // Fail loudly on a name that is not a declared store, rather than clearing the
@@ -120,20 +126,22 @@ export async function clearAllImportedData({ propertyId = "all" } = {}) {
     throw new Error(`clearAllImportedData: not declared in localDb: ${unknown.join(", ")}`);
   }
 
-  // 1. Authoritative Cloudflare D1 server-side reset (outside Dexie transaction!)
-  // If online and businessData.resetImportedData is available, invoke it.
+  // 1. Authoritative Cloudflare D1 server-side reset (outside Dexie transaction!).
+  // A browser with an active authoritative generation must NEVER fall back to a
+  // local-only clear: the next hydrate would download every deleted row again.
+  // A missing generation means this browser is still using the local-only mode.
   let serverReset = null;
-  try {
-    if (typeof db?.businessData?.resetImportedData === "function") {
-      serverReset = await db.businessData.resetImportedData({ propertyId });
+  const syncState = typeof db?.businessData?.status === "function"
+    ? await db.businessData.status()
+    : null;
+  if (syncState?.generation_id) {
+    if (typeof db?.businessData?.resetImportedData !== "function") {
+      throw new Error("Authoritative data is active, but the server reset endpoint is unavailable.");
     }
-  } catch (err) {
-    // If unauthorized (403), rethrow to fail-closed and block unprivileged operators
-    if (err?.status === 403 || /forbidden|denied|only.*owner/i.test(err?.message || "")) {
-      throw err;
+    serverReset = await db.businessData.resetImportedData({ propertyId });
+    if (!serverReset?.ok) {
+      throw new Error("The authoritative server did not confirm the imported-data reset.");
     }
-    // Offline or sync disabled fallback: proceed with local clear
-    console.warn("[importReset] Server reset skipped or failed (offline?):", err?.message || err);
   }
 
   /** @type {Record<string, number>} */
@@ -145,13 +153,7 @@ export async function clearAllImportedData({ propertyId = "all" } = {}) {
       for (const name of tableNames) {
         // Counted before the clear so the caller reports what actually went.
         deletedByTable[name] = await localDb[name].count();
-        if (propertyId && propertyId !== "all" && name !== IMPORT_LEDGER_TABLE && name !== "DailyFinancialAggregate") {
-          const keys = await localDb[name].where("property_id").equals(propertyId).primaryKeys();
-          await localDb[name].bulkDelete(keys);
-          deletedByTable[name] = keys.length;
-        } else {
-          await localDb[name].clear();
-        }
+        await localDb[name].clear();
       }
     }
   );

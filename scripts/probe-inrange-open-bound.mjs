@@ -44,3 +44,4 @@ T("undefined date is rejected", inRange(undefined, "", "") === false);
 
 console.log(`\n${fail === 0 ? "PASSED" : "FAILED"}: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
+process.exit(0);

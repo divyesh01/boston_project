@@ -224,6 +224,7 @@ export function createBusinessSyncClient({
   let isHydrating = false;
   let lastPullAt = 0;
   let pullPromise = null;
+  let rosterPromise = null;
   let activeTransaction = null;
   let transactionPending = false;
   let recoveryPromise = null;
@@ -267,7 +268,7 @@ export function createBusinessSyncClient({
     return { ...activated, status, backup_filename, baseline: snapshot.manifest };
   }
 
-  async function syncPropertyRoster(baseState = null) {
+  async function loadPropertyRoster(baseState = null) {
     const propRows = [];
     let propCursor = '';
     let generationId = null;
@@ -294,6 +295,11 @@ export function createBusinessSyncClient({
           revision: snapshotRevision ?? priorState?.revision ?? 0,
           scope_fingerprint: scopeFingerprint || priorState?.scope_fingerprint,
           empty_roster_confirmed: propRows.length === 0,
+          // A roster-only pull on a brand-new browser is not a complete cache.
+          // Preserve that fact so the next non-Property read downloads every
+          // business entity instead of treating the snapshot revision as proof
+          // that tables which were never fetched are authoritatively empty.
+          roster_only: priorState ? Boolean(priorState.roster_only) : true,
           updated_at: new Date().toISOString()
         });
       }
@@ -305,6 +311,17 @@ export function createBusinessSyncClient({
       publish('Property', 'hydrate', payload);
     }
     return { rows: propRows, generation_id: generationId };
+  }
+
+  async function syncPropertyRoster(baseState = null) {
+    // Property screens intentionally use a small roster-only fetch. Cold tabs
+    // can issue several Property reads in one render, so make them join one
+    // authoritative pull instead of racing clear/bulkPut transactions and
+    // letting an unlucky reader observe the brief empty interval.
+    if (rosterPromise) return rosterPromise;
+    rosterPromise = loadPropertyRoster(baseState);
+    try { return await rosterPromise; }
+    finally { rosterPromise = null; }
   }
 
   async function fetchSnapshot() {
@@ -376,7 +393,7 @@ export function createBusinessSyncClient({
       isHydrating = true;
       try {
         const prior = await localDb.BusinessSyncState.get(SYNC_STATE_KEY);
-        if (!force && prior?.generation_id) {
+        if (!force && prior?.generation_id && !prior?.roster_only) {
           try {
             const applied = await applyFeed(prior);
             if (!applied.rebuild) {
@@ -766,8 +783,10 @@ export function createBusinessSyncClient({
             const count = await table.count();
             if (count > 0) return localProxy.filter(query, sortField, limit);
             try {
-              await syncPropertyRoster();
-              return localProxy.filter(query, sortField, limit);
+              const roster = await syncPropertyRoster();
+              let rows = roster.rows.filter((row) => matchesBusinessFilter(row, query));
+              rows = sortBusinessRows(rows, sortField);
+              return limit ? rows.slice(0, limit) : rows;
             } catch {}
           }
           if (entity === 'UploadedReport') {
@@ -787,8 +806,9 @@ export function createBusinessSyncClient({
             const count = await table.count();
             if (count > 0) return localProxy.list(sortField, limit);
             try {
-              await syncPropertyRoster();
-              return localProxy.list(sortField, limit);
+              const roster = await syncPropertyRoster();
+              const rows = sortBusinessRows(roster.rows, sortField);
+              return limit ? rows.slice(0, limit) : rows;
             } catch {}
           }
           if (entity === 'UploadedReport') {

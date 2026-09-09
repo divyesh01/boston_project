@@ -198,7 +198,9 @@ async function main() {
   process.exitCode = 0;
 }
 
-main().catch((err) => {
+main().then(() => {
+  process.exit(process.exitCode || 0);
+}).catch((err) => {
   console.error(`FAILED: probe crashed: ${err?.stack || err}`);
-  process.exitCode = 1;
+  process.exit(1);
 });

@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import {
   writeJsonSetting,
   readJsonSetting,
@@ -31,6 +33,8 @@ import { getWeatherConfig, saveWeatherConfig } from "./weatherSettings";
 function createMockD1({ existingSettings = [], scalarMeta = null } = {}) {
   const executedStmts = [];
   let batchCalled = false;
+  let currentRevision = existingSettings.reduce((max, row) => Math.max(max, Number(row.revision || 0)), 0);
+  let currentCount = existingSettings.length;
 
   const mockDb = {
     prepare: (sql) => {
@@ -53,10 +57,10 @@ function createMockD1({ existingSettings = [], scalarMeta = null } = {}) {
             },
             first: async () => {
               if (sql.includes("SELECT COUNT(1) as total_count")) {
-                return scalarMeta || { total_count: existingSettings.length, max_rev: 1, latest_updated: "2026-09-08T00:00:00.000Z" };
+                return scalarMeta || { total_count: currentCount, max_rev: currentRevision, latest_updated: "2026-09-08T00:00:00.000Z" };
               }
               if (sql.includes("SELECT MAX(revision) as max_rev")) {
-                return { max_rev: 2 };
+                return { max_rev: currentRevision };
               }
               return null;
             },
@@ -69,6 +73,9 @@ function createMockD1({ existingSettings = [], scalarMeta = null } = {}) {
     batch: async (stmts) => {
       batchCalled = true;
       executedStmts.push(...stmts);
+      const history = stmts.filter((s) => s.sql.includes("INSERT INTO app_setting_history"));
+      for (const stmt of history) currentRevision = Math.max(currentRevision, Number(stmt.args[5] || 0));
+      if (history.length) currentCount = Math.max(currentCount, history.length);
       return stmts.map(() => ({ success: true }));
     },
   };
@@ -167,7 +174,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
       },
     });
 
-    const mockScope = /** @type {any} */ ({ accountId: "acc_test", user: { role: "owner" } });
+    const mockScope = /** @type {any} */ ({ accountId: "acc_test", all: true, propertyIds: ["prop_boston_1"], user: { role: "owner" } });
     const matchingEtag = `W/"rev-12-5-${new Date("2026-09-08T00:00:00.000Z").getTime()}"`;
 
     const request = new Request("https://example.com/api/settings", {
@@ -207,6 +214,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
     // Queue a local modification
     queueCloudSettingSync("rri_cc_fee_rate", 0.035);
     expect(getPendingSyncCount()).toBe(1);
+    store["rri_cc_fee_rate"] = "0.035";
 
     await flushCloudSettingSync();
 
@@ -216,6 +224,8 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
     expect(conflictEvent?.code).toBe("SETTINGS_CONFLICT");
     expect(conflictEvent?.serverRevision).toBe(5);
     expect(getCurrentServerRev()).toBe(5);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(store["rri_cc_fee_rate"]).toBe("0.035");
 
     unsub();
   });
@@ -289,7 +299,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
   it("Fix 6: worker logs initial row creation with old_value = null and rev 1 in history", async () => {
     const { mockDb, executedStmts, getBatchCalled } = createMockD1({ existingSettings: [] });
     const mockEnv = /** @type {any} */ ({ DB: mockDb });
-    const mockScope = /** @type {any} */ ({ accountId: "acc_test", user: { id: "user_owner", role: "owner" } });
+    const mockScope = /** @type {any} */ ({ accountId: "acc_test", all: true, propertyIds: ["prop_boston_1"], user: { id: "user_owner", role: "owner" } });
 
     // Initial insert request (no existing rows in D1)
     const request = new Request("https://example.com/api/settings", {
@@ -321,7 +331,12 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
   it("Fix 7: manager role can update commission rates but is blocked from restricted settings", async () => {
     const { mockDb } = createMockD1({ existingSettings: [] });
     const mockEnv = /** @type {any} */ ({ DB: mockDb });
-    const managerScope = /** @type {any} */ ({ accountId: "acc_test", user: { id: "user_mgr", role: "manager" } });
+    const managerScope = /** @type {any} */ ({
+      accountId: "acc_test",
+      all: true,
+      propertyIds: ["prop_boston_1"],
+      user: { id: "user_mgr", role: "manager", permissions: { manage_ota_commissions: true, manage_pricing: true } },
+    });
 
     // 1. Manager updating commission rate -> ALLOWED (200)
     const allowedReq = new Request("https://example.com/api/settings", {
@@ -348,6 +363,13 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
     expect(forbiddenRes.status).toBe(403);
     const errBody = await forbiddenRes.json();
     expect(errBody.error).toContain("cannot modify restricted setting");
+
+    const strippedManager = /** @type {any} */ ({
+      ...managerScope,
+      user: { id: "user_mgr", role: "manager", permissions: { manage_ota_commissions: false, manage_pricing: false } },
+    });
+    const strippedRes = await handleSettingsRequest(allowedReq, mockEnv, strippedManager, new URL(allowedReq.url), ["settings"]);
+    expect(strippedRes.status).toBe(403);
   });
 
   // ─── Fix 8: Deduplication in settingsBus ────────────────────────────────────
@@ -379,7 +401,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
   it("Fix 9: worker preserves commission rate objects { type, rate, taxExempt } without wiping to 0", async () => {
     const { mockDb, executedStmts } = createMockD1({ existingSettings: [] });
     const mockEnv = /** @type {any} */ ({ DB: mockDb });
-    const mockScope = /** @type {any} */ ({ accountId: "acc_test", user: { id: "user_owner", role: "owner" } });
+    const mockScope = /** @type {any} */ ({ accountId: "acc_test", all: true, propertyIds: ["prop_boston_1"], user: { id: "user_owner", role: "owner" } });
 
     const ratePayload = {
       expedia: { type: "percentage", rate: 0.15, taxExempt: false },
@@ -414,15 +436,15 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
   it("Fix 10: worker clamps rri_tax_config_v1 object structure correctly", async () => {
     const { mockDb, executedStmts } = createMockD1({ existingSettings: [] });
     const mockEnv = /** @type {any} */ ({ DB: mockDb });
-    const mockScope = /** @type {any} */ ({ accountId: "acc_test", user: { id: "user_owner", role: "owner" } });
+    const mockScope = /** @type {any} */ ({ accountId: "acc_test", all: true, propertyIds: ["prop_boston_1"], user: { id: "user_owner", role: "owner" } });
 
     const taxConfigPayload = {
       taxRate: 0.1445,
       taxEnabled: true,
-      sources: {
-        expedia: true,
-        direct: false,
-      },
+      sources: [
+        { key: "EXPEDIA_HC", label: "Expedia", taxable: "true" },
+        { key: "OTHER_OTA", label: "Other OTA", taxable: "false" },
+      ],
       extra: "ignore",
     };
 
@@ -443,8 +465,11 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
     const savedVal = JSON.parse(upsertStmt.args[3]);
     expect(savedVal.taxRate).toBe(0.1445);
     expect(savedVal.taxEnabled).toBe(true);
-    expect(savedVal.sources.expedia).toBe(true);
-    expect(savedVal.sources.direct).toBe(false);
+    expect(savedVal.sources).toEqual([
+      { key: "EXPEDIA_HC", label: "Expedia", taxable: true },
+      { key: "OTHER_OTA", label: "Other OTA", taxable: false },
+    ]);
+    expect(savedVal.extra).toBeUndefined();
   });
 
   // ─── Fix 11: Thresholds & Pricing Sync Keys ────────────────────────────────
@@ -465,7 +490,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
 
     const { mockDb } = createMockD1({ existingSettings: [] });
     const mockEnv = /** @type {any} */ ({ DB: mockDb });
-    const mockScope = /** @type {any} */ ({ accountId: "acc_test", user: { id: "user_owner", role: "owner" } });
+    const mockScope = /** @type {any} */ ({ accountId: "acc_test", all: true, propertyIds: ["prop_boston_1"], user: { id: "user_owner", role: "owner" } });
 
     const req = new Request("https://example.com/api/settings", {
       method: "POST",
@@ -484,7 +509,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
   it("Fix 12: POST /api/settings returns computed ETag and x-settings-rev in response headers", async () => {
     const { mockDb } = createMockD1({ existingSettings: [] });
     const mockEnv = /** @type {any} */ ({ DB: mockDb });
-    const mockScope = /** @type {any} */ ({ accountId: "acc_test", user: { id: "user_owner", role: "owner" } });
+    const mockScope = /** @type {any} */ ({ accountId: "acc_test", all: true, propertyIds: ["prop_boston_1"], user: { id: "user_owner", role: "owner" } });
 
     const req = new Request("https://example.com/api/settings", {
       method: "POST",
@@ -497,8 +522,8 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
 
     const res = await handleSettingsRequest(req, mockEnv, mockScope, new URL(req.url), ["settings"]);
     expect(res.status).toBe(200);
-    expect(res.headers.get("ETag")).toMatch(/^W\/"rev-2-/);
-    expect(res.headers.get("x-settings-rev")).toBe("2");
+    expect(res.headers.get("ETag")).toMatch(/^W\/"rev-1-/);
+    expect(res.headers.get("x-settings-rev")).toBe("1");
   });
 
   // ─── Fix 13: Property-scoped isolation ─────────────────────────────────────
@@ -581,5 +606,96 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
     await Promise.resolve();
     expect(busNotified).toBeGreaterThan(0);
     unsub();
+  });
+
+  it("rejects manager portfolio and cross-property writes while honoring explicit scoped permission", async () => {
+    const { mockDb } = createMockD1();
+    const mockEnv = /** @type {any} */ ({ DB: mockDb });
+    const managerScope = /** @type {any} */ ({
+      accountId: "acc_test",
+      all: false,
+      propertyIds: ["prop_a"],
+      user: { id: "user_mgr", role: "manager", permissions: { manage_ota_commissions: true } },
+    });
+    const save = (propertyId) => handleSettingsRequest(
+      new Request("https://example.com/api/settings", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key: "rri_cc_fee_rate", value: 0.03, property_id: propertyId }),
+      }),
+      mockEnv,
+      managerScope,
+      new URL("https://example.com/api/settings"),
+      ["settings"]
+    );
+
+    expect((await save("prop_a")).status).toBe(200);
+    expect((await save("prop_b")).status).toBe(403);
+    expect((await save("*")).status).toBe(403);
+  });
+
+  it("advances one global revision so a stale write to a lower-revision key conflicts", async () => {
+    const { mockDb } = createMockD1();
+    const mockEnv = /** @type {any} */ ({ DB: mockDb });
+    const ownerScope = /** @type {any} */ ({ accountId: "acc_test", all: true, propertyIds: ["prop_a"], user: { id: "owner", role: "owner" } });
+    const save = (key, value, expectedRevision) => handleSettingsRequest(
+      new Request("https://example.com/api/settings", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key, value, ...(expectedRevision === undefined ? {} : { expected_revision: expectedRevision }) }),
+      }),
+      mockEnv,
+      ownerScope,
+      new URL("https://example.com/api/settings"),
+      ["settings"]
+    );
+
+    expect((await save("rri_cc_fee_rate", 0.03)).headers.get("x-settings-rev")).toBe("1");
+    expect((await save("rri_commission_rates_v2", { expedia: 0.15 }, 1)).headers.get("x-settings-rev")).toBe("2");
+    const stale = await save("rri_cc_fee_rate", 0.04, 1);
+    expect(stale.status).toBe(409);
+    expect((await stale.json()).server_revision).toBe(2);
+  });
+
+  it("caps fixed commissions and parses string booleans without turning false into true", async () => {
+    const { mockDb, executedStmts } = createMockD1();
+    const mockEnv = /** @type {any} */ ({ DB: mockDb });
+    const ownerScope = /** @type {any} */ ({ accountId: "acc_test", all: true, propertyIds: [], user: { id: "owner", role: "owner" } });
+    const req = new Request("https://example.com/api/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        key: "rri_commission_rates_v2",
+        value: { booking: { type: "fixed", rate: 50000, taxExempt: "false" } },
+      }),
+    });
+    expect((await handleSettingsRequest(req, mockEnv, ownerScope, new URL(req.url), ["settings"])).status).toBe(200);
+    const upsert = executedStmts.find((s) => s.sql.includes("INSERT INTO app_setting ("));
+    expect(JSON.parse(upsert.args[3]).booking).toEqual({ type: "fixed", rate: 10000, taxExempt: false });
+  });
+
+  it("mirrors aliases inside property-scoped settings pulled from the server", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({ ETag: 'W/"rev-21-1"', "x-settings-rev": "21" }),
+      json: async () => ({
+        ok: true,
+        settings: { _byProperty: { prop_a: { rri_pricing_config_v1: { minRate: 88 } } } },
+      }),
+    });
+    expect(await pullRemoteSettings(true)).toBe(true);
+    const byProperty = JSON.parse(store.rri_settings_by_property);
+    expect(byProperty.prop_a.rri_pricing_config).toEqual({ minRate: 88 });
+    expect(byProperty.prop_a.rri_pricing_config_v1).toEqual({ minRate: 88 });
+  });
+
+  it("keeps mount and remote-update suppression active until after every auto-save effect", () => {
+    const source = readFileSync(path.join(process.cwd(), "src/pages/Settings.jsx"), "utf8");
+    const lastAutoSave = source.indexOf("saveTaxSettings(clean);");
+    const disarm = source.indexOf("isInitialMount.current = false;");
+    expect(lastAutoSave).toBeGreaterThan(0);
+    expect(disarm).toBeGreaterThan(lastAutoSave);
+    expect(source).toContain("setRemoteSyncEpoch((epoch) => epoch + 1)");
+    expect(source).not.toContain("queueMicrotask(() => {\n          isRemoteUpdate.current = false");
   });
 });

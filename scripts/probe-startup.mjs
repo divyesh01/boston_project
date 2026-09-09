@@ -76,7 +76,8 @@ function ok(cond, label, detail = "") {
 console.log("=== PROBE: INTERNAL IMPORTS RESOLVE, CASE-EXACTLY ===\n");
 
 // ── 1. Walk src/ once ────────────────────────────────────────────────────────
-// `everyFile` is the resolution universe and holds EVERY file, not just source:
+// `everyFile` is the resolution universe and holds every file under src plus
+// Worker modules that src test suites validly import, not just source:
 // `import "@/index.css"` is a real specifier that must resolve. `sourceFiles` is
 // the narrower set that gets scanned for specifiers and for class=.
 const everyFile = new Set();
@@ -93,7 +94,17 @@ const sourceFiles = [];
   }
 })(join(ROOT, "src"));
 
-console.log(`  ${sourceFiles.length} source files, ${everyFile.size} files total under src/\n`);
+// Source tests exercise the Worker contract directly. Inventory that sibling
+// root for exact-case resolution without scanning it for browser imports or JSX.
+(function inventoryWorker(dir) {
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) inventoryWorker(full);
+    else everyFile.add(posix(relative(ROOT, full)));
+  }
+})(join(ROOT, "worker"));
+
+console.log(`  ${sourceFiles.length} source files, ${everyFile.size} files in the resolution universe\n`);
 
 // Anti-vacuity floors, deliberately far below the measured 275 / 276. These are
 // not expectations to keep in step with the tree — they exist so that a walk

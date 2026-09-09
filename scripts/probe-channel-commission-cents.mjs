@@ -188,3 +188,4 @@ if (fail) {
   process.exit(1);
 }
 console.log(`PASSED: ${pass} passed, 0 failed`);
+process.exit(0);

@@ -11,6 +11,7 @@ import { useRef } from "react";
 import { num } from "@/lib/hotel";
 import { REPORT_TYPES, scanReport, importReport } from "@/lib/reportParsers";
 import { clearAllImportedData } from "@/lib/importReset";
+import { compensateLateCreate, withActionTimeout } from "@/lib/actionTimeout";
 import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
 import { useAuth } from "@/lib/AuthContext";
 import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sha256File } from "@/lib/securityUtils";
@@ -392,12 +393,6 @@ export default function Import() {
     }
   };
 
-  const withActionTimeout = (promise, ms = 35000, message = "Operation timed out.") =>
-    Promise.race([
-      promise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
-    ]);
-
   const importSingle = async (item) => {
     if (!item.scan || !propertyId || item.status === "done") return null;
     // Rate limiting for imports
@@ -438,19 +433,37 @@ export default function Import() {
       }
       let result;
       try {
-        result = await withActionTimeout(
-          importReport(item.scan, {
+        const lateImportCleanup = async (settled) => {
+          const sessionId = settled?.importId;
+          if (!sessionId) return;
+          const rollback = await rollbackImportSession(sessionId);
+          if (!rollback?.success) {
+            throw new Error(rollback?.error || `Could not roll back late import ${sessionId}`);
+          }
+        };
+        const reportPromise = importReport(item.scan, {
             propertyId,
             propertyName: selectedProperty?.name || "",
             importId: item.importId,
             sourceFile: item.name,
             forceImport,
-          }),
+          });
+        result = await withActionTimeout(
+          reportPromise,
           35000,
-          "File import timed out after 35s."
+          "File import timed out after 35s. Any late commit will be rolled back automatically.",
+          {
+            onLateResolve: lateImportCleanup,
+            onLateReject: lateImportCleanup,
+            onCleanupError: (error) => {
+              console.error("[import] late import cleanup failed:", error);
+              setQueue((prev) => prev.map((q) => q.key === item.key
+                ? { ...q, error: `${q.error || "Import timed out"} — late cleanup failed: ${error?.message || error}. Do not re-import yet.` }
+                : q));
+            },
+          }
         );
-        await withActionTimeout(
-          db.entities.UploadedReport.create({
+        const historyPromise = db.entities.UploadedReport.create({
             file_name: item.name,
             report_type: item.scan.type || type,
             rows_imported: result.count,
@@ -464,9 +477,22 @@ export default function Import() {
             content_hash: item.contentHash || null,
             raw_rows: scanRawRows(item.scan),
             raw_rows_ttl: rawRowsTtlExpiry(),
-          }),
+          });
+        await withActionTimeout(
+          historyPromise,
           15000,
-          "Saving import history timed out."
+          "Saving import history timed out.",
+          {
+            onLateResolve: async (lateRecord) => {
+              await compensateLateCreate(lateRecord, db.entities.UploadedReport);
+            },
+            onCleanupError: (error) => {
+              console.error("[import] late history cleanup failed:", error);
+              setQueue((prev) => prev.map((q) => q.key === item.key
+                ? { ...q, error: `${q.error || "Import history timed out"} — a late history row could not be removed: ${error?.message || error}.` }
+                : q));
+            },
+          }
         );
       } catch (err) {
         // Roll back with the SESSION id, never our queue-local item.importId:

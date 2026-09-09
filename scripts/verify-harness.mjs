@@ -221,3 +221,4 @@ try {
 } finally {
   await server.close();
 }
+process.exit(process.exitCode || 0);

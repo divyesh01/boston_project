@@ -770,7 +770,9 @@ console.log("\n9. Invariants that live in another file");
     for (const entry of fs.readdirSync(path.join(REPO, dir), { withFileTypes: true })) {
       const rel = `${dir}/${entry.name}`;
       if (entry.isDirectory()) walk(rel);
-      else if (/\.(js|jsx)$/.test(entry.name) && WRITES_STORAGE.test(read(rel))) writers.push(rel);
+      // Test fixtures deliberately write synthetic storage; they are not app
+      // writers and cannot add a production key that the backup must classify.
+      else if (/\.(js|jsx)$/.test(entry.name) && !/\.test\.(js|jsx)$/.test(entry.name) && WRITES_STORAGE.test(read(rel))) writers.push(rel);
     }
   };
   walk("src");

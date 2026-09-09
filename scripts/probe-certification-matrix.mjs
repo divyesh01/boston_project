@@ -86,6 +86,11 @@ await run.check("TRICK 1: Browser B has completely empty IndexedDB -> Reconstruc
   const list = await wrappedProp.list();
   assertEqual(list.length, 1);
   assertEqual(list[0].name, "Red Roof Boston");
+  // Property.list() deliberately uses the roster-only fast path. Certify full
+  // empty-browser reconstruction through the public hydration API rather than
+  // assuming a roster request downloaded every business table.
+  const hydrated = await clientB.api.hydrateFromServer();
+  assertEqual(hydrated.active, true);
   assertEqual(await localDb.OccupancyDay.count(), 1);
 });
 

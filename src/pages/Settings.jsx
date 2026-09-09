@@ -55,9 +55,9 @@ export default function Settings() {
   const [revSaved, setRevSaved] = useState(false);
   const isInitialMount = useRef(true);
   const isRemoteUpdate = useRef(false);
+  const [remoteSyncEpoch, setRemoteSyncEpoch] = useState(0);
 
   useEffect(() => {
-    isInitialMount.current = false;
     return () => {
       setEditingSettingsLock(false);
     };
@@ -74,9 +74,10 @@ export default function Settings() {
         setTaxRows(getTaxSettings());
         setThresholds(getAlertThresholds());
         setRevThresholds(getRevenueThresholds());
-        queueMicrotask(() => {
-          isRemoteUpdate.current = false;
-        });
+        // Force one render even when the pulled values compare equal. The final
+        // guard effect below clears suppression only AFTER every auto-save effect
+        // has observed this remote render, so remote state cannot echo back to D1.
+        setRemoteSyncEpoch((epoch) => epoch + 1);
       }
     });
 
@@ -164,6 +165,14 @@ export default function Settings() {
     const clean = taxRows.map(({ _key, ...rest }) => rest);
     saveTaxSettings(clean);
   }, [taxRows]);
+
+  // Effects run in declaration order. This must stay after every auto-save
+  // effect: on the first mount they all see isInitialMount=true; after a remote
+  // pull they all see isRemoteUpdate=true. Only then is saving re-enabled.
+  useEffect(() => {
+    isInitialMount.current = false;
+    isRemoteUpdate.current = false;
+  }, [remoteSyncEpoch]);
 
   const handleChange = (key, field, val) => {
     setEditingSettingsLock(true);

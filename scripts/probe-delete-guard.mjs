@@ -315,7 +315,11 @@ for (const file of pageFiles) {
     );
   }
 }
-check('found the destructive call sites (>= 8)', siteCount >= 8, `found ${siteCount}`);
+// Seven user-triggered page deletes remain. The eighth historical call moved to
+// compensateLateCreate in actionTimeout.js because it reverses an invisible
+// create that settled after timeout; asking for confirmation there would retain
+// the orphan the compensation exists to remove.
+check('found the user-triggered destructive call sites (>= 7)', siteCount >= 7, `found ${siteCount}`);
 
 // The dialog has to name the record, not just the noun — "Delete this payroll
 // run?" gives an operator no way to notice they clicked the wrong row.

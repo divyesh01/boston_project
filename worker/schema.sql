@@ -916,4 +916,5 @@ CREATE TABLE IF NOT EXISTS app_setting_history (
 );
 CREATE INDEX IF NOT EXISTS idx_app_setting_history
   ON app_setting_history (account_id, setting_key, property_id);
-
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_setting_history_revision_guard
+  ON app_setting_history (account_id, setting_key, property_id, revision);

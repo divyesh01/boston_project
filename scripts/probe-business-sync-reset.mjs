@@ -221,4 +221,6 @@ await run.check("Reactivity & Audit: destructive feed change row written, revisi
 });
 
 run.done();
-console.log("\nAll probe-business-sync-reset tests PASSED!\n");
+if (process.exitCode) process.exit(1);
+console.log("\nPASSED: All probe-business-sync-reset tests passed.\n");
+process.exit(0);

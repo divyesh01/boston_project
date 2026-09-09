@@ -6807,4 +6807,34 @@ In legacy versions, `clearAllImportedData` called Dexie's `table.clear()` across
    - Proved with `scripts/probe-clear-all-rollback.mjs` (42 of 42 passed).
    - Proved with `src/api/businessSync.test.js` (29 of 29 tests passed).
 
+## 72. Post-Fix Verification Audit: Settings Isolation, Reset Safety, Timeout Compensation, and Cold-Browser Hydration (2026-09-08)
 
+The verification audit after sections 68–71 found that green targeted tests did not cover several load-bearing failure modes. The fixes below are intentionally at the shared boundary rather than page-specific workarounds.
+
+### Confirmed defects and core fixes
+
+1. **Settings mount/remote echo race:** `Settings.jsx` disarmed its first-render guard before the auto-save effects ran, and a microtask could clear the remote-update guard before React committed the pulled state. The guard is now cleared by a final effect declared after every auto-save effect; a remote epoch guarantees that effect runs even when pulled values compare equal.
+2. **Property aliases and conflict preservation:** property-scoped `_byProperty` pulls did not mirror base/`_v1` aliases. A 409 conflict also immediately pulled remote data over the visible local edit. `settingsStore.js` now mirrors aliases within every property map and retains the pending/local value until the user resolves the conflict.
+3. **Worker authorization and validation:** a `manager` role name implicitly restored permissions explicitly set to false; restricted readers could receive other-property settings; their scoped GET revision was compared with the invisible account-wide revision on write, creating permanent 409 conflicts after another property's update; fixed commissions had no upper bound; string `"false"` became truthy; malformed tax-source objects bypassed validation. `worker/settings.js` now requires explicit permissions, enforces global/property scope on reads and writes, compares CAS against the caller's visible revision while allocating the next stored revision from the account-wide maximum, caps fixed commissions at 10,000, parses booleans strictly, and accepts only validated tax-source arrays.
+4. **Non-atomic settings revisions:** revisions were incremented per row, so the account maximum could fail to advance and two same-key writers could both pass the precheck. Every write batch now claims one account-global next revision, requires exact compare-and-swap equality when supplied, and uses a unique history constraint `(account_id, setting_key, property_id, revision)` as the atomic race barrier.
+5. **Zombie data after reset failure:** `clearAllImportedData` treated most server failures as permission to clear IndexedDB. An authoritative browser could therefore repopulate the supposedly deleted rows on its next hydrate. Authoritative reset is now fail-closed; no local mutation occurs unless the server confirms. Property-scoped clearing is rejected before mutation because the current lifecycle history is shared and cannot be safely partitioned.
+6. **Late import commits after UI timeout:** `Promise.race` stopped the spinner but did not cancel the underlying import or history write. A late success could create invisible data or an orphan history row. `withActionTimeout` now observes late settlement and invokes compensating rollback/delete handlers; cleanup failure is made visible and tells the operator not to re-import.
+7. **Cold browser mistaken for an empty authoritative cache:** the fast Property-roster path wrote the server snapshot revision into `BusinessSyncState`, after which the first non-Property read applied an empty feed and treated never-downloaded tables as authoritatively empty. Roster-only state is now marked incomplete, the next business-data read performs a full snapshot, concurrent roster readers share one promise, and each roster caller returns the fetched rows instead of observing a concurrent swap's transient empty interval.
+8. **Verification harness false reds/timeouts:** the startup resolver knew only `src/` and rejected a valid source-test import of `worker/settings.js`; the backup classifier counted test fixtures as production storage writers; the delete guard treated timeout compensation as a user-triggered delete; two new probes did not satisfy the suite-verdict contract; four successful probes left Node handles open for 240 seconds. The gates now model those distinctions explicitly and all affected targeted reruns pass.
+9. **Dependency audit drift:** the final governance gate found new advisories affecting `js-yaml` before 4.3.2 and Vitest before 4.1.11. The supported `npm audit fix` upgraded the lockfile to patched transitive packages and Vitest 4.1.11; `npm run audit:gate` then passed with only the repository's two documented SheetJS exceptions remaining.
+
+### Deterministic evidence
+
+- `src/lib/actionTimeout.test.js`, `src/lib/settingsForensicFixes.test.js`, and `src/api/businessSync.test.js`: 54/54 passing in the post-fix targeted run.
+- `scripts/probe-worker-settings.mjs`: 14/14, including concurrent same-key CAS (one winner/one 409), restricted GET isolation, invisible-property revision tolerance, permission removal, strict booleans, and fixed-commission bounds.
+- `scripts/probe-clear-all-rollback.mjs`: 51/51, including authoritative server failure preserving rows/ledger/history and scoped reset rejection before mutation.
+- `probe-adversarial-browser-b-kpis.mjs`: Browser B matches Browser A exactly after an empty-cache hydrate.
+- `probe-cross-browser-sync-e2e.mjs`: 22/22, including the concurrent cold-read stampede.
+- `probe-certification-matrix.mjs`: all certification cases plus the deterministic 10,000-case matrix pass.
+- `probe-db-archive.mjs` 218/218; `probe-delete-guard.mjs` 94/94; `probe-startup.mjs` 13/13; `probe-suite-integrity.mjs` 171/171.
+- Former timeout-only probes now exit normally: channel commissions 14/14, hotel statistics passing, open-bound dates 16/16, and the general harness 26/26.
+- `npm run audit:gate`: no unaccepted high or critical advisory after the lockfile upgrade.
+- Final `npm test`: 52 files and 456 tests passed on Vitest 4.1.11; lint, typecheck, and production build passed.
+- Final `npm run verify:all`: 168 discovered, fingerprint `a833dca9`; 167 passed, 0 failed, 0 broken, 0 timed out, and 1 explicit skip. The skipped config-exposure probe received only 404 responses because the local Vite server did not mount the Base44 function backend, so this run makes no claim for that endpoint. The separate remote Worker authentication probe passed 8/8.
+
+No production data was changed and no production deployment was performed during this audit.

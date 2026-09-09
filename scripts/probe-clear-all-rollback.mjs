@@ -381,6 +381,56 @@ console.log("\n[7] every store carrying import_id is deliberately classified");
   console.log(`        import-owned stores: ${importOwned.length}; cleared: ${dataSet.size}; excluded with a reason: ${NOT_IMPORTED_DATA.size}`);
 }
 
+// ── 8. Authoritative reset failures must preserve the browser copy ─────────
+console.log("\n[8] an authoritative reset failure is fail-closed");
+{
+  await reset();
+  await doImport("P1", ["2026-04-01", "2026-04-02"]);
+  await localDb.BusinessSyncState.put({
+    key: "authoritative-business-data",
+    generation_id: "generation-under-test",
+    revision: 12,
+    updated_at: new Date().toISOString(),
+  });
+
+  const originalReset = db.businessData.resetImportedData;
+  db.businessData.resetImportedData = async () => { throw new Error("server offline"); };
+  let rejected = null;
+  try {
+    await clearFn()();
+  } catch (error) {
+    rejected = error;
+  } finally {
+    db.businessData.resetImportedData = originalReset;
+  }
+
+  ok("the failed server reset rejects the operation", /server offline/.test(rejected?.message || ""), rejected?.message);
+  eq("imported rows remain after the rejection", await localDb.OccupancyDay.count(), 2);
+  eq("the rollback ledger remains after the rejection", await localDb.ImportRecordIds.count(), 1);
+  eq("the import history remains after the rejection", (await listImportSessions()).length, 1);
+}
+
+// ── 9. Never fake a property-scoped clear over shared history ───────────────
+console.log("\n[9] unsupported property-scoped reset is rejected before mutation");
+{
+  await reset();
+  await doImport("P1", ["2026-05-01"]);
+  await doImport("P2", ["2026-05-02"]);
+
+  let rejected = null;
+  try {
+    await clearFn()({ propertyId: "P1" });
+  } catch (error) {
+    rejected = error;
+  }
+
+  ok("the scoped request explains why it is unsupported", /shared|all-property/.test(rejected?.message || ""), rejected?.message);
+  eq("P1 rows remain", await localDb.OccupancyDay.where("property_id").equals("P1").count(), 1);
+  eq("P2 rows remain", await localDb.OccupancyDay.where("property_id").equals("P2").count(), 1);
+  eq("both rollback-ledger rows remain", await localDb.ImportRecordIds.count(), 2);
+  eq("both history entries remain", (await listImportSessions()).length, 2);
+}
+
 console.log(`\n${"─".repeat(70)}`);
 if (failures.length) {
   console.log("Failures:");

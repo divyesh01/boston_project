@@ -20,7 +20,8 @@ import { db } from "@/api/base44Client";
 import { useProperties } from "@/lib/useHotelData";
 import { ROLES, PERMISSIONS, PERMISSION_KEYS, defaultPermissionsForRole } from "@/lib/permissions";
 import { isCryptoAvailable, validatePasswordStrength, generateTemporaryPassword } from "@/lib/security";
-import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
+import { getCsrfToken, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
+import { securityActionRateLimiter } from "@/lib/rateLimiters";
 import { validateUserForm, PASSWORD_HELP } from "@/lib/userFormValidation";
 import PasswordConfirmDialog from "@/components/PasswordConfirmDialog";
 
@@ -118,8 +119,8 @@ export default function Users() {
       toast({ variant: "destructive", title: "Error", description: "Password hashing unavailable. Open via localhost/HTTPS." });
       return;
     }
-    // Rate limiting for sensitive actions
-    const rateLimit = sensitiveActionRateLimiter.check();
+    // Rate limiting for security actions
+    const rateLimit = securityActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
       return;
@@ -217,7 +218,7 @@ export default function Users() {
   };
 
   const handleEditSave = async () => {
-    const rateLimit = sensitiveActionRateLimiter.check();
+    const rateLimit = securityActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
       return;
@@ -267,7 +268,7 @@ export default function Users() {
       toast({ variant: "destructive", title: "Error", description: "Password hashing unavailable. Open via localhost/HTTPS." });
       return;
     }
-    const rateLimit = sensitiveActionRateLimiter.check();
+    const rateLimit = securityActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
       return;
@@ -363,7 +364,7 @@ export default function Users() {
   };
 
   const runConfirm = async () => {
-    const rateLimit = sensitiveActionRateLimiter.check();
+    const rateLimit = securityActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
       return;

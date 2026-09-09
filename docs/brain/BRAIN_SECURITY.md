@@ -35,12 +35,17 @@ Cookie defense:           __Host-rri_session is SameSite=Strict
 Failure:                  controlled 403 before credential/data processing
 ```
 
-### Rate Limiting
+### Rate Limiting & Domain Separation
 ```
-Login lockout:     5 failed attempts on the account
-Lock duration:    15 minutes
-Recovery:         an expired lock restarts the failure count; valid login clears it
-Server reset:     intentionally unavailable; contact the administrator
+Login lockout:        5 failed attempts on the account
+Lock duration:       15 minutes
+Recovery:            an expired lock restarts the failure count; valid login clears it
+Server reset:        intentionally unavailable; contact the administrator
+Client Rate Limits (Domain-Separated via src/lib/rateLimiters.js):
+  - Security Domain:    Password reset, MFA verification, user management (delegates to sensitiveActionRateLimiter)
+  - Destructive Domain: Clear all data, wipe history, undo import (30 actions / 15m)
+  - Import Domain:      Batch import, file scans, HotelKey reports (100 actions / 15m)
+  - Operational Domain: Expenses, daily manual entry, routine settings updates (120 actions / 15m)
 ```
 
 ### Audit Log (Tamper-Proof Blockchain-Style)

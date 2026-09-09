@@ -20,7 +20,8 @@ import { refundTotal } from "@/lib/paymentNorm";
 import { CalculationService } from "@/lib/calculationService";
 import { toast } from "sonner";
 import { EXPENSE_CATEGORIES, EXPENSE_FREQUENCIES, EXPENSE_STATUSES, expenseLabel, frequencyLabel, isStandardCategory, slugifyCategory } from "@/lib/expenseCategories";
-import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeCsvCell } from "@/lib/securityUtils";
+import { getCsrfToken, validateCsrfToken, rotateCsrfToken, sanitizeCsvCell } from "@/lib/securityUtils";
+import { operationalActionRateLimiter } from "@/lib/rateLimiters";
 import { guardDestructiveAction } from "@/lib/deleteGuard";
 import { ErrorState } from "@/components/ui/status";
 
@@ -140,8 +141,8 @@ export default function Expenses() {
   const propName = property === "all" ? "All Properties" : (Array.isArray(property) ? `${property.length} Properties` : (properties.find((p) => p.id === property)?.name || "Property"));
 
   const handleAdd = async () => {
-    // Rate limiting for sensitive actions
-    const rateLimit = sensitiveActionRateLimiter.check();
+    // Rate limiting for operational actions
+    const rateLimit = operationalActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast.error(`Rate limited. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
       return;
@@ -243,8 +244,8 @@ export default function Expenses() {
   });
 
   const handleAddPayroll = async () => {
-    // Rate limiting for sensitive actions
-    const rateLimit = sensitiveActionRateLimiter.check();
+    // Rate limiting for operational actions
+    const rateLimit = operationalActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast.error(`Rate limited. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
       return;

@@ -757,6 +757,7 @@ console.log("\n9. Invariants that live in another file");
     "src/pages/DataIntelligence.jsx": "archived — rri_automationRules, rri_reportHistory",
     "src/lib/dbArchive.js": "the restore writer itself",
     "src/lib/securityUtils.js": "skipped — rri_rate_limit_* counters, rri_enc_* ciphertext, _rri_test_ probe, rri_csrf_token (sessionStorage)",
+    "src/lib/rateLimiters.js": "skipped — domain-specific rri_rate_limit_* UX counters; never security or business state",
     "src/lib/realtime.js": "skipped — rri_realtime_change, a cross-tab ping",
     "src/lib/sessionChannel.js": "skipped — rri_session_revocation, a cross-tab signal",
     "src/lib/auditFailureLog.js": "skipped — rri_audit_write_failures_v1, machine-local diagnostics",

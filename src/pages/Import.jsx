@@ -1,7 +1,7 @@
 import { db, listImportSessions, rollbackImportSession } from '@/api/base44Client';
 
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { UploadCloud, CheckCircle2, FileSpreadsheet, XCircle, Search, Building2, Loader2, Eye, Trash2, ArrowDownToLine, RefreshCw, RotateCcw, X } from "lucide-react";
+import { UploadCloud, CheckCircle2, FileSpreadsheet, XCircle, Search, Building2, Loader2, Eye, Trash2, ArrowDownToLine, RefreshCw, RotateCcw, X, AlertTriangle } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { EmptyState, ErrorState } from "@/components/ui/status";
 
@@ -13,7 +13,9 @@ import { clearAllImportedData } from "@/lib/importReset";
 import { compensateLateCreate, withActionTimeout } from "@/lib/actionTimeout";
 import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
 import { useAuth } from "@/lib/AuthContext";
-import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sha256File } from "@/lib/securityUtils";
+import { getCsrfToken, validateCsrfToken, rotateCsrfToken, sha256File } from "@/lib/securityUtils";
+import { importRateLimiter, destructiveActionRateLimiter } from "@/lib/rateLimiters";
+import { getQueueMetrics, confirmForceImportToggle, confirmBatchForceImport, validateQueueProperty } from "@/lib/importQueueHelpers";
 import { rebuildDailyAggregates } from "@/lib/dailyAggregates";
 import { queryClientInstance } from "@/lib/query-client";
 import { toCents, formatCents } from "@/lib/decimal";
@@ -46,7 +48,7 @@ function UndoImportButton({ upload: u, disabled, onDone }) {
     // Same guards the other destructive paths use (import, clear-all), but
     // reported inline instead of via alert() — the button has somewhere to
     // put the message.
-    const rateLimit = sensitiveActionRateLimiter.check();
+    const rateLimit = destructiveActionRateLimiter.check();
     if (!rateLimit.allowed) {
       setError(`Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
       setConfirming(false);
@@ -190,6 +192,7 @@ const STATUS_LABEL = {
   importing: "Importing…",
   done: "Imported",
   error: "Failed",
+  duplicate: "Duplicate",
 };
 
 // Where a Hotel Statistics snapshot's date came from. The file itself has none,
@@ -275,6 +278,15 @@ export default function Import() {
     }
   }, [accessibleProperties, propertyId]);
 
+  // If active property is deleted or access revoked, reset propertyId and clear queue
+  useEffect(() => {
+    if (propertyId && !accessibleProperties.some((p) => p.id === propertyId)) {
+      setPropertyId("");
+      setQueue([]);
+      setForceImport(false);
+    }
+  }, [accessibleProperties, propertyId]);
+
   const importMeta = (sourceFile) => ({
     propertyId,
     propertyName: selectedProperty?.name || "",
@@ -282,7 +294,7 @@ export default function Import() {
     sourceFile: sourceFile || "",
   });
 
-  // Check for incomplete import sessions that can be resumed
+  // Check for incomplete import sessions that can be resumed or rolled back
   const checkIncompleteImports = async () => {
     try {
       const sessions = await listImportSessions();
@@ -295,6 +307,38 @@ export default function Import() {
     } catch {
       return [];
     }
+  };
+
+  // Automatically check for interrupted sessions when property selection changes
+  useEffect(() => {
+    if (!propertyId) {
+      setIncompleteImports([]);
+      return;
+    }
+    checkIncompleteImports().then((incomplete) => {
+      if (incomplete?.length) setIncompleteImports(incomplete);
+    });
+  }, [propertyId]);
+
+  const handlePropertyChange = (newPid) => {
+    if (newPid === propertyId) return;
+    if (queue.length > 0) {
+      setQueue([]);
+      alert("Property selection changed. Queued reports from previous property were cleared to prevent cross-property data contamination.");
+    }
+    setPropertyId(newPid);
+    setForceImport(false);
+  };
+
+  const handleForceImportToggle = (enable) => {
+    if (enable) {
+      const ok = confirmForceImportToggle({
+        propertyName: selectedProperty?.name,
+        enabling: true,
+      });
+      if (!ok) return;
+    }
+    setForceImport(enable);
   };
 
   const handleFiles = async (fileList) => {
@@ -407,13 +451,27 @@ export default function Import() {
     }
   };
 
-  const importSingle = async (item) => {
+  const importSingle = async (item, { isBatch = false } = {}) => {
     if (!item.scan || !propertyId || item.status === "done") return null;
-    // Rate limiting for imports
-    const rateLimit = sensitiveActionRateLimiter.check();
-    if (!rateLimit.allowed) {
-      setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: `Rate limited. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` } : q)));
-      return null;
+
+    // Property consistency validation
+    const propCheck = validateQueueProperty({
+      item,
+      propertyId,
+      accessibleProperties,
+    });
+    if (!propCheck.ok) {
+      setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: propCheck.error } : q)));
+      return { name: item.name, ok: false, error: propCheck.error };
+    }
+
+    // Rate limiting for imports (single import checks; batch import checks once at batch level)
+    if (!isBatch) {
+      const rateLimit = importRateLimiter.check();
+      if (!rateLimit.allowed) {
+        setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: `Rate limited. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` } : q)));
+        return null;
+      }
     }
     // CSRF validation
     const csrfToken = getCsrfToken();
@@ -530,12 +588,16 @@ export default function Import() {
           // in the database, and the operator has to know that.
           if (!res?.success) {
             err.message = `${err.message || "Import failed"} — automatic cleanup ALSO failed: ${res?.error || "unknown error"}. Rows may remain in the database; do not re-import until this is resolved.`;
+          } else {
+            err.message = `${err.message || "Import failed"} — rolled back cleanly (0 rows stored).`;
           }
         }
         throw err;
       }
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "done", count: result.count, excluded: result.excluded || 0 } : q)));
-      rotateCsrfToken();
+      if (!isBatch) {
+        rotateCsrfToken();
+      }
       // Pre-compute the daily financial aggregates so the Dashboard reads a few
       // hundred pre-summed rows instead of the raw ledgers. Fire-and-forget: a
       // failure here must never fail the import that already succeeded.
@@ -562,8 +624,14 @@ export default function Import() {
     }
     const pending = queue.filter((q) => q.status === "ready" && q.scan);
     if (!pending.length || importing) return;
-    // Rate limiting
-    const rateLimit = sensitiveActionRateLimiter.check();
+
+    // If Force Import is active, confirm batch operation explicitly
+    if (forceImport && !confirmBatchForceImport({ propertyName: selectedProperty?.name, count: pending.length })) {
+      return;
+    }
+
+    // Rate limiting - UI batch action level
+    const rateLimit = importRateLimiter.check();
     if (!rateLimit.allowed) {
       alert(`Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
       return;
@@ -580,7 +648,7 @@ export default function Import() {
     try {
       for (const item of pending) {
         try {
-          const r = await importSingle(item);
+          const r = await importSingle(item, { isBatch: true });
           if (r) newResults.push(r);
         } catch (itemErr) {
           console.error(`[import] Error importing ${item.name}:`, itemErr);
@@ -595,9 +663,9 @@ export default function Import() {
       return;
     } finally {
       setImporting(false);
+      rotateCsrfToken();
     }
     refetch();
-    rotateCsrfToken();
   };
 
   const handleRemoveFromQueue = (key) => {
@@ -607,8 +675,8 @@ export default function Import() {
 
   const handleClearAll = async () => {
     if (clearing) return;
-    // Rate limiting
-    const rateLimit = sensitiveActionRateLimiter.check();
+    // Rate limiting for destructive actions
+    const rateLimit = destructiveActionRateLimiter.check();
     if (!rateLimit.allowed) {
       alert(`Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
       return;
@@ -671,12 +739,43 @@ export default function Import() {
     }
   };
 
-  const readyCount = queue.filter((q) => q.status === "ready" && q.scan).length;
-  const queuedCount = queue.filter((q) => q.status !== "done" && q.status !== "error").length;
-  const doneItems = queue.filter((q) => q.status === "done");
-  const errorItems = queue.filter((q) => q.status === "error");
-  const batchImported = doneItems.reduce((a, r) => a + (r.count || 0), 0);
-  const batchExcluded = doneItems.reduce((a, r) => a + (r.excluded || 0), 0);
+  const {
+    readyCount,
+    queuedCount,
+    doneItems,
+    errorItems,
+    duplicateItems,
+    batchImported,
+    batchExcluded,
+  } = getQueueMetrics(queue);
+
+  const handleRetrySingle = async (item) => {
+    if (importing || busy) return;
+    setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "ready", error: "" } : q)));
+    const res = await importSingle({ ...item, status: "ready", error: "" });
+    if (res) {
+      setResults((prev) => [...prev, res]);
+      refetch();
+    }
+  };
+
+  const handleRetryAllFailed = async () => {
+    if (importing || busy) return;
+    setQueue((prev) =>
+      prev.map((q) => (q.status === "error" || q.status === "duplicate" ? { ...q, status: "ready", error: "" } : q))
+    );
+  };
+
+  const handleRollbackInterrupted = async (session) => {
+    if (!session?.importId) return;
+    try {
+      await rollbackImportSession(session.importId);
+      setIncompleteImports((prev) => prev.filter((s) => s.importId !== session.importId));
+      refetch();
+    } catch (e) {
+      alert(`Could not roll back interrupted session: ${e?.message || e}`);
+    }
+  };
 
   const handleBrowseDrive = async () => {
     if (!propertyId) {
@@ -807,7 +906,7 @@ export default function Import() {
             <div className="min-w-[280px] flex-1">
               <ResponsiveSelect
                 value={propertyId}
-                onValueChange={setPropertyId}
+                onValueChange={handlePropertyChange}
                 options={propertyOpts}
                 placeholder="Select a property…"
               />
@@ -845,17 +944,21 @@ export default function Import() {
           ))}
         </div>
 
-        <div className="mt-4 flex items-center gap-3">
+        <div className="mt-4 flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
             <input
               type="checkbox"
               checked={forceImport}
-              onChange={(e) => setForceImport(e.target.checked)}
+              onChange={(e) => handleForceImportToggle(e.target.checked)}
               className="h-4 w-4 rounded border-white/20"
             />
             Force import (bypass duplicate check — re-import already loaded data)
           </label>
-          {forceImport && <span className="text-xs text-[#FFB547]">⚠ Will create duplicates if data already exists</span>}
+          {forceImport && (
+            <span className="rounded-md border border-[#FF6B6B]/40 bg-[#FF6B6B]/10 px-2.5 py-1 text-xs text-[#FF6B6B]">
+              ⚠ FORCE IMPORT ACTIVE for {selectedProperty?.name || "selected property"} — duplicate checks bypassed
+            </span>
+          )}
         </div>
 
         <label
@@ -950,13 +1053,22 @@ export default function Import() {
                   </button>
                 )}
                 {errorItems.length > 0 && (
-                  <button
-                    onClick={() => setQueue((prev) => prev.filter((q) => q.status !== "error"))}
-                    disabled={importing}
-                    className="flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm text-slate-400 transition-colors hover:border-[#FF6B6B]/60 hover:text-[#FF6B6B] disabled:opacity-50"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" /> Clear failed
-                  </button>
+                  <>
+                    <button
+                      onClick={handleRetryAllFailed}
+                      disabled={importing}
+                      className="flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm text-[#00D4FF] transition-colors hover:border-[#00D4FF]/60 hover:bg-[#00D4FF]/10 disabled:opacity-50"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" /> Retry failed ({errorItems.length})
+                    </button>
+                    <button
+                      onClick={() => setQueue((prev) => prev.filter((q) => q.status !== "error" && q.status !== "duplicate"))}
+                      disabled={importing}
+                      className="flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm text-slate-400 transition-colors hover:border-[#FF6B6B]/60 hover:text-[#FF6B6B] disabled:opacity-50"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> Clear failed
+                    </button>
+                  </>
                 )}
               </div>
             </div>
@@ -972,6 +1084,8 @@ export default function Import() {
                         <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[#00E096]" />
                       ) : q.status === "error" ? (
                         <XCircle className="h-3.5 w-3.5 shrink-0 text-[#FF6B6B]" />
+                      ) : q.status === "duplicate" ? (
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[#FFB547]" />
                       ) : q.status === "ready" ? (
                         <FileSpreadsheet className="h-3.5 w-3.5 shrink-0 text-[#6C63FF]" />
                       ) : (
@@ -986,6 +1100,8 @@ export default function Import() {
                             ? "bg-[#00E096]/15 text-[#00E096]"
                             : q.status === "error"
                             ? "bg-[#FF6B6B]/15 text-[#FF6B6B]"
+                            : q.status === "duplicate"
+                            ? "bg-[#FFB547]/15 text-[#FFB547]"
                             : q.status === "ready"
                             ? "bg-[#6C63FF]/15 text-[#6C63FF]"
                             : "bg-white/5 text-slate-400"
@@ -1011,6 +1127,16 @@ export default function Import() {
                           className="rounded-lg bg-[#6C63FF]/20 px-3 py-1 text-xs text-[#6C63FF] transition-colors hover:bg-[#6C63FF]/35 disabled:opacity-40"
                         >
                           Import
+                        </button>
+                      )}
+                      {(q.status === "error" || q.status === "duplicate") && (
+                        <button
+                          onClick={() => handleRetrySingle(q)}
+                          disabled={importing || !propertyId}
+                          className="rounded-lg bg-[#00D4FF]/20 px-3 py-1 text-xs text-[#00D4FF] transition-colors hover:bg-[#00D4FF]/35 disabled:opacity-40"
+                          title="Retry import"
+                        >
+                          Retry
                         </button>
                       )}
                       {q.status !== "scanning" && q.status !== "importing" && (
@@ -1042,7 +1168,11 @@ export default function Import() {
                     </div>
                   )}
 
-                  {q.status === "error" && <p className="mt-1 text-xs text-[#FF6B6B]">{q.error}</p>}
+                  {(q.status === "error" || q.status === "duplicate") && q.error && (
+                    <p className={`mt-1 text-xs ${q.status === "duplicate" ? "text-[#FFB547]" : "text-[#FF6B6B]"}`}>
+                      {q.error}
+                    </p>
+                  )}
 
 {expandedKey === q.key && q.scan && (
   <div className="mt-3 space-y-2 border-t border-white/5 pt-3">
@@ -1165,29 +1295,40 @@ export default function Import() {
                 </p>
               </div>
             )}
+          </div>
+        )}
 
-            {incompleteImports.length > 0 && (
-              <div className="mt-4 rounded-xl border border-[#FFB547]/20 bg-[#FFB547]/[0.06] px-4 py-3">
-                <div className="flex items-center gap-3">
-                  <span className="h-5 w-5 shrink-0 text-[#FFB547]">⚠</span>
-                  <div className="flex-1">
-                    <p className="text-sm text-slate-300">
-                      Found {incompleteImports.length} interrupted import session{incompleteImports.length === 1 ? "" : "s"}.
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      These imports were started but never completed. They may have been interrupted by browser refresh, power loss, or network issues.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setIncompleteImports([])}
-                    className="text-slate-500 hover:text-white"
-                    title="Dismiss"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
+        {incompleteImports.length > 0 && (
+          <div className="mt-4 rounded-xl border border-[#FFB547]/20 bg-[#FFB547]/[0.06] px-4 py-3">
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 h-5 w-5 shrink-0 text-[#FFB547]">⚠</span>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-slate-200">
+                  Found {incompleteImports.length} interrupted import session{incompleteImports.length === 1 ? "" : "s"}.
+                </p>
+                <p className="text-xs text-slate-400">
+                  These imports were started but never completed. They may have been interrupted by browser refresh, power loss, or network issues. You can roll them back cleanly to prevent orphaned data.
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {incompleteImports.map((imp) => (
+                    <button
+                      key={imp.importId || imp.id}
+                      onClick={() => handleRollbackInterrupted(imp)}
+                      className="flex items-center gap-1.5 rounded-lg border border-[#FFB547]/30 bg-[#FFB547]/10 px-2.5 py-1 text-xs text-[#FFB547] transition-colors hover:bg-[#FFB547]/20"
+                    >
+                      <RefreshCw className="h-3 w-3" /> Roll back interrupted ({imp.reportType || imp.report_type || "session"})
+                    </button>
+                  ))}
                 </div>
               </div>
-            )}
+              <button
+                onClick={() => setIncompleteImports([])}
+                className="text-slate-500 hover:text-white"
+                title="Dismiss"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         )}
       </Card>

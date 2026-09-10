@@ -26,6 +26,7 @@
 // Run: node scripts/probe-deploy-config.mjs
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -730,6 +731,22 @@ section('public/_headers <-> vercel.json');
       blocks['/assets/*']?.[key] === value,
       `_headers=${JSON.stringify(blocks['/assets/*']?.[key])} vercel=${JSON.stringify(value)}`);
   }
+}
+
+// -- Section 13: local Wrangler state must never be committed ----------------
+// Miniflare creates SQLite databases and WAL files beneath .wrangler/state.
+// They are machine-local runtime state, not deployment inputs, and may contain
+// copied development rows. Keeping them out of Git also prevents a candidate
+// branch from looking like a database migration when it has no source diff.
+section('local Wrangler state');
+{
+  const tracked = execFileSync('git', ['ls-files', '.wrangler/state/**'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  }).trim();
+  check('no Miniflare/D1 runtime state is tracked',
+    tracked.length === 0,
+    tracked || 'none');
 }
 
 // ── Result ─────────────────────────────────────────────────────────────────

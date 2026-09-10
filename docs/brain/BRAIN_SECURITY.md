@@ -35,12 +35,17 @@ Cookie defense:           __Host-rri_session is SameSite=Strict
 Failure:                  controlled 403 before credential/data processing
 ```
 
-### Rate Limiting
+### Rate Limiting & Domain Separation
 ```
-Login lockout:     5 failed attempts on the account
-Lock duration:    15 minutes
-Recovery:         an expired lock restarts the failure count; valid login clears it
-Server reset:     intentionally unavailable; contact the administrator
+Login lockout:        5 failed attempts on the account
+Lock duration:       15 minutes
+Recovery:            an expired lock restarts the failure count; valid login clears it
+Server reset:        intentionally unavailable; contact the administrator
+Client Rate Limits (Domain-Separated via src/lib/rateLimiters.js):
+  - Security Domain:    Password reset, MFA verification, user management (delegates to sensitiveActionRateLimiter)
+  - Destructive Domain: Clear all data, wipe history, undo import (30 actions / 15m)
+  - Import Domain:      Batch import, file scans, HotelKey reports (100 actions / 15m)
+  - Operational Domain: Expenses, daily manual entry, routine settings updates (120 actions / 15m)
 ```
 
 ### Audit Log (Tamper-Proof Blockchain-Style)
@@ -406,5 +411,18 @@ re-homed, the real roster row and its access grants intact, and a grantee still
 unable to read a global row through the real snapshot route. Three of the six
 carry controls that a blanket "reject every `s:0:`" fix would fail, because such
 a fix would destroy the account-global capability this section describes.
+
+---
+
+# 19. WORKER API RESPONSE ENVELOPE (2026-09-09)
+
+Every `/api` and `/api/*` response now passes through one final Worker-owned
+security envelope, including authentication failures and unhandled errors. It
+adds HSTS and the baseline browser security headers and defaults responses to
+`Cache-Control: private, no-store`; a route that already supplied a stricter or
+more specific cache directive keeps it. Non-API asset responses are unchanged.
+`scripts/probe-worker-integration.mjs` pins the unauthenticated and authorized
+business-read cases so sensitive D1-backed responses cannot silently become
+cacheable or lose HSTS.
 
 ---

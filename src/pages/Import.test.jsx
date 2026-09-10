@@ -81,11 +81,11 @@ vi.mock("@tanstack/react-virtual", () => ({
 }));
 
 vi.mock("@/components/ui/ResponsiveSelect", () => ({
-  default: ({ value, onChange, options, placeholder }) => (
+  default: ({ value, onValueChange, onChange, options, placeholder }) => (
     <select
       data-testid="property-select"
       value={value}
-      onChange={(e) => onChange(e.target.value)}
+      onChange={(e) => (onValueChange || onChange)?.(e.target.value)}
     >
       <option value="">{placeholder || "Select"}</option>
       {options?.map(([v, l]) => (

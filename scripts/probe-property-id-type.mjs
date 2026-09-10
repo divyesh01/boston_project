@@ -5,13 +5,15 @@
 // THE TWO REPRESENTATIONS, and where each one comes from:
 //
 //   NUMBER  localDb.js declares `Property: '++id, &code, name, active,
-//           created_date'`. Dexie's `++id` mints integer primary keys. Every
-//           writer stamps the property id it was handed by the roster UI, and
-//           the roster UI hands over `p.id` verbatim — Import.jsx builds
-//           `propertyOpts` as `properties.map((p) => [p.id, p.name])` and
-//           stamps `property_id: propertyId`; Users.jsx pushes `p.id` into
-//           `property_ids` and stores that array as `property_access`. Nothing
-//           on that path calls String(). So the stored column is a Number.
+//           created_date'`. Dexie's `++id` mints integer primary keys. Writers
+//           MUST coerce the roster id before stamping: Import.jsx builds
+//           `propertyOpts` as `properties.map((p) => [p.id, p.name])` but every
+//           write path resolves through resolveEffectiveProperty(), which
+//           String()s the snapshot/current/singleton id and stamps
+//           `property_id: effPropertyId` (drive: `effDrive.id`); Users.jsx pushes
+//           `p.id` into `property_ids` and stores that array as
+//           `property_access`. Section [3b] pins the Import.jsx coercion
+//           statically because the React layer cannot be driven from Node.
 //
 //   STRING  Every base44/entities/*.jsonc that declares the column declares
 //           `"property_id": { "type": "string" }`. String-keyed legacy/custom
@@ -193,7 +195,7 @@ let NUM_PROP_ID;
   eq("a row written with the minted id stores it as a Number", typeof stored.property_id, "number");
 }
 
-console.log("\n[3b] the roster UI passes Property.id on without coercion");
+console.log("\n[3b] the roster UI coerces Property.id to String before stamping");
 {
   const importSrc = fs.readFileSync(path.join(REPO, "src/pages/Import.jsx"), "utf8");
   const usersSrc = fs.readFileSync(path.join(REPO, "src/pages/Users.jsx"), "utf8");
@@ -201,12 +203,22 @@ console.log("\n[3b] the roster UI passes Property.id on without coercion");
   ok("Import.jsx builds its property options from p.id raw",
     /properties\s*\.?[\s\S]{0,80}?map\(\(p\)\s*=>\s*\[p\.id,/.test(importSrc),
     "expected `.map((p) => [p.id, p.name])` — a String(p.id) here would change the answer");
-  ok("Import.jsx stamps that value straight into property_id",
-    /property_id:\s*propertyId\b/.test(importSrc));
+  // Fixed 2026-09-10 (Import hardening + property-retry merge): Import.jsx no
+  // longer stamps the raw dropdown value straight into property_id. Every
+  // write path resolves through resolveEffectiveProperty(), which String()s
+  // the snapshot/current/singleton id, and stamps property_id: effPropertyId
+  // (single/drive paths: effDrive.id). Accept the coerced writer; reject a
+  // return to the raw `property_id: propertyId` stamper with no String() on
+  // the path.
+  ok("Import.jsx coerces the id to String before stamping property_id",
+    /resolveEffectiveProperty/.test(importSrc)
+    && /String\((itemPid|propertyId)[^)]*\)/.test(importSrc)
+    && /property_id:\s*(effPropertyId|effDrive\.id)\b/.test(importSrc),
+    "expected resolveEffectiveProperty() with String() coercion feeding property_id: effPropertyId / effDrive.id");
   ok("Users.jsx puts p.id raw into the property_access array",
     /property_ids:\s*v\s*\?\s*\[\.\.\.f\.property_ids,\s*p\.id\]/.test(usersSrc));
-  console.log("        so property_access holds Numbers and property_id holds Numbers: they agree with each other");
-  console.log("        and both disagree with the \"string\" the entity schemas and the cascade assume");
+  console.log("        so property_access holds Numbers while Import.jsx now coerces to String strings");
+  console.log("        new Import rows disagree with legacy Number rows: the cascade must match both (see [4]-[6])");
 }
 
 // ── 4. THE DEFECT: the cascade does not match a Number-keyed row ────────────

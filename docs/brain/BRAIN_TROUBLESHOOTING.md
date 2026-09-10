@@ -6878,3 +6878,23 @@ Section 73 added auto-select plus upload guards, but the live Middleboro upload 
 4. **Automated Verification**:
    - Existing `src/pages/Import.test.jsx` (5 tests) still passes; `src/lib/hotelKeyImportFixtures.test.js` (30 tests) still passes.
    - `npm run lint`, `npm run typecheck`, and `npm run build` pass.
+
+## 75. Import Merge: Hardening (Rate-Limiter Domains + Queue Helpers) + Property Snapshot/Retry (2026-09-10)
+
+### Problem & Root Cause
+`094e135` (property snapshot/retry) was branched from `a2d9029`, while the reviewed hardening `6c261df` + `ddca53f` (import UX hardening + secure API caching) was branched from the same base — the two histories diverged. `main` at `094e135` still imported the old shared `sensitiveActionRateLimiter` in `src/pages/Import.jsx`, so the reviewed fix for false 58-minute lockouts (IMPORT/DESTRUCTIVE/OPERATIONAL domains) was absent, along with the queue/Force Import safety helpers.
+
+### Core Fix (`src/pages/Import.jsx` merge of `origin/antigravity/import-ux-hardening` into `094e135`)
+1. **Rate-limiter domains win** (hardening preserved, regression removed):
+   - No `sensitiveActionRateLimiter` remains in `Import.jsx`.
+   - Single/batch imports use `importRateLimiter` (batch checks once at batch level via `isBatch`); undo/clear-all use `destructiveActionRateLimiter`.
+2. **Property retry preserved** (094e135 preserved):
+   - Per-item `propertyId`/`propertyName` snapshots, `resolveEffectiveProperty()` chain, and `friendlyImportError()` translation all survive.
+   - `importSingle(item, { isBatch })` resolves the effective property FIRST, then runs the hardening `validateQueueProperty()` check against the resolved id (revoked access still fails closed; empty scan properties from pre-snapshot queues pass through to the fallback instead of demanding a re-scan).
+   - `handleImportAll()` keeps the retryable `ready + error-with-scan` pending set, the `Retry Failed (N)` label, Force Import batch confirm, and batch-level `importRateLimiter`.
+   - Drive import, `rescanWithDate()`, and `importMeta()` all resolve through the same chain.
+3. **Queue-safety reconciliation**:
+   - Hardening cleared the queue on property change/revoke; that would re-impose re-upload and contradict the retry fix. Combined behavior preserves the queue (snapshots prevent cross-property contamination) and only resets `propertyId`/`forceImport` on revoke.
+   - Metrics come from hardening `getQueueMetrics()` plus the property-fix `retryableCount` extension; per-file retry uses the single hardening `handleRetrySingle` path (duplicate `Retry` buttons removed).
+4. **Automated Verification**:
+   - Targeted: `Import.test.jsx` + `ImportHardening.test.jsx` + `rateLimiters.test.js` + `importQueueHelpers.test.js` green; `hotelKeyImportFixtures` green; `lint`/`typecheck`/`build` green; full canonical `npm run verify:all` reported below.

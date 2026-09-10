@@ -92,6 +92,32 @@ function jsonResponse(body, status) {
   return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
 }
 
+/**
+ * Apply the browser-facing security envelope to every API response, including
+ * errors returned before a route handler runs. Preserve stricter route-level
+ * cache directives such as `no-store` when they are already present.
+ * @param {Request} request
+ * @param {Response} response
+ * @returns {Response}
+ */
+function secureApiResponse(request, response) {
+  const pathname = new URL(request.url).pathname;
+  if (pathname !== "/api" && !pathname.startsWith("/api/")) return response;
+
+  const headers = new Headers(response.headers);
+  if (!headers.has("Cache-Control")) headers.set("Cache-Control", "private, no-store");
+  headers.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("X-Frame-Options", "DENY");
+  headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // SCOPED READ HANDLER — every read is constrained to the caller's property set.
 // Money columns are RETURNED, never SQL-SUM'd (totals are a JS concern).
@@ -360,14 +386,14 @@ export default {
    */
   async fetch(request, env, ctx) {
     try {
-      return await handleRequest(request, env, ctx);
+      return secureApiResponse(request, await handleRequest(request, env, ctx));
     } catch (error) {
       console.error(JSON.stringify({
         message: "unhandled worker request failure",
         path: new URL(request.url).pathname,
         error: error instanceof Error ? error.message : String(error),
       }));
-      return jsonResponse({ error: "internal server error" }, 500);
+      return secureApiResponse(request, jsonResponse({ error: "internal server error" }, 500));
     }
   },
 };

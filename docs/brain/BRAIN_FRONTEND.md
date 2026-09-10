@@ -40,7 +40,7 @@ number of rows below, verified against `src/pages/*.jsx` (excluding `*.test.jsx`
 ### Operations
 | Page | File | What It Does | Key Dependencies |
 |------|------|-------------|-----------------|
-| **Import** | `src/pages/Import.jsx` | Upload CSV files from HotelKey, auto-classify, atomic undo | `csvParser.js`, `universalParser.js`, `parser.worker.js`, `importValidation.js`, `reportParsers.js` |
+| **Import** | `src/pages/Import.jsx` | Upload CSV files from HotelKey, auto-classify, batch import, queue recovery, atomic undo | `csvParser.js`, `universalParser.js`, `parser.worker.js`, `importValidation.js`, `reportParsers.js`, `rateLimiters.js`, `importQueueHelpers.js` |
 | **ManualEntry** | `src/pages/ManualEntry.jsx` | Enter data by hand, copy-paste from spreadsheets | `manualEntryImport.js`, `manualEntrySave.js`, `manualDraft.js` |
 | **Housekeeping** | `src/pages/Housekeeping.jsx` | Room status board (clean/dirty/inspected), maid assignment | `housekeepingService.js`, `housekeepingConfig.js`, `laborOptimization.js` |
 | **RoomBoard** | `src/pages/RoomBoard.jsx` | Visual room grid: check-in/out, live cache invalidation | `roomBoard.js`, `pricingEngine.js`, `pricingSettings.js`, `realtime.js` |

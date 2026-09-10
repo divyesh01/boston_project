@@ -9,7 +9,8 @@ import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { downloadCsv, downloadExcel, stampFilename } from "@/lib/exportData";
 import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
 import { ErrorState } from "@/components/ui/status";
-import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
+import { getCsrfToken, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
+import { operationalActionRateLimiter } from "@/lib/rateLimiters";
 import { parseManualEntryCsv, parseManualEntryPaste } from "@/lib/manualEntryImport";
 import { saveManualRows } from "@/lib/manualEntrySave";
 import { draftKeyFor, readDraft, writeDraft, clearDraft } from "@/lib/manualDraft";
@@ -409,8 +410,8 @@ export default function ManualEntry() {
   };
 
   const handleSave = async () => {
-    // Rate limiting for sensitive actions
-    const rateLimit = sensitiveActionRateLimiter.check();
+    // Rate limiting for operational actions
+    const rateLimit = operationalActionRateLimiter.check();
     if (!rateLimit.allowed) {
       setSaveMsg(`Rate limited. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
       setMsgTone("error");

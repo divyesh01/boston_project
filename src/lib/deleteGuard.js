@@ -24,8 +24,8 @@ import {
   getCsrfToken,
   validateCsrfToken,
   rotateCsrfToken,
-  sensitiveActionRateLimiter,
 } from '@/lib/securityUtils';
+import { destructiveActionRateLimiter } from '@/lib/rateLimiters';
 
 /**
  * Assemble the text the operator reads before destroying a record.
@@ -119,7 +119,7 @@ export function guardDestructiveAction({
   lines = [],
   dependents = [],
   confirm,
-  rateLimiter = sensitiveActionRateLimiter,
+  rateLimiter = destructiveActionRateLimiter,
   csrf,
 }) {
   const ask =

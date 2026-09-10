@@ -9,7 +9,8 @@ import { Eye, EyeOff, Loader2, KeyRound } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
 import { db } from "@/api/base44Client";
 import { isCryptoAvailable, validatePasswordStrength } from "@/lib/security";
-import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
+import { getCsrfToken, validateCsrfToken, rotateCsrfToken } from "@/lib/securityUtils";
+import { securityActionRateLimiter } from "@/lib/rateLimiters";
 import { PASSWORD_HELP } from "@/lib/userFormValidation";
 
 export default function ChangePassword() {
@@ -30,7 +31,7 @@ export default function ChangePassword() {
       return;
     }
     // Rate limiting
-    const rateLimit = sensitiveActionRateLimiter.check();
+    const rateLimit = securityActionRateLimiter.check();
     if (!rateLimit.allowed) {
       setError(`Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
       return;

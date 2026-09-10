@@ -32,7 +32,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Loader2 } from "lucide-react";
-import { getCsrfToken, sensitiveActionRateLimiter, validateCsrfToken, rotateCsrfToken, sanitizeText, sanitizeAlphanumeric, sanitizeCsvCell } from "@/lib/securityUtils";
+import { getCsrfToken, validateCsrfToken, rotateCsrfToken, sanitizeText, sanitizeAlphanumeric, sanitizeCsvCell } from "@/lib/securityUtils";
+import { operationalActionRateLimiter, destructiveActionRateLimiter, securityActionRateLimiter } from "@/lib/rateLimiters";
 import { ARCHIVE_FILE_EXT, downloadArchive, inspectArchiveFile, parseArchive, restoreArchive } from "@/lib/dbArchive";
 import { hasAllPropertyAccess } from "@/lib/launchPolicy";
 import PasswordConfirmDialog from "@/components/PasswordConfirmDialog";
@@ -211,7 +212,7 @@ export default function Settings() {
 
   const handleSave = async () => {
     setEditingSettingsLock(false);
-    const rateLimit = sensitiveActionRateLimiter.check();
+    const rateLimit = operationalActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
       return;
@@ -303,7 +304,7 @@ export default function Settings() {
 
   const handleSaveTax = async () => {
     setEditingSettingsLock(false);
-    const rateLimit = sensitiveActionRateLimiter.check();
+    const rateLimit = operationalActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
       return;
@@ -358,7 +359,7 @@ export default function Settings() {
   };
 
   const handleBackupDownload = async () => {
-    const rateLimit = sensitiveActionRateLimiter.check();
+    const rateLimit = operationalActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
       return;
@@ -435,7 +436,7 @@ export default function Settings() {
 
   const handleRestoreConfirm = async () => {
     if (!restorePlan) return;
-    const rateLimit = sensitiveActionRateLimiter.check();
+    const rateLimit = destructiveActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
       return;
@@ -484,7 +485,7 @@ export default function Settings() {
   };
 
   const handleSaveThresholds = () => {
-    const rateLimit = sensitiveActionRateLimiter.check();
+    const rateLimit = operationalActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
       return;
@@ -511,7 +512,7 @@ export default function Settings() {
   };
 
   const handleSaveRevThresholds = () => {
-    const rateLimit = sensitiveActionRateLimiter.check();
+    const rateLimit = operationalActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
       return;
@@ -545,7 +546,7 @@ export default function Settings() {
 
   const handleAddProperty = async () => {
     if (!newPropCode.trim() || !newPropName.trim()) return;
-    const rateLimit = sensitiveActionRateLimiter.check();
+    const rateLimit = operationalActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
       return;
@@ -689,7 +690,7 @@ export default function Settings() {
   };
 
   const handleDeleteProperty = async (id) => {
-    const rateLimit = sensitiveActionRateLimiter.check();
+    const rateLimit = destructiveActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
       return;
@@ -786,7 +787,7 @@ export default function Settings() {
   // The pre-checks run BEFORE the prompt so a rate-limited operator is told so
   // instead of typing a password that was never going to be sent.
   const mfaPreflight = () => {
-    const rateLimit = sensitiveActionRateLimiter.check();
+    const rateLimit = securityActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
       return false;

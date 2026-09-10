@@ -6908,24 +6908,45 @@ A real production operator on `/upload` had 10 scanned files stuck in an unrecov
 **Root Cause Analysis**:
 `resolveEffectiveProperty()` previously trusted any truthy `item.propertyId` snapshot without checking whether that property ID was currently authorized in `accessibleProperties`. When an old/stale ID was present on the queue item, it was returned as `eff.id`. Then, `validateQueueProperty` strictly and correctly failed closed on `!accessibleProperties.some(p => p.id === propertyId)`. Because the snapshot was repeatedly re-read across retries, clicking `Retry` or `Retry Failed` re-ran the exact same failure with no escape hatch without wiping and re-uploading every file.
 
+Subsequent review of commit `308a9d24` identified three further property-integrity gaps:
+1. **Confirmation Target-Binding**: A generic boolean `reassignmentConfirmed: true` was not bound to the exact approved destination pair (`confirmedFromPropertyId` -> `confirmedTargetPropertyId`). If target B was later revoked or selection changed to C, files could silently re-home.
+2. **Batch Conflation in Import All**: `handleImportAll` previously grouped all stale items under the first item's old hotel name and count, conflating mixed origins into a single prompt.
+3. **Invented Property Aliases**: Code checked `p.code === stalePropertyId` and `p.aliases`, but `Property` entity has no `aliases` column and property codes are not proven IDs.
+
+### Architectural Decision: Option A (Safest Minimal Solution)
+Selected Option A over schema mutations:
+- No invented alias heuristics (`findAuthoritativeAlias`, `p.code`, `p.aliases` completely removed).
+- Automatic identity resolution permitted ONLY for exact currently authorized canonical IDs (with strict numeric/string collision protection) and empty snapshots with a single accessible property.
+- Every other nonempty mismatch requires explicit operator confirmation.
+- Confirmation is strictly target-bound: `{ confirmedFromPropertyId, confirmedTargetPropertyId }`.
+- Provenance is strictly immutable: `originalPropertyId` is NEVER overwritten by reassignment.
+- Batch `handleImportAll` groups by immutable `originalPropertyId`, prompts per origin group, and cancels atomically (0 writes) if any group is declined.
+
 ### Core Fix & Invariants
-1. **Strict Canonical Identity Resolution Ladder (`src/lib/importQueueHelpers.js` & `src/pages/Import.jsx`)**:
-   - Central Invariant: **"Only one accessible property exists" is NOT proof that a queued file originally belonged to that property.** A nonempty unknown/revoked property reference is **NEVER** silently re-homed solely because one other property is accessible.
-   - Core Cases Formally Distinguished:
-     - **CASE A (Valid Snapshot)**: Snapshot ID is nonempty AND currently authorized in `accessibleProperties` -> Use snapshot directly (`ok: true, source: 'snapshot'`, no reassignment).
-     - **CASE B (Authoritative Alias -> Same Canonical Property)**: Snapshot ID is nonempty and inaccessible, BUT authoritative mapping proves it represents an accessible canonical property (e.g. numeric/string ID equivalence `String(p.id) === String(snapId)`, or matching canonical property code `p.code === snapCode`, or explicit property `aliases`). Auto-canonicalization allowed (`ok: true, source: 'authoritative_alias', canonicalized: true`).
-     - **CASE C (Empty Snapshot)**: Snapshot ID is EMPTY (file was queued before a property was chosen). If exactly 1 accessible property exists, safe single-property fallback is allowed without dialog (`ok: true, source: 'canonical_single'`). If property selected, uses selected (`source: 'selected'`).
-     - **CASE D (Revoked / Unknown Nonempty Snapshot)**: Snapshot ID is nonempty, unauthorized, and NOT authoritatively mapped. It is **NEVER silently re-homed**, even if only 1 accessible property exists! Reassignment strictly requires explicit operator confirmation (`confirmPropertyReassignment`) naming old target, new target, and file count. If declined: 0 import calls, 0 UploadedReport writes, 0 business writes.
-     - **CASE E (Multiple Accessible Properties)**: When target property is ambiguous, requires user selection (`ok: false, requiresSelection: true`).
-     - **CASE F (Zero Accessible Properties)**: Fails closed (`ok: false`).
-2. **Fail-Closed Drop Gate & Scan Consistency**:
+1. **Target-Bound Confirmation Structure (`isValidPropertyReassignmentConfirmation`)**:
+   - Requires `reassignmentConfirmed: true`.
+   - Requires `confirmedFromPropertyId` strictly matching immutable `originalPropertyId`.
+   - Requires `confirmedTargetPropertyId` strictly matching `targetPropertyId`.
+   - Requires `confirmedTargetPropertyId` to STILL be authorized in `accessibleProperties`.
+   - If selected property changes after approval (e.g. from B to C), approval is invalidated and new confirmation is required.
+   - If target property is revoked before retry completes, approval is invalidated and fails closed (0 writes).
+2. **Immutable Provenance Preservation**:
+   - `originalPropertyId` and `originalPropertyName` record the true original origin at scan time and are NEVER overwritten.
+   - Reassignment fields `reassignedFromPropertyId`, `confirmedFromPropertyId`, and `confirmedTargetPropertyId` track the approval trail explicitly.
+3. **Atomic Batch Reassignment & Per-Origin Grouping (`groupQueueByOrigin`)**:
+   - `handleImportAll()` groups files requiring reassignment strictly by their immutable origin ID (`groupQueueByOrigin`).
+   - Operator is prompted sequentially per distinct origin group.
+   - **Atomicity**: If ANY origin group is declined or cancelled, the entire batch import aborts before any file writes begin (0 writes executed).
+4. **Numeric / String Property ID Collision Handling (`findAuthorizedById`)**:
+   - If `accessibleProperties` contains ambiguous colliding IDs (e.g. `{ id: 1 }` and `{ id: "1" }`), resolution fails closed rather than guessing.
+5. **Fail-Closed Drop Gate & Scan Consistency**:
    - `handleFiles()`: Upload and scan drop gate evaluates `if (!effUpload.ok)` alone — never falling back to raw `propertyId`. Blocks file drop even if an invalid nonempty string is present in dropdown.
    - Scan consistency: `effUpload.id` and `effUpload.name` are passed directly to `scanReport` and preserved across `newQueue` and post-scan `setQueue`.
-3. **Automated Verification & Mutation Proof**:
-   - Unit tests in `src/lib/importQueueHelpers.test.js`: 22/22 tests passing across all identity cases (A through F), confirmation prompts, cancellation, and validation checks.
-   - End-to-end integration tests in `src/pages/Import.test.jsx`: 13/13 tests passing, covering single auto-selection, negative flows, fail-closed revoked property attack flows, confirmed reassignment with provenance preservation, empty snapshot auto-fallback, authoritative alias canonicalization, drop gate blocking, and scan consistency.
+6. **Automated Verification & Mutation Proof**:
+   - Unit tests in `src/lib/importQueueHelpers.test.js`: 36/36 tests passing covering identity ladder, `isValidPropertyReassignmentConfirmation`, `groupQueueByOrigin`, numeric/string collisions, and validation.
+   - Integration tests in `src/pages/Import.test.jsx`: 17/17 tests passing covering single retry matrix (S1-S8), batch matrix (B1-B4), confirmation invalidation on target change, target revocation, and strict code alias rejection.
    - Mutation tests executed:
-     - Mutation 1 (unconditional silent re-homing): broke 5 tests across unit and integration suites (`CASE D`, `CASE C`, `Explicit Reassignment`, `Test 1`, `Test 4`). Restored.
-     - Mutation 2 (`if (!effUpload.ok && !propertyId)`): verified drop gate strictly evaluates `!effUpload.ok` to reject invalid dropdown states. Restored.
-
-
+     - M1 (revert validation to boolean-only `if (item.reassignmentConfirmed)`): broke 2 tests in `importQueueHelpers.test.js`. Restored.
+     - M2 (force resolver to silently re-target without approval): broke `TEST S5` in `Import.test.jsx`. Restored.
+     - M3 (collapse mixed-origin batch into first origin): broke `TEST B2` in `importQueueHelpers.test.js`. Restored.
+     - M4 (restore `p.code === snapshotId` alias guessing): broke code rejection test in `importQueueHelpers.test.js`. Restored.

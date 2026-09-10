@@ -20,6 +20,8 @@ import {
   confirmForceImportToggle,
   confirmBatchForceImport,
   confirmPropertyReassignment,
+  groupQueueByOrigin,
+  isValidPropertyReassignmentConfirmation,
   validateQueueProperty,
   resolveQueueProperty,
 } from "@/lib/importQueueHelpers";
@@ -539,32 +541,81 @@ export default function Import() {
     // was chosen can still import once it is chosen — no re-upload required.
     // This is what repairs the stuck "10 failed … propertyId is required" queue:
     // the old code passed the then-empty dropdown value straight through.
-    const eff = resolveEffectiveProperty(item.propertyId, item.propertyName, item);
+    let targetItem = item;
+    let eff = resolveEffectiveProperty(item.propertyId, item.propertyName, item);
+
+    if (!eff.ok && eff.requiresReassignment) {
+      const targetProp = accessibleProperties.find((p) => p.id === propertyId) || (accessibleProperties.length === 1 ? accessibleProperties[0] : null);
+      if (!targetProp) {
+        const msg = eff.error || "Multiple accessible properties available. Please select the target property above to reassign this file.";
+        setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: msg } : q)));
+        return { name: item.name, ok: false, error: msg };
+      }
+      const originId = String(item.originalPropertyId || item.propertyId || item.scan?.meta?.propertyId || item.scan?.propertyId || '').trim();
+      const originName = item.originalPropertyName || item.propertyName || originId || "Previous Property";
+      const oldTarget = originName ? `${originName} (${originId})` : originId;
+      const newTarget = `${targetProp.name || targetProp.id} (${targetProp.id})`;
+      const ok = confirmPropertyReassignment({
+        oldTarget,
+        newTarget,
+        count: 1,
+      });
+      if (!ok) {
+        const msg = "Reassignment cancelled by operator.";
+        setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: msg } : q)));
+        return { name: item.name, ok: false, error: msg };
+      }
+      targetItem = {
+        ...item,
+        originalPropertyId: originId,
+        originalPropertyName: originName,
+        confirmedFromPropertyId: originId,
+        confirmedTargetPropertyId: String(targetProp.id),
+        propertyId: targetProp.id,
+        propertyName: targetProp.name || "",
+        reassignedFromPropertyId: item.propertyId,
+        reassignmentConfirmed: true,
+        scan: item.scan ? {
+          ...item.scan,
+          propertyId: targetProp.id,
+          meta: item.scan.meta ? {
+            ...item.scan.meta,
+            propertyId: targetProp.id,
+            propertyName: targetProp.name || "",
+          } : item.scan.meta,
+        } : item.scan,
+      };
+      eff = resolveEffectiveProperty(targetItem.propertyId, targetItem.propertyName, targetItem);
+    }
+
     if (!eff.ok || !eff.id) {
       const msg = eff.error || friendlyImportError({ message: "Select a property above, then retry this file — it was scanned with no property attached so there was nowhere to store its rows." });
-      setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: msg } : q)));
-      return { name: item.name, ok: false, error: msg };
+      setQueue((prev) => prev.map((q) => (q.key === targetItem.key ? { ...q, status: "error", error: msg } : q)));
+      return { name: targetItem.name, ok: false, error: msg };
     }
-    // If the item was safely reassigned or canonicalized,
+    // If the item was safely reassigned to the canonical/selected target,
     // update the item's target property and scan metadata so validateQueueProperty evaluates the target.
-    const itemToValidate = (eff.reassigned || eff.canonicalized) && eff.id !== item.propertyId
+    const itemToValidate = eff.reassigned && eff.id !== targetItem.propertyId
       ? {
-          ...item,
+          ...targetItem,
           propertyId: eff.id,
           propertyName: eff.name,
-          originalPropertyId: item.originalPropertyId || item.propertyId,
-          originalPropertyName: item.originalPropertyName || item.propertyName,
-          scan: item.scan ? {
-            ...item.scan,
+          originalPropertyId: targetItem.originalPropertyId || targetItem.propertyId,
+          originalPropertyName: targetItem.originalPropertyName || targetItem.propertyName,
+          confirmedFromPropertyId: targetItem.confirmedFromPropertyId || eff.confirmedFromPropertyId,
+          confirmedTargetPropertyId: targetItem.confirmedTargetPropertyId || eff.confirmedTargetPropertyId,
+          reassignmentConfirmed: targetItem.reassignmentConfirmed || eff.reassigned,
+          scan: targetItem.scan ? {
+            ...targetItem.scan,
             propertyId: eff.id,
-            meta: item.scan.meta ? { ...item.scan.meta, propertyId: eff.id, propertyName: eff.name } : item.scan.meta,
-          } : item.scan,
+            meta: targetItem.scan.meta ? { ...targetItem.scan.meta, propertyId: eff.id, propertyName: eff.name } : targetItem.scan.meta,
+          } : targetItem.scan,
         }
-      : item;
+      : targetItem;
 
     // Hardening consistency check, evaluated against the RESOLVED property (not
     // just the live dropdown): revoked access fails closed, and a scan that
-    // actually carries a different property id still requires a re-scan.
+    // actually carries a different property id requires valid target-bound confirmation.
     // Empty scan properties (pre-snapshot queues) pass through to the fallback.
     const propCheck = validateQueueProperty({
       item: itemToValidate,
@@ -576,14 +627,17 @@ export default function Import() {
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: friendly } : q)));
       return { name: item.name, ok: false, error: friendly };
     }
-    // Persist the resolution so a later retry (or a re-render) keeps it, preserving original provenance.
-    if (eff.id !== item.propertyId || eff.name !== item.propertyName || eff.reassigned || eff.canonicalized) {
+    // Persist the resolution so a later retry (or a re-render) keeps it, preserving immutable provenance.
+    if (eff.id !== item.propertyId || eff.name !== item.propertyName || eff.reassigned) {
       setQueue((prev) => prev.map((q) => (q.key === item.key ? {
         ...q,
         propertyId: eff.id,
         propertyName: eff.name,
         originalPropertyId: q.originalPropertyId || q.propertyId,
         originalPropertyName: q.originalPropertyName || q.propertyName,
+        confirmedFromPropertyId: q.confirmedFromPropertyId || eff.confirmedFromPropertyId,
+        confirmedTargetPropertyId: q.confirmedTargetPropertyId || eff.confirmedTargetPropertyId,
+        reassignmentConfirmed: q.reassignmentConfirmed || eff.reassigned,
         scan: q.scan ? {
           ...q.scan,
           propertyId: eff.id,
@@ -758,7 +812,7 @@ export default function Import() {
     // Check if any pending items require explicit reassignment
     const itemsNeedingReassignment = pending.filter((item) => {
       const eff = resolveEffectiveProperty(item.propertyId, item.propertyName, item);
-      return !eff.ok && eff.requiresReassignment && !item.reassignmentConfirmed;
+      return !eff.ok && eff.requiresReassignment;
     });
 
     let queueItemsToProcess = pending;
@@ -768,43 +822,59 @@ export default function Import() {
         alert("Some queued files were scanned for properties that are no longer accessible. Please select a target property above to reassign them.");
         return;
       }
-      const oldTarget = itemsNeedingReassignment[0].originalPropertyName || itemsNeedingReassignment[0].propertyName || itemsNeedingReassignment[0].propertyId || "Previous Property";
-      const newTarget = `${targetProp.name || targetProp.id} (${targetProp.id})`;
-      const ok = confirmPropertyReassignment({
-        oldTarget,
-        newTarget,
-        count: itemsNeedingReassignment.length,
-      });
-      if (ok) {
-        const reassignedKeys = new Set(itemsNeedingReassignment.map((it) => it.key));
-        queueItemsToProcess = pending.map((item) => {
-          if (reassignedKeys.has(item.key)) {
-            return {
-              ...item,
-              propertyId: targetProp.id,
-              propertyName: targetProp.name || "",
-              originalPropertyId: item.originalPropertyId || item.propertyId,
-              originalPropertyName: item.originalPropertyName || item.propertyName || "",
-              reassignedFromPropertyId: item.propertyId,
-              reassignmentConfirmed: true,
-              scan: item.scan ? {
-                ...item.scan,
-                propertyId: targetProp.id,
-                meta: item.scan.meta ? {
-                  ...item.scan.meta,
-                  propertyId: targetProp.id,
-                  propertyName: targetProp.name || "",
-                } : item.scan.meta,
-              } : item.scan,
-            };
-          }
-          return item;
+
+      // Group files strictly by immutable origin ID (not display name alone)
+      const groupsByOrigin = groupQueueByOrigin(itemsNeedingReassignment);
+
+      // Prompt separately for EACH distinct origin group
+      // BATCH ATOMICITY PREFERENCE:
+      // If ANY required group is cancelled/refused, abort Import All before any writes!
+      let allApproved = true;
+      const targetUpdates = new Map();
+
+      for (const [originId, group] of groupsByOrigin.entries()) {
+        const oldTarget = group.originName ? `${group.originName} (${originId})` : originId;
+        const newTarget = `${targetProp.name || targetProp.id} (${targetProp.id})`;
+        const ok = confirmPropertyReassignment({
+          oldTarget,
+          newTarget,
+          count: group.items.length,
         });
-        setQueue((prev) => prev.map((q) => {
-          const matched = queueItemsToProcess.find((it) => it.key === q.key);
-          return matched || q;
-        }));
+        if (!ok) {
+          allApproved = false;
+          break;
+        }
+        for (const item of group.items) {
+          targetUpdates.set(item.key, {
+            ...item,
+            originalPropertyId: originId,
+            originalPropertyName: group.originName,
+            confirmedFromPropertyId: originId,
+            confirmedTargetPropertyId: String(targetProp.id),
+            propertyId: targetProp.id,
+            propertyName: targetProp.name || "",
+            reassignedFromPropertyId: item.propertyId,
+            reassignmentConfirmed: true,
+            scan: item.scan ? {
+              ...item.scan,
+              propertyId: targetProp.id,
+              meta: item.scan.meta ? {
+                ...item.scan.meta,
+                propertyId: targetProp.id,
+                propertyName: targetProp.name || "",
+              } : item.scan.meta,
+            } : item.scan,
+          });
+        }
       }
+
+      if (!allApproved) {
+        alert("Batch import cancelled. All files requiring reassignment must be confirmed before batch import begins.");
+        return;
+      }
+
+      queueItemsToProcess = pending.map((item) => targetUpdates.get(item.key) || item);
+      setQueue((prev) => prev.map((q) => targetUpdates.get(q.key) || q));
     }
 
     const effAll = resolveEffectiveProperty("", "");
@@ -963,7 +1033,9 @@ export default function Import() {
         alert(eff.error || "Multiple accessible properties available. Please select the target property above to reassign this file.");
         return;
       }
-      const oldTarget = item.originalPropertyName || item.propertyName || item.originalPropertyId || item.propertyId || "Previous Property";
+      const originId = String(item.originalPropertyId || item.propertyId || item.scan?.meta?.propertyId || item.scan?.propertyId || '').trim();
+      const originName = item.originalPropertyName || item.propertyName || originId || "Previous Property";
+      const oldTarget = originName ? `${originName} (${originId})` : originId;
       const newTarget = `${targetProp.name || targetProp.id} (${targetProp.id})`;
       const ok = confirmPropertyReassignment({
         oldTarget,
@@ -974,16 +1046,18 @@ export default function Import() {
         setQueue((prev) => prev.map((q) => (q.key === item.key ? {
           ...q,
           status: "error",
-          error: eff.error || "Reassignment cancelled by operator.",
+          error: "Reassignment cancelled by operator.",
         } : q)));
         return;
       }
       targetItem = {
         ...item,
+        originalPropertyId: originId,
+        originalPropertyName: originName,
+        confirmedFromPropertyId: originId,
+        confirmedTargetPropertyId: String(targetProp.id),
         propertyId: targetProp.id,
         propertyName: targetProp.name || "",
-        originalPropertyId: item.originalPropertyId || item.propertyId,
-        originalPropertyName: item.originalPropertyName || item.propertyName || "",
         reassignedFromPropertyId: item.propertyId,
         reassignmentConfirmed: true,
         scan: item.scan ? {

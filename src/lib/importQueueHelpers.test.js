@@ -4,6 +4,8 @@ import {
   confirmForceImportToggle,
   confirmBatchForceImport,
   confirmPropertyReassignment,
+  groupQueueByOrigin,
+  isValidPropertyReassignmentConfirmation,
   validateQueueProperty,
   resolveQueueProperty,
 } from './importQueueHelpers';
@@ -121,6 +123,38 @@ describe('importQueueHelpers', () => {
     });
   });
 
+  describe('groupQueueByOrigin (TEST B1 & TEST B2)', () => {
+    it('groups batch items by their distinct immutable origin IDs without conflation (TEST B2)', () => {
+      const items = [
+        { originalPropertyId: 'prop-origin-1', originalPropertyName: 'Hotel Alpha', key: '1' },
+        { originalPropertyId: 'prop-origin-1', originalPropertyName: 'Hotel Alpha', key: '2' },
+        { originalPropertyId: 'prop-origin-2', originalPropertyName: 'Hotel Beta', key: '3' },
+      ];
+      const groups = groupQueueByOrigin(items);
+      expect(groups.size).toBe(2);
+      expect(groups.get('prop-origin-1')?.items).toHaveLength(2);
+      expect(groups.get('prop-origin-2')?.items).toHaveLength(1);
+    });
+
+    it('groups all items into single group when all originate from same property (TEST B1)', () => {
+      const items = [
+        { originalPropertyId: 'prop-origin-1', originalPropertyName: 'Hotel Alpha', key: '1' },
+        { originalPropertyId: 'prop-origin-1', originalPropertyName: 'Hotel Alpha', key: '2' },
+        { originalPropertyId: 'prop-origin-1', originalPropertyName: 'Hotel Alpha', key: '3' },
+        { originalPropertyId: 'prop-origin-1', originalPropertyName: 'Hotel Alpha', key: '4' },
+        { originalPropertyId: 'prop-origin-1', originalPropertyName: 'Hotel Alpha', key: '5' },
+      ];
+      const groups = groupQueueByOrigin(items);
+      expect(groups.size).toBe(1);
+      expect(groups.get('prop-origin-1')?.items).toHaveLength(5);
+    });
+
+    it('handles empty items array safely', () => {
+      const groups = groupQueueByOrigin([]);
+      expect(groups.size).toBe(0);
+    });
+  });
+
   describe('validateQueueProperty', () => {
     it('rejects empty propertyId', () => {
       const res = validateQueueProperty({
@@ -152,9 +186,41 @@ describe('importQueueHelpers', () => {
       expect(res.error).toContain('was scanned for property "old-prop"');
     });
 
-    it('accepts item whose scan metadata differs if reassignment was operator-confirmed', () => {
+    it('rejects item whose scan metadata differs if reassignment confirmation is missing or boolean-only', () => {
       const res = validateQueueProperty({
         item: { scan: { meta: { propertyId: 'old-prop' } }, reassignmentConfirmed: true },
+        propertyId: 'new-prop',
+        accessibleProperties: [{ id: 'new-prop' }],
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error).toContain('Reassignment confirmation is invalid or required');
+    });
+
+    it('rejects item whose scan metadata differs if confirmed target does not match current target', () => {
+      const res = validateQueueProperty({
+        item: {
+          scan: { meta: { propertyId: 'old-prop' } },
+          reassignmentConfirmed: true,
+          originalPropertyId: 'old-prop',
+          confirmedFromPropertyId: 'old-prop',
+          confirmedTargetPropertyId: 'other-prop',
+        },
+        propertyId: 'new-prop',
+        accessibleProperties: [{ id: 'new-prop' }, { id: 'other-prop' }],
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error).toContain('Reassignment confirmation is invalid or required');
+    });
+
+    it('accepts item whose scan metadata differs if reassignment was operator-confirmed with valid target binding', () => {
+      const res = validateQueueProperty({
+        item: {
+          scan: { meta: { propertyId: 'old-prop' } },
+          reassignmentConfirmed: true,
+          originalPropertyId: 'old-prop',
+          confirmedFromPropertyId: 'old-prop',
+          confirmedTargetPropertyId: 'new-prop',
+        },
         propertyId: 'new-prop',
         accessibleProperties: [{ id: 'new-prop' }],
       });
@@ -168,6 +234,92 @@ describe('importQueueHelpers', () => {
         accessibleProperties: [{ id: 'prop-1' }],
       });
       expect(res.ok).toBe(true);
+    });
+  });
+
+  describe('isValidPropertyReassignmentConfirmation', () => {
+    const accessible = [{ id: 'prop-target', name: 'Target Hotel' }];
+
+    it('passes for exact, valid target-bound confirmation', () => {
+      const valid = isValidPropertyReassignmentConfirmation({
+        item: {
+          originalPropertyId: 'prop-origin',
+          reassignmentConfirmed: true,
+          confirmedFromPropertyId: 'prop-origin',
+          confirmedTargetPropertyId: 'prop-target',
+        },
+        targetPropertyId: 'prop-target',
+        accessibleProperties: accessible,
+      });
+      expect(valid).toBe(true);
+    });
+
+    it('fails when item has boolean-only reassignmentConfirmed without binding (TEST S8)', () => {
+      const valid = isValidPropertyReassignmentConfirmation({
+        item: {
+          originalPropertyId: 'prop-origin',
+          reassignmentConfirmed: true,
+        },
+        targetPropertyId: 'prop-target',
+        accessibleProperties: accessible,
+      });
+      expect(valid).toBe(false);
+    });
+
+    it('fails when confirmedFromPropertyId is tampered or does not match originalPropertyId (TEST S7)', () => {
+      const valid = isValidPropertyReassignmentConfirmation({
+        item: {
+          originalPropertyId: 'prop-origin',
+          reassignmentConfirmed: true,
+          confirmedFromPropertyId: 'prop-tampered',
+          confirmedTargetPropertyId: 'prop-target',
+        },
+        targetPropertyId: 'prop-target',
+        accessibleProperties: accessible,
+      });
+      expect(valid).toBe(false);
+    });
+
+    it('fails when targetPropertyId does not match confirmedTargetPropertyId (TEST S5)', () => {
+      const valid = isValidPropertyReassignmentConfirmation({
+        item: {
+          originalPropertyId: 'prop-origin',
+          reassignmentConfirmed: true,
+          confirmedFromPropertyId: 'prop-origin',
+          confirmedTargetPropertyId: 'prop-target',
+        },
+        targetPropertyId: 'prop-other',
+        accessibleProperties: accessible,
+      });
+      expect(valid).toBe(false);
+    });
+
+    it('fails when confirmed target property has been revoked from session (TEST S6)', () => {
+      const valid = isValidPropertyReassignmentConfirmation({
+        item: {
+          originalPropertyId: 'prop-origin',
+          reassignmentConfirmed: true,
+          confirmedFromPropertyId: 'prop-origin',
+          confirmedTargetPropertyId: 'prop-target',
+        },
+        targetPropertyId: 'prop-target',
+        accessibleProperties: [], // revoked!
+      });
+      expect(valid).toBe(false);
+    });
+
+    it('fails closed when accessibleProperties has an ambiguous numeric/string collision', () => {
+      const valid = isValidPropertyReassignmentConfirmation({
+        item: {
+          originalPropertyId: '1',
+          reassignmentConfirmed: true,
+          confirmedFromPropertyId: '1',
+          confirmedTargetPropertyId: '1',
+        },
+        targetPropertyId: '1',
+        accessibleProperties: [{ id: 1, name: 'Numeric 1' }, { id: '1', name: 'String 1' }],
+      });
+      expect(valid).toBe(false);
     });
   });
 
@@ -187,18 +339,31 @@ describe('importQueueHelpers', () => {
       expect(res.reassigned).toBe(false);
     });
 
-    it('CASE B: authoritatively canonicalizes when snapshot matches property code', () => {
+    it('does NOT automatically canonicalize when snapshot matches property code (Option A: no invented aliases)', () => {
+      // prop code RR101 is NOT an authorized ID; must not guess without operator confirmation
       const res = resolveQueueProperty({
         item: { propertyId: 'RR101', propertyName: 'Hotel Alpha' },
         propertyId: '',
         accessibleProperties: [propA, propB],
       });
-      expect(res.ok).toBe(true);
-      expect(res.id).toBe('prop-a');
-      expect(res.source).toBe('authoritative_alias');
-      expect(res.canonicalized).toBe(true);
-      expect(res.reassigned).toBe(true);
-      expect(res.originalPropertyId).toBe('RR101');
+      expect(res.ok).toBe(false);
+      expect(res.id).toBe('');
+      expect(res.requiresReassignment).toBe(true);
+      expect(res.requiresSelection).toBe(true);
+      expect(res.error).toContain('Multiple accessible properties available');
+    });
+
+    it('requires explicit operator reassignment when snapshot matches property code and target is selected', () => {
+      const res = resolveQueueProperty({
+        item: { propertyId: 'RR101', propertyName: 'Hotel Alpha' },
+        propertyId: 'prop-b',
+        accessibleProperties: [propA, propB],
+      });
+      expect(res.ok).toBe(false);
+      expect(res.id).toBe('');
+      expect(res.requiresReassignment).toBe(true);
+      expect(res.suggestedTargetId).toBe('prop-b');
+      expect(res.error).toContain('Explicit operator reassignment is required');
     });
 
     it('CASE C: safely falls back to canonical property when snapshot is EMPTY and exactly 1 property accessible', () => {
@@ -231,7 +396,7 @@ describe('importQueueHelpers', () => {
       expect(res.error).toContain('Explicit operator reassignment is required');
     });
 
-    it('Explicit Reassignment: proceeds with confirmed target when operator has confirmed', () => {
+    it('Explicit Reassignment: proceeds with confirmed target when operator confirmation is valid', () => {
       const res = resolveQueueProperty({
         item: {
           propertyId: 'prop-revoked',
@@ -239,7 +404,8 @@ describe('importQueueHelpers', () => {
           originalPropertyId: 'prop-revoked',
           originalPropertyName: 'Revoked Hotel',
           reassignmentConfirmed: true,
-          reassignedFromPropertyId: 'prop-revoked',
+          confirmedFromPropertyId: 'prop-revoked',
+          confirmedTargetPropertyId: 'prop-b',
         },
         propertyId: 'prop-b',
         accessibleProperties: [propB],
@@ -250,7 +416,41 @@ describe('importQueueHelpers', () => {
       expect(res.source).toBe('operator_reassigned');
       expect(res.reassigned).toBe(true);
       expect(res.originalPropertyId).toBe('prop-revoked');
-      expect(res.reassignedFromPropertyId).toBe('prop-revoked');
+      expect(res.confirmedFromPropertyId).toBe('prop-revoked');
+      expect(res.confirmedTargetPropertyId).toBe('prop-b');
+    });
+
+    it('fails closed if confirmed target property is revoked from session before resolve (TEST S6)', () => {
+      const res = resolveQueueProperty({
+        item: {
+          propertyId: 'prop-revoked',
+          propertyName: 'Revoked Hotel',
+          originalPropertyId: 'prop-revoked',
+          originalPropertyName: 'Revoked Hotel',
+          reassignmentConfirmed: true,
+          confirmedFromPropertyId: 'prop-revoked',
+          confirmedTargetPropertyId: 'prop-b',
+        },
+        propertyId: 'prop-b',
+        accessibleProperties: [], // revoked!
+      });
+      expect(res.ok).toBe(false);
+      expect(res.id).toBe('');
+      expect(res.error).toContain('No accessible properties found');
+    });
+
+    it('fails closed when ID has ambiguous numeric and string collision in accessible properties', () => {
+      const collisionProps = [
+        { id: 42, name: 'Numeric 42' },
+        { id: '42', name: 'String 42' },
+      ];
+      const res = resolveQueueProperty({
+        item: { propertyId: 42 },
+        accessibleProperties: collisionProps,
+      });
+      // Ambiguous collision must not guess
+      expect(res.ok).toBe(false);
+      expect(res.requiresReassignment).toBe(true);
     });
 
     it('CASE E: refuses to guess when multiple accessible properties exist and snapshot is stale', () => {

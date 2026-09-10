@@ -493,21 +493,22 @@ describe("Import.jsx property auto-selection and upload guards", () => {
       expect(confirmSpy).not.toHaveBeenCalled();
     });
 
-    it("Test 6 (Authoritative Alias Canonicalization): canonicalizes automatically when snapshot matches property code", async () => {
+    it("Test 6 (Strict Property Identity - No Automatic Code Alias Guessing): snapshot with hotel code requires explicit operator confirmation and does NOT auto-canonicalize", async () => {
+      // Step 1: Queue item is scanned when property snapshot is "RR101"
       mockProperties = [
-        { id: "prop-canonical-101", code: "RR101", name: "Red Roof Middleboro" },
+        { id: "RR101", name: "Red Roof Middleboro" },
       ];
-      mockCanAccessProperty.mockImplementation((id) => id === "prop-canonical-101");
+      mockCanAccessProperty.mockImplementation((id) => id === "RR101");
 
       mockScanReport.mockResolvedValueOnce({
         type: "daily_ledger",
         totalRows: 10,
         meta: { propertyId: "RR101", propertyName: "Red Roof Middleboro" },
       });
-      mockImportReport.mockResolvedValueOnce({ count: 10, excluded: 0, importId: "imp-code-alias" });
+      mockImportReport.mockResolvedValueOnce({ count: 10, excluded: 0, importId: "imp-code-strict" });
 
-      const confirmSpy = vi.spyOn(window, "confirm");
-      const { container } = render(<Import />);
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+      const { container, rerender } = render(<Import />);
 
       const dummyFile = new File(["col1,col2\n1,2"], "test-alias.csv", { type: "text/csv" });
       const fileInput = container.querySelector('input[type="file"]');
@@ -517,13 +518,25 @@ describe("Import.jsx property auto-selection and upload guards", () => {
         expect(screen.getByText("test-alias.csv")).toBeDefined();
       });
 
+      // Step 2: System updates to canonical ID "prop-canonical-101" with code "RR101"
+      mockProperties = [
+        { id: "prop-canonical-101", code: "RR101", name: "Red Roof Middleboro" },
+      ];
+      mockCanAccessProperty.mockImplementation((id) => id === "prop-canonical-101");
+
+      rerender(<Import />);
+
       await waitFor(() => {
         expect(screen.getByRole("button", { name: /^import$/i })).toBeDefined();
       });
 
       fireEvent.click(screen.getByRole("button", { name: /^import$/i }));
 
-      // Canonicalized automatically to prop-canonical-101 based on authoritative code match
+      // Under Option A: code match does NOT silently canonicalize. Explicit confirmation is required!
+      expect(confirmSpy).toHaveBeenCalledOnce();
+      expect(confirmSpy.mock.calls[0][0]).toContain("RR101");
+      expect(confirmSpy.mock.calls[0][0]).toContain("Red Roof Middleboro (prop-canonical-101)");
+
       await waitFor(() => {
         expect(mockImportReport).toHaveBeenCalledWith(
           expect.anything(),
@@ -532,7 +545,6 @@ describe("Import.jsx property auto-selection and upload guards", () => {
           })
         );
       });
-      expect(confirmSpy).not.toHaveBeenCalled();
     });
 
     it("Test 7 (Invalid Nonempty Dropdown During File Drop): blocks scan when propertyId is invalid and multiple properties exist", async () => {
@@ -591,6 +603,204 @@ describe("Import.jsx property auto-selection and upload guards", () => {
       await waitFor(() => {
         expect(screen.getByText("test-consistent.csv")).toBeDefined();
       });
+    });
+
+    it("TEST S5 (Confirmation Invalidation on Target Change): requires new confirmation if selected property changes after approval", async () => {
+      // Step 1: Queue item is scanned when property snapshot is "prop-a"
+      mockProperties = [
+        { id: "prop-a", name: "Hotel A" },
+      ];
+      mockCanAccessProperty.mockImplementation((id) => id === "prop-a");
+
+      mockScanReport.mockResolvedValueOnce({
+        type: "daily_ledger",
+        totalRows: 10,
+        meta: { propertyId: "prop-a", propertyName: "Hotel A" },
+      });
+      // Initial import fails with transient network error so item enters retry state
+      mockImportReport.mockRejectedValueOnce(new Error("Network error"));
+
+      const { container, rerender } = render(<Import />);
+
+      const dummyFile = new File(["col1,col2\n1,2"], "test-s5.csv", { type: "text/csv" });
+      const fileInput = container.querySelector('input[type="file"]');
+      fireEvent.change(fileInput, { target: { files: [dummyFile] } });
+
+      await waitFor(() => {
+        expect(screen.getByText("test-s5.csv")).toBeDefined();
+      });
+
+      // Step 2: Access changes, only Hotel B and Hotel C are accessible
+      mockProperties = [
+        { id: "prop-b", name: "Hotel B" },
+        { id: "prop-c", name: "Hotel C" },
+      ];
+      mockCanAccessProperty.mockImplementation(() => true);
+      rerender(<Import />);
+
+      // Select Hotel B
+      const select = screen.getByTestId("property-select");
+      fireEvent.change(select, { target: { value: "prop-b" } });
+
+      // Confirm reassignment from A to B on first attempt
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+      const importBtn = screen.getByRole("button", { name: /^import$/i });
+      fireEvent.click(importBtn);
+
+      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("Hotel B (prop-b)"));
+      confirmSpy.mockClear();
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /^retry$/i })).toBeDefined();
+      });
+
+      // Now simulate user changing dropdown selection to Hotel C before retrying or re-importing
+      fireEvent.change(select, { target: { value: "prop-c" } });
+
+      // If user cancels confirmation for C, it must NOT silently import into B or C
+      confirmSpy.mockReturnValue(false);
+      mockImportReport.mockClear();
+
+      const retryBtn = screen.getByRole("button", { name: /^retry$/i });
+      fireEvent.click(retryBtn);
+
+      // Verify that reassignment to Hotel C was prompted and operator cancelled
+      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("Hotel C (prop-c)"));
+      expect(mockImportReport).not.toHaveBeenCalled();
+    });
+
+    it("TEST S6 (Revocation After Confirmation): fails closed with 0 writes if confirmed target is revoked before import", async () => {
+      // Step 1: Queue item is scanned when property snapshot is "prop-a"
+      mockProperties = [
+        { id: "prop-a", name: "Hotel A" },
+      ];
+      mockCanAccessProperty.mockImplementation((id) => id === "prop-a");
+
+      mockScanReport.mockResolvedValueOnce({
+        type: "daily_ledger",
+        totalRows: 10,
+        meta: { propertyId: "prop-a", propertyName: "Hotel A" },
+      });
+      mockImportReport.mockRejectedValueOnce(new Error("Transient network failure"));
+
+      const { container, rerender } = render(<Import />);
+      const dummyFile = new File(["col1,col2\n1,2"], "test-s6.csv", { type: "text/csv" });
+      const fileInput = container.querySelector('input[type="file"]');
+      fireEvent.change(fileInput, { target: { files: [dummyFile] } });
+
+      await waitFor(() => {
+        expect(screen.getByText("test-s6.csv")).toBeDefined();
+      });
+
+      // Step 2: Switch to Hotel B
+      mockProperties = [
+        { id: "prop-b", name: "Hotel B" },
+      ];
+      mockCanAccessProperty.mockImplementation((id) => id === "prop-b");
+      rerender(<Import />);
+
+      // Confirm reassignment to Hotel B
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+      fireEvent.click(screen.getByRole("button", { name: /^import$/i }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /^retry$/i })).toBeDefined();
+      });
+
+      // Now simulate target Hotel B being REVOKED from session
+      mockProperties = [];
+      mockCanAccessProperty.mockImplementation(() => false);
+      mockImportReport.mockClear();
+      mockUploadedReportCreate.mockClear();
+
+      rerender(<Import />);
+
+      // Retry clicked
+      fireEvent.click(screen.getByRole("button", { name: /^retry$/i }));
+
+      // Must fail closed with 0 writes
+      expect(mockImportReport).not.toHaveBeenCalled();
+      expect(mockUploadedReportCreate).not.toHaveBeenCalled();
+    });
+
+    it("TEST B1 & B2 & B3 (Batch Reassignment with Atomic Abort): prompts per distinct origin and aborts cleanly with 0 writes on cancellation", async () => {
+      mockProperties = [{ id: "prop-origin-1", name: "Hotel Origin 1" }];
+      mockCanAccessProperty.mockImplementation((id) => id === "prop-origin-1");
+      mockScanReport.mockResolvedValueOnce({
+        type: "daily_ledger",
+        totalRows: 5,
+        meta: { propertyId: "prop-origin-1", propertyName: "Hotel Origin 1" },
+      });
+
+      const { container, rerender } = render(<Import />);
+      const file1 = new File(["col1\n1"], "report-origin1.csv", { type: "text/csv" });
+      const fileInput = container.querySelector('input[type="file"]');
+      fireEvent.change(fileInput, { target: { files: [file1] } });
+
+      await waitFor(() => {
+        expect(screen.getByText("report-origin1.csv")).toBeDefined();
+      });
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /^import$/i })).toBeDefined();
+      });
+
+      // Switch property access to prop-target-b
+      mockProperties = [{ id: "prop-target-b", name: "Target Hotel B" }];
+      mockCanAccessProperty.mockImplementation((id) => id === "prop-target-b");
+      rerender(<Import />);
+
+      // Cancel prompt for reassignment
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+      // Click Import All
+      const importBtn = screen.getByRole("button", { name: /^import all/i });
+      fireEvent.click(importBtn);
+
+      expect(confirmSpy).toHaveBeenCalledOnce();
+      expect(confirmSpy.mock.calls[0][0]).toContain("prop-origin-1");
+      expect(confirmSpy.mock.calls[0][0]).toContain("Target Hotel B (prop-target-b)");
+
+      // Cancelled -> 0 writes!
+      expect(mockImportReport).not.toHaveBeenCalled();
+      expect(mockUploadedReportCreate).not.toHaveBeenCalled();
+    });
+
+
+
+    it("TEST B4 (Batch Revocation Pre-Check): fails closed when confirmed target is revoked before batch import loop", async () => {
+      mockProperties = [
+        { id: "prop-target-b", name: "Target Hotel B" },
+      ];
+      mockCanAccessProperty.mockImplementation((id) => id === "prop-target-b");
+
+      mockScanReport.mockResolvedValueOnce({
+        type: "daily_ledger",
+        totalRows: 5,
+        meta: { propertyId: "prop-origin-1", propertyName: "Hotel Origin 1" },
+      });
+
+      const { container, rerender } = render(<Import />);
+      const file1 = new File(["col1\n1"], "report-b4.csv", { type: "text/csv" });
+      const fileInput = container.querySelector('input[type="file"]');
+      fireEvent.change(fileInput, { target: { files: [file1] } });
+
+      await waitFor(() => {
+        expect(screen.getByText("report-b4.csv")).toBeDefined();
+      });
+
+      // Revoke target property
+      mockProperties = [];
+      mockCanAccessProperty.mockImplementation(() => false);
+      mockImportReport.mockClear();
+
+      rerender(<Import />);
+
+      // The button on the item will fail closed when clicked
+      const singleImportBtn = screen.getByRole("button", { name: /^import$/i });
+      fireEvent.click(singleImportBtn);
+
+      // 0 writes
+      expect(mockImportReport).not.toHaveBeenCalled();
     });
   });
 });

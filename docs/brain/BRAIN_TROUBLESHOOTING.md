@@ -6858,3 +6858,23 @@ In single-hotel operator accounts (e.g., Red Roof Middleboro), the `propertyId` 
    - Added `src/pages/Import.test.jsx` covering single-property auto-selection, multi-property manual selection requirement, unselected drop-zone rejection with alert, and file input disabled/enabled states.
    - All 53 test suites and 461 tests passed in `vitest`.
    - Full verification verified clean: `npm run verify:v3`, `npm run lint`, `npm run typecheck`, and `npm run build`.
+
+## 74. Import Queue Property Snapshot and Retry of Property-Missing Failures (2026-09-10)
+
+### Problem & Root Cause
+Section 73 added auto-select plus upload guards, but the live Middleboro upload still showed `10 files selected · 10 failed` with `Import refused: a non-empty propertyId is required to persist rows (property isolation boundary)` from `src/lib/reportParsers.js`. The stuck state is reproducible from the old flow: files were scanned while the property dropdown was still empty (pre-fix builds allowed this because `scanReport` in `src/lib/reportParsers.js` does not validate property), then `Import All` called `importReport` with the empty dropdown value. The per-file error persisted in queue state even after a property was later selected, and `handleImportAll` in `src/pages/Import.jsx` only retried `status === "ready"` items — so failed items could never be retried without re-uploading, and the operator kept uploading the same 10 files.
+
+### Core Fix
+1. **Property snapshot per queue item** (`src/pages/Import.jsx`):
+   - `handleFiles()` snapshots `propertyId`/`propertyName` onto each queue item at scan time and re-stamps them when the scan resolves.
+   - New `resolveEffectiveProperty(itemPid, itemPname)` chain: item snapshot -> current dropdown -> single accessible property -> single roster property. `importSingle()`, `handleImportAll()`, `handleImportDrive()`, `rescanWithDate()`, and `importMeta()` all resolve through it.
+2. **Retry without re-upload**:
+   - `handleImportAll()` now includes `status === "error"` items that carry `scan` data (`readyCount` counts them; the button reads `Retry Failed (N)` when any exist).
+   - Per-file rows show `Retry` (instead of only `Import`) for error-with-scan items, plus the scan preview eye.
+   - `importSingle()` persists the resolved property back onto the item so later retries keep it.
+3. **Actionable error text**:
+   - New `friendlyImportError()` translates `IMPORT_PROPERTY_REQUIRED` into `Select a property above, then retry this file — it was scanned with no property attached so there was nowhere to store its rows.` All three import paths (single, batch, Drive) use it.
+   - The fail-closed boundary in `src/lib/reportParsers.js` is unchanged; only the presentation at the call site changed.
+4. **Automated Verification**:
+   - Existing `src/pages/Import.test.jsx` (5 tests) still passes; `src/lib/hotelKeyImportFixtures.test.js` (30 tests) still passes.
+   - `npm run lint`, `npm run typecheck`, and `npm run build` pass.

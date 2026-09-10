@@ -269,18 +269,56 @@ export default function Import() {
   const propertyOpts = accessibleProperties.map((p) => [p.id, p.name]);
   const selectedProperty = properties.find((p) => p.id === propertyId);
 
+  // Resolve the property a queue item should import into. Queue items snapshot
+  // the selection at scan time (item.propertyId), but older queues were built
+  // before any property was chosen — or the selection changed after scanning.
+  // Chain: item snapshot -> current selection -> single accessible property ->
+  // single property in the roster. The last two steps are what un-breaks the
+  // "10 files selected · 10 failed … propertyId is required" state: a
+  // single-hotel operator who scans first and picks the property second can
+  // still retry without re-uploading every file.
+  const resolveEffectiveProperty = (itemPid = "", itemPname = "") => {
+    const snapId = String(itemPid || "").trim();
+    if (snapId) {
+      const snapProp = properties.find((p) => p.id === snapId);
+      return { id: snapId, name: String(itemPname || snapProp?.name || selectedProperty?.name || "") };
+    }
+    const curId = String(propertyId || "").trim();
+    if (curId) return { id: curId, name: selectedProperty?.name || "" };
+    if (accessibleProperties.length === 1) {
+      return { id: accessibleProperties[0].id, name: accessibleProperties[0].name || "" };
+    }
+    if (properties.length === 1) {
+      return { id: properties[0].id, name: properties[0].name || "" };
+    }
+    return { id: "", name: "" };
+  };
+
+  const friendlyImportError = (e) => {
+    const msg = e?.message || "Import failed";
+    // The persist boundary throws a fail-closed technical error when no
+    // property is attached. Operators need an action, not an isolation lecture.
+    if (e?.code === "IMPORT_PROPERTY_REQUIRED" || /non-empty propertyId is required/i.test(msg)) {
+      return "Select a property above, then retry this file — it was scanned with no property attached so there was nowhere to store its rows.";
+    }
+    return msg;
+  };
+
   useEffect(() => {
     if (accessibleProperties.length === 1 && !propertyId) {
       setPropertyId(accessibleProperties[0].id);
     }
   }, [accessibleProperties, propertyId]);
 
-  const importMeta = (sourceFile) => ({
-    propertyId,
-    propertyName: selectedProperty?.name || "",
-    importId: crypto.randomUUID(),
-    sourceFile: sourceFile || "",
-  });
+  const importMeta = (sourceFile) => {
+    const eff = resolveEffectiveProperty("", "");
+    return {
+      propertyId: eff.id || propertyId,
+      propertyName: eff.name || selectedProperty?.name || "",
+      importId: crypto.randomUUID(),
+      sourceFile: sourceFile || "",
+    };
+  };
 
   // Check for incomplete import sessions that can be resumed
   const checkIncompleteImports = async () => {
@@ -321,6 +359,12 @@ export default function Import() {
 
     if (!files.length) return;
     const stamp = Date.now();
+    // Snapshot the target property onto every queue item. importSingle resolves
+    // through resolveEffectiveProperty(), so even if the dropdown changes (or
+    // was empty at scan time and chosen later) each file still knows where its
+    // rows belong and can be retried without re-uploading.
+    const scanPid = String(propertyId || "").trim();
+    const scanPname = selectedProperty?.name || "";
     const newQueue = files.map((file, i) => ({
       key: `${file.name}-${stamp}-${i}`,
       file,
@@ -332,6 +376,8 @@ export default function Import() {
       count: 0,
       excluded: 0,
       importId: crypto.randomUUID(),
+      propertyId: scanPid,
+      propertyName: scanPname,
       // Operator-supplied statement date, set from the queue row and only used by
       // Hotel Statistics (which ships no date column). Declared here rather than
       // appearing on first edit so the queue item has one stable shape.
@@ -370,7 +416,7 @@ export default function Import() {
         });
         // Content hash (SHA-256) for duplicate detection before the import runs.
         const contentHash = await sha256File(item.file);
-        setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "ready", scan, file_url, contentHash } : q)));
+        setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "ready", scan, file_url, contentHash, propertyId: String(propertyId || "").trim() || q.propertyId || "", propertyName: selectedProperty?.name || q.propertyName || "" } : q)));
       } catch (e) {
         setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: e.message || "Could not read file" } : q)));
       }
@@ -392,23 +438,40 @@ export default function Import() {
     setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, businessDate, status: "scanning" } : q)));
     try {
       const csvText = /\.csv$/i.test(item.name) ? await item.file.text() : null;
+      const effRe = resolveEffectiveProperty(item.propertyId, item.propertyName);
       const scan = await scanReport(type, item.file_url, {
-        propertyId,
-        propertyName: selectedProperty?.name || "",
+        propertyId: effRe.id || propertyId,
+        propertyName: effRe.name || selectedProperty?.name || "",
         importId: item.importId,
         sourceFile: item.name,
         fileModified: item.file?.lastModified || null,
         businessDate,
         csvText,
       });
-      setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "ready", scan } : q)));
+      setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "ready", scan, propertyId: effRe.id || q.propertyId || "", propertyName: effRe.name || q.propertyName || "" } : q)));
     } catch (e) {
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: e.message || "Could not re-scan file" } : q)));
     }
   };
 
   const importSingle = async (item) => {
-    if (!item.scan || !propertyId || item.status === "done") return null;
+    if (!item.scan || item.status === "done") return null;
+    // Resolve through the snapshot chain so a file scanned before the property
+    // was chosen can still import once it is chosen — no re-upload required.
+    // This is what repairs the stuck "10 failed … propertyId is required" queue:
+    // the old code passed the then-empty dropdown value straight through.
+    const eff = resolveEffectiveProperty(item.propertyId, item.propertyName);
+    if (!eff.id) {
+      const msg = "Select a property above, then retry this file — it was scanned with no property attached so there was nowhere to store its rows.";
+      setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: msg } : q)));
+      return { name: item.name, ok: false, error: msg };
+    }
+    // Persist the resolution so a later retry (or a re-render) keeps it.
+    if (eff.id !== item.propertyId || eff.name !== item.propertyName) {
+      setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, propertyId: eff.id, propertyName: eff.name } : q)));
+    }
+    const effPropertyId = eff.id;
+    const effPropertyName = eff.name;
     // Rate limiting for imports
     const rateLimit = sensitiveActionRateLimiter.check();
     if (!rateLimit.allowed) {
@@ -431,7 +494,7 @@ export default function Import() {
         const existing = await withActionTimeout(
           db.entities.UploadedReport.filter({
             content_hash: item.contentHash,
-            property_id: propertyId,
+            property_id: effPropertyId,
           }),
           15000,
           "Duplicate check timed out."
@@ -456,8 +519,8 @@ export default function Import() {
           }
         };
         const reportPromise = importReport(item.scan, {
-            propertyId,
-            propertyName: selectedProperty?.name || "",
+            propertyId: effPropertyId,
+            propertyName: effPropertyName,
             importId: item.importId,
             sourceFile: item.name,
             forceImport,
@@ -484,8 +547,8 @@ export default function Import() {
             rows_skipped: result.excluded || 0,
             rows_parsed: item.scan.totalRows ?? null,
             file_url: item.file_url,
-            property_id: propertyId,
-            property_name: selectedProperty?.name || "",
+            property_id: effPropertyId,
+            property_name: effPropertyName,
             import_id: result.importId || item.importId,
             source_file: item.name,
             content_hash: item.contentHash || null,
@@ -539,11 +602,12 @@ export default function Import() {
       // Pre-compute the daily financial aggregates so the Dashboard reads a few
       // hundred pre-summed rows instead of the raw ledgers. Fire-and-forget: a
       // failure here must never fail the import that already succeeded.
-      refreshAggregates(propertyId);
+      refreshAggregates(effPropertyId);
       return { name: item.name, ok: true, count: result.count, excluded: result.excluded || 0 };
     } catch (e) {
-      setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: e.message || "Import failed" } : q)));
-      return { name: item.name, ok: false, error: e.message || "Import failed" };
+      const friendly = friendlyImportError(e);
+      setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: friendly } : q)));
+      return { name: item.name, ok: false, error: friendly };
     }
   };
 
@@ -556,11 +620,15 @@ export default function Import() {
   };
 
   const handleImportAll = async () => {
-    if (!propertyId) {
+    const effAll = resolveEffectiveProperty("", "");
+    if (!effAll.id) {
       alert("Select a property before importing reports.");
       return;
     }
-    const pending = queue.filter((q) => q.status === "ready" && q.scan);
+    // Include retryable failures: files that scanned fine but failed to import
+    // (e.g. the old "propertyId is required" queue) carry scan data and can be
+    // retried now that a property resolves — without forcing a re-upload.
+    const pending = queue.filter((q) => (q.status === "ready" || q.status === "error") && q.scan);
     if (!pending.length || importing) return;
     // Rate limiting
     const rateLimit = sensitiveActionRateLimiter.check();
@@ -584,8 +652,9 @@ export default function Import() {
           if (r) newResults.push(r);
         } catch (itemErr) {
           console.error(`[import] Error importing ${item.name}:`, itemErr);
-          setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: itemErr.message || "Import failed" } : q)));
-          newResults.push({ name: item.name, ok: false, error: itemErr.message || "Import failed" });
+          const friendly = friendlyImportError(itemErr);
+          setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: friendly } : q)));
+          newResults.push({ name: item.name, ok: false, error: friendly });
         }
       }
       setResults(newResults);
@@ -671,8 +740,9 @@ export default function Import() {
     }
   };
 
-  const readyCount = queue.filter((q) => q.status === "ready" && q.scan).length;
+  const readyCount = queue.filter((q) => (q.status === "ready" || q.status === "error") && q.scan).length;
   const queuedCount = queue.filter((q) => q.status !== "done" && q.status !== "error").length;
+  const retryableCount = queue.filter((q) => q.status === "error" && q.scan).length;
   const doneItems = queue.filter((q) => q.status === "done");
   const errorItems = queue.filter((q) => q.status === "error");
   const batchImported = doneItems.reduce((a, r) => a + (r.count || 0), 0);
@@ -695,13 +765,14 @@ export default function Import() {
   };
 
   const handleImportDrive = async () => {
-    if (!propertyId) {
+    const effDrive = resolveEffectiveProperty("", "");
+    if (!effDrive.id) {
       alert("Select a property before importing reports.");
       return;
     }
     if (!selectedFiles.size || !type) return;
     setDriveImporting(true);
-    const meta = { ...importMeta(), forceImport };
+    const meta = { propertyId: effDrive.id, propertyName: effDrive.name, importId: crypto.randomUUID(), sourceFile: "", forceImport };
     for (const fileId of selectedFiles) {
       const fileInfo = driveFiles.find((f) => f.id === fileId);
       const fileName = fileInfo?.name || fileId;
@@ -719,21 +790,21 @@ export default function Import() {
           rows_skipped: result.excluded || 0,
           rows_parsed: scan.totalRows ?? null,
           file_url: fileUrl,
-          property_id: propertyId,
-          property_name: selectedProperty?.name || "",
+          property_id: effDrive.id,
+          property_name: effDrive.name,
           import_id: result.importId || meta.importId,
           source_file: fileName,
           drive_file_id: fileId,
           raw_rows: scanRawRows(scan),
           raw_rows_ttl: rawRowsTtlExpiry(),
         });
-        refreshAggregates(propertyId);
+        refreshAggregates(effDrive.id);
         setResults((prev) => [...prev, { name: fileName, ok: true, count: result.count, excluded: result.excluded || 0 }]);
       } catch (e) {
         // Same cleanup contract as the file-upload path above: this branch used
         // to have no rollback at all, so a Drive import that committed rows and
         // then failed left them in the ledger with no history row and no Undo.
-        let message = e.response?.data?.error || e.message || "Import failed";
+        let message = friendlyImportError(e?.response?.data ? { ...e, message: e.response.data.error } : e);
         const sessionId = e?.importId || result?.importId;
         if (sessionId) {
           const rb = await rollbackImportSession(sessionId).catch((err) => ({
@@ -927,11 +998,11 @@ export default function Import() {
                 {readyCount > 0 && (
                   <button
                     onClick={handleImportAll}
-                    disabled={importing || !propertyId}
+                    disabled={importing}
                     className="flex items-center gap-2 rounded-lg bg-[#00E096] px-5 py-2 text-sm font-medium text-[#040D1A] transition-colors hover:bg-[#00c885] disabled:opacity-50"
                   >
                     {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowDownToLine className="h-4 w-4" />}
-                    {importing ? "Importing…" : `Import All (${readyCount})`}
+                    {importing ? "Importing…" : retryableCount > 0 ? `Retry Failed (${readyCount})` : `Import All (${readyCount})`}
                   </button>
                 )}
                 {!importing && !busy && (
@@ -995,7 +1066,7 @@ export default function Import() {
                           ? `${q.count} rows${q.excluded ? ` · ${q.excluded} excluded` : ""}`
                           : STATUS_LABEL[q.status] || q.status}
                       </span>
-                      {(q.status === "ready" || q.status === "done") && (
+                      {(q.status === "ready" || q.status === "done" || (q.status === "error" && q.scan)) && (
                         <button
                           onClick={() => setExpandedKey(expandedKey === q.key ? null : q.key)}
                           className="rounded-md p-1 text-slate-400 transition-colors hover:bg-white/5 hover:text-[#00D4FF]"
@@ -1004,13 +1075,13 @@ export default function Import() {
                           <Eye className="h-3.5 w-3.5" />
                         </button>
                       )}
-                      {q.status === "ready" && (
+                      {(q.status === "ready" || (q.status === "error" && q.scan)) && (
                         <button
                           onClick={() => importSingle(q).then((r) => { if (r) { setResults((prev) => [...prev, r]); refetch(); } })}
-                          disabled={importing || !propertyId}
+                          disabled={importing}
                           className="rounded-lg bg-[#6C63FF]/20 px-3 py-1 text-xs text-[#6C63FF] transition-colors hover:bg-[#6C63FF]/35 disabled:opacity-40"
                         >
-                          Import
+                          {q.status === "error" ? "Retry" : "Import"}
                         </button>
                       )}
                       {q.status !== "scanning" && q.status !== "importing" && (

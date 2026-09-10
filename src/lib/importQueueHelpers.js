@@ -87,6 +87,107 @@ export function confirmBatchForceImport({ propertyName = '', count, confirmFn })
 }
 
 /**
+ * Resolves the effective property for an import queue item following the 5-step ladder:
+ *
+ * 1. Queue snapshot ID:
+ *    Is that ID CURRENTLY authorized?
+ *       YES -> use it
+ *       NO  -> treat snapshot as STALE, not authoritative
+ *
+ * 2. Is the currently selected property authorized?
+ *       YES -> use it when safely reassigned
+ *
+ * 3. Exactly ONE accessible property?
+ *       YES -> use that canonical property automatically
+ *
+ * 4. Multiple accessible properties?
+ *       -> DO NOT guess.
+ *       -> Ask user to select/reassign the target property.
+ *
+ * 5. Zero accessible properties?
+ *       -> fail closed.
+ *
+ * @param {{
+ *   item?: Object,
+ *   propertyId?: string,
+ *   accessibleProperties?: Array<{ id: string, name?: string }>,
+ * }} opts
+ * @returns {{
+ *   ok: boolean,
+ *   id: string,
+ *   name: string,
+ *   error?: string,
+ *   source?: 'snapshot' | 'selected' | 'canonical_single',
+ *   reassigned?: boolean,
+ *   requiresSelection?: boolean,
+ * }}
+ */
+export function resolveQueueProperty({ item, propertyId = '', accessibleProperties = [] }) {
+  // Step 1: Queue snapshot ID
+  const snapId = String(item?.propertyId || item?.scan?.meta?.propertyId || item?.scan?.propertyId || '').trim();
+  if (snapId) {
+    const isSnapAuthorized = accessibleProperties.some((p) => p.id === snapId);
+    if (isSnapAuthorized) {
+      const snapProp = accessibleProperties.find((p) => p.id === snapId);
+      return {
+        ok: true,
+        id: snapId,
+        name: String(item?.propertyName || snapProp?.name || ''),
+        source: 'snapshot',
+      };
+    }
+    // NO -> treat snapshot as STALE, not authoritative. Fall through to Step 2.
+  }
+
+  // Step 2: Is the currently selected property authorized?
+  const curId = String(propertyId || '').trim();
+  if (curId) {
+    const isCurAuthorized = accessibleProperties.some((p) => p.id === curId);
+    if (isCurAuthorized) {
+      const curProp = accessibleProperties.find((p) => p.id === curId);
+      return {
+        ok: true,
+        id: curId,
+        name: curProp?.name || '',
+        source: 'selected',
+        reassigned: true,
+      };
+    }
+    // Selected property not authorized -> fall through to Step 3.
+  }
+
+  // Step 3: Exactly ONE accessible property?
+  if (accessibleProperties.length === 1) {
+    return {
+      ok: true,
+      id: accessibleProperties[0].id,
+      name: accessibleProperties[0].name || '',
+      source: 'canonical_single',
+      reassigned: true,
+    };
+  }
+
+  // Step 4: Multiple accessible properties?
+  if (accessibleProperties.length > 1) {
+    return {
+      ok: false,
+      id: '',
+      name: '',
+      error: 'Multiple accessible properties available. Please select the target property above to reassign this file.',
+      requiresSelection: true,
+    };
+  }
+
+  // Step 5: Zero accessible properties?
+  return {
+    ok: false,
+    id: '',
+    name: '',
+    error: 'No accessible properties found. Contact your administrator for access.',
+  };
+}
+
+/**
  * Validates that an item is consistent with the currently active property selection.
  *
  * Guard against:

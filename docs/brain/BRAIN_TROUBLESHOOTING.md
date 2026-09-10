@@ -6898,3 +6898,42 @@ Section 73 added auto-select plus upload guards, but the live Middleboro upload 
    - Metrics come from hardening `getQueueMetrics()` plus the property-fix `retryableCount` extension; per-file retry uses the single hardening `handleRetrySingle` path (duplicate `Retry` buttons removed).
 4. **Automated Verification**:
    - Targeted: `Import.test.jsx` + `ImportHardening.test.jsx` + `rateLimiters.test.js` + `importQueueHelpers.test.js` green; `hotelKeyImportFixtures` green; `lint`/`typecheck`/`build` green; full canonical `npm run verify:all` reported below.
+
+## 76. Recovery of Stale Queue Property Snapshots via Authorized Canonical Scope (2026-09-10)
+
+### Problem & Root Cause
+A real production operator on `/upload` had 10 scanned files stuck in an unrecoverable error loop displaying:
+`Selected property is no longer accessible or authorized.`
+
+**Root Cause Analysis**:
+`resolveEffectiveProperty()` previously trusted any truthy `item.propertyId` snapshot without checking whether that property ID was currently authorized in `accessibleProperties`. When an old/stale ID was present on the queue item, it was returned as `eff.id`. Then, `validateQueueProperty` strictly and correctly failed closed on `!accessibleProperties.some(p => p.id === propertyId)`. Because the snapshot was repeatedly re-read across retries, clicking `Retry` or `Retry Failed` re-ran the exact same failure with no escape hatch without wiping and re-uploading every file.
+
+### Core Fix & Invariants
+1. **Canonical 5-Step Property Resolution Ladder (`src/lib/importQueueHelpers.js` & `src/pages/Import.jsx`)**:
+   - Exported `resolveQueueProperty({ item, propertyId, accessibleProperties })`:
+     1. **Queue snapshot ID**: Currently authorized in `accessibleProperties`?
+        - `YES` -> Use it (`source: 'snapshot'`).
+        - `NO`  -> Treat snapshot as STALE, not authoritative. Fall through to Step 2.
+     2. **Currently selected property authorized?**
+        - `YES` -> Use it when safely reassigned (`source: 'selected'`, `reassigned: true`).
+     3. **Exactly ONE accessible property?**
+        - `YES` -> Use that canonical property automatically (`source: 'canonical_single'`, `reassigned: true`).
+     4. **Multiple accessible properties?**
+        - `DO NOT GUESS` -> Fail closed and require operator selection (`ok: false`, `requiresSelection: true`, `error: "Multiple accessible properties available. Please select the target property above to reassign this file."`).
+     5. **Zero accessible properties?**
+        - `FAIL CLOSED` -> (`ok: false`, `error: "No accessible properties found for this account."`).
+2. **Strict Authorization & Integrity Enforcement**:
+   - `validateQueueProperty` remains strictly fail-closed, verifying target property against `accessibleProperties` and ensuring scan metadata consistency.
+   - In `Import.jsx`:
+     - When an item is safely reassigned to the canonical/selected property, `importSingle()` updates `itemToValidate`'s target property and scan metadata to match `eff.id`, satisfying both authorization and consistency invariants.
+     - Persists reassignment back to queue state so subsequent operations stay aligned.
+     - `handleFiles()` auto-resolves when 1 accessible property exists.
+     - `handleImportAll()` checks `canResolveAny`.
+3. **Automated Verification & Mutation Proof**:
+   - Added unit tests in `src/lib/importQueueHelpers.test.js` covering all 5 steps of the ladder.
+   - Added 3 end-to-end flow tests in `src/pages/Import.test.jsx`:
+     - Test 1 (Real Screenshot Flow): Stuck stale queue item automatically recovers and imports into canonical single property on Retry without re-upload.
+     - Test 2 (Multi-Property Negative Flow): With multiple properties and no selection, retry fails closed with prompt requiring user selection (0 rows written, 0 API calls).
+     - Test 3 (Revoked Property Attack Flow): Revoked property access fails closed in multi-property mode, while canonical single property safely reassigns without touching revoked property.
+   - Mutation test executed: Temporarily restored old unconditional `snapId` win -> all 3 tests failed. Restored fix -> all tests passed.
+

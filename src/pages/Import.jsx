@@ -15,7 +15,13 @@ import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
 import { useAuth } from "@/lib/AuthContext";
 import { getCsrfToken, validateCsrfToken, rotateCsrfToken, sha256File } from "@/lib/securityUtils";
 import { importRateLimiter, destructiveActionRateLimiter } from "@/lib/rateLimiters";
-import { getQueueMetrics, confirmForceImportToggle, confirmBatchForceImport, validateQueueProperty } from "@/lib/importQueueHelpers";
+import {
+  getQueueMetrics,
+  confirmForceImportToggle,
+  confirmBatchForceImport,
+  validateQueueProperty,
+  resolveQueueProperty,
+} from "@/lib/importQueueHelpers";
 import { rebuildDailyAggregates } from "@/lib/dailyAggregates";
 import { queryClientInstance } from "@/lib/query-client";
 import { toCents, formatCents } from "@/lib/decimal";
@@ -280,21 +286,18 @@ export default function Import() {
   // "10 files selected · 10 failed … propertyId is required" state: a
   // single-hotel operator who scans first and picks the property second can
   // still retry without re-uploading every file.
-  const resolveEffectiveProperty = (itemPid = "", itemPname = "") => {
-    const snapId = String(itemPid || "").trim();
-    if (snapId) {
-      const snapProp = properties.find((p) => p.id === snapId);
-      return { id: snapId, name: String(itemPname || snapProp?.name || selectedProperty?.name || "") };
-    }
-    const curId = String(propertyId || "").trim();
-    if (curId) return { id: curId, name: selectedProperty?.name || "" };
-    if (accessibleProperties.length === 1) {
-      return { id: accessibleProperties[0].id, name: accessibleProperties[0].name || "" };
-    }
-    if (properties.length === 1) {
-      return { id: properties[0].id, name: properties[0].name || "" };
-    }
-    return { id: "", name: "" };
+  // Resolve the property a queue item should import into following the canonical 5-step ladder:
+  // 1. Queue snapshot ID: currently authorized? YES -> use it; NO -> treat as STALE, not authoritative.
+  // 2. Currently selected property authorized? YES -> use it when safely reassigned.
+  // 3. Exactly ONE accessible property? YES -> use that canonical property automatically.
+  // 4. Multiple accessible properties? -> DO NOT guess -> require user selection.
+  // 5. Zero accessible properties? -> fail closed.
+  const resolveEffectiveProperty = (itemPid = "", itemPname = "", item = null) => {
+    return resolveQueueProperty({
+      item: item || { propertyId: itemPid, propertyName: itemPname },
+      propertyId,
+      accessibleProperties,
+    });
   };
 
   const friendlyImportError = (e) => {
@@ -383,8 +386,12 @@ export default function Import() {
   };
 
   const handleFiles = async (fileList) => {
-    if (!propertyId) {
-      alert("Select a property before importing reports.");
+    const effUpload = resolveQueueProperty({
+      propertyId,
+      accessibleProperties,
+    });
+    if (!effUpload.ok && !propertyId) {
+      alert(effUpload.error || "Select a property before importing reports.");
       return;
     }
 
@@ -410,8 +417,8 @@ export default function Import() {
     // through resolveEffectiveProperty(), so even if the dropdown changes (or
     // was empty at scan time and chosen later) each file still knows where its
     // rows belong and can be retried without re-uploading.
-    const scanPid = String(propertyId || "").trim();
-    const scanPname = selectedProperty?.name || "";
+    const scanPid = effUpload.id || String(propertyId || "").trim();
+    const scanPname = effUpload.name || selectedProperty?.name || "";
     const newQueue = files.map((file, i) => ({
       key: `${file.name}-${stamp}-${i}`,
       file,
@@ -507,18 +514,33 @@ export default function Import() {
     // was chosen can still import once it is chosen — no re-upload required.
     // This is what repairs the stuck "10 failed … propertyId is required" queue:
     // the old code passed the then-empty dropdown value straight through.
-    const eff = resolveEffectiveProperty(item.propertyId, item.propertyName);
+    const eff = resolveEffectiveProperty(item.propertyId, item.propertyName, item);
     if (!eff.id) {
-      const msg = "Select a property above, then retry this file — it was scanned with no property attached so there was nowhere to store its rows.";
+      const msg = eff.error || friendlyImportError({ message: "Select a property above, then retry this file — it was scanned with no property attached so there was nowhere to store its rows." });
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: msg } : q)));
       return { name: item.name, ok: false, error: msg };
     }
+    // If the item was safely reassigned (e.g. from a stale snapshot to the canonical property),
+    // update the item's target property and scan metadata so validateQueueProperty evaluates the target.
+    const itemToValidate = eff.reassigned && eff.id !== item.propertyId
+      ? {
+          ...item,
+          propertyId: eff.id,
+          propertyName: eff.name,
+          scan: item.scan ? {
+            ...item.scan,
+            propertyId: eff.id,
+            meta: item.scan.meta ? { ...item.scan.meta, propertyId: eff.id, propertyName: eff.name } : item.scan.meta,
+          } : item.scan,
+        }
+      : item;
+
     // Hardening consistency check, evaluated against the RESOLVED property (not
     // just the live dropdown): revoked access fails closed, and a scan that
     // actually carries a different property id still requires a re-scan.
     // Empty scan properties (pre-snapshot queues) pass through to the fallback.
     const propCheck = validateQueueProperty({
-      item,
+      item: itemToValidate,
       propertyId: eff.id,
       accessibleProperties,
     });
@@ -528,8 +550,17 @@ export default function Import() {
       return { name: item.name, ok: false, error: friendly };
     }
     // Persist the resolution so a later retry (or a re-render) keeps it.
-    if (eff.id !== item.propertyId || eff.name !== item.propertyName) {
-      setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, propertyId: eff.id, propertyName: eff.name } : q)));
+    if (eff.id !== item.propertyId || eff.name !== item.propertyName || eff.reassigned) {
+      setQueue((prev) => prev.map((q) => (q.key === item.key ? {
+        ...q,
+        propertyId: eff.id,
+        propertyName: eff.name,
+        scan: q.scan ? {
+          ...q.scan,
+          propertyId: eff.id,
+          meta: q.scan.meta ? { ...q.scan.meta, propertyId: eff.id, propertyName: eff.name } : q.scan.meta,
+        } : q.scan,
+      } : q)));
     }
     const effPropertyId = eff.id;
     const effPropertyName = eff.name;
@@ -690,15 +721,21 @@ export default function Import() {
 
   const handleImportAll = async () => {
     const effAll = resolveEffectiveProperty("", "");
-    if (!effAll.id) {
-      alert("Select a property before importing reports.");
-      return;
-    }
     // Include retryable failures: files that scanned fine but failed to import
     // (e.g. the old "propertyId is required" queue) carry scan data and can be
     // retried now that a property resolves — without forcing a re-upload.
     const pending = queue.filter((q) => (q.status === "ready" || q.status === "error") && q.scan);
     if (!pending.length || importing) return;
+
+    const canResolveAny = pending.some((item) => {
+      const eff = resolveEffectiveProperty(item.propertyId, item.propertyName, item);
+      return Boolean(eff.id);
+    });
+
+    if (!effAll.id && !canResolveAny) {
+      alert("Select a property before importing reports.");
+      return;
+    }
 
     // If Force Import is active, confirm batch operation explicitly
     if (forceImport && !confirmBatchForceImport({ propertyName: selectedProperty?.name, count: pending.length })) {

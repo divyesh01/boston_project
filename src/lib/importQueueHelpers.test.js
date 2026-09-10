@@ -4,6 +4,7 @@ import {
   confirmForceImportToggle,
   confirmBatchForceImport,
   validateQueueProperty,
+  resolveQueueProperty,
 } from './importQueueHelpers';
 
 describe('importQueueHelpers', () => {
@@ -117,6 +118,71 @@ describe('importQueueHelpers', () => {
         accessibleProperties: [{ id: 'prop-1' }],
       });
       expect(res.ok).toBe(true);
+    });
+  });
+
+  describe('resolveQueueProperty (5-step ladder)', () => {
+    const propA = { id: 'prop-a', name: 'Hotel Alpha' };
+    const propB = { id: 'prop-b', name: 'Hotel Beta' };
+
+    it('Step 1: uses queue snapshot ID when it is CURRENTLY authorized', () => {
+      const res = resolveQueueProperty({
+        item: { propertyId: 'prop-a', propertyName: 'Hotel Alpha' },
+        propertyId: 'prop-b',
+        accessibleProperties: [propA, propB],
+      });
+      expect(res.ok).toBe(true);
+      expect(res.id).toBe('prop-a');
+      expect(res.source).toBe('snapshot');
+    });
+
+    it('Step 1 -> 2: treats snapshot as STALE when unauthorized, and uses authorized selected property', () => {
+      const res = resolveQueueProperty({
+        item: { propertyId: 'prop-stale', propertyName: 'Old Hotel' },
+        propertyId: 'prop-b',
+        accessibleProperties: [propA, propB],
+      });
+      expect(res.ok).toBe(true);
+      expect(res.id).toBe('prop-b');
+      expect(res.source).toBe('selected');
+      expect(res.reassigned).toBe(true);
+    });
+
+    it('Step 1 -> 3: uses canonical property automatically when exactly ONE accessible property exists', () => {
+      // Exactly the production scenario: 1 property in portfolio, queue had stale/unauthorized propertyId
+      const res = resolveQueueProperty({
+        item: { propertyId: 'prop-stale', propertyName: 'Stale Middleboro' },
+        propertyId: '',
+        accessibleProperties: [propA],
+      });
+      expect(res.ok).toBe(true);
+      expect(res.id).toBe('prop-a');
+      expect(res.name).toBe('Hotel Alpha');
+      expect(res.source).toBe('canonical_single');
+      expect(res.reassigned).toBe(true);
+    });
+
+    it('Step 1 -> 4: refuses to guess when multiple accessible properties exist, asking user to select', () => {
+      const res = resolveQueueProperty({
+        item: { propertyId: 'prop-stale', propertyName: 'Stale' },
+        propertyId: '',
+        accessibleProperties: [propA, propB],
+      });
+      expect(res.ok).toBe(false);
+      expect(res.id).toBe('');
+      expect(res.requiresSelection).toBe(true);
+      expect(res.error).toContain('Multiple accessible properties available');
+    });
+
+    it('Step 5: fails closed when zero accessible properties exist', () => {
+      const res = resolveQueueProperty({
+        item: { propertyId: 'prop-stale' },
+        propertyId: '',
+        accessibleProperties: [],
+      });
+      expect(res.ok).toBe(false);
+      expect(res.id).toBe('');
+      expect(res.error).toContain('No accessible properties found');
     });
   });
 });

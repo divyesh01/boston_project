@@ -87,87 +87,248 @@ export function confirmBatchForceImport({ propertyName = '', count, confirmFn })
 }
 
 /**
- * Resolves the effective property for an import queue item following the 5-step ladder:
+ * Confirms explicit operator reassignment when a queued file's snapshot property
+ * is no longer accessible or authorized.
  *
- * 1. Queue snapshot ID:
- *    Is that ID CURRENTLY authorized?
- *       YES -> use it
- *       NO  -> treat snapshot as STALE, not authoritative
+ * @param {{
+ *   oldTarget?: string,
+ *   newTarget?: string,
+ *   count?: number,
+ *   confirmFn?: (msg: string) => boolean,
+ * }} opts
+ * @returns {boolean} True if confirmed; false if cancelled.
+ */
+export function confirmPropertyReassignment({
+  oldTarget = '',
+  newTarget = '',
+  count = 1,
+  confirmFn,
+}) {
+  const fileDescriptor = count === 1 ? 'This file was queued for' : `${count} files were queued for`;
+  const reassignDescriptor = count === 1 ? 'Reassign this file to' : `Reassign all ${count} queued files to`;
+
+  const message = [
+    `${fileDescriptor}:\n${oldTarget || 'Previous property'}`,
+    'That property is no longer accessible or authorized.',
+    `${reassignDescriptor}:\n${newTarget}?`,
+  ].join('\n\n');
+
+  const fn = confirmFn || (typeof window !== 'undefined' && typeof window.confirm === 'function' ? window.confirm.bind(window) : null);
+  if (fn) {
+    return Boolean(fn(message));
+  }
+  return false;
+}
+
+/**
+ * Resolves the effective property for an import queue item following strict canonical identity rules:
  *
- * 2. Is the currently selected property authorized?
- *       YES -> use it when safely reassigned
+ * CASE A (Valid snapshot):
+ *   Snapshot ID is nonempty AND currently authorized in accessibleProperties.
+ *   -> Use snapshot directly (ok: true, source: 'snapshot').
  *
- * 3. Exactly ONE accessible property?
- *       YES -> use that canonical property automatically
+ * CASE B (Authoritative Alias -> Same Canonical Property):
+ *   Snapshot ID is nonempty, currently inaccessible, BUT authoritative mapping proves
+ *   it is an alias/representation of an accessible canonical property X (e.g. numeric/string
+ *   equivalence String(p.id) === String(snapId), or code match p.code === snapCode).
+ *   -> Canonicalize to X automatically (ok: true, source: 'authoritative_alias', canonicalized: true).
+ *   -> Preserve original snapshot provenance.
  *
- * 4. Multiple accessible properties?
- *       -> DO NOT guess.
- *       -> Ask user to select/reassign the target property.
+ * CASE C (Empty Snapshot):
+ *   Snapshot ID is EMPTY (file queued before property chosen) AND:
+ *   - selected property is authorized -> use selected property (source: 'selected').
+ *   - exactly ONE accessible property exists -> use that canonical property (source: 'canonical_single').
+ *   - multiple accessible properties exist -> requiresSelection (ok: false).
+ *   - zero accessible properties -> fail closed (ok: false).
  *
- * 5. Zero accessible properties?
- *       -> fail closed.
+ * CASE D (Revoked / Unknown Nonempty Snapshot):
+ *   Snapshot ID is NONEMPTY, unauthorized, and NOT authoritatively mapped to any accessible property.
+ *   -> NEVER silently re-home it, even if only 1 accessible property exists!
+ *   -> If operator has explicitly confirmed reassignment (item.reassignmentConfirmed === true):
+ *      proceed with confirmed target (ok: true, source: 'operator_reassigned').
+ *   -> Otherwise: require explicit operator reassignment (ok: false, requiresReassignment: true).
+ *
+ * CASE E (Multiple Accessible Properties):
+ *   Requires selection when target is ambiguous.
+ *
+ * CASE F (Zero Accessible Properties):
+ *   Fails closed.
  *
  * @param {{
  *   item?: Object,
  *   propertyId?: string,
- *   accessibleProperties?: Array<{ id: string, name?: string }>,
+ *   accessibleProperties?: Array<{ id: string | number, name?: string, code?: string, aliases?: Array<string | number> }>,
  * }} opts
  * @returns {{
  *   ok: boolean,
  *   id: string,
  *   name: string,
  *   error?: string,
- *   source?: 'snapshot' | 'selected' | 'canonical_single',
+ *   source?: 'snapshot' | 'authoritative_alias' | 'operator_reassigned' | 'selected' | 'canonical_single',
  *   reassigned?: boolean,
+ *   canonicalized?: boolean,
  *   requiresSelection?: boolean,
+ *   requiresReassignment?: boolean,
+ *   originalPropertyId?: string,
+ *   originalPropertyName?: string,
+ *   reassignedFromPropertyId?: string,
+ *   suggestedTargetId?: string,
+ *   suggestedTargetName?: string,
  * }}
  */
 export function resolveQueueProperty({ item, propertyId = '', accessibleProperties = [] }) {
-  // Step 1: Queue snapshot ID
   const snapId = String(item?.propertyId || item?.scan?.meta?.propertyId || item?.scan?.propertyId || '').trim();
-  if (snapId) {
-    const isSnapAuthorized = accessibleProperties.some((p) => p.id === snapId);
-    if (isSnapAuthorized) {
-      const snapProp = accessibleProperties.find((p) => p.id === snapId);
-      return {
-        ok: true,
-        id: snapId,
-        name: String(item?.propertyName || snapProp?.name || ''),
-        source: 'snapshot',
-      };
-    }
-    // NO -> treat snapshot as STALE, not authoritative. Fall through to Step 2.
-  }
-
-  // Step 2: Is the currently selected property authorized?
+  const originalId = String(item?.originalPropertyId || snapId || '').trim();
+  const originalName = String(item?.originalPropertyName || item?.propertyName || '').trim();
   const curId = String(propertyId || '').trim();
-  if (curId) {
-    const isCurAuthorized = accessibleProperties.some((p) => p.id === curId);
-    if (isCurAuthorized) {
-      const curProp = accessibleProperties.find((p) => p.id === curId);
+
+  // Helper to find authorized property by exact ID or numeric/string ID equivalence
+  const findAuthorizedById = (idToFind) => {
+    if (!idToFind) return null;
+    return accessibleProperties.find((p) => String(p.id) === String(idToFind)) || null;
+  };
+
+  // Helper to find authorized property by authoritative code or alias list
+  const findAuthoritativeAlias = (idToMatch) => {
+    if (!idToMatch) return null;
+    const cleanMatch = idToMatch.toLowerCase();
+    return accessibleProperties.find((p) => {
+      if (p.code && String(p.code).trim().toLowerCase() === cleanMatch) return true;
+      if (item?.propertyCode && p.code && String(p.code).trim().toLowerCase() === String(item.propertyCode).trim().toLowerCase()) return true;
+      if (item?.scan?.meta?.propertyCode && p.code && String(p.code).trim().toLowerCase() === String(item.scan.meta.propertyCode).trim().toLowerCase()) return true;
+      if (Array.isArray(p.aliases) && p.aliases.some((a) => String(a).trim().toLowerCase() === cleanMatch)) return true;
+      return false;
+    }) || null;
+  };
+
+  // -------------------------------------------------------------
+  // 1. NONEMPTY SNAPSHOT
+  // -------------------------------------------------------------
+  if (snapId) {
+    // CASE A: Snapshot ID is currently authorized
+    const directProp = findAuthorizedById(snapId);
+    if (directProp) {
       return {
         ok: true,
-        id: curId,
-        name: curProp?.name || '',
-        source: 'selected',
-        reassigned: true,
+        id: String(directProp.id),
+        name: String(item?.propertyName || directProp.name || ''),
+        source: 'snapshot',
+        reassigned: false,
+        originalPropertyId: originalId,
+        originalPropertyName: originalName,
       };
     }
-    // Selected property not authorized -> fall through to Step 3.
-  }
 
-  // Step 3: Exactly ONE accessible property?
-  if (accessibleProperties.length === 1) {
+    // CASE B: Authoritative Alias (matches canonical code or explicit aliases)
+    const aliasProp = findAuthoritativeAlias(snapId);
+    if (aliasProp) {
+      return {
+        ok: true,
+        id: String(aliasProp.id),
+        name: String(aliasProp.name || ''),
+        source: 'authoritative_alias',
+        reassigned: true,
+        canonicalized: true,
+        originalPropertyId: originalId,
+        originalPropertyName: originalName,
+      };
+    }
+
+    // EXPLICIT CONFIRMATION: Operator previously confirmed reassignment for this item
+    if (item?.reassignmentConfirmed === true) {
+      const targetProp = findAuthorizedById(curId) || (accessibleProperties.length === 1 ? accessibleProperties[0] : null);
+      if (targetProp) {
+        return {
+          ok: true,
+          id: String(targetProp.id),
+          name: String(targetProp.name || ''),
+          source: 'operator_reassigned',
+          reassigned: true,
+          reassignedFromPropertyId: item.reassignedFromPropertyId || snapId,
+          originalPropertyId: originalId,
+          originalPropertyName: originalName,
+        };
+      }
+      if (accessibleProperties.length > 1) {
+        return {
+          ok: false,
+          id: '',
+          name: '',
+          error: 'Multiple accessible properties available. Please select the target property above to reassign this file.',
+          requiresSelection: true,
+          originalPropertyId: originalId,
+          originalPropertyName: originalName,
+        };
+      }
+    }
+
+    // CASE D: Nonempty snapshot, unauthorized, unmapped, and unconfirmed
+    // NEVER silently re-home, even if exactly 1 accessible property exists!
+    if (accessibleProperties.length === 0) {
+      return {
+        ok: false,
+        id: '',
+        name: '',
+        error: 'No accessible properties found. Contact your administrator for access.',
+      };
+    }
+
+    if (accessibleProperties.length > 1 && !curId) {
+      return {
+        ok: false,
+        id: '',
+        name: '',
+        requiresReassignment: true,
+        requiresSelection: true,
+        originalPropertyId: originalId,
+        originalPropertyName: originalName,
+        error: 'Multiple accessible properties available. Please select the target property above to reassign this file.',
+      };
+    }
+
+    const suggestedTarget = findAuthorizedById(curId) || (accessibleProperties.length === 1 ? accessibleProperties[0] : null);
     return {
-      ok: true,
-      id: accessibleProperties[0].id,
-      name: accessibleProperties[0].name || '',
-      source: 'canonical_single',
-      reassigned: true,
+      ok: false,
+      id: '',
+      name: '',
+      requiresReassignment: true,
+      originalPropertyId: originalId,
+      originalPropertyName: originalName,
+      suggestedTargetId: suggestedTarget ? String(suggestedTarget.id) : '',
+      suggestedTargetName: suggestedTarget ? String(suggestedTarget.name || '') : '',
+      error: `Queue item was scanned for "${originalName || originalId}" which is no longer accessible. Explicit operator reassignment is required before importing.`,
     };
   }
 
-  // Step 4: Multiple accessible properties?
+  // -------------------------------------------------------------
+  // 2. EMPTY SNAPSHOT (file queued before property was selected, or called without an item)
+  // -------------------------------------------------------------
+  // Check currently selected property in dropdown
+  if (curId) {
+    const curProp = findAuthorizedById(curId);
+    if (curProp) {
+      return {
+        ok: true,
+        id: String(curProp.id),
+        name: String(curProp.name || ''),
+        source: 'selected',
+        reassigned: false,
+      };
+    }
+  }
+
+  // CASE C: Exactly ONE accessible property -> Safe single-property fallback
+  if (accessibleProperties.length === 1) {
+    return {
+      ok: true,
+      id: String(accessibleProperties[0].id),
+      name: String(accessibleProperties[0].name || ''),
+      source: 'canonical_single',
+      reassigned: false,
+    };
+  }
+
+  // CASE E: Multiple accessible properties
   if (accessibleProperties.length > 1) {
     return {
       ok: false,
@@ -178,7 +339,7 @@ export function resolveQueueProperty({ item, propertyId = '', accessibleProperti
     };
   }
 
-  // Step 5: Zero accessible properties?
+  // CASE F: Zero accessible properties
   return {
     ok: false,
     id: '',
@@ -198,16 +359,17 @@ export function resolveQueueProperty({ item, propertyId = '', accessibleProperti
  * @param {{
  *   item: Object,
  *   propertyId: string,
- *   accessibleProperties?: Array<{ id: string }>,
+ *   accessibleProperties?: Array<{ id: string | number, name?: string, code?: string, aliases?: Array<string | number> }>,
  * }} opts
  * @returns {{ ok: boolean, error?: string }}
  */
 export function validateQueueProperty({ item, propertyId, accessibleProperties = [] }) {
-  if (!propertyId || !propertyId.trim()) {
+  if (!propertyId || !String(propertyId).trim()) {
     return { ok: false, error: 'Select a property before importing reports.' };
   }
 
-  if (accessibleProperties.length > 0 && !accessibleProperties.some((p) => p.id === propertyId)) {
+  const pidStr = String(propertyId).trim();
+  if (accessibleProperties.length > 0 && !accessibleProperties.some((p) => String(p.id) === pidStr)) {
     return { ok: false, error: 'Selected property is no longer accessible or authorized.' };
   }
 
@@ -215,14 +377,22 @@ export function validateQueueProperty({ item, propertyId, accessibleProperties =
     return { ok: false, error: 'File has not been scanned.' };
   }
 
-  // If scan metadata was recorded with a property ID, enforce that it matches the current property
+  // If scan metadata was recorded with a property ID, enforce that it matches the target property
   const scanPropId = item.scan.meta?.propertyId || item.scan.propertyId;
-  if (scanPropId && scanPropId !== propertyId) {
-    return {
-      ok: false,
-      error: `Queue item was scanned for property "${scanPropId}" but current selection is "${propertyId}". Invalidate and re-scan file.`,
-    };
+  if (scanPropId && String(scanPropId) !== pidStr) {
+    const currentProp = accessibleProperties.find((p) => String(p.id) === pidStr);
+    const isCodeMatch = currentProp?.code && String(currentProp.code).trim().toLowerCase() === String(scanPropId).trim().toLowerCase();
+    const isAliasMatch = Array.isArray(currentProp?.aliases) && currentProp.aliases.some((a) => String(a).trim().toLowerCase() === String(scanPropId).trim().toLowerCase());
+    if (item.reassignmentConfirmed || item.canonicalized || isCodeMatch || isAliasMatch) {
+      // Allowed: explicitly confirmed or authoritatively canonicalized
+    } else {
+      return {
+        ok: false,
+        error: `Queue item was scanned for property "${scanPropId}" but current selection is "${propertyId}". Invalidate and re-scan file.`,
+      };
+    }
   }
 
   return { ok: true };
 }
+

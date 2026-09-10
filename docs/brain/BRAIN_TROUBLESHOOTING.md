@@ -6909,31 +6909,23 @@ A real production operator on `/upload` had 10 scanned files stuck in an unrecov
 `resolveEffectiveProperty()` previously trusted any truthy `item.propertyId` snapshot without checking whether that property ID was currently authorized in `accessibleProperties`. When an old/stale ID was present on the queue item, it was returned as `eff.id`. Then, `validateQueueProperty` strictly and correctly failed closed on `!accessibleProperties.some(p => p.id === propertyId)`. Because the snapshot was repeatedly re-read across retries, clicking `Retry` or `Retry Failed` re-ran the exact same failure with no escape hatch without wiping and re-uploading every file.
 
 ### Core Fix & Invariants
-1. **Canonical 5-Step Property Resolution Ladder (`src/lib/importQueueHelpers.js` & `src/pages/Import.jsx`)**:
-   - Exported `resolveQueueProperty({ item, propertyId, accessibleProperties })`:
-     1. **Queue snapshot ID**: Currently authorized in `accessibleProperties`?
-        - `YES` -> Use it (`source: 'snapshot'`).
-        - `NO`  -> Treat snapshot as STALE, not authoritative. Fall through to Step 2.
-     2. **Currently selected property authorized?**
-        - `YES` -> Use it when safely reassigned (`source: 'selected'`, `reassigned: true`).
-     3. **Exactly ONE accessible property?**
-        - `YES` -> Use that canonical property automatically (`source: 'canonical_single'`, `reassigned: true`).
-     4. **Multiple accessible properties?**
-        - `DO NOT GUESS` -> Fail closed and require operator selection (`ok: false`, `requiresSelection: true`, `error: "Multiple accessible properties available. Please select the target property above to reassign this file."`).
-     5. **Zero accessible properties?**
-        - `FAIL CLOSED` -> (`ok: false`, `error: "No accessible properties found for this account."`).
-2. **Strict Authorization & Integrity Enforcement**:
-   - `validateQueueProperty` remains strictly fail-closed, verifying target property against `accessibleProperties` and ensuring scan metadata consistency.
-   - In `Import.jsx`:
-     - When an item is safely reassigned to the canonical/selected property, `importSingle()` updates `itemToValidate`'s target property and scan metadata to match `eff.id`, satisfying both authorization and consistency invariants.
-     - Persists reassignment back to queue state so subsequent operations stay aligned.
-     - `handleFiles()` auto-resolves when 1 accessible property exists.
-     - `handleImportAll()` checks `canResolveAny`.
+1. **Strict Canonical Identity Resolution Ladder (`src/lib/importQueueHelpers.js` & `src/pages/Import.jsx`)**:
+   - Central Invariant: **"Only one accessible property exists" is NOT proof that a queued file originally belonged to that property.** A nonempty unknown/revoked property reference is **NEVER** silently re-homed solely because one other property is accessible.
+   - Core Cases Formally Distinguished:
+     - **CASE A (Valid Snapshot)**: Snapshot ID is nonempty AND currently authorized in `accessibleProperties` -> Use snapshot directly (`ok: true, source: 'snapshot'`, no reassignment).
+     - **CASE B (Authoritative Alias -> Same Canonical Property)**: Snapshot ID is nonempty and inaccessible, BUT authoritative mapping proves it represents an accessible canonical property (e.g. numeric/string ID equivalence `String(p.id) === String(snapId)`, or matching canonical property code `p.code === snapCode`, or explicit property `aliases`). Auto-canonicalization allowed (`ok: true, source: 'authoritative_alias', canonicalized: true`).
+     - **CASE C (Empty Snapshot)**: Snapshot ID is EMPTY (file was queued before a property was chosen). If exactly 1 accessible property exists, safe single-property fallback is allowed without dialog (`ok: true, source: 'canonical_single'`). If property selected, uses selected (`source: 'selected'`).
+     - **CASE D (Revoked / Unknown Nonempty Snapshot)**: Snapshot ID is nonempty, unauthorized, and NOT authoritatively mapped. It is **NEVER silently re-homed**, even if only 1 accessible property exists! Reassignment strictly requires explicit operator confirmation (`confirmPropertyReassignment`) naming old target, new target, and file count. If declined: 0 import calls, 0 UploadedReport writes, 0 business writes.
+     - **CASE E (Multiple Accessible Properties)**: When target property is ambiguous, requires user selection (`ok: false, requiresSelection: true`).
+     - **CASE F (Zero Accessible Properties)**: Fails closed (`ok: false`).
+2. **Fail-Closed Drop Gate & Scan Consistency**:
+   - `handleFiles()`: Upload and scan drop gate evaluates `if (!effUpload.ok)` alone — never falling back to raw `propertyId`. Blocks file drop even if an invalid nonempty string is present in dropdown.
+   - Scan consistency: `effUpload.id` and `effUpload.name` are passed directly to `scanReport` and preserved across `newQueue` and post-scan `setQueue`.
 3. **Automated Verification & Mutation Proof**:
-   - Added unit tests in `src/lib/importQueueHelpers.test.js` covering all 5 steps of the ladder.
-   - Added 3 end-to-end flow tests in `src/pages/Import.test.jsx`:
-     - Test 1 (Real Screenshot Flow): Stuck stale queue item automatically recovers and imports into canonical single property on Retry without re-upload.
-     - Test 2 (Multi-Property Negative Flow): With multiple properties and no selection, retry fails closed with prompt requiring user selection (0 rows written, 0 API calls).
-     - Test 3 (Revoked Property Attack Flow): Revoked property access fails closed in multi-property mode, while canonical single property safely reassigns without touching revoked property.
-   - Mutation test executed: Temporarily restored old unconditional `snapId` win -> all 3 tests failed. Restored fix -> all tests passed.
+   - Unit tests in `src/lib/importQueueHelpers.test.js`: 22/22 tests passing across all identity cases (A through F), confirmation prompts, cancellation, and validation checks.
+   - End-to-end integration tests in `src/pages/Import.test.jsx`: 13/13 tests passing, covering single auto-selection, negative flows, fail-closed revoked property attack flows, confirmed reassignment with provenance preservation, empty snapshot auto-fallback, authoritative alias canonicalization, drop gate blocking, and scan consistency.
+   - Mutation tests executed:
+     - Mutation 1 (unconditional silent re-homing): broke 5 tests across unit and integration suites (`CASE D`, `CASE C`, `Explicit Reassignment`, `Test 1`, `Test 4`). Restored.
+     - Mutation 2 (`if (!effUpload.ok && !propertyId)`): verified drop gate strictly evaluates `!effUpload.ok` to reject invalid dropdown states. Restored.
+
 

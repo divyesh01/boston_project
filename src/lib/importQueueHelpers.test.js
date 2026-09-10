@@ -3,6 +3,7 @@ import {
   getQueueMetrics,
   confirmForceImportToggle,
   confirmBatchForceImport,
+  confirmPropertyReassignment,
   validateQueueProperty,
   resolveQueueProperty,
 } from './importQueueHelpers';
@@ -80,6 +81,46 @@ describe('importQueueHelpers', () => {
     });
   });
 
+  describe('confirmPropertyReassignment', () => {
+    it('prompts confirmation for single file with old and new targets', () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const res = confirmPropertyReassignment({
+        oldTarget: 'Hotel Alpha (prop-a)',
+        newTarget: 'Hotel Beta (prop-b)',
+        count: 1,
+      });
+      expect(res).toBe(true);
+      expect(confirmSpy).toHaveBeenCalledOnce();
+      const msg = confirmSpy.mock.calls[0][0];
+      expect(msg).toContain('This file was queued for:\nHotel Alpha (prop-a)');
+      expect(msg).toContain('That property is no longer accessible or authorized.');
+      expect(msg).toContain('Reassign this file to:\nHotel Beta (prop-b)?');
+    });
+
+    it('prompts batch confirmation naming file count', () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const res = confirmPropertyReassignment({
+        oldTarget: 'Old Stale (prop-stale)',
+        newTarget: 'Red Roof Middleboro (prop-middleboro)',
+        count: 10,
+      });
+      expect(res).toBe(true);
+      expect(confirmSpy).toHaveBeenCalledOnce();
+      const msg = confirmSpy.mock.calls[0][0];
+      expect(msg).toContain('10 files were queued for:\nOld Stale (prop-stale)');
+      expect(msg).toContain('Reassign all 10 queued files to:\nRed Roof Middleboro (prop-middleboro)?');
+    });
+
+    it('returns false when user cancels reassignment', () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(false);
+      const res = confirmPropertyReassignment({
+        oldTarget: 'Hotel A',
+        newTarget: 'Hotel B',
+      });
+      expect(res).toBe(false);
+    });
+  });
+
   describe('validateQueueProperty', () => {
     it('rejects empty propertyId', () => {
       const res = validateQueueProperty({
@@ -101,7 +142,7 @@ describe('importQueueHelpers', () => {
       expect(res.error).toContain('no longer accessible');
     });
 
-    it('rejects item whose scan metadata belongs to a different property', () => {
+    it('rejects item whose scan metadata belongs to a different property when not reassigned/canonicalized', () => {
       const res = validateQueueProperty({
         item: { scan: { meta: { propertyId: 'old-prop' } } },
         propertyId: 'new-prop',
@@ -109,6 +150,15 @@ describe('importQueueHelpers', () => {
       });
       expect(res.ok).toBe(false);
       expect(res.error).toContain('was scanned for property "old-prop"');
+    });
+
+    it('accepts item whose scan metadata differs if reassignment was operator-confirmed', () => {
+      const res = validateQueueProperty({
+        item: { scan: { meta: { propertyId: 'old-prop' } }, reassignmentConfirmed: true },
+        propertyId: 'new-prop',
+        accessibleProperties: [{ id: 'new-prop' }],
+      });
+      expect(res.ok).toBe(true);
     });
 
     it('accepts valid item matching current property', () => {
@@ -121,11 +171,11 @@ describe('importQueueHelpers', () => {
     });
   });
 
-  describe('resolveQueueProperty (5-step ladder)', () => {
-    const propA = { id: 'prop-a', name: 'Hotel Alpha' };
-    const propB = { id: 'prop-b', name: 'Hotel Beta' };
+  describe('resolveQueueProperty (strict identity ladder)', () => {
+    const propA = { id: 'prop-a', code: 'RR101', name: 'Hotel Alpha' };
+    const propB = { id: 'prop-b', code: 'RR102', name: 'Hotel Beta' };
 
-    it('Step 1: uses queue snapshot ID when it is CURRENTLY authorized', () => {
+    it('CASE A: uses queue snapshot ID when it is CURRENTLY authorized (no reassignment)', () => {
       const res = resolveQueueProperty({
         item: { propertyId: 'prop-a', propertyName: 'Hotel Alpha' },
         propertyId: 'prop-b',
@@ -134,24 +184,26 @@ describe('importQueueHelpers', () => {
       expect(res.ok).toBe(true);
       expect(res.id).toBe('prop-a');
       expect(res.source).toBe('snapshot');
+      expect(res.reassigned).toBe(false);
     });
 
-    it('Step 1 -> 2: treats snapshot as STALE when unauthorized, and uses authorized selected property', () => {
+    it('CASE B: authoritatively canonicalizes when snapshot matches property code', () => {
       const res = resolveQueueProperty({
-        item: { propertyId: 'prop-stale', propertyName: 'Old Hotel' },
-        propertyId: 'prop-b',
+        item: { propertyId: 'RR101', propertyName: 'Hotel Alpha' },
+        propertyId: '',
         accessibleProperties: [propA, propB],
       });
       expect(res.ok).toBe(true);
-      expect(res.id).toBe('prop-b');
-      expect(res.source).toBe('selected');
+      expect(res.id).toBe('prop-a');
+      expect(res.source).toBe('authoritative_alias');
+      expect(res.canonicalized).toBe(true);
       expect(res.reassigned).toBe(true);
+      expect(res.originalPropertyId).toBe('RR101');
     });
 
-    it('Step 1 -> 3: uses canonical property automatically when exactly ONE accessible property exists', () => {
-      // Exactly the production scenario: 1 property in portfolio, queue had stale/unauthorized propertyId
+    it('CASE C: safely falls back to canonical property when snapshot is EMPTY and exactly 1 property accessible', () => {
       const res = resolveQueueProperty({
-        item: { propertyId: 'prop-stale', propertyName: 'Stale Middleboro' },
+        item: { propertyId: '', propertyName: '' },
         propertyId: '',
         accessibleProperties: [propA],
       });
@@ -159,10 +211,49 @@ describe('importQueueHelpers', () => {
       expect(res.id).toBe('prop-a');
       expect(res.name).toBe('Hotel Alpha');
       expect(res.source).toBe('canonical_single');
-      expect(res.reassigned).toBe(true);
+      expect(res.reassigned).toBe(false);
     });
 
-    it('Step 1 -> 4: refuses to guess when multiple accessible properties exist, asking user to select', () => {
+    it('CASE D: NEVER silently re-homes a nonempty revoked snapshot even if only 1 accessible property exists', () => {
+      // prop-revoked genuinely belonged to another hotel; user only has access to prop-b
+      const res = resolveQueueProperty({
+        item: { propertyId: 'prop-revoked', propertyName: 'Revoked Hotel' },
+        propertyId: '',
+        accessibleProperties: [propB],
+      });
+      expect(res.ok).toBe(false);
+      expect(res.id).toBe('');
+      expect(res.requiresReassignment).toBe(true);
+      expect(res.originalPropertyId).toBe('prop-revoked');
+      expect(res.originalPropertyName).toBe('Revoked Hotel');
+      expect(res.suggestedTargetId).toBe('prop-b');
+      expect(res.suggestedTargetName).toBe('Hotel Beta');
+      expect(res.error).toContain('Explicit operator reassignment is required');
+    });
+
+    it('Explicit Reassignment: proceeds with confirmed target when operator has confirmed', () => {
+      const res = resolveQueueProperty({
+        item: {
+          propertyId: 'prop-revoked',
+          propertyName: 'Revoked Hotel',
+          originalPropertyId: 'prop-revoked',
+          originalPropertyName: 'Revoked Hotel',
+          reassignmentConfirmed: true,
+          reassignedFromPropertyId: 'prop-revoked',
+        },
+        propertyId: 'prop-b',
+        accessibleProperties: [propB],
+      });
+      expect(res.ok).toBe(true);
+      expect(res.id).toBe('prop-b');
+      expect(res.name).toBe('Hotel Beta');
+      expect(res.source).toBe('operator_reassigned');
+      expect(res.reassigned).toBe(true);
+      expect(res.originalPropertyId).toBe('prop-revoked');
+      expect(res.reassignedFromPropertyId).toBe('prop-revoked');
+    });
+
+    it('CASE E: refuses to guess when multiple accessible properties exist and snapshot is stale', () => {
       const res = resolveQueueProperty({
         item: { propertyId: 'prop-stale', propertyName: 'Stale' },
         propertyId: '',
@@ -170,11 +261,22 @@ describe('importQueueHelpers', () => {
       });
       expect(res.ok).toBe(false);
       expect(res.id).toBe('');
+      expect(res.requiresReassignment).toBe(true);
       expect(res.requiresSelection).toBe(true);
       expect(res.error).toContain('Multiple accessible properties available');
     });
 
-    it('Step 5: fails closed when zero accessible properties exist', () => {
+    it('Dropdown validation: blocks scan when selected property is invalid and multiple properties exist', () => {
+      const res = resolveQueueProperty({
+        propertyId: 'stale-c',
+        accessibleProperties: [propA, propB],
+      });
+      expect(res.ok).toBe(false);
+      expect(res.requiresSelection).toBe(true);
+      expect(res.error).toContain('Multiple accessible properties available');
+    });
+
+    it('CASE F: fails closed when zero accessible properties exist', () => {
       const res = resolveQueueProperty({
         item: { propertyId: 'prop-stale' },
         propertyId: '',
@@ -186,3 +288,4 @@ describe('importQueueHelpers', () => {
     });
   });
 });
+

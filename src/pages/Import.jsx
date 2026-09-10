@@ -19,6 +19,7 @@ import {
   getQueueMetrics,
   confirmForceImportToggle,
   confirmBatchForceImport,
+  confirmPropertyReassignment,
   validateQueueProperty,
   resolveQueueProperty,
 } from "@/lib/importQueueHelpers";
@@ -286,16 +287,17 @@ export default function Import() {
   // "10 files selected · 10 failed … propertyId is required" state: a
   // single-hotel operator who scans first and picks the property second can
   // still retry without re-uploading every file.
-  // Resolve the property a queue item should import into following the canonical 5-step ladder:
-  // 1. Queue snapshot ID: currently authorized? YES -> use it; NO -> treat as STALE, not authoritative.
-  // 2. Currently selected property authorized? YES -> use it when safely reassigned.
-  // 3. Exactly ONE accessible property? YES -> use that canonical property automatically.
-  // 4. Multiple accessible properties? -> DO NOT guess -> require user selection.
-  // 5. Zero accessible properties? -> fail closed.
+  // Resolve the property a queue item should import into following the strict canonical identity ladder:
+  // CASE A: Snapshot ID authorized -> use snapshot directly (no reassignment).
+  // CASE B: Authoritative alias -> canonicalize to matching property automatically.
+  // CASE C: EMPTY snapshot + single property -> safe fallback.
+  // CASE D: Nonempty revoked/unknown snapshot -> NEVER silently re-home, require operator reassignment.
+  // CASE E: Multiple accessible properties -> require selection.
+  // CASE F: Zero accessible properties -> fail closed.
   const resolveEffectiveProperty = (itemPid = "", itemPname = "", item = null) => {
     return resolveQueueProperty({
-      item: item || { propertyId: itemPid, propertyName: itemPname },
-      propertyId,
+      item: item || (itemPid ? { propertyId: String(itemPid).trim(), propertyName: itemPname } : null),
+      propertyId: String(propertyId || "").trim(),
       accessibleProperties,
     });
   };
@@ -387,10 +389,10 @@ export default function Import() {
 
   const handleFiles = async (fileList) => {
     const effUpload = resolveQueueProperty({
-      propertyId,
+      propertyId: String(propertyId || "").trim(),
       accessibleProperties,
     });
-    if (!effUpload.ok && !propertyId) {
+    if (!effUpload.ok) {
       alert(effUpload.error || "Select a property before importing reports.");
       return;
     }
@@ -417,8 +419,8 @@ export default function Import() {
     // through resolveEffectiveProperty(), so even if the dropdown changes (or
     // was empty at scan time and chosen later) each file still knows where its
     // rows belong and can be retried without re-uploading.
-    const scanPid = effUpload.id || String(propertyId || "").trim();
-    const scanPname = effUpload.name || selectedProperty?.name || "";
+    const scanPid = String(effUpload.id).trim();
+    const scanPname = effUpload.name || "";
     const newQueue = files.map((file, i) => ({
       key: `${file.name}-${stamp}-${i}`,
       file,
@@ -432,6 +434,8 @@ export default function Import() {
       importId: crypto.randomUUID(),
       propertyId: scanPid,
       propertyName: scanPname,
+      originalPropertyId: scanPid,
+      originalPropertyName: scanPname,
       // Operator-supplied statement date, set from the queue row and only used by
       // Hotel Statistics (which ships no date column). Declared here rather than
       // appearing on first edit so the queue item has one stable shape.
@@ -456,8 +460,8 @@ export default function Import() {
         }
         const { file_url } = await db.integrations.Core.UploadFile({ file: item.file });
         const scan = await scanReport(type, file_url, {
-          propertyId,
-          propertyName: selectedProperty?.name || "",
+          propertyId: scanPid,
+          propertyName: scanPname,
           importId: item.importId,
           sourceFile: item.name,
           // Hotel Statistics files carry no date of their own. The parser derives
@@ -470,7 +474,17 @@ export default function Import() {
         });
         // Content hash (SHA-256) for duplicate detection before the import runs.
         const contentHash = await sha256File(item.file);
-        setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "ready", scan, file_url, contentHash, propertyId: String(propertyId || "").trim() || q.propertyId || "", propertyName: selectedProperty?.name || q.propertyName || "" } : q)));
+        setQueue((prev) => prev.map((q) => (q.key === item.key ? {
+          ...q,
+          status: "ready",
+          scan,
+          file_url,
+          contentHash,
+          propertyId: scanPid,
+          propertyName: scanPname,
+          originalPropertyId: scanPid,
+          originalPropertyName: scanPname,
+        } : q)));
       } catch (e) {
         setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: e.message || "Could not read file" } : q)));
       }
@@ -492,17 +506,28 @@ export default function Import() {
     setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, businessDate, status: "scanning" } : q)));
     try {
       const csvText = /\.csv$/i.test(item.name) ? await item.file.text() : null;
-      const effRe = resolveEffectiveProperty(item.propertyId, item.propertyName);
+      const effRe = resolveEffectiveProperty(item.propertyId, item.propertyName, item);
+      if (!effRe.ok || !effRe.id) {
+        throw new Error(effRe.error || "Property resolution failed");
+      }
       const scan = await scanReport(type, item.file_url, {
-        propertyId: effRe.id || propertyId,
-        propertyName: effRe.name || selectedProperty?.name || "",
+        propertyId: effRe.id,
+        propertyName: effRe.name || "",
         importId: item.importId,
         sourceFile: item.name,
         fileModified: item.file?.lastModified || null,
         businessDate,
         csvText,
       });
-      setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "ready", scan, propertyId: effRe.id || q.propertyId || "", propertyName: effRe.name || q.propertyName || "" } : q)));
+      setQueue((prev) => prev.map((q) => (q.key === item.key ? {
+        ...q,
+        status: "ready",
+        scan,
+        propertyId: effRe.id,
+        propertyName: effRe.name || "",
+        originalPropertyId: q.originalPropertyId || q.propertyId,
+        originalPropertyName: q.originalPropertyName || q.propertyName,
+      } : q)));
     } catch (e) {
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: e.message || "Could not re-scan file" } : q)));
     }
@@ -515,18 +540,20 @@ export default function Import() {
     // This is what repairs the stuck "10 failed … propertyId is required" queue:
     // the old code passed the then-empty dropdown value straight through.
     const eff = resolveEffectiveProperty(item.propertyId, item.propertyName, item);
-    if (!eff.id) {
+    if (!eff.ok || !eff.id) {
       const msg = eff.error || friendlyImportError({ message: "Select a property above, then retry this file — it was scanned with no property attached so there was nowhere to store its rows." });
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: msg } : q)));
       return { name: item.name, ok: false, error: msg };
     }
-    // If the item was safely reassigned (e.g. from a stale snapshot to the canonical property),
+    // If the item was safely reassigned or canonicalized,
     // update the item's target property and scan metadata so validateQueueProperty evaluates the target.
-    const itemToValidate = eff.reassigned && eff.id !== item.propertyId
+    const itemToValidate = (eff.reassigned || eff.canonicalized) && eff.id !== item.propertyId
       ? {
           ...item,
           propertyId: eff.id,
           propertyName: eff.name,
+          originalPropertyId: item.originalPropertyId || item.propertyId,
+          originalPropertyName: item.originalPropertyName || item.propertyName,
           scan: item.scan ? {
             ...item.scan,
             propertyId: eff.id,
@@ -549,12 +576,14 @@ export default function Import() {
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: friendly } : q)));
       return { name: item.name, ok: false, error: friendly };
     }
-    // Persist the resolution so a later retry (or a re-render) keeps it.
-    if (eff.id !== item.propertyId || eff.name !== item.propertyName || eff.reassigned) {
+    // Persist the resolution so a later retry (or a re-render) keeps it, preserving original provenance.
+    if (eff.id !== item.propertyId || eff.name !== item.propertyName || eff.reassigned || eff.canonicalized) {
       setQueue((prev) => prev.map((q) => (q.key === item.key ? {
         ...q,
         propertyId: eff.id,
         propertyName: eff.name,
+        originalPropertyId: q.originalPropertyId || q.propertyId,
+        originalPropertyName: q.originalPropertyName || q.propertyName,
         scan: q.scan ? {
           ...q.scan,
           propertyId: eff.id,
@@ -720,14 +749,66 @@ export default function Import() {
   };
 
   const handleImportAll = async () => {
-    const effAll = resolveEffectiveProperty("", "");
     // Include retryable failures: files that scanned fine but failed to import
     // (e.g. the old "propertyId is required" queue) carry scan data and can be
     // retried now that a property resolves — without forcing a re-upload.
     const pending = queue.filter((q) => (q.status === "ready" || q.status === "error") && q.scan);
     if (!pending.length || importing) return;
 
-    const canResolveAny = pending.some((item) => {
+    // Check if any pending items require explicit reassignment
+    const itemsNeedingReassignment = pending.filter((item) => {
+      const eff = resolveEffectiveProperty(item.propertyId, item.propertyName, item);
+      return !eff.ok && eff.requiresReassignment && !item.reassignmentConfirmed;
+    });
+
+    let queueItemsToProcess = pending;
+    if (itemsNeedingReassignment.length > 0) {
+      const targetProp = accessibleProperties.find((p) => p.id === propertyId) || (accessibleProperties.length === 1 ? accessibleProperties[0] : null);
+      if (!targetProp) {
+        alert("Some queued files were scanned for properties that are no longer accessible. Please select a target property above to reassign them.");
+        return;
+      }
+      const oldTarget = itemsNeedingReassignment[0].originalPropertyName || itemsNeedingReassignment[0].propertyName || itemsNeedingReassignment[0].propertyId || "Previous Property";
+      const newTarget = `${targetProp.name || targetProp.id} (${targetProp.id})`;
+      const ok = confirmPropertyReassignment({
+        oldTarget,
+        newTarget,
+        count: itemsNeedingReassignment.length,
+      });
+      if (ok) {
+        const reassignedKeys = new Set(itemsNeedingReassignment.map((it) => it.key));
+        queueItemsToProcess = pending.map((item) => {
+          if (reassignedKeys.has(item.key)) {
+            return {
+              ...item,
+              propertyId: targetProp.id,
+              propertyName: targetProp.name || "",
+              originalPropertyId: item.originalPropertyId || item.propertyId,
+              originalPropertyName: item.originalPropertyName || item.propertyName || "",
+              reassignedFromPropertyId: item.propertyId,
+              reassignmentConfirmed: true,
+              scan: item.scan ? {
+                ...item.scan,
+                propertyId: targetProp.id,
+                meta: item.scan.meta ? {
+                  ...item.scan.meta,
+                  propertyId: targetProp.id,
+                  propertyName: targetProp.name || "",
+                } : item.scan.meta,
+              } : item.scan,
+            };
+          }
+          return item;
+        });
+        setQueue((prev) => prev.map((q) => {
+          const matched = queueItemsToProcess.find((it) => it.key === q.key);
+          return matched || q;
+        }));
+      }
+    }
+
+    const effAll = resolveEffectiveProperty("", "");
+    const canResolveAny = queueItemsToProcess.some((item) => {
       const eff = resolveEffectiveProperty(item.propertyId, item.propertyName, item);
       return Boolean(eff.id);
     });
@@ -758,7 +839,7 @@ export default function Import() {
     setImporting(true);
     const newResults = [];
     try {
-      for (const item of pending) {
+      for (const item of queueItemsToProcess) {
         try {
           const r = await importSingle(item, { isBatch: true });
           if (r) newResults.push(r);
@@ -869,8 +950,57 @@ export default function Import() {
 
   const handleRetrySingle = async (item) => {
     if (importing || busy) return;
-    setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "ready", error: "" } : q)));
-    const res = await importSingle({ ...item, status: "ready", error: "" });
+    let targetItem = item;
+    const eff = resolveEffectiveProperty(item.propertyId, item.propertyName, item);
+    if (!eff.ok && eff.requiresReassignment) {
+      const targetProp = accessibleProperties.find((p) => p.id === propertyId) || (accessibleProperties.length === 1 ? accessibleProperties[0] : null);
+      if (!targetProp) {
+        setQueue((prev) => prev.map((q) => (q.key === item.key ? {
+          ...q,
+          status: "error",
+          error: eff.error || "Multiple accessible properties available. Please select the target property above to reassign this file.",
+        } : q)));
+        alert(eff.error || "Multiple accessible properties available. Please select the target property above to reassign this file.");
+        return;
+      }
+      const oldTarget = item.originalPropertyName || item.propertyName || item.originalPropertyId || item.propertyId || "Previous Property";
+      const newTarget = `${targetProp.name || targetProp.id} (${targetProp.id})`;
+      const ok = confirmPropertyReassignment({
+        oldTarget,
+        newTarget,
+        count: 1,
+      });
+      if (!ok) {
+        setQueue((prev) => prev.map((q) => (q.key === item.key ? {
+          ...q,
+          status: "error",
+          error: eff.error || "Reassignment cancelled by operator.",
+        } : q)));
+        return;
+      }
+      targetItem = {
+        ...item,
+        propertyId: targetProp.id,
+        propertyName: targetProp.name || "",
+        originalPropertyId: item.originalPropertyId || item.propertyId,
+        originalPropertyName: item.originalPropertyName || item.propertyName || "",
+        reassignedFromPropertyId: item.propertyId,
+        reassignmentConfirmed: true,
+        scan: item.scan ? {
+          ...item.scan,
+          propertyId: targetProp.id,
+          meta: item.scan.meta ? {
+            ...item.scan.meta,
+            propertyId: targetProp.id,
+            propertyName: targetProp.name || "",
+          } : item.scan.meta,
+        } : item.scan,
+      };
+      setQueue((prev) => prev.map((q) => (q.key === item.key ? targetItem : q)));
+    }
+
+    setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...targetItem, status: "ready", error: "" } : q)));
+    const res = await importSingle({ ...targetItem, status: "ready", error: "" });
     if (res) {
       setResults((prev) => [...prev, res]);
       refetch();

@@ -205,7 +205,7 @@ describe("Import.jsx property auto-selection and upload guards", () => {
   });
 
   describe("Flow Tests: Stale Property Snapshot Recovery and Authorization Ladder", () => {
-    it("Test 1 (Real Screenshot Flow): recovers stuck stale-property queue item to canonical property on retry without re-upload", async () => {
+    it("Test 1 (Real Screenshot Flow with Explicit Operator Reassignment): recovers stuck stale-property queue item to canonical property on confirmed retry without re-upload", async () => {
       // Setup initial state: file scanned under a property that subsequently became stale
       mockProperties = [
         { id: "prop-stale", name: "Old Stale Property" },
@@ -250,12 +250,20 @@ describe("Import.jsx property auto-selection and upload guards", () => {
       mockCanAccessProperty.mockImplementation((id) => id === "prop-middleboro");
       mockImportReport.mockResolvedValueOnce({ count: 10, excluded: 0, importId: "imp-123" });
 
+      // Operator confirms reassignment dialog
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
       // Rerender with updated property access
       rerender(<Import />);
 
       // Click Retry on the stuck item
       const retryBtn = screen.getByRole("button", { name: /^retry$/i });
       fireEvent.click(retryBtn);
+
+      // Verify operator confirmation was requested with provenance details
+      expect(confirmSpy).toHaveBeenCalled();
+      expect(confirmSpy.mock.calls[0][0]).toContain("Old Stale Property");
+      expect(confirmSpy.mock.calls[0][0]).toContain("Red Roof Middleboro (prop-middleboro)");
 
       // Verify canonical property assignment and successful import
       await waitFor(() => {
@@ -340,7 +348,7 @@ describe("Import.jsx property auto-selection and upload guards", () => {
       expect(mockUploadedReportCreate).not.toHaveBeenCalled();
     });
 
-    it("Test 3 (Revoked Property Attack Flow): prevents cross-property pollution when property access is revoked", async () => {
+    it("Test 3 (Revoked Property Attack Flow - Fail Closed): NEVER silently re-homes revoked property to single accessible property without confirmation", async () => {
       // Step A: Queue item has snapshot for prop-revoked
       mockProperties = [{ id: "prop-revoked", name: "Revoked Property" }];
       mockCanAccessProperty.mockImplementation((id) => id === "prop-revoked");
@@ -367,56 +375,222 @@ describe("Import.jsx property auto-selection and upload guards", () => {
       });
 
       // Access to prop-revoked is REVOKED
-      // Sub-case A: 2 other properties exist, none selected -> fail closed
-      mockProperties = [
-        { id: "prop-other-1", name: "Other 1" },
-        { id: "prop-other-2", name: "Other 2" },
-      ];
-      mockCanAccessProperty.mockImplementation((id) => id !== "prop-revoked");
-      mockImportReport.mockClear();
-      mockUploadedReportCreate.mockClear();
-
-      rerender(<Import />);
-
-      fireEvent.click(screen.getByRole("button", { name: /^retry$/i }));
-
-      // Must fail closed, never touch prop-revoked or write data
-      await waitFor(() => {
-        expect(screen.getByText(/Multiple accessible properties available/i)).toBeDefined();
-      });
-      expect(mockImportReport).not.toHaveBeenCalled();
-      expect(mockUploadedReportCreate).not.toHaveBeenCalled();
-
-      // Sub-case B: Only 1 legitimate property exists (prop-canonical-b)
+      // Only 1 property remains: prop-canonical-b.
+      // Operator declines or cancels reassignment confirmation.
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
       mockProperties = [
         { id: "prop-canonical-b", name: "Canonical B" },
       ];
       mockCanAccessProperty.mockImplementation((id) => id === "prop-canonical-b");
-      mockImportReport.mockResolvedValueOnce({ count: 10, excluded: 0, importId: "imp-safe" });
+      mockImportReport.mockClear();
+      mockUploadedReportCreate.mockClear();
+      mockRebuildDailyAggregates.mockClear();
 
       rerender(<Import />);
 
-      // Retry now safely reassigns to canonical property
+      // Retry is clicked
       fireEvent.click(screen.getByRole("button", { name: /^retry$/i }));
 
+      // MUST NOT automatically import into prop-canonical-b
+      expect(mockImportReport).not.toHaveBeenCalled();
+      expect(mockUploadedReportCreate).not.toHaveBeenCalled();
+      expect(mockRebuildDailyAggregates).not.toHaveBeenCalled();
+    });
+
+    it("Test 4 (Explicit Reassignment Confirmed): imports to new property only when operator explicitly confirms", async () => {
+      // Queue item for prop-revoked
+      mockProperties = [{ id: "prop-revoked", name: "Revoked Property" }];
+      mockCanAccessProperty.mockImplementation((id) => id === "prop-revoked");
+      mockScanReport.mockResolvedValueOnce({
+        type: "daily_ledger",
+        totalRows: 10,
+        meta: { propertyId: "prop-revoked", propertyName: "Revoked Property" },
+      });
+      mockImportReport.mockRejectedValueOnce(new Error("Initial failure"));
+
+      const { container, rerender } = render(<Import />);
+      const dummyFile = new File(["col1,col2\n1,2"], "test-confirm.csv", { type: "text/csv" });
+      const fileInput = container.querySelector('input[type="file"]');
+      fireEvent.change(fileInput, { target: { files: [dummyFile] } });
+
+      await waitFor(() => {
+        expect(screen.getByText("test-confirm.csv")).toBeDefined();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /^import$/i }));
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /^retry$/i })).toBeDefined();
+      });
+
+      // Revoke prop-revoked, switch to prop-canonical-b
+      mockProperties = [{ id: "prop-canonical-b", name: "Canonical B" }];
+      mockCanAccessProperty.mockImplementation((id) => id === "prop-canonical-b");
+      mockImportReport.mockResolvedValueOnce({ count: 10, excluded: 0, importId: "imp-confirmed" });
+
+      // Operator explicitly confirms reassignment
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+      rerender(<Import />);
+
+      fireEvent.click(screen.getByRole("button", { name: /^retry$/i }));
+
+      // Confirmation was requested
+      expect(confirmSpy).toHaveBeenCalledOnce();
+      expect(confirmSpy.mock.calls[0][0]).toContain("Revoked Property");
+      expect(confirmSpy.mock.calls[0][0]).toContain("Canonical B (prop-canonical-b)");
+
+      // Import succeeds under canonical property
       await waitFor(() => {
         expect(mockImportReport).toHaveBeenCalledWith(
           expect.anything(),
           expect.objectContaining({
             propertyId: "prop-canonical-b",
+            propertyName: "Canonical B",
           })
         );
       });
       expect(mockUploadedReportCreate).toHaveBeenCalledWith(
         expect.objectContaining({
           property_id: "prop-canonical-b",
+          property_name: "Canonical B",
         })
       );
-      // Verify prop-revoked was NEVER used
-      expect(mockImportReport).not.toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ propertyId: "prop-revoked" })
-      );
+    });
+
+    it("Test 5 (Empty Snapshot Auto-Fallback): safe single-property fallback when file was scanned before property selection", async () => {
+      mockProperties = [{ id: "prop-single", name: "Single Hotel" }];
+      mockCanAccessProperty.mockImplementation((id) => id === "prop-single");
+
+      mockScanReport.mockResolvedValueOnce({
+        type: "daily_ledger",
+        totalRows: 10,
+        meta: { propertyId: "", propertyName: "" },
+      });
+      mockImportReport.mockResolvedValueOnce({ count: 10, excluded: 0, importId: "imp-empty-snap" });
+
+      const confirmSpy = vi.spyOn(window, "confirm");
+      const { container } = render(<Import />);
+
+      const dummyFile = new File(["col1,col2\n1,2"], "test-empty.csv", { type: "text/csv" });
+      const fileInput = container.querySelector('input[type="file"]');
+      fireEvent.change(fileInput, { target: { files: [dummyFile] } });
+
+      await waitFor(() => {
+        expect(screen.getByText("test-empty.csv")).toBeDefined();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /^import$/i }));
+
+      // Safe fallback happens automatically without requiring confirm dialog
+      await waitFor(() => {
+        expect(mockImportReport).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            propertyId: "prop-single",
+          })
+        );
+      });
+      expect(confirmSpy).not.toHaveBeenCalled();
+    });
+
+    it("Test 6 (Authoritative Alias Canonicalization): canonicalizes automatically when snapshot matches property code", async () => {
+      mockProperties = [
+        { id: "prop-canonical-101", code: "RR101", name: "Red Roof Middleboro" },
+      ];
+      mockCanAccessProperty.mockImplementation((id) => id === "prop-canonical-101");
+
+      mockScanReport.mockResolvedValueOnce({
+        type: "daily_ledger",
+        totalRows: 10,
+        meta: { propertyId: "RR101", propertyName: "Red Roof Middleboro" },
+      });
+      mockImportReport.mockResolvedValueOnce({ count: 10, excluded: 0, importId: "imp-code-alias" });
+
+      const confirmSpy = vi.spyOn(window, "confirm");
+      const { container } = render(<Import />);
+
+      const dummyFile = new File(["col1,col2\n1,2"], "test-alias.csv", { type: "text/csv" });
+      const fileInput = container.querySelector('input[type="file"]');
+      fireEvent.change(fileInput, { target: { files: [dummyFile] } });
+
+      await waitFor(() => {
+        expect(screen.getByText("test-alias.csv")).toBeDefined();
+      });
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /^import$/i })).toBeDefined();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /^import$/i }));
+
+      // Canonicalized automatically to prop-canonical-101 based on authoritative code match
+      await waitFor(() => {
+        expect(mockImportReport).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            propertyId: "prop-canonical-101",
+          })
+        );
+      });
+      expect(confirmSpy).not.toHaveBeenCalled();
+    });
+
+    it("Test 7 (Invalid Nonempty Dropdown During File Drop): blocks scan when propertyId is invalid and multiple properties exist", async () => {
+      mockProperties = [
+        { id: "prop-alpha", name: "Hotel Alpha" },
+        { id: "prop-beta", name: "Hotel Beta" },
+      ];
+      mockCanAccessProperty.mockImplementation(() => true);
+
+      const { container } = render(<Import />);
+
+      // Simulate dropdown holding an un-authorized propertyId
+      const select = screen.getByTestId("property-select");
+      fireEvent.change(select, { target: { value: "invalid-prop-id" } });
+
+      // Fire file change with an invalid property state
+      const dummyFile = new File(["col1,col2\n1,2"], "test-drop-blocked.csv", { type: "text/csv" });
+      const fileInput = container.querySelector('input[type="file"]');
+
+      mockUploadFile.mockClear();
+      mockScanReport.mockClear();
+
+      // Drop file when no property is selected / invalid
+      fireEvent.change(fileInput, { target: { files: [dummyFile] } });
+
+      // Alerts user and blocks upload immediately
+      expect(window.alert).toHaveBeenCalled();
+      expect(mockUploadFile).not.toHaveBeenCalled();
+      expect(mockScanReport).not.toHaveBeenCalled();
+    });
+
+    it("Test 8 (Resolved Scan Consistency): scanReport and post-scan queue use canonical resolved property", async () => {
+      mockProperties = [
+        { id: "prop-middleboro", name: "Red Roof Middleboro" },
+      ];
+      mockCanAccessProperty.mockImplementation((id) => id === "prop-middleboro");
+
+      const { container } = render(<Import />);
+
+      const dummyFile = new File(["col1,col2\n1,2"], "test-consistent.csv", { type: "text/csv" });
+      const fileInput = container.querySelector('input[type="file"]');
+      fireEvent.change(fileInput, { target: { files: [dummyFile] } });
+
+      await waitFor(() => {
+        expect(mockScanReport).toHaveBeenCalledWith(
+          "auto",
+          expect.anything(),
+          expect.objectContaining({
+            propertyId: "prop-middleboro",
+            propertyName: "Red Roof Middleboro",
+          })
+        );
+      });
+
+      // Queue retains canonical property
+      await waitFor(() => {
+        expect(screen.getByText("test-consistent.csv")).toBeDefined();
+      });
     });
   });
 });

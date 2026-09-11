@@ -7034,3 +7034,63 @@ The correct RRI rule is established:
   - Mutation E (resolver drift between chunk and mutate): failed direct mutate M1–M3.
 - All 11 targeted probes passed; 56 Vitest files (521 tests) passed; `verify:all` 168 suites passed, 0 failed.
 
+---
+
+## 79. A 35s timeout that unlocked the import queue mid-transaction (2026-09-11)
+
+### Problem & Root Cause
+`src/pages/Import.jsx` awaited the report import through a racing wrapper:
+
+```js
+result = await withActionTimeout(reportPromise, 35000, "File import timed out after 35s. ...", {...});
+```
+
+`withActionTimeout` races the real promise against a timer and **rejects the caller** at
+the deadline. It cannot cancel the underlying `importReport` — which runs
+`runTransaction` — so at 35s the queue item moved to an error state, `importSingle`
+returned, and `handleImportAll` started **File B while File A's transaction was still
+pending**. Two `runTransaction` write batches overlapping on the same store is exactly
+the commit-then-fail / split-brain class this codebase already tracks elsewhere.
+
+The late-settlement handlers (`onLateResolve`/`onLateReject` → `lateImportCleanup`)
+tried to compensate by rolling back after the fact, but that is a repair, not
+prevention: for the whole 35s→settle window both files were in flight.
+
+### Core Fix — the timeout may observe, never unlock
+1. **`importReport` is awaited directly.** No race, no rejection, no rollback at 35s.
+   The promise resolves or rejects on its own; the queue stays locked until it does.
+2. **The 35s timer is informational only.** It sets a truthful
+   `"Still importing… this file is taking longer than 35s. Do not start another import."`
+   notice on the row and is cleared the moment the real import settles. It cannot
+   reject, cannot unlock, cannot roll back.
+3. **`handleImportAll` breaks on an unverifiable outcome.** When the rollback of a
+   failed import itself fails, `importSingle` sets
+   `err.authoritativeOutcomeUnknown = true` and returns `{ stopBatch: true }`. The
+   batch loop `break`s, so later files stay `ready` instead of writing on top of an
+   unknown database state.
+4. **One synchronous overlap guard for row Import/Retry.** The per-row buttons share
+   `runSingleItem`, which guards on `importingRef` (a ref, not React state). React
+   state is captured by the render closure, so two clicks in the same tick both saw
+   `importing === false` and both started a transaction; the ref updates
+   synchronously and refuses the second click before it reaches `importSingle`.
+   `handleImportAll` takes the same ref before its loop, so a double-click cannot
+   start two batch loops over the same queue either.
+
+### Invariants preserved (Observed)
+- Known-clean rollback continuation: a successful rollback still reports
+  `"rolled back cleanly (0 rows stored)"` and the batch continues.
+- Session rollback is keyed by `err?.importId || result?.importId` (never the
+  queue-local `item.importId`).
+- History ordering, aggregate-success-only accounting, `RAW_ROWS_PREVIEW_LIMIT`
+  and the transaction guard are untouched.
+
+### Verification
+- `scripts/probe-long-import-transaction-coordination.mjs` proves Q1 (a timed-out
+  race rejects the caller while the underlying work keeps running — the mechanism)
+  and Q2 (the fixed contract in `Import.jsx`: direct await, no racing wrapper,
+  still-importing notice, `authoritativeOutcomeUnknown`, `stopBatch`, loop break,
+  synchronous ref guard).
+- `src/pages/Import.test.jsx` adds focused tests: a slow import is awaited directly
+  and never rolled back; a batch whose rollback fails breaks after the first file and
+  leaves the second `Ready to import`.
+

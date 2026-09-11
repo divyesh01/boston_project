@@ -261,6 +261,7 @@ export default function Import() {
   const [processed, setProcessed] = useState(0);
   const [queue, setQueue] = useState([]);
   const [importing, setImporting] = useState(false);
+  const importingRef = useRef(false);
   const [expandedKey, setExpandedKey] = useState(null);
   const [results, setResults] = useState([]);
   const [search, setSearch] = useState("");
@@ -689,36 +690,33 @@ export default function Import() {
       }
       let result;
       try {
-        const lateImportCleanup = async (settled) => {
-          const sessionId = settled?.importId;
-          if (!sessionId) return;
-          const rollback = await rollbackImportSession(sessionId);
-          if (!rollback?.success) {
-            throw new Error(rollback?.error || `Could not roll back late import ${sessionId}`);
-          }
-        };
-        const reportPromise = importReport(item.scan, {
+        // importReport is awaited DIRECTLY. A timeout here must never reject the
+        // promise, unlock the queue, or trigger a rollback: the underlying
+        // runTransaction keeps running, and rejecting it would let the batch
+        // start File B while File A's transaction is still pending. The 35s
+        // timer is informational only — it sets a truthful still-importing
+        // notice and is cleared when the real import settles.
+        let stillImportingNotified = false;
+        const stillImportingTimer = setTimeout(() => {
+          stillImportingNotified = true;
+          setQueue((prev) => prev.map((q) => q.key === item.key
+            ? { ...q, error: "Still importing… this file is taking longer than 35s. Do not start another import." }
+            : q));
+        }, 35000);
+        try {
+          result = await importReport(item.scan, {
             propertyId: effPropertyId,
             propertyName: effPropertyName,
             importId: item.importId,
             sourceFile: item.name,
             forceImport,
           });
-        result = await withActionTimeout(
-          reportPromise,
-          35000,
-          "File import timed out after 35s. Any late commit will be rolled back automatically.",
-          {
-            onLateResolve: lateImportCleanup,
-            onLateReject: lateImportCleanup,
-            onCleanupError: (error) => {
-              console.error("[import] late import cleanup failed:", error);
-              setQueue((prev) => prev.map((q) => q.key === item.key
-                ? { ...q, error: `${q.error || "Import timed out"} — late cleanup failed: ${error?.message || error}. Do not re-import yet.` }
-                : q));
-            },
+        } finally {
+          clearTimeout(stillImportingTimer);
+          if (stillImportingNotified) {
+            setQueue((prev) => prev.map((q) => q.key === item.key ? { ...q, error: "" } : q));
           }
-        );
+        }
         const historyPromise = db.entities.UploadedReport.create({
             file_name: item.name,
             report_type: item.scan.type || type,
@@ -771,6 +769,11 @@ export default function Import() {
           // Never discard the result: a failed rollback means rows may still be
           // in the database, and the operator has to know that.
           if (!res?.success) {
+            // The rollback itself failed, so we no longer know whether the
+            // committed rows were removed. Mark the outcome as unverifiable so
+            // the batch loop stops and every later file stays ready instead of
+            // piling more writes on top of an unknown database state.
+            err.authoritativeOutcomeUnknown = true;
             err.message = `${err.message || "Import failed"} — automatic cleanup ALSO failed: ${res?.error || "unknown error"}. Rows may remain in the database; do not re-import until this is resolved.`;
           } else {
             err.message = `${err.message || "Import failed"} — rolled back cleanly (0 rows stored).`;
@@ -790,7 +793,7 @@ export default function Import() {
     } catch (e) {
       const friendly = friendlyImportError(e);
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: friendly } : q)));
-      return { name: item.name, ok: false, error: friendly };
+      return { name: item.name, ok: false, error: friendly, stopBatch: e?.authoritativeOutcomeUnknown === true };
     }
   };
 
@@ -807,7 +810,7 @@ export default function Import() {
     // (e.g. the old "propertyId is required" queue) carry scan data and can be
     // retried now that a property resolves — without forcing a re-upload.
     const pending = queue.filter((q) => (q.status === "ready" || q.status === "error") && q.scan);
-    if (!pending.length || importing) return;
+    if (!pending.length || importingRef.current || importing) return;
 
     // Check if any pending items require explicit reassignment
     const itemsNeedingReassignment = pending.filter((item) => {
@@ -906,6 +909,7 @@ export default function Import() {
       rotateCsrfToken();
       return;
     }
+    importingRef.current = true;
     setImporting(true);
     const newResults = [];
     try {
@@ -913,6 +917,10 @@ export default function Import() {
         try {
           const r = await importSingle(item, { isBatch: true });
           if (r) newResults.push(r);
+          // A failed rollback leaves the database outcome unverifiable. Stop the
+          // batch so later files stay ready instead of writing on top of an
+          // unknown state.
+          if (r?.stopBatch) break;
         } catch (itemErr) {
           console.error(`[import] Error importing ${item.name}:`, itemErr);
           const friendly = friendlyImportError(itemErr);
@@ -926,6 +934,7 @@ export default function Import() {
       alert(`Import failed: ${e.message || "unknown error"}.`);
       return;
     } finally {
+      importingRef.current = false;
       setImporting(false);
       rotateCsrfToken();
     }
@@ -1019,7 +1028,6 @@ export default function Import() {
   const readyCount = baseReadyCount + retryableCount;
 
   const handleRetrySingle = async (item) => {
-    if (importing || busy) return;
     let targetItem = item;
     const eff = resolveEffectiveProperty(item.propertyId, item.propertyName, item);
     if (!eff.ok && eff.requiresReassignment) {
@@ -1078,6 +1086,30 @@ export default function Import() {
     if (res) {
       setResults((prev) => [...prev, res]);
       refetch();
+    }
+    return res;
+  };
+
+  // Single writer for the per-row Import and Retry buttons. It owns the global
+  // `importing` flag so two row actions can never overlap: the second click is
+  // refused while the first import (and its transaction) is still in flight.
+  //
+  // The guard is a ref, not the `importing` state: React state is captured by
+  // the render closure, so two clicks in the same tick would both observe
+  // `importing === false` and both start a transaction. A ref updates
+  // synchronously, so the second click is refused before it reaches importSingle.
+  const runSingleItem = async (item, options = {}) => {
+    if (importingRef.current || importing || busy) return null;
+    importingRef.current = true;
+    setImporting(true);
+    try {
+      if (options.retry) {
+        return await handleRetrySingle(item);
+      }
+      return await importSingle(item, options);
+    } finally {
+      importingRef.current = false;
+      setImporting(false);
     }
   };
 
@@ -1445,7 +1477,10 @@ export default function Import() {
                       )}
                       {q.status === "ready" && (
                         <button
-                          onClick={() => importSingle(q).then((r) => { if (r) { setResults((prev) => [...prev, r]); refetch(); } })}
+                          onClick={async () => {
+                            const r = await runSingleItem(q);
+                            if (r) { setResults((prev) => [...prev, r]); refetch(); }
+                          }}
                           disabled={importing}
                           className="rounded-lg bg-[#6C63FF]/20 px-3 py-1 text-xs text-[#6C63FF] transition-colors hover:bg-[#6C63FF]/35 disabled:opacity-40"
                         >
@@ -1454,7 +1489,7 @@ export default function Import() {
                       )}
                       {(q.status === "error" || q.status === "duplicate") && (
                         <button
-                          onClick={() => handleRetrySingle(q)}
+                          onClick={() => runSingleItem(q, { retry: true })}
                           disabled={importing}
                           className="rounded-lg bg-[#00D4FF]/20 px-3 py-1 text-xs text-[#00D4FF] transition-colors hover:bg-[#00D4FF]/35 disabled:opacity-40"
                           title="Retry import"
@@ -1491,8 +1526,8 @@ export default function Import() {
                     </div>
                   )}
 
-                  {(q.status === "error" || q.status === "duplicate") && q.error && (
-                    <p className={`mt-1 text-xs ${q.status === "duplicate" ? "text-[#FFB547]" : "text-[#FF6B6B]"}`}>
+                  {(q.status === "error" || q.status === "duplicate" || (q.status === "importing" && q.error)) && q.error && (
+                    <p className={`mt-1 text-xs ${q.status === "duplicate" || q.status === "importing" ? "text-[#FFB547]" : "text-[#FF6B6B]"}`}>
                       {q.error}
                     </p>
                   )}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import React from "react";
 
 // Mock dependencies
@@ -24,6 +24,7 @@ const mockUploadedReportFilter = vi.fn().mockReturnValue({ get: vi.fn().mockReso
 const mockUploadFile = vi.fn().mockResolvedValue({ file_url: "blob://test" });
 const mockScanReport = vi.fn();
 const mockImportReport = vi.fn();
+const mockRollbackImportSession = vi.fn().mockResolvedValue({ success: true, deleted: 0 });
 const mockRebuildDailyAggregates = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("@/api/base44Client", () => ({
@@ -46,7 +47,7 @@ vi.mock("@/api/base44Client", () => ({
     },
   },
   listImportSessions: vi.fn().mockResolvedValue([]),
-  rollbackImportSession: vi.fn().mockResolvedValue({ success: true, deleted: 0 }),
+  rollbackImportSession: (...args) => mockRollbackImportSession(...args),
 }));
 
 vi.mock("@/lib/reportParsers", () => ({
@@ -125,6 +126,8 @@ describe("Import.jsx property auto-selection and upload guards", () => {
     mockUploadedReportCreate.mockResolvedValue({ id: "rep-1" });
     mockUploadedReportFilter.mockReturnValue({ get: vi.fn().mockResolvedValue([]) });
     mockUploadFile.mockResolvedValue({ file_url: "blob://test" });
+    mockRollbackImportSession.mockReset();
+    mockRollbackImportSession.mockResolvedValue({ success: true, deleted: 0 });
     mockRebuildDailyAggregates.mockResolvedValue(undefined);
     mockScanReport.mockResolvedValue({
       type: "daily_ledger",
@@ -801,6 +804,76 @@ describe("Import.jsx property auto-selection and upload guards", () => {
 
       // 0 writes
       expect(mockImportReport).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Long-import transaction coordination", () => {
+    it("awaits a slow importReport directly and never rolls back or unlocks mid-transaction", async () => {
+      mockProperties = [{ id: "prop-middleboro", name: "Red Roof Middleboro" }];
+      let resolveImport;
+      mockImportReport.mockImplementation(() => new Promise((res) => { resolveImport = res; }));
+
+      const { container } = render(<Import />);
+      const dummyFile = new File(["col1,col2\n1,2"], "slow.csv", { type: "text/csv" });
+      fireEvent.change(container.querySelector('input[type="file"]'), { target: { files: [dummyFile] } });
+
+      await waitFor(() => {
+        expect(screen.getByText("slow.csv")).toBeDefined();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /^import$/i }));
+
+      await waitFor(() => {
+        expect(mockImportReport).toHaveBeenCalledTimes(1);
+      });
+
+      // Still pending: the row stays importing, the queue is NOT unlocked, and no
+      // late rollback has fired just because time is passing.
+      expect(mockRollbackImportSession).not.toHaveBeenCalled();
+      expect(screen.getAllByText(/importing/i).length).toBeGreaterThan(0);
+
+      await act(async () => {
+        resolveImport({ count: 10, excluded: 0, importId: "imp-slow" });
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText(/10 rows/i)).toBeDefined();
+      });
+      expect(mockRollbackImportSession).not.toHaveBeenCalled();
+    });
+
+    it("breaks the batch when a rollback fails, leaving later files ready instead of writing on an unknown state", async () => {
+      mockProperties = [{ id: "prop-middleboro", name: "Red Roof Middleboro" }];
+      mockImportReport.mockImplementationOnce(() =>
+        Promise.reject(Object.assign(new Error("commit then fail"), { importId: "imp-1" }))
+      );
+      mockRollbackImportSession.mockResolvedValueOnce({ success: false, error: "cleanup nope" });
+
+      const { container } = render(<Import />);
+      const f1 = new File(["a\n1"], "a.csv", { type: "text/csv" });
+      const f2 = new File(["b\n2"], "b.csv", { type: "text/csv" });
+      fireEvent.change(container.querySelector('input[type="file"]'), { target: { files: [f1, f2] } });
+
+      await waitFor(() => {
+        expect(screen.getByText("a.csv")).toBeDefined();
+      });
+      await waitFor(() => {
+        expect(screen.getByText("b.csv")).toBeDefined();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /import all/i }));
+
+      await waitFor(() => {
+        expect(mockImportReport).toHaveBeenCalledTimes(1);
+      });
+
+      // The second file never started a transaction: it stays ready, and the first
+      // file reports that the outcome is no longer authoritative.
+      expect(screen.getByText("Ready to import")).toBeDefined();
+      await waitFor(() => {
+        expect(screen.getByText(/automatic cleanup ALSO failed/i)).toBeDefined();
+      });
     });
   });
 });

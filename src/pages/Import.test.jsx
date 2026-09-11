@@ -811,36 +811,78 @@ describe("Import.jsx property auto-selection and upload guards", () => {
     it("awaits a slow importReport directly and never rolls back or unlocks mid-transaction", async () => {
       mockProperties = [{ id: "prop-middleboro", name: "Red Roof Middleboro" }];
       let resolveImport;
+      let longImportNotice;
+      const realSetTimeout = globalThis.setTimeout;
+      const timeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+        if (delay === 35000) {
+          longImportNotice = callback;
+          return 987654;
+        }
+        return realSetTimeout(callback, delay, ...args);
+      });
       mockImportReport.mockImplementation(() => new Promise((res) => { resolveImport = res; }));
 
+      try {
+        const { container } = render(<Import />);
+        const dummyFile = new File(["col1,col2\n1,2"], "slow.csv", { type: "text/csv" });
+        fireEvent.change(container.querySelector('input[type="file"]'), { target: { files: [dummyFile] } });
+
+        await waitFor(() => {
+          expect(screen.getByText("slow.csv")).toBeDefined();
+        });
+
+        fireEvent.click(screen.getByRole("button", { name: /^import$/i }));
+
+        await waitFor(() => {
+          expect(mockImportReport).toHaveBeenCalledTimes(1);
+        });
+
+        expect(longImportNotice).toBeTypeOf("function");
+        act(() => longImportNotice());
+        expect(screen.getByText(/Still importing.*longer than 35s/i)).toBeDefined();
+        expect(screen.queryByRole("button", { name: /^import$/i })).toBeNull();
+        expect(screen.queryByRole("button", { name: /^retry$/i })).toBeNull();
+        expect(mockRollbackImportSession).not.toHaveBeenCalled();
+
+        await act(async () => {
+          resolveImport({ count: 10, excluded: 0, importId: "imp-slow" });
+          await Promise.resolve();
+        });
+
+        await waitFor(() => {
+          expect(screen.getByText(/10 rows/i)).toBeDefined();
+        });
+        expect(mockRollbackImportSession).not.toHaveBeenCalled();
+        expect(mockUploadedReportCreate).toHaveBeenCalledTimes(1);
+      } finally {
+        timeoutSpy.mockRestore();
+      }
+    });
+
+    it("rejects a same-tick second row import while the first authoritative import is unresolved", async () => {
+      mockProperties = [{ id: "prop-middleboro", name: "Red Roof Middleboro" }];
+      let resolveFirst;
+      mockImportReport.mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }));
+
       const { container } = render(<Import />);
-      const dummyFile = new File(["col1,col2\n1,2"], "slow.csv", { type: "text/csv" });
-      fireEvent.change(container.querySelector('input[type="file"]'), { target: { files: [dummyFile] } });
+      const fileA = new File(["a\n1"], "first.csv", { type: "text/csv" });
+      const fileB = new File(["b\n2"], "second.csv", { type: "text/csv" });
+      fireEvent.change(container.querySelector('input[type="file"]'), { target: { files: [fileA, fileB] } });
 
-      await waitFor(() => {
-        expect(screen.getByText("slow.csv")).toBeDefined();
-      });
+      await waitFor(() => expect(screen.getAllByRole("button", { name: /^import$/i })).toHaveLength(2));
+      const importButtons = screen.getAllByRole("button", { name: /^import$/i });
+      fireEvent.click(importButtons[0]);
+      fireEvent.click(importButtons[1]);
 
-      fireEvent.click(screen.getByRole("button", { name: /^import$/i }));
-
-      await waitFor(() => {
-        expect(mockImportReport).toHaveBeenCalledTimes(1);
-      });
-
-      // Still pending: the row stays importing, the queue is NOT unlocked, and no
-      // late rollback has fired just because time is passing.
-      expect(mockRollbackImportSession).not.toHaveBeenCalled();
-      expect(screen.getAllByText(/importing/i).length).toBeGreaterThan(0);
+      await waitFor(() => expect(mockImportReport).toHaveBeenCalledTimes(1));
+      expect(mockUploadedReportCreate).not.toHaveBeenCalled();
 
       await act(async () => {
-        resolveImport({ count: 10, excluded: 0, importId: "imp-slow" });
+        resolveFirst({ count: 10, excluded: 0, importId: "imp-first" });
         await Promise.resolve();
       });
-
-      await waitFor(() => {
-        expect(screen.getByText(/10 rows/i)).toBeDefined();
-      });
-      expect(mockRollbackImportSession).not.toHaveBeenCalled();
+      await waitFor(() => expect(mockUploadedReportCreate).toHaveBeenCalledTimes(1));
+      expect(mockImportReport).toHaveBeenCalledTimes(1);
     });
 
     it("breaks the batch when a rollback fails, leaving later files ready instead of writing on an unknown state", async () => {

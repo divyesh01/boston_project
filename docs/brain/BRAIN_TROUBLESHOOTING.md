@@ -7085,12 +7085,27 @@ prevention: for the whole 35s→settle window both files were in flight.
   and the transaction guard are untouched.
 
 ### Verification
-- `scripts/probe-long-import-transaction-coordination.mjs` proves Q1 (a timed-out
-  race rejects the caller while the underlying work keeps running — the mechanism)
-  and Q2 (the fixed contract in `Import.jsx`: direct await, no racing wrapper,
-  still-importing notice, `authoritativeOutcomeUnknown`, `stopBatch`, loop break,
-  synchronous ref guard).
-- `src/pages/Import.test.jsx` adds focused tests: a slow import is awaited directly
-  and never rolled back; a batch whose rollback fails breaks after the first file and
-  leaves the second `Ready to import`.
+- `scripts/probe-long-import-transaction-coordination.mjs` proves:
+  - Q1: a timed-out race rejects the caller while the underlying work keeps running
+    (the mechanism that caused the split-brain).
+  - Q2: the fixed contract — direct await in `Import.jsx` (no racing wrapper),
+    still-importing notice, `authoritativeOutcomeUnknown`, `stopBatch`, loop break,
+    one synchronous `importingRef` guard shared by row Import/Retry and the batch
+    loop. Assertions are the regex helpers `directlyAwaitsImport`,
+    `batchOwnsSynchronousLock`, `unknownOutcomeStopsBatch` run against both
+    `Import.jsx` and `businessSync.js` (`commitResponseIsReconciled`,
+    `trueNestedTransactionsAreRejected`, `transactionExecutorSection`).
+  - Q3: an in-memory mutation proof — five mutations (restore the old timeout
+    wrapper, drop the batch lock, remove the unknown-outcome stop, replace the
+    commit-status response, delete the nested-transaction guard) are each detected,
+    in-memory only, leaving the working tree untouched.
+  - Q4: large-operation chunk order stays deterministic at chunk size 13 for
+    1/13/14/100/1000/7918 operations, and 7,918 operations produce exactly 610
+    chunks.
+- `src/pages/Import.test.jsx` (20 tests) adds focused tests: a slow import is
+  awaited directly, fires the truthful 35s still-importing notice, never rolls back
+  and keeps the Import/Retry buttons suppressed mid-transaction; a same-tick second
+  row import is rejected while the first authoritative import is unresolved (only
+  one `importReport` call, no upload artifacts); and a batch whose rollback fails
+  breaks after the first file and leaves the later files `Ready to import`.
 

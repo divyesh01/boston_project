@@ -102,6 +102,44 @@ function isGlobalPropertyKey(key) { return key === GLOBAL_PROPERTY_KEY; }
  */
 const GLOBAL_STAGING_TARGET_ID = "__account_global__";
 
+/**
+ * Resolves an incoming property_key against the generation's authoritative business_property_map.
+ * Candidates are collected from:
+ *   1. Legacy property_key match: map.property_key === incomingPropertyKey
+ *   2. Canonical server_property_id match: typedRecordKey(String(map.server_property_id)) === incomingPropertyKey
+ *
+ * If 0 candidates: throws 422 "property mapping not found"
+ * If >1 candidates: throws 422 "ambiguous property identity" { code: "ambiguous_property_identity" }
+ * If 1 candidate: returns canonical server_property_id string
+ */
+export function resolvePropertyKeyFromMappings(mappings, incomingPropertyKey) {
+  const keyStr = String(incomingPropertyKey || "");
+  if (!keyStr) throw new SyncRequestError("property_key is required", 422);
+  const candidates = new Set();
+  for (const row of mappings) {
+    const serverId = String(row.server_property_id);
+    if (String(row.property_key) === keyStr) {
+      candidates.add(serverId);
+    }
+    let canonicalKey = null;
+    try {
+      canonicalKey = typedRecordKey(serverId);
+    } catch {
+      canonicalKey = null;
+    }
+    if (canonicalKey !== null && canonicalKey === keyStr) {
+      candidates.add(serverId);
+    }
+  }
+  if (candidates.size === 0) {
+    throw new SyncRequestError("property mapping not found", 422);
+  }
+  if (candidates.size > 1) {
+    throw new SyncRequestError("ambiguous property identity", 422, { code: "ambiguous_property_identity" });
+  }
+  return [...candidates][0];
+}
+
 async function readBody(request) {
   try { return await request.json(); }
   catch { throw new SyncRequestError("invalid JSON body"); }
@@ -626,13 +664,16 @@ async function uploadTransactionChunk(request, env, scope) {
     }
     propertyKeys.add(propertyKey);
   }
-  // A chunk whose operations are ALL global leaves this list empty, and
-  // `property_key IN ()` is a SQLite syntax error, so the lookup is skipped.
+  // A chunk whose operations are ALL global leaves this list empty, so the lookup is skipped.
   const propertyKeyList = [...propertyKeys];
   const mappings = propertyKeyList.length === 0
     ? []
-    : await queryAll(env, `SELECT property_key,server_property_id FROM business_property_map WHERE account_id=? AND generation_id=? AND property_key IN (${propertyKeyList.map(() => "?").join(",")})`, [scope.accountId, stagingGenerationId, ...propertyKeyList]);
-  const propertyMap = new Map(mappings.map((row) => [row.property_key, String(row.server_property_id)]));
+    : await queryAll(env, "SELECT property_key,server_property_id FROM business_property_map WHERE account_id=? AND generation_id=?", [scope.accountId, stagingGenerationId]);
+  const propertyMap = new Map();
+  for (const pk of propertyKeys) {
+    const resolvedId = resolvePropertyKeyFromMappings(mappings, pk);
+    propertyMap.set(pk, resolvedId);
+  }
   const normalized = [];
   const targets = new Set();
   for (const op of operations) {
@@ -785,18 +826,20 @@ async function commitTransaction(request, env, scope) {
   const currentRevision = Number(tx.base_revision);
   for (const [index, staged] of stagedRows.entries()) {
     const existing = await queryFirst(env,
-      "SELECT row_json,row_hash FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=?",
+      "SELECT property_key,server_property_id,row_json,row_hash FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=?",
       [scope.accountId, tx.base_generation_id, staged.entity_name, staged.record_key]
     );
     const journalOp = existing ? (staged.operation === 'delete' ? 'delete' : 'update') : 'create';
     const prevJson = existing ? String(existing.row_json) : null;
     const prevHash = existing ? String(existing.row_hash) : null;
     const appliedHash = staged.operation === 'delete' ? null : staged.row_hash;
+    const journalPropertyKey = existing ? existing.property_key : staged.property_key;
+    const journalServerPropertyId = existing ? existing.server_property_id : staged.server_property_id;
 
     statements.push(env.DB.prepare(
       "INSERT INTO business_rollback_journal (account_id,transaction_id,entity_name,record_key,property_key,server_property_id,operation,pre_commit_revision,previous_row_json,previous_row_hash,applied_row_hash,committed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
     ).bind(
-      scope.accountId, txId, staged.entity_name, staged.record_key, staged.property_key, staged.server_property_id,
+      scope.accountId, txId, staged.entity_name, staged.record_key, journalPropertyKey, journalServerPropertyId,
       journalOp, currentRevision, prevJson, prevHash, appliedHash, now
     ));
 
@@ -1127,9 +1170,8 @@ async function mutate(request, env, scope) {
     // `String(body.property_key || "")` coerces a MISSING key to "", which is an
     // omitted field, not a global record — "" !== GLOBAL_PROPERTY_KEY.
     if (!propertyKey) throw new SyncRequestError("property_key is required", 422);
-    const mapping = await queryFirst(env, "SELECT server_property_id FROM business_property_map WHERE account_id=? AND generation_id=? AND property_key=?", [scope.accountId, generationId, propertyKey]);
-    if (!mapping) throw new SyncRequestError("property mapping not found", 422);
-    mappedServerPropertyId = String(mapping.server_property_id);
+    const mappings = await queryAll(env, "SELECT property_key,server_property_id FROM business_property_map WHERE account_id=? AND generation_id=?", [scope.accountId, generationId]);
+    mappedServerPropertyId = resolvePropertyKeyFromMappings(mappings, propertyKey);
     assertPropertyInScope(scope, mappedServerPropertyId);
   }
   const current = isBootstrap ? null : await queryFirst(env, "SELECT row_hash,property_key,server_property_id,row_json FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=?", [scope.accountId, generationId, entity, recordKey]);
@@ -1211,12 +1253,30 @@ async function mutate(request, env, scope) {
       const currentPropertyId = current.server_property_id === null ? null : String(current.server_property_id);
       if (currentPropertyId !== null) assertPropertyInScope(scope, currentPropertyId);
       else if (!scope.all) throw new SyncRequestError("record belongs to another property", 403);
-      // Null-safe on the id, strict on the key. This is what forbids re-homing in
+      // Null-safe on the id, strict on property boundary. This is what forbids re-homing in
       // BOTH directions through the `ON CONFLICT ... DO UPDATE SET
       // server_property_id=excluded.server_property_id` statements below, and what
       // stops a delete carrying no property_key from matching a stored "s:0:" row.
-      if (currentPropertyId !== serverPropertyId || String(current.property_key) !== propertyKey) {
-        throw new SyncRequestError("record belongs to another property", 403);
+      if (isGlobalRecord) {
+        if (currentPropertyId !== null || String(current.property_key) !== propertyKey) {
+          throw new SyncRequestError("record belongs to another property", 403);
+        }
+      } else {
+        if (currentPropertyId !== serverPropertyId) {
+          throw new SyncRequestError("record belongs to another property", 403);
+        }
+        if (String(current.property_key) !== propertyKey) {
+          const mappings = await queryAll(env, "SELECT property_key,server_property_id FROM business_property_map WHERE account_id=? AND generation_id=?", [scope.accountId, generationId]);
+          let currentKeyResolved = null;
+          try {
+            currentKeyResolved = resolvePropertyKeyFromMappings(mappings, String(current.property_key));
+          } catch {
+            currentKeyResolved = null;
+          }
+          if (currentKeyResolved !== serverPropertyId) {
+            throw new SyncRequestError("record belongs to another property", 403);
+          }
+        }
       }
     }
     if (operation === "delete") {

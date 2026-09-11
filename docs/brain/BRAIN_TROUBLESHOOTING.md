@@ -66,6 +66,7 @@
 | 62 | Cross-browser financial divergence ($5,037.18 on $1M gross) from localStorage-only settings storage | CRITICAL | FIXED 2026-09-08 | `worker/settings.js`, `src/lib/settingsStore.js`, `src/lib/settingsBus.js` | See section 68 |
 | 63 | Settings sync forensic audit findings: tax key mismatch, ETag 304 D1 read overhead, CAS 409 local clobber, stale form inputs, property scope loss, missing initial audit history, manager RBAC lockout, and double event notification | HIGH | FIXED 2026-09-08 | `worker/settings.js`, `src/lib/settingsStore.js`, `src/lib/settingsBus.js`, `src/pages/Settings.jsx`, `src/lib/settingsForensicFixes.test.js` | See section 69 |
 | 64 | Comprehensive settings forensic hardening: commission rate object preservation, tax config validation, threshold & pricing sync, ETag response headers, property-scoped isolation, echo loop prevention, and reactive view re-renders | HIGH | FIXED 2026-09-08 | `worker/settings.js`, `src/lib/settingsStore.js`, `src/lib/commissionRates.js`, `src/lib/taxConfig.js`, `src/lib/taxSettings.js`, `src/pages/Settings.jsx`, `src/pages/Payments.jsx`, `src/pages/OtaChannels.jsx`, `src/pages/MonthlyCalendar.jsx`, `src/pages/Pricing.jsx` | See section 70 |
+| 65 | Modern browser business rows use canonical server property IDs, but business_property_map retains historical property key, causing 422 property mapping not found on chunk upload and mutate | CRITICAL | FIXED 2026-09-11 | `worker/business-sync.js#uploadTransactionChunk`, `worker/business-sync.js#mutate`, `worker/business-sync.js#commitTransaction` | (This commit) |
 
 ---
 
@@ -6950,3 +6951,39 @@ Selected Option A over schema mutations:
      - M2 (force resolver to silently re-target without approval): broke `TEST S5` in `Import.test.jsx`. Restored.
      - M3 (collapse mixed-origin batch into first origin): broke `TEST B2` in `importQueueHelpers.test.js`. Restored.
      - M4 (restore `p.code === snapshotId` alias guessing): broke code rejection test in `importQueueHelpers.test.js`. Restored.
+
+## 77. Server Property-Identity Resolution at Authoritative Worker Boundary (2026-09-11)
+
+### Problem & Root Cause
+Modern browser business rows send canonical server property IDs (e.g. `prop_97a5...`, encoded as `typedRecordKey` `s:37:prop_97a5...`), but D1 `business_property_map` maintains the historical typed property key (e.g. `n:1`) from initial dataset seeding.
+Previously, Worker endpoints (`uploadTransactionChunk` and `mutate`) looked up incoming property keys with strict equality against `business_property_map.property_key`:
+`map.property_key === incomingPropertyKey`
+Because `s:37:prop_97a5... !== n:1`, the Worker failed closed with:
+`422 property mapping not found — rolled back cleanly (0 rows stored)`
+Production safely rolled back the import, preventing any partial row storage.
+
+### Core Architectural Solution
+Rather than mutating D1 schema or inserting duplicate alias rows (violating `UNIQUE(account_id, generation_id, server_property_id)`), resolution is centralized at the authoritative Worker boundary via `resolvePropertyKeyFromMappings(mappings, incomingPropertyKey)` in `worker/business-sync.js`:
+
+1. **Authoritative Dual Candidate Resolution**:
+   - **Candidate A (Historical/Legacy Key)**: Matches `map.property_key === incomingPropertyKey`.
+   - **Candidate B (Canonical Server Property ID)**: Matches `typedRecordKey(String(map.server_property_id)) === incomingPropertyKey`.
+2. **Fail-Closed Ambiguity & Collision Handling**:
+   - If candidate count is 0: rejects with 422 `property mapping not found`.
+   - If candidate count is > 1 (pointing to different server properties): fails closed with 422 `{ error: "ambiguous property identity", code: "ambiguous_property_identity" }`.
+   - If candidate count is 1: resolves unambiguously to that canonical `server_property_id`.
+3. **Transaction Batching & Performance**:
+   - In `uploadTransactionChunk`, batch-fetches all `business_property_map` rows for `(scope.accountId, stagingGenerationId)` in a single bounded D1 read, pre-resolving all operations without O(N) database queries.
+4. **Mutate Same-Property Representation Transitions**:
+   - In `mutate`, resolves incoming key and permits representation changes (`currentKeyResolved === serverPropertyId`) while strictly preventing cross-property re-homing (403).
+5. **Exact Pre-Image Rollback Journaling**:
+   - In `commitTransaction`, records the true pre-image property key and server property ID (`existing.property_key` and `existing.server_property_id` for updates; staged key for creations).
+   - On transaction rollback, restores the exact historical representation bit-for-bit without hybrid drift.
+6. **Global Record & Scope Isolation**:
+   - Global sentinel `s:0:` bypasses property mapping and requires `scope.all`.
+   - Property authorization (`assertPropertyInScope`) is evaluated on the resolved canonical server property ID before existence checks.
+
+### Verification & Mutation Proof
+- Tested with dedicated test suite `scripts/probe-worker-property-resolution.mjs` (15/15 passing) covering 10-file batch import simulation, mixed chunk failure atomicity, collision fail-closed behavior, mutate representation transitions, cross-property re-home rejection, and bit-for-bit rollback pre-image restoration.
+- Mutation tests (M1-M5) verified all regression guards fail when violated and pass when restored.
+- Write budget formula `6M + 12` verified unchanged in `scripts/probe-d1-write-budget.mjs` (0 map alias writes).

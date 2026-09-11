@@ -816,7 +816,7 @@ describe("Import.jsx property auto-selection and upload guards", () => {
       const timeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
         if (delay === 35000) {
           longImportNotice = callback;
-          return 987654;
+          return /** @type {ReturnType<typeof setTimeout>} */ (/** @type {unknown} */ (987654));
         }
         return realSetTimeout(callback, delay, ...args);
       });
@@ -883,6 +883,37 @@ describe("Import.jsx property auto-selection and upload guards", () => {
       });
       await waitFor(() => expect(mockUploadedReportCreate).toHaveBeenCalledTimes(1));
       expect(mockImportReport).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the import lock until the authoritative history write really settles", async () => {
+      mockProperties = [{ id: "prop-middleboro", name: "Red Roof Middleboro" }];
+      let resolveHistory;
+      mockUploadedReportCreate.mockImplementationOnce(() => new Promise((resolve) => { resolveHistory = resolve; }));
+
+      const { container } = render(<Import />);
+      const fileA = new File(["a\n1"], "history-a.csv", { type: "text/csv" });
+      const fileB = new File(["b\n2"], "history-b.csv", { type: "text/csv" });
+      fireEvent.change(container.querySelector('input[type="file"]'), { target: { files: [fileA, fileB] } });
+
+      await waitFor(() => expect(screen.getAllByRole("button", { name: /^import$/i })).toHaveLength(2));
+      fireEvent.click(screen.getAllByRole("button", { name: /^import$/i })[0]);
+
+      await waitFor(() => expect(mockUploadedReportCreate).toHaveBeenCalledTimes(1));
+      expect(mockImportReport).toHaveBeenCalledTimes(1);
+      const blockedImportButtons = screen.getAllByRole("button", { name: /^import$/i });
+      expect(blockedImportButtons.length).toBeGreaterThan(0);
+      expect(blockedImportButtons.every((button) => /** @type {HTMLButtonElement} */ (button).disabled)).toBe(true);
+      const retryButton = /** @type {HTMLButtonElement | null} */ (screen.queryByRole("button", { name: /^retry$/i }));
+      expect(retryButton?.disabled ?? true).toBe(true);
+
+      await act(async () => {
+        resolveHistory({ id: "rep-history" });
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(screen.getByText(/10 rows/i)).toBeDefined());
+      expect(mockImportReport).toHaveBeenCalledTimes(1);
+      expect(mockUploadedReportCreate).toHaveBeenCalledTimes(1);
     });
 
     it("breaks the batch when a rollback fails, leaving later files ready instead of writing on an unknown state", async () => {

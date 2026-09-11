@@ -10,7 +10,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { num } from "@/lib/hotel";
 import { REPORT_TYPES, scanReport, importReport } from "@/lib/reportParsers";
 import { clearAllImportedData } from "@/lib/importReset";
-import { compensateLateCreate, withActionTimeout } from "@/lib/actionTimeout";
+import { withActionTimeout } from "@/lib/actionTimeout";
 import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
 import { useAuth } from "@/lib/AuthContext";
 import { getCsrfToken, validateCsrfToken, rotateCsrfToken, sha256File } from "@/lib/securityUtils";
@@ -717,7 +717,11 @@ export default function Import() {
             setQueue((prev) => prev.map((q) => q.key === item.key ? { ...q, error: "" } : q));
           }
         }
-        const historyPromise = db.entities.UploadedReport.create({
+        // History is also an authoritative write. Await its real settlement;
+        // a presentation timeout cannot prove that a late create did not land.
+        // If it fails, the catch below rolls back the committed import session
+        // before any later file may start.
+        await db.entities.UploadedReport.create({
             file_name: item.name,
             report_type: item.scan.type || type,
             rows_imported: result.count,
@@ -732,22 +736,6 @@ export default function Import() {
             raw_rows: scanRawRows(item.scan),
             raw_rows_ttl: rawRowsTtlExpiry(),
           });
-        await withActionTimeout(
-          historyPromise,
-          15000,
-          "Saving import history timed out.",
-          {
-            onLateResolve: async (lateRecord) => {
-              await compensateLateCreate(lateRecord, db.entities.UploadedReport);
-            },
-            onCleanupError: (error) => {
-              console.error("[import] late history cleanup failed:", error);
-              setQueue((prev) => prev.map((q) => q.key === item.key
-                ? { ...q, error: `${q.error || "Import history timed out"} — a late history row could not be removed: ${error?.message || error}.` }
-                : q));
-            },
-          }
-        );
       } catch (err) {
         // Roll back with the SESSION id, never our queue-local item.importId:
         // the ledger is keyed by the id createImportSession minted, so rolling
@@ -942,12 +930,12 @@ export default function Import() {
   };
 
   const handleRemoveFromQueue = (key) => {
-    if (importing || busy) return;
+    if (importingRef.current || importing || busy) return;
     setQueue((prev) => prev.filter((q) => q.key !== key));
   };
 
   const handleClearAll = async () => {
-    if (clearing) return;
+    if (clearing || importingRef.current || importing || busy) return;
     // Rate limiting for destructive actions
     const rateLimit = destructiveActionRateLimiter.check();
     if (!rateLimit.allowed) {
@@ -1114,7 +1102,7 @@ export default function Import() {
   };
 
   const handleRetryAllFailed = async () => {
-    if (importing || busy) return;
+    if (importingRef.current || importing || busy) return;
     setQueue((prev) =>
       prev.map((q) => (q.status === "error" || q.status === "duplicate" ? { ...q, status: "ready", error: "" } : q))
     );

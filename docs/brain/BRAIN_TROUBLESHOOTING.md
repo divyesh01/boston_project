@@ -7075,6 +7075,11 @@ prevention: for the whole 35s→settle window both files were in flight.
    synchronously and refuses the second click before it reaches `importSingle`.
    `handleImportAll` takes the same ref before its loop, so a double-click cannot
    start two batch loops over the same queue either.
+5. **Import history is awaited as an authoritative write.** The former 15s
+   `Promise.race` around `UploadedReport.create` had the same non-cancellation flaw:
+   a late history row could land after the queue unlocked. The create now settles
+   normally while the shared import lock remains held; failure enters the existing
+   session rollback path before another file may start.
 
 ### Invariants preserved (Observed)
 - Known-clean rollback continuation: a successful rollback still reports
@@ -7102,10 +7107,11 @@ prevention: for the whole 35s→settle window both files were in flight.
   - Q4: large-operation chunk order stays deterministic at chunk size 13 for
     1/13/14/100/1000/7918 operations, and 7,918 operations produce exactly 610
     chunks.
-- `src/pages/Import.test.jsx` (20 tests) adds focused tests: a slow import is
+- `src/pages/Import.test.jsx` (21 tests) adds focused tests: a slow import is
   awaited directly, fires the truthful 35s still-importing notice, never rolls back
   and keeps the Import/Retry buttons suppressed mid-transaction; a same-tick second
   row import is rejected while the first authoritative import is unresolved (only
-  one `importReport` call, no upload artifacts); and a batch whose rollback fails
+  one `importReport` call, no upload artifacts); the queue remains locked until the
+  authoritative `UploadedReport.create` history write really settles; and a batch whose rollback fails
   breaks after the first file and leaves the later files `Ready to import`.
 

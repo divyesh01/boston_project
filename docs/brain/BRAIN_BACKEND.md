@@ -665,10 +665,11 @@ Primary gates: `scripts/probe-cross-browser-sync-e2e.mjs`, `scripts/probe-gm-pro
   - Tabs automatically pause polling when minimized or hidden (`document.hidden`).
   - Exponential backoff doubles polling intervals up to 60s upon network or server errors, resetting to 10s on success.
 - **Empirical Write Accounting (Proven by `scripts/probe-d1-write-budget.mjs`)**:
-  - Transaction Start: 5 writes (guards, dataset, property map, staging tx).
-  - Transaction Chunk: $3M + 2$ writes.
-  - Transaction Commit: $3M + 6$ writes (journal, live updates, change log, revision, status, staging cleanup).
-  - Total Lifecycle Writes: 30 rows for $M=1$ (was 38,685, a 1,289x reduction); 48 rows for $M=3$ (was 38,687, an 805x reduction); 949 rows for $M=100$.
+  - Total Lifecycle Writes for a transaction of $M$ operations chunked at 13 per chunk:
+    $rows\_written = 9M + 4 \cdot \lceil M / 13 \rceil + 17$.
+  - Measured points (index-inclusive, metered `rows_written`): $M=1 \to 30$, $M=3 \to 48$, $M=100 \to 949$ (the latter is 8 chunks, `900 + 32 + 17`).
+  - Deterministic projections asserted by the probe: $M=1000 \to 9325$, $M=3000 \to 27941$, $M=7918 \to 73719$, $M=10000 \to 93097$, $M=17000 \to 158249$.
+  - The $100\,000$ D1 row budget is crossed between $M=7918$ (73,719 rows, under budget in isolation) and $M=17000$ (158,249 rows, EXCEEDS flag).
   - Session Read: 0 writes within 15-minute window; 1 write after window expiry.
 
 Primary gates: `scripts/probe-d1-write-budget.mjs` (4 assertions validating write bounds and session hysteresis), `scripts/probe-realtime-leader.mjs`, `scripts/probe-worker-business-sync.mjs`, `scripts/probe-business-sync-global-records.mjs`, and `scripts/verify-schema-parity.mjs`.

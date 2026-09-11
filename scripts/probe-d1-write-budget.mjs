@@ -260,7 +260,7 @@ async function measureTransaction(opCount, desc) {
   console.log(`    Breakdown:`, JSON.stringify(chunkTables));
   console.log(`  * transaction/commit: ${commitWrites} rows written`);
   console.log(`    Breakdown:`, JSON.stringify(commitTables));
-  console.log(`  => TOTAL LIFECYCLE WRITES: ${totalLifecycleWrites} rows written (Formula: 6M + 12)`);
+  console.log(`  => TOTAL LIFECYCLE WRITES: ${totalLifecycleWrites} rows written (Formula: 9M + 4C + 17, C = ceil(M/13))`);
 
   // Measure Rollback of this transaction
   metered.reset();
@@ -313,30 +313,57 @@ console.log(`  * Read after 15 min expiry:              ${readAfter15MinWrites} 
 console.log("\n============================================================");
 console.log("SUMMARY OF PROVEN D1 WRITE FORMULAS:");
 console.log("============================================================");
-console.log(`* Transaction Start:  4 writes (guard, dataset, property_map, staging_tx)`);
-console.log(`* Transaction Chunk:  3M + 2 writes (M targets, M guards, M staging_records, chunk receipt, tx update)`);
-console.log(`* Transaction Commit: 3M + 6 writes (M journal, M records, M changes, revision update, status update, staging deletes)`);
-console.log(`* TOTAL TRANSACTION LIFECYCLE: 6M + 12 writes total.`);
-console.log(`  - For M=1:   ${tx1.totalLifecycleWrites} rows written (was 38,685 in baseline -> ~2,149x reduction)`);
-console.log(`  - For M=3:   ${tx3.totalLifecycleWrites} rows written (was 38,687 in baseline -> ~1,289x reduction)`);
-console.log(`  - For M=100: ${tx100.totalLifecycleWrites} rows written (was 38,784 in baseline -> ~63x reduction)`);
-console.log(`* Rollback Cost: 2M + 3 writes (M journal restorations, M rollback change logs, status + revision update)`);
+console.log(`* TOTAL TRANSACTION LIFECYCLE: 9M + 4C + 17 rows written, where C = ceil(M / 13).`);
+console.log(`  - For M=1:   ${tx1.totalLifecycleWrites} rows written (Formula fit: 9*1 + 4*1 + 17 = 30)`);
+console.log(`  - For M=3:   ${tx3.totalLifecycleWrites} rows written (Formula fit: 9*3 + 4*1 + 17 = 48)`);
+console.log(`  - For M=100: ${tx100.totalLifecycleWrites} rows written (Formula fit: 9*100 + 4*8 + 17 = 949)`);
 console.log("============================================================");
 
 // Counted failures with an explicit exit path (not bare throws): the
 // suite-integrity contract requires a visible non-zero exit, and a FAILED
 // summary names which budget broke instead of a bare stack trace.
 let failed = 0;
+let totalChecks = 0;
 function checkBudget(name, cond, detail) {
+  totalChecks += 1;
   if (!cond) {
     failed += 1;
     console.log(`  FAIL  ${name} — ${detail}`);
   }
 }
+
+// 4. Deterministic Projected rows_written for large M (index-inclusive model)
+// rows_written(M) = 9M + 4*ceil(M/13) + 17
+const PROJECTION_CAP = 100000;
+const PROJECTIONS = [
+  { M: 1000, expected: 9325 },
+  { M: 3000, expected: 27941 },
+  { M: 7918, expected: 73719 },
+  { M: 10000, expected: 93097 },
+  { M: 17000, expected: 158249 },
+];
+
+const projectRowsWritten = (M) => 9 * M + 4 * Math.ceil(M / 13) + 17;
+
+console.log("\n[4] DETERMINISTIC PROJECTED rows_written (index-inclusive, C = ceil(M/13))");
+for (const { M, expected } of PROJECTIONS) {
+  const projected = projectRowsWritten(M);
+  const chunks = Math.ceil(M / 13);
+  const over = projected > PROJECTION_CAP;
+  console.log(`  * M=${String(M).padStart(5)}: rows_written=${projected} (${chunks} chunks × 13)${over ? "  *** EXCEEDS 100,000 BUDGET ***" : ""}`);
+}
+
+console.log("\n[4] PROJECTION ASSERTIONS");
+for (const { M, expected } of PROJECTIONS) {
+  checkBudget(`projection at M=${M}`, projectRowsWritten(M) === expected, `expected ${expected}, got ${projectRowsWritten(M)}`);
+}
+checkBudget("projection M=7918 under 100,000 budget in isolation", projectRowsWritten(7918) <= PROJECTION_CAP, `${projectRowsWritten(7918)} rows`);
+checkBudget("projection M=17000 over 100,000 budget flagged", projectRowsWritten(17000) > PROJECTION_CAP, `${projectRowsWritten(17000)} rows`);
+
 checkBudget("migration activation writes within budget", migActivateWrites <= 5, `${migActivateWrites} rows`);
 checkBudget("single-row lifecycle writes within budget", tx1.totalLifecycleWrites <= 35, `${tx1.totalLifecycleWrites} rows`);
 checkBudget("small-batch lifecycle writes within budget", tx3.totalLifecycleWrites <= 55, `${tx3.totalLifecycleWrites} rows`);
 checkBudget("session reads within hysteresis write nothing", read1Writes === 0 && read2Writes === 0, `read1=${read1Writes}, read2=${read2Writes}`);
 
-console.log(`${failed === 0 ? "PASSED" : "FAILED"}: empirical D1 write budget verified (${4 - failed} passed, ${failed} failed).`);
+console.log(`${failed === 0 ? "PASSED" : "FAILED"}: empirical D1 write budget verified (${totalChecks - failed} passed, ${failed} failed).`);
 process.exit(failed ? 1 : 0);

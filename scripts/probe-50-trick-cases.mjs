@@ -16,7 +16,7 @@ import {
   seedUser,
   scopeAll,
 } from "./_worker-testkit.mjs";
-import { handleBusinessSyncRequest } from "../worker/business-sync.js";
+import { handleBusinessSyncRequest, resolvePropertyKeyFromMappings, typedRecordKey } from "../worker/business-sync.js";
 import localDb from "../src/api/localDb.js";
 import {
   createBusinessSyncClient,
@@ -187,13 +187,57 @@ await run.check("Trick 9: Property ID numeric (1) and string ('1' / 's:1:1') res
   const client = createBusinessSyncClient({ request: makeServerRequest });
   const status = await client.api.status();
   assert(status.generation_id != null);
+
+  // Behavioral test: verify resolution helper directly for numeric 1 and string '1'
+  const mappings = [{ property_key: "n:1", server_property_id: "prop_middleboro_canonical", property_code: "RRI1416" }];
+  const resNum = resolvePropertyKeyFromMappings(mappings, "n:1");
+  const resStr = resolvePropertyKeyFromMappings(mappings, "s:1:1");
+  assertEqual(resNum, "prop_middleboro_canonical", "n:1 resolves to canonical property ID");
+  assertEqual(resStr, "prop_middleboro_canonical", "s:1:1 resolves to canonical property ID");
+
+  // Behavioral test: verify real Worker mutate path accepts s:1:1 against n:1 map
+  const props = db.prepare("SELECT id FROM property WHERE account_id='A_1'").all().map((r) => r.id);
+  const trickScope = scopeAll(props);
+  trickScope.user = { id: "user_owner", account_id: "A_1", role: "owner" };
+  const mutateRes = await makeServerRequest("business-sync/mutate", {
+    method: "POST",
+    body: JSON.stringify({
+      mutation_id: "mut_trick_0000009",
+      entity: "Expense",
+      operation: "upsert",
+      record_key: typedRecordKey(8888),
+      property_key: "s:1:1",
+      row: { id: 8888, property_id: "1", amount: 25 },
+    }),
+  }, trickScope);
+  assert(mutateRes.row != null || mutateRes.mutation_id != null, "mutate must succeed with s:1:1");
 });
 
-await run.check("Trick 10: Property key 'n:1' vs 's:1:1' both map to property 1", async () => {
-  const gmScope1 = { account_id: "A_1", property_ids: ["n:1"], user: { id: "user_gm", role: "gm" } };
-  const gmScope2 = { account_id: "A_1", property_ids: ["s:1:1"], user: { id: "user_gm", role: "gm" } };
-  assert(gmScope1.property_ids.includes("n:1"));
-  assert(gmScope2.property_ids.includes("s:1:1"));
+await run.check("Trick 10: Property key 'n:1' vs 's:1:1' collision fails closed", async () => {
+  const collMappings = [
+    { property_key: "n:1", server_property_id: "prop_A", property_code: "PA" },
+    { property_key: "s:1:1", server_property_id: "prop_B", property_code: "PB" },
+  ];
+  let caught = false;
+  try {
+    resolvePropertyKeyFromMappings(collMappings, "s:1:1");
+  } catch (err) {
+    caught = true;
+    assertEqual(err.status, 422);
+    assertEqual(err.details?.code, "ambiguous_property_identity");
+  }
+  assert(caught, "collision between n:1 -> A and s:1:1 -> B must fail closed with ambiguous_property_identity");
+
+  // Reverse direction also fails closed
+  let caughtReverse = false;
+  try {
+    resolvePropertyKeyFromMappings(collMappings, "n:1");
+  } catch (err) {
+    caughtReverse = true;
+    assertEqual(err.status, 422);
+    assertEqual(err.details?.code, "ambiguous_property_identity");
+  }
+  assert(caughtReverse, "reverse collision between n:1 and s:1:1 must fail closed with ambiguous_property_identity");
 });
 
 // =============================================================================

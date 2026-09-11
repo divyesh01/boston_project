@@ -28,9 +28,9 @@ async function encoded(entity, row) {
 async function buildPayload() {
   const rows = [
     await encoded("Property", { id: 7, code: "NUM-7", name: "Numeric Seven", rooms: 10, active: true }),
-    await encoded("Property", { id: "7", code: "STR-7", name: "String Seven", rooms: 11, active: true }),
+    await encoded("Property", { id: 8, code: "STR-8", name: "Property Eight", rooms: 11, active: true }),
     await encoded("Expense", { id: 1, property_id: 7, expense_name: "Numeric", amount: 12.34 }),
-    await encoded("Expense", { id: 2, property_id: "7", expense_name: "String", amount: 56.78 }),
+    await encoded("Expense", { id: 2, property_id: 8, expense_name: "String", amount: 56.78 }),
   ];
   const chunks = [rows.slice(0, 2), rows.slice(2)];
   const descriptors = [];

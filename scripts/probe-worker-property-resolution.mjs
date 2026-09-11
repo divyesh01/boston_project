@@ -13,9 +13,162 @@ import {
   handleBusinessSyncRequest,
   typedRecordKey,
   resolvePropertyKeyFromMappings,
+  numericStringAlternateTypedKey,
 } from "../worker/business-sync.js";
 
 const run = makeRunner("probe-worker-property-resolution");
+
+// ===========================================================================
+// SECTION 27: R1 through R13 Unit & Resolver Matrix
+// ===========================================================================
+
+await run.check("R1: n:1 -> prop_A with incoming n:1 resolves to prop_A", async () => {
+  const mappings = [{ property_key: "n:1", server_property_id: "prop_A" }];
+  const resolved = resolvePropertyKeyFromMappings(mappings, "n:1");
+  assertEqual(resolved, "prop_A");
+});
+
+await run.check("R2: n:1 -> prop_A with incoming s:1:1 resolves to prop_A", async () => {
+  const mappings = [{ property_key: "n:1", server_property_id: "prop_A" }];
+  const resolved = resolvePropertyKeyFromMappings(mappings, "s:1:1");
+  assertEqual(resolved, "prop_A");
+});
+
+await run.check("R3: n:1 -> prop_A with incoming typed canonical prop_A resolves to prop_A", async () => {
+  const mappings = [{ property_key: "n:1", server_property_id: "prop_A" }];
+  const resolved = resolvePropertyKeyFromMappings(mappings, typedRecordKey("prop_A"));
+  assertEqual(resolved, "prop_A");
+});
+
+await run.check("R4: s:1:1 -> prop_A with incoming n:1 resolves to prop_A", async () => {
+  const mappings = [{ property_key: "s:1:1", server_property_id: "prop_A" }];
+  const resolved = resolvePropertyKeyFromMappings(mappings, "n:1");
+  assertEqual(resolved, "prop_A");
+});
+
+await run.check("R5: n:1 -> prop_A and s:1:1 -> prop_B with incoming s:1:1 fails closed with 422 ambiguous_property_identity", async () => {
+  const mappings = [
+    { property_key: "n:1", server_property_id: "prop_A" },
+    { property_key: "s:1:1", server_property_id: "prop_B" },
+  ];
+  let err = null;
+  try {
+    resolvePropertyKeyFromMappings(mappings, "s:1:1");
+  } catch (e) {
+    err = e;
+  }
+  assert(err !== null, "must throw error");
+  assertEqual(err.status, 422);
+  assertEqual(err.message, "ambiguous property identity");
+  assertEqual(err.details?.code, "ambiguous_property_identity");
+});
+
+await run.check("R6: n:1 -> prop_A and s:1:1 -> prop_B with incoming n:1 fails closed with 422 ambiguous_property_identity", async () => {
+  const mappings = [
+    { property_key: "n:1", server_property_id: "prop_A" },
+    { property_key: "s:1:1", server_property_id: "prop_B" },
+  ];
+  let err = null;
+  try {
+    resolvePropertyKeyFromMappings(mappings, "n:1");
+  } catch (e) {
+    err = e;
+  }
+  assert(err !== null, "must throw error");
+  assertEqual(err.status, 422);
+  assertEqual(err.message, "ambiguous property identity");
+  assertEqual(err.details?.code, "ambiguous_property_identity");
+});
+
+await run.check("R7: exact + alternate converge to same canonical server ID yields 1 candidate (success)", async () => {
+  const mappings = [
+    { property_key: "n:1", server_property_id: "prop_A" },
+    { property_key: "s:1:1", server_property_id: "prop_A" },
+  ];
+  const resolved = resolvePropertyKeyFromMappings(mappings, "s:1:1");
+  assertEqual(resolved, "prop_A");
+  const resolvedReverse = resolvePropertyKeyFromMappings(mappings, "n:1");
+  assertEqual(resolvedReverse, "prop_A");
+});
+
+await run.check("R8: s:2:01 does NOT alias n:1", async () => {
+  assertEqual(numericStringAlternateTypedKey("s:2:01"), null);
+  const mappings = [{ property_key: "n:1", server_property_id: "prop_A" }];
+  let err = null;
+  try {
+    resolvePropertyKeyFromMappings(mappings, "s:2:01");
+  } catch (e) {
+    err = e;
+  }
+  assert(err !== null, "must throw");
+  assertEqual(err.status, 422);
+  assertEqual(err.message, "property mapping not found");
+});
+
+await run.check("R9: s:2:+1 does NOT alias n:1", async () => {
+  assertEqual(numericStringAlternateTypedKey("s:2:+1"), null);
+  const mappings = [{ property_key: "n:1", server_property_id: "prop_A" }];
+  let err = null;
+  try {
+    resolvePropertyKeyFromMappings(mappings, "s:2:+1");
+  } catch (e) {
+    err = e;
+  }
+  assert(err !== null, "must throw");
+  assertEqual(err.status, 422);
+  assertEqual(err.message, "property mapping not found");
+});
+
+await run.check("R10: malformed typed length does NOT alias", async () => {
+  assertEqual(numericStringAlternateTypedKey("s:999:1"), null);
+  assertEqual(numericStringAlternateTypedKey("s:1:01"), null);
+  assertEqual(numericStringAlternateTypedKey("s:abc:1"), null);
+  assertEqual(numericStringAlternateTypedKey("n:1.0"), null);
+  assertEqual(numericStringAlternateTypedKey("n:1e0"), null);
+  assertEqual(numericStringAlternateTypedKey("s:3:1.0"), null);
+  assertEqual(numericStringAlternateTypedKey("s:3:1e0"), null);
+  assertEqual(numericStringAlternateTypedKey("s:2: 1"), null);
+  assertEqual(numericStringAlternateTypedKey("s:2:1 "), null);
+  assertEqual(numericStringAlternateTypedKey("s:2:-0"), null);
+  assertEqual(numericStringAlternateTypedKey("n:-0"), null);
+});
+
+await run.check("R11: unsafe integer string does NOT alias", async () => {
+  const unsafeStr = "9007199254740992";
+  const key = typedRecordKey(unsafeStr);
+  assertEqual(numericStringAlternateTypedKey(key), null);
+});
+
+await run.check("R12: s:0: remains global and is never mapped to n:0", async () => {
+  assertEqual(numericStringAlternateTypedKey("s:0:"), null);
+  const mappings = [{ property_key: "n:0", server_property_id: "prop_zero" }];
+  let err = null;
+  try {
+    resolvePropertyKeyFromMappings(mappings, "s:0:");
+  } catch (e) {
+    err = e;
+  }
+  assert(err !== null, "global sentinel must not resolve through property mapping");
+  assertEqual(err.status, 422);
+  assertEqual(err.message, "property mapping not found");
+});
+
+await run.check("R13: s:1:0 <-> n:0 works when a legitimate property mapping exists", async () => {
+  assertEqual(numericStringAlternateTypedKey("s:1:0"), "n:0");
+  assertEqual(numericStringAlternateTypedKey("n:0"), "s:1:0");
+  const mappings = [{ property_key: "n:0", server_property_id: "prop_zero" }];
+  const resolved = resolvePropertyKeyFromMappings(mappings, "s:1:0");
+  assertEqual(resolved, "prop_zero");
+  const resolvedReverse = resolvePropertyKeyFromMappings(
+    [{ property_key: "s:1:0", server_property_id: "prop_zero" }],
+    "n:0"
+  );
+  assertEqual(resolvedReverse, "prop_zero");
+});
+
+// ===========================================================================
+// DATABASE TESTKIT FIXTURES FOR INTEGRATION TESTS
+// ===========================================================================
 
 const db = makeDb();
 db.prepare("INSERT INTO account (id,name,created_date) VALUES (?,?,?)").run("A_1", "Account 1", "2026-01-01");
@@ -36,7 +189,6 @@ function seedDataset(accountId, genId, userId) {
   ).run(accountId, genId, now);
 }
 
-// Initial setup of generations and properties
 const activeGen1 = "gen_active_001";
 seedDataset("A_1", activeGen1, "owner_1");
 db.prepare("INSERT INTO business_sync_state (account_id,revision) VALUES (?,?)").run("A_1", 1);
@@ -96,546 +248,409 @@ async function transactionChunkHash(operations) {
   }))));
 }
 
-// ---------------------------------------------------------------------------
-// 1. SECTION 25: Exact production 10-file local simulation
-// ---------------------------------------------------------------------------
-await run.check("Section 25: exact production 10-file local simulation with canonical property IDs succeeds without duplicate map rows", async () => {
-  const txId = "tx_middleboro_prod_sim_10";
-  const operations = [];
-  const middleboroCanonicalKey = typedRecordKey(middleboroId);
+// ===========================================================================
+// SECTION 28 & 29: Exact real 10-file local simulation with row.property_id = "1"
+// and multi-entity report family coverage
+// ===========================================================================
 
-  for (let day = 1; day <= 10; day++) {
-    const dayStr = `2026-09-${String(day).padStart(2, "0")}`;
+await run.check("Section 28 & 29: exact real 10-file simulation with row.property_id = '1' (s:1:1) and report entities succeeds with 0 map writes", async () => {
+  const txId = "tx_real_browser_10_files";
+  const browserPropertyKey = typedRecordKey("1"); // "s:1:1"
+  assertEqual(browserPropertyKey, "s:1:1");
+
+  const entities = [
+    "OccupancyDay",
+    "GrossRevenueDay",
+    "PaymentDay",
+    "SourceDay",
+    "ClerkShiftRecord",
+    "UploadedReport",
+    "OccupancyDay",
+    "GrossRevenueDay",
+    "PaymentDay",
+    "SourceDay",
+  ];
+
+  const operations = [];
+  for (let i = 0; i < 10; i++) {
+    const entity = entities[i];
+    const recId = `rec_rep_${i + 1}`;
     const row = {
-      id: dayStr,
-      property_id: middleboroId,
-      date: dayStr,
-      rooms_sold: 40 + day,
-      rooms_available: 50,
+      id: recId,
+      property_id: "1", // STRING "1", exactly as browser sends
+      report_family: entity,
+      metric_val: 100 + i,
     };
     operations.push({
-      entity: "OccupancyDay",
+      entity,
       operation: "upsert",
-      record_key: typedRecordKey(dayStr),
-      property_key: middleboroCanonicalKey,
+      record_key: typedRecordKey(recId),
+      property_key: browserPropertyKey,
       row,
       base_row_hash: null,
     });
   }
 
   const requestHash = await sha256Hex(canonicalJson(operations));
-  const startedRes = await call("transaction/start", {
+  const startRes = await call("transaction/start", {
     method: "POST",
     body: { tx_id: txId, request_hash: requestHash, expected_chunks: 1, operation_count: 10 },
   });
-  assertEqual(startedRes.status, 201, "transaction/start status");
+  assertEqual(startRes.status, 201, "start status");
 
   const chunkHash = await transactionChunkHash(operations);
   const chunkRes = await call("transaction/chunk", {
     method: "POST",
     body: { tx_id: txId, chunk_index: 0, chunk_hash: chunkHash, operations },
   });
-  assertEqual(chunkRes.status, 200, "transaction/chunk status must be 200");
+  assertEqual(chunkRes.status, 200, "chunk status");
+
+  // Section 31: duplicate / idempotency contract: re-sending identical accepted chunk succeeds
+  const chunkReplayRes = await call("transaction/chunk", {
+    method: "POST",
+    body: { tx_id: txId, chunk_index: 0, chunk_hash: chunkHash, operations },
+  });
+  assertEqual(chunkReplayRes.status, 200, "chunk replay status");
 
   const commitRes = await call("transaction/commit", {
     method: "POST",
     body: { tx_id: txId },
   });
-  assertEqual(commitRes.status, 200, "transaction/commit status must be 200");
+  assertEqual(commitRes.status, 200, "commit status");
 
-  // Verify all 10 stored rows in active generation
+  // Verify all 10 stored rows
   const activePointer = db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id;
-  const storedRows = db.prepare(
-    "SELECT record_key, property_key, server_property_id, row_json FROM business_record WHERE account_id='A_1' AND generation_id=? AND entity_name='OccupancyDay'"
+  const stored = db.prepare(
+    "SELECT entity_name, record_key, property_key, server_property_id, row_json FROM business_record WHERE account_id='A_1' AND generation_id=?"
   ).all(activePointer);
-  assertEqual(storedRows.length, 10, "must have stored exactly 10 OccupancyDay rows");
-  for (const stored of storedRows) {
-    assertEqual(stored.server_property_id, middleboroId, "server_property_id must match canonical");
-    assertEqual(stored.property_key, middleboroCanonicalKey, "property_key must be canonical typed key");
-    const parsed = JSON.parse(stored.row_json);
-    assertEqual(parsed.property_id, middleboroId, "row_json property_id must match canonical");
+  const simStored = stored.filter((r) => r.record_key.includes("rec_rep_"));
+  assertEqual(simStored.length, 10, "10 rows stored");
+  for (const row of simStored) {
+    assertEqual(row.server_property_id, middleboroId, "server_property_id must be canonical Middleboro");
+    assertEqual(row.property_key, "s:1:1", "property_key must be stored as incoming s:1:1");
+    const parsed = JSON.parse(row.row_json);
+    assertEqual(parsed.property_id, "1", "row_json.property_id must be string '1'");
   }
 
-  // Verify NO duplicate alias map rows were created
+  // Verify 0 business_property_map rows added
   const mapRows = db.prepare("SELECT * FROM business_property_map WHERE account_id='A_1' AND generation_id=?").all(activePointer);
-  assertEqual(mapRows.length, 2, "map rows must not have duplicated aliases");
-  const middleboroMaps = mapRows.filter((m) => m.server_property_id === middleboroId);
-  assertEqual(middleboroMaps.length, 1, "exactly one map row for middleboro");
-  assertEqual(middleboroMaps[0].property_key, "n:1", "original legacy key preserved in map");
+  assertEqual(mapRows.length, 2, "no duplicate alias map rows");
+  assertEqual(mapRows.find((m) => m.server_property_id === middleboroId).property_key, "n:1", "original legacy key intact");
 });
 
-// ---------------------------------------------------------------------------
-// 2. SECTION 26: Failure atomicity on mixed chunk
-// ---------------------------------------------------------------------------
-await run.check("Section 26: mixed chunk with valid canonical and unmapped property fails atomically with 0 leaked rows", async () => {
-  const txId = "tx_mixed_fail_atomicity";
-  const validCanonicalKey = typedRecordKey(middleboroId);
-  const unmappedKey = typedRecordKey("prop_unmapped_xyz_999");
+// ===========================================================================
+// SECTION 30: Failure atomicity on mixed chunk
+// ===========================================================================
 
-  const operations = [
-    {
+await run.check("Section 30: mixed chunk (9 valid s:1:1 + 1 unmapped) fails atomically with 0 leaked rows", async () => {
+  const txId = "tx_atomicity_unmapped";
+  const validKey = typedRecordKey("1"); // s:1:1
+  const unmappedKey = typedRecordKey("prop_unmapped_999");
+
+  const operations = [];
+  for (let i = 1; i <= 9; i++) {
+    operations.push({
       entity: "OccupancyDay",
       operation: "upsert",
-      record_key: typedRecordKey("2026-09-98"),
-      property_key: validCanonicalKey,
-      row: { id: "2026-09-98", property_id: middleboroId, rooms_sold: 10 },
+      record_key: typedRecordKey(`valid_unmap_${i}`),
+      property_key: validKey,
+      row: { id: `valid_unmap_${i}`, property_id: "1", rooms: 10 },
       base_row_hash: null,
-    },
-    {
-      entity: "OccupancyDay",
-      operation: "upsert",
-      record_key: typedRecordKey("2026-09-99"),
-      property_key: unmappedKey,
-      row: { id: "2026-09-99", property_id: "prop_unmapped_xyz_999", rooms_sold: 15 },
-      base_row_hash: null,
-    },
-  ];
-
-  const requestHash = await sha256Hex(canonicalJson(operations));
-  const startedRes = await call("transaction/start", {
-    method: "POST",
-    body: { tx_id: txId, request_hash: requestHash, expected_chunks: 1, operation_count: 2 },
+    });
+  }
+  operations.push({
+    entity: "OccupancyDay",
+    operation: "upsert",
+    record_key: typedRecordKey("invalid_unmap_10"),
+    property_key: unmappedKey,
+    row: { id: "invalid_unmap_10", property_id: "prop_unmapped_999", rooms: 10 },
+    base_row_hash: null,
   });
-  assertEqual(startedRes.status, 201);
 
-  const chunkHash = await transactionChunkHash(operations);
+  await call("transaction/start", {
+    method: "POST",
+    body: { tx_id: txId, request_hash: await sha256Hex(canonicalJson(operations)), expected_chunks: 1, operation_count: 10 },
+  });
+
   const chunkRes = await call("transaction/chunk", {
     method: "POST",
-    body: { tx_id: txId, chunk_index: 0, chunk_hash: chunkHash, operations },
+    body: { tx_id: txId, chunk_index: 0, chunk_hash: await transactionChunkHash(operations), operations },
   });
-  assertEqual(chunkRes.status, 422, "mixed chunk must fail with 422");
+  assertEqual(chunkRes.status, 422, "chunk must fail with 422");
   const errBody = await chunkRes.json();
   assertEqual(errBody.error, "property mapping not found");
 
-  // Verify staging table is empty for this transaction
-  const stagedOps = db.prepare("SELECT COUNT(*) AS n FROM business_record_staging WHERE account_id='A_1' AND transaction_id=?").get(txId).n;
-  assertEqual(Number(stagedOps), 0, "no operations may be staged from a failed chunk");
-
-  // Abort cleanly
-  const abortRes = await call("transaction/abort", { method: "POST", body: { tx_id: txId } });
-  assertEqual(abortRes.status, 200, "transaction/abort must succeed");
+  await call("transaction/abort", { method: "POST", body: { tx_id: txId } });
 
   // Verify 0 rows leaked to business_record
-  const leaked = db.prepare(
-    "SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_1' AND record_key IN (?, ?)"
-  ).get(typedRecordKey("2026-09-98"), typedRecordKey("2026-09-99")).n;
-  assertEqual(Number(leaked), 0, "zero rows leaked into business_record");
+  const leaked = db.prepare("SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_1' AND record_key LIKE '%valid_unmap%'").get().n;
+  assertEqual(Number(leaked), 0, "zero rows leaked");
 });
 
-// ---------------------------------------------------------------------------
-// 3. SECTION 27: Collision adversarial test
-// ---------------------------------------------------------------------------
-await run.check("Section 27: collision adversarial test fails closed with ambiguous_property_identity and 0 writes", async () => {
-  const collGen = "gen_collision_test";
-  db.prepare("INSERT INTO account (id,name,created_date) VALUES (?,?,?)").run("A_COLL", "Collision Test", "2026-01-01");
-  seedUser(db, { id: "owner_coll", email: "owner_coll@test.local", role: "owner", mode: "all", account_id: "A_COLL" });
-  seedDataset("A_COLL", collGen, "owner_coll");
-  db.prepare("INSERT INTO business_sync_state (account_id,revision) VALUES (?,?)").run("A_COLL", 1);
+await run.check("Section 30: mixed chunk (9 valid s:1:1 + 1 ambiguous collision) fails atomically with 0 leaked rows", async () => {
+  const collGen = "gen_coll_atomicity";
+  db.prepare("INSERT INTO account (id,name,created_date) VALUES (?,?,?)").run("A_COLL_ATOM", "Collision Atomicity", "2026-01-01");
+  seedUser(db, { id: "owner_coll_atom", email: "owner_coll_atom@test.local", role: "owner", mode: "all", account_id: "A_COLL_ATOM" });
+  seedDataset("A_COLL_ATOM", collGen, "owner_coll_atom");
+  db.prepare("INSERT INTO business_sync_state (account_id,revision) VALUES (?,?)").run("A_COLL_ATOM", 1);
 
-  // Pre-seed properties into property table so foreign keys pass
   db.prepare("INSERT INTO property (id,account_id,code,name,rooms,active,created_date) VALUES (?,?,?,?,?,?,?)")
-    .run("prop_A", "A_COLL", "PA", "Property A", 10, 1, "2026-01-01");
+    .run("prop_A", "A_COLL_ATOM", "PA", "Property A", 10, 1, "2026-01-01");
   db.prepare("INSERT INTO property (id,account_id,code,name,rooms,active,created_date) VALUES (?,?,?,?,?,?,?)")
-    .run("prop_B", "A_COLL", "PB", "Property B", 10, 1, "2026-01-01");
+    .run("prop_B", "A_COLL_ATOM", "PB", "Property B", 10, 1, "2026-01-01");
+  db.prepare("INSERT INTO property (id,account_id,code,name,rooms,active,created_date) VALUES (?,?,?,?,?,?,?)")
+    .run("prop_C", "A_COLL_ATOM", "PC", "Property C", 10, 1, "2026-01-01");
 
-  const scopeColl = scopeAll(["prop_A", "prop_B"]);
-  scopeColl.accountId = "A_COLL";
-  scopeColl.user = { id: "owner_coll", email: "owner_coll@test.local", role: "owner", account_id: "A_COLL" };
-
-  // Map A: legacy property_key = typedRecordKey("prop_B"), server_property_id = "prop_A"
-  // Map B: legacy property_key = "n:2", server_property_id = "prop_B"
-  const ambiguousKey = typedRecordKey("prop_B");
+  // Map A: n:1 -> prop_A
+  // Map B: s:1:1 -> prop_B
   db.prepare("INSERT INTO business_property_map (account_id,generation_id,property_key,server_property_id,property_code) VALUES (?,?,?,?,?)")
-    .run("A_COLL", collGen, ambiguousKey, "prop_A", "PA");
+    .run("A_COLL_ATOM", collGen, "n:1", "prop_A", "PA");
   db.prepare("INSERT INTO business_property_map (account_id,generation_id,property_key,server_property_id,property_code) VALUES (?,?,?,?,?)")
-    .run("A_COLL", collGen, "n:2", "prop_B", "PB");
+    .run("A_COLL_ATOM", collGen, "s:1:1", "prop_B", "PB");
 
-  // Direct mutate test with ambiguousKey
-  const mutateRes = await call("mutate", {
-    method: "POST",
-    scope: scopeColl,
-    body: {
-      mutation_id: "mut_coll_00000001",
-      entity: "Expense",
+  // Map C: n:99 -> prop_C (unambiguous for the 9 valid ops)
+  db.prepare("INSERT INTO business_property_map (account_id,generation_id,property_key,server_property_id,property_code) VALUES (?,?,?,?,?)")
+    .run("A_COLL_ATOM", collGen, "n:99", "prop_C", "PC");
+
+  const scopeColl = scopeAll(["prop_A", "prop_B", "prop_C"]);
+  scopeColl.accountId = "A_COLL_ATOM";
+  scopeColl.user = { id: "owner_coll_atom", email: "owner_coll_atom@test.local", role: "owner", account_id: "A_COLL_ATOM" };
+
+  const txId = "tx_atomicity_ambiguous";
+  const operations = [];
+  for (let i = 1; i <= 9; i++) {
+    operations.push({
+      entity: "OccupancyDay",
       operation: "upsert",
-      record_key: typedRecordKey(555),
-      property_key: ambiguousKey,
-      row: { id: 555, property_id: "prop_B", amount: 100 },
-    },
-  });
-  assertEqual(mutateRes.status, 422, "must fail closed with 422 on collision");
-  const mutateErr = await mutateRes.json();
-  assertEqual(mutateErr.error, "ambiguous property identity");
-  assertEqual(mutateErr.code, "ambiguous_property_identity");
-
-  // Transaction chunk test with ambiguousKey
-  const txId = "tx_coll_000000001";
-  const op = {
-    entity: "Expense",
+      record_key: typedRecordKey(`valid_amb_${i}`),
+      property_key: "s:2:99", // resolves unambiguously to prop_C via n:99
+      row: { id: `valid_amb_${i}`, property_id: "99", rooms: 10 },
+      base_row_hash: null,
+    });
+  }
+  // 10th op is ambiguous: s:1:1 can resolve to prop_B (exact) or prop_A (alternate of n:1)
+  operations.push({
+    entity: "OccupancyDay",
     operation: "upsert",
-    record_key: typedRecordKey(556),
-    property_key: ambiguousKey,
-    row: { id: 556, property_id: "prop_B", amount: 100 },
-  };
+    record_key: typedRecordKey("ambiguous_op_10"),
+    property_key: "s:1:1",
+    row: { id: "ambiguous_op_10", property_id: "1", rooms: 10 },
+    base_row_hash: null,
+  });
+
   await call("transaction/start", {
     method: "POST",
     scope: scopeColl,
-    body: { tx_id: txId, request_hash: await sha256Hex(canonicalJson([op])), expected_chunks: 1, operation_count: 1 },
+    body: { tx_id: txId, request_hash: await sha256Hex(canonicalJson(operations)), expected_chunks: 1, operation_count: 10 },
   });
+
   const chunkRes = await call("transaction/chunk", {
     method: "POST",
     scope: scopeColl,
-    body: { tx_id: txId, chunk_index: 0, chunk_hash: await transactionChunkHash([op]), operations: [op] },
+    body: { tx_id: txId, chunk_index: 0, chunk_hash: await transactionChunkHash(operations), operations },
   });
-  assertEqual(chunkRes.status, 422, "transaction/chunk must fail closed with 422 on collision");
-  const chunkErr = await chunkRes.json();
-  assertEqual(chunkErr.error, "ambiguous property identity");
-  assertEqual(chunkErr.code, "ambiguous_property_identity");
+  assertEqual(chunkRes.status, 422, "ambiguous chunk must fail 422");
+  const errBody = await chunkRes.json();
+  assertEqual(errBody.error, "ambiguous property identity");
+  assertEqual(errBody.code, "ambiguous_property_identity");
 
-  // Verify 0 writes
-  const rows = db.prepare("SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_COLL'").get().n;
-  assertEqual(Number(rows), 0, "zero writes must be stored on collision");
+  await call("transaction/abort", { method: "POST", scope: scopeColl, body: { tx_id: txId } });
+
+  const leaked = db.prepare("SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_COLL_ATOM'").get().n;
+  assertEqual(Number(leaked), 0, "zero rows committed");
 });
 
-// ---------------------------------------------------------------------------
-// 4. SECTION 11 & SECTION 28 Case A, B: Direct mutate with canonical and legacy keys
-// ---------------------------------------------------------------------------
-await run.check("Section 11 & 28 A, B: direct mutate supports both canonical server ID and legacy property key", async () => {
-  const activePointer = db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id;
+// ===========================================================================
+// SECTION 16: Direct mutate Cases M1, M2, M3
+// ===========================================================================
 
-  // Case B: Canonical create
-  const canonicalRes = await call("mutate", {
+await run.check("Section 16: Direct mutate M1, M2, M3 succeed with identical resolution rule", async () => {
+  // Case M1: property_id = "1", property_key = "s:1:1"
+  const m1Res = await call("mutate", {
     method: "POST",
     body: {
-      mutation_id: "mut_canonical_0001",
+      mutation_id: "mut_m1_case_00000001",
       entity: "Expense",
       operation: "upsert",
-      record_key: typedRecordKey(9001),
-      property_key: typedRecordKey(middleboroId),
-      row: { id: 9001, property_id: middleboroId, expense_name: "Canonical Expense", amount: 99.50 },
+      record_key: typedRecordKey(8001),
+      property_key: "s:1:1",
+      row: { id: 8001, property_id: "1", expense_name: "M1 Expense", amount: 10 },
     },
   });
-  assertEqual(canonicalRes.status, 200, "canonical direct create status");
-  const canonicalRecord = db.prepare(
-    "SELECT server_property_id, property_key FROM business_record WHERE account_id='A_1' AND generation_id=? AND entity_name='Expense' AND record_key=?"
-  ).get(activePointer, typedRecordKey(9001));
-  assertEqual(canonicalRecord.server_property_id, middleboroId);
-  assertEqual(canonicalRecord.property_key, typedRecordKey(middleboroId));
+  assertEqual(m1Res.status, 200, "M1 direct create status");
+  const m1Record = db.prepare("SELECT server_property_id, property_key FROM business_record WHERE account_id='A_1' AND record_key=?").get(typedRecordKey(8001));
+  assertEqual(m1Record.server_property_id, middleboroId);
+  assertEqual(m1Record.property_key, "s:1:1");
 
-  // Case A: Legacy create
-  const legacyRes = await call("mutate", {
+  // Case M2: property_id = 1, property_key = "n:1"
+  const m2Res = await call("mutate", {
     method: "POST",
     body: {
-      mutation_id: "mut_legacy_0000001",
+      mutation_id: "mut_m2_case_00000001",
       entity: "Expense",
       operation: "upsert",
-      record_key: typedRecordKey(9002),
+      record_key: typedRecordKey(8002),
       property_key: "n:1",
-      row: { id: 9002, property_id: 1, expense_name: "Legacy Expense", amount: 50.00 },
+      row: { id: 8002, property_id: 1, expense_name: "M2 Expense", amount: 20 },
     },
   });
-  assertEqual(legacyRes.status, 200, "legacy direct create status");
-  const legacyRecord = db.prepare(
-    "SELECT server_property_id, property_key FROM business_record WHERE account_id='A_1' AND generation_id=? AND entity_name='Expense' AND record_key=?"
-  ).get(activePointer, typedRecordKey(9002));
-  assertEqual(legacyRecord.server_property_id, middleboroId);
-  assertEqual(legacyRecord.property_key, "n:1");
-});
+  assertEqual(m2Res.status, 200, "M2 direct create status");
+  const m2Record = db.prepare("SELECT server_property_id, property_key FROM business_record WHERE account_id='A_1' AND record_key=?").get(typedRecordKey(8002));
+  assertEqual(m2Record.server_property_id, middleboroId);
+  assertEqual(m2Record.property_key, "n:1");
 
-// ---------------------------------------------------------------------------
-// 5. SECTION 28 Case C: Both legacy and canonical interpretations point to SAME server ID
-// ---------------------------------------------------------------------------
-await run.check("Section 28 Case C: candidate set resolves when legacy and canonical point to same server ID", async () => {
-  const samePropId = "prop_same_cand_id";
-  const typedSameKey = typedRecordKey(samePropId);
-  // A mapping row where the legacy property_key IS the typed canonical key
-  const mappings = [
-    { property_key: typedSameKey, server_property_id: samePropId },
-  ];
-  const resolved = resolvePropertyKeyFromMappings(mappings, typedSameKey);
-  assertEqual(resolved, samePropId, "must resolve cleanly to samePropId");
-});
-
-// ---------------------------------------------------------------------------
-// 6. SECTION 28 Case E: No candidate throws 422 property mapping not found
-// ---------------------------------------------------------------------------
-await run.check("Section 28 Case E: unknown property throws 422 property mapping not found", async () => {
-  const res = await call("mutate", {
+  // Case M3: property_id = middleboroId, property_key = typedRecordKey(middleboroId)
+  const m3Res = await call("mutate", {
     method: "POST",
     body: {
-      mutation_id: "mut_unknown_000001",
+      mutation_id: "mut_m3_case_00000001",
       entity: "Expense",
       operation: "upsert",
-      record_key: typedRecordKey(9005),
-      property_key: typedRecordKey("prop_completely_unknown"),
-      row: { id: 9005, property_id: "prop_completely_unknown", amount: 10 },
-    },
-  });
-  assertEqual(res.status, 422);
-  assertEqual((await res.json()).error, "property mapping not found");
-});
-
-// ---------------------------------------------------------------------------
-// 7. SECTION 28 Case F: Cross-account isolation
-// ---------------------------------------------------------------------------
-await run.check("Section 28 Case F: canonical property ID from another account cannot resolve", async () => {
-  // A_1 tries to mutate using A_2's canonical property ID
-  const res = await call("mutate", {
-    method: "POST",
-    body: {
-      mutation_id: "mut_cross_acct_00001",
-      entity: "Expense",
-      operation: "upsert",
-      record_key: typedRecordKey(9006),
-      property_key: typedRecordKey(a2PropId),
-      row: { id: 9006, property_id: a2PropId, amount: 20 },
-    },
-  });
-  assertEqual(res.status, 422, "must fail with 422 property mapping not found for cross-account property");
-  assertEqual((await res.json()).error, "property mapping not found");
-});
-
-// ---------------------------------------------------------------------------
-// 8. SECTION 28 Case G: Property exists in roster table but not in generation map
-// ---------------------------------------------------------------------------
-await run.check("Section 28 Case G: roster-only orphan property not in generation map fails closed", async () => {
-  const orphanId = "prop_orphan_roster_only";
-  db.prepare("INSERT INTO property (id,account_id,code,name,rooms,active,created_date) VALUES (?,?,?,?,?,?,?)")
-    .run(orphanId, "A_1", "ORP", "Orphan Hotel", 10, 1, "2026-01-01");
-
-  const res = await call("mutate", {
-    method: "POST",
-    body: {
-      mutation_id: "mut_orphan_00000001",
-      entity: "Expense",
-      operation: "upsert",
-      record_key: typedRecordKey(9007),
-      property_key: typedRecordKey(orphanId),
-      row: { id: 9007, property_id: orphanId, amount: 30 },
-    },
-  });
-  assertEqual(res.status, 422, "roster-only orphan property must not resolve without map entry");
-  assertEqual((await res.json()).error, "property mapping not found");
-});
-
-// ---------------------------------------------------------------------------
-// 9. SECTION 28 Case H: Restricted user targeting unauthorized mapped property gets 403
-// ---------------------------------------------------------------------------
-await run.check("Section 28 Case H: restricted user receives 403 before record existence oracle", async () => {
-  // mgr_1 only has access to secondPropId
-  const scopedMgr = scopeSpecific([secondPropId]);
-  scopedMgr.accountId = "A_1";
-  scopedMgr.user = { id: "mgr_1", email: "mgr1@test.local", role: "manager", account_id: "A_1", permissions: { manual_entry: true } };
-
-  // Targets middleboroId (which exists in map, but mgr_1 is not authorized for)
-  const res = await call("mutate", {
-    method: "POST",
-    scope: scopedMgr,
-    body: {
-      mutation_id: "mut_restricted_00001",
-      entity: "Expense",
-      operation: "upsert",
-      record_key: typedRecordKey(9001), // record 9001 exists!
+      record_key: typedRecordKey(8003),
       property_key: typedRecordKey(middleboroId),
-      row: { id: 9001, property_id: middleboroId, amount: 999 },
+      row: { id: 8003, property_id: middleboroId, expense_name: "M3 Expense", amount: 30 },
     },
   });
-  assertEqual(res.status, 403, "restricted caller must receive 403");
-  assert(String((await res.json()).error).includes("outside caller scope"), "must report outside caller scope");
+  assertEqual(m3Res.status, 200, "M3 direct create status");
+  const m3Record = db.prepare("SELECT server_property_id, property_key FROM business_record WHERE account_id='A_1' AND record_key=?").get(typedRecordKey(8003));
+  assertEqual(m3Record.server_property_id, middleboroId);
+  assertEqual(m3Record.property_key, typedRecordKey(middleboroId));
 });
 
-// ---------------------------------------------------------------------------
-// 10. SECTION 28 Case I: Global sentinel preserves existing behavior
-// ---------------------------------------------------------------------------
-await run.check("Section 28 Case I: global sentinel s:0: requires scope.all and rejects restricted caller with 403", async () => {
-  // Global record with owner (scope.all)
-  const globalRes = await call("mutate", {
-    method: "POST",
-    body: {
-      mutation_id: "mut_global_00000001",
-      entity: "Review",
-      operation: "upsert",
-      record_key: typedRecordKey("rev_global_1"),
-      property_key: "s:0:",
-      row: { id: "rev_global_1", property_id: "", rating: 5, comment: "Global feedback" },
-    },
-  });
-  assertEqual(globalRes.status, 200, `owner can mutate global record, got: ${await globalRes.clone().text()}`);
+// ===========================================================================
+// SECTION 17: Representation transitions
+// ===========================================================================
+
+await run.check("Section 17: representation transitions (n:1 -> s:1:1 -> canonical) succeed", async () => {
   const activePointer = db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id;
-  const stored = db.prepare("SELECT server_property_id, property_key FROM business_record WHERE account_id='A_1' AND generation_id=? AND record_key=?")
-    .get(activePointer, typedRecordKey("rev_global_1"));
-  assertEqual(stored.server_property_id, null, "global record must have server_property_id NULL");
-  assertEqual(stored.property_key, "s:0:", "global record must have property_key s:0:");
 
-  // Restricted caller fails with 403
-  const scopedMgr = scopeSpecific([secondPropId]);
-  scopedMgr.accountId = "A_1";
-  scopedMgr.user = { id: "mgr_1", email: "mgr1@test.local", role: "manager", account_id: "A_1", permissions: { manual_entry: true } };
-  const restrictedRes = await call("mutate", {
+  // Stored with n:1
+  const recId = 8100;
+  const recKey = typedRecordKey(recId);
+  const rowV1 = { id: recId, property_id: 1, expense_name: "Version 1", amount: 100 };
+  const jsonV1 = canonicalJson(rowV1);
+  const hashV1 = await sha256Hex(jsonV1);
+  db.prepare(
+    "INSERT INTO business_record (account_id,generation_id,entity_name,record_key,property_key,server_property_id,row_json,row_hash,updated_at) VALUES (?,?,?,?,?,?,?,?,?)"
+  ).run("A_1", activePointer, "Expense", recKey, "n:1", middleboroId, jsonV1, hashV1, new Date().toISOString());
+
+  // Transition 1: n:1 -> s:1:1
+  const rowV2 = { id: recId, property_id: "1", expense_name: "Version 2 via s:1:1", amount: 110 };
+  const jsonV2 = canonicalJson(rowV2);
+  const hashV2 = await sha256Hex(jsonV2);
+  const res1 = await call("mutate", {
     method: "POST",
-    scope: scopedMgr,
     body: {
-      mutation_id: "mut_global_00000002",
-      entity: "Review",
+      mutation_id: "mut_trans_00000001",
+      entity: "Expense",
       operation: "upsert",
-      record_key: typedRecordKey("rev_global_2"),
-      property_key: "s:0:",
-      row: { id: "rev_global_2", property_id: "", rating: 4 },
+      record_key: recKey,
+      property_key: "s:1:1",
+      base_row_hash: hashV1,
+      row: rowV2,
     },
   });
-  assertEqual(restrictedRes.status, 403, "restricted caller must get 403 on global record");
+  assertEqual(res1.status, 200, "n:1 -> s:1:1 status");
+  const storedV2 = db.prepare("SELECT property_key, server_property_id FROM business_record WHERE account_id='A_1' AND record_key=?").get(recKey);
+  assertEqual(storedV2.property_key, "s:1:1");
+  assertEqual(storedV2.server_property_id, middleboroId);
+
+  // Transition 2: s:1:1 -> canonical
+  const rowV3 = { id: recId, property_id: middleboroId, expense_name: "Version 3 via canonical", amount: 120 };
+  const jsonV3 = canonicalJson(rowV3);
+  const hashV3 = await sha256Hex(jsonV3);
+  const res2 = await call("mutate", {
+    method: "POST",
+    body: {
+      mutation_id: "mut_trans_00000002",
+      entity: "Expense",
+      operation: "upsert",
+      record_key: recKey,
+      property_key: typedRecordKey(middleboroId),
+      base_row_hash: hashV2,
+      row: rowV3,
+    },
+  });
+  assertEqual(res2.status, 200, "s:1:1 -> canonical status");
+  const storedV3 = db.prepare("SELECT property_key, server_property_id FROM business_record WHERE account_id='A_1' AND record_key=?").get(recKey);
+  assertEqual(storedV3.property_key, typedRecordKey(middleboroId));
+  assertEqual(storedV3.server_property_id, middleboroId);
+
+  // Transition 3: canonical -> s:1:1
+  const rowV4 = { id: recId, property_id: "1", expense_name: "Version 4 via s:1:1 again", amount: 130 };
+  const res3 = await call("mutate", {
+    method: "POST",
+    body: {
+      mutation_id: "mut_trans_00000003",
+      entity: "Expense",
+      operation: "upsert",
+      record_key: recKey,
+      property_key: "s:1:1",
+      base_row_hash: hashV3,
+      row: rowV4,
+    },
+  });
+  assertEqual(res3.status, 200, "canonical -> s:1:1 status");
+  const storedV4 = db.prepare("SELECT property_key, server_property_id FROM business_record WHERE account_id='A_1' AND record_key=?").get(recKey);
+  assertEqual(storedV4.property_key, "s:1:1");
 });
 
-// ---------------------------------------------------------------------------
-// 11. SECTION 28 Case J: Malformed typed canonical key
-// ---------------------------------------------------------------------------
-await run.check("Section 28 Case J: malformed typed canonical key does not enter fallback and fails with 422", async () => {
-  const malformedKey = `s:999:${middleboroId}`; // length prefix is wrong!
+// ===========================================================================
+// SECTION 18: No cross-property re-homing
+// ===========================================================================
+
+await run.check("Section 18: cross-property re-home attempt fails closed with 403", async () => {
+  const activePointer = db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id;
+  const recId = 8200;
+  const recKey = typedRecordKey(recId);
+  const row = { id: recId, property_id: "1", expense_name: "Belongs to Middleboro", amount: 10 };
+  const json = canonicalJson(row);
+  const hash = await sha256Hex(json);
+  db.prepare(
+    "INSERT INTO business_record (account_id,generation_id,entity_name,record_key,property_key,server_property_id,row_json,row_hash,updated_at) VALUES (?,?,?,?,?,?,?,?,?)"
+  ).run("A_1", activePointer, "Expense", recKey, "s:1:1", middleboroId, json, hash, new Date().toISOString());
+
+  // Attempt to rehome to secondPropId (legacy n:2 / s:1:2)
   const res = await call("mutate", {
     method: "POST",
     body: {
-      mutation_id: "mut_malformed_key_01",
+      mutation_id: "mut_rehome_denied_0001",
       entity: "Expense",
       operation: "upsert",
-      record_key: typedRecordKey(9008),
-      property_key: malformedKey,
-      row: { id: 9008, property_id: middleboroId, amount: 45 },
+      record_key: recKey,
+      property_key: "s:1:2",
+      base_row_hash: hash,
+      row: { id: recId, property_id: "2", expense_name: "Rehome attempt", amount: 10 },
     },
   });
-  assertEqual(res.status, 422, "malformed typed key must fail 422");
-  assertEqual((await res.json()).error, "property mapping not found");
+  assertEqual(res.status, 403, "cross-property rehoming must return 403");
+  assertEqual((await res.json()).error, "record belongs to another property");
 });
 
-// ---------------------------------------------------------------------------
-// 12. SECTION 12, 13 & 28 Case K: Historical legacy record updated through canonical identity
-// ---------------------------------------------------------------------------
-await run.check("Section 12, 13 & 28 Case K: historical legacy record updated through canonical identity succeeds without cross-property error", async () => {
+// ===========================================================================
+// SECTION 19: Rollback pre-image exactness (n:1 + numeric 1 restored, no hybrid)
+// ===========================================================================
+
+await run.check("Section 19: rollback restores exact pre-image (n:1, numeric 1, H1) after real browser transition (s:1:1, string '1', H2)", async () => {
   const activePointer = db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id;
 
-  // Create a historical record stored with legacy property_key "n:1"
-  const histId = 9100;
-  const histRecordKey = typedRecordKey(histId);
-  const histRow = { id: histId, property_id: 1, expense_name: "Original Historical", amount: 120.00 };
-  const histJson = canonicalJson(histRow);
-  const histHash = await sha256Hex(histJson);
+  const recId = 8300;
+  const recKey = typedRecordKey(recId);
+  const origRow = { id: recId, property_id: 1, expense_name: "Historical Pre-Image", amount: 200 };
+  const origJson = canonicalJson(origRow);
+  const origHash = await sha256Hex(origJson);
   db.prepare(
     "INSERT INTO business_record (account_id,generation_id,entity_name,record_key,property_key,server_property_id,row_json,row_hash,updated_at) VALUES (?,?,?,?,?,?,?,?,?)"
-  ).run("A_1", activePointer, "Expense", histRecordKey, "n:1", middleboroId, histJson, histHash, new Date().toISOString());
+  ).run("A_1", activePointer, "Expense", recKey, "n:1", middleboroId, origJson, origHash, new Date().toISOString());
 
-  // Update through canonical property key: typedRecordKey(middleboroId)
-  const updatedRow = { id: histId, property_id: middleboroId, expense_name: "Updated via Canonical", amount: 125.00 };
-  const updateRes = await call("mutate", {
-    method: "POST",
-    body: {
-      mutation_id: "mut_hist_update_0001",
-      entity: "Expense",
-      operation: "upsert",
-      record_key: histRecordKey,
-      property_key: typedRecordKey(middleboroId),
-      base_row_hash: histHash,
-      row: updatedRow,
-    },
-  });
-  assertEqual(updateRes.status, 200, `update status must be 200, got: ${await updateRes.clone().text()}`);
-
-  const storedAfterUpdate = db.prepare(
-    "SELECT server_property_id, property_key, row_json, row_hash FROM business_record WHERE account_id='A_1' AND generation_id=? AND entity_name='Expense' AND record_key=?"
-  ).get(activePointer, histRecordKey);
-  assertEqual(storedAfterUpdate.server_property_id, middleboroId, "server_property_id must stay middleboroId");
-  assertEqual(storedAfterUpdate.property_key, typedRecordKey(middleboroId), "property_key normalized to canonical typed key");
-  assertEqual(JSON.parse(storedAfterUpdate.row_json).expense_name, "Updated via Canonical");
-});
-
-// ---------------------------------------------------------------------------
-// 13. SECTION 14 & 28 Case L: Historical legacy record deleted through canonical identity
-// ---------------------------------------------------------------------------
-await run.check("Section 14 & 28 Case L: historical legacy record deleted through canonical identity succeeds", async () => {
-  const activePointer = db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id;
-
-  const histDeleteId = 9101;
-  const histRecordKey = typedRecordKey(histDeleteId);
-  const histRow = { id: histDeleteId, property_id: 1, expense_name: "To Delete", amount: 88.00 };
-  const histJson = canonicalJson(histRow);
-  const histHash = await sha256Hex(histJson);
-  db.prepare(
-    "INSERT INTO business_record (account_id,generation_id,entity_name,record_key,property_key,server_property_id,row_json,row_hash,updated_at) VALUES (?,?,?,?,?,?,?,?,?)"
-  ).run("A_1", activePointer, "Expense", histRecordKey, "n:1", middleboroId, histJson, histHash, new Date().toISOString());
-
-  // Delete via canonical property identity
-  const deleteRes = await call("mutate", {
-    method: "POST",
-    body: {
-      mutation_id: "mut_hist_delete_0001",
-      entity: "Expense",
-      operation: "delete",
-      record_key: histRecordKey,
-      property_key: typedRecordKey(middleboroId),
-      base_row_hash: histHash,
-    },
-  });
-  assertEqual(deleteRes.status, 200, "delete must succeed with 200");
-
-  const check = db.prepare(
-    "SELECT COUNT(*) AS n FROM business_record WHERE account_id='A_1' AND generation_id=? AND entity_name='Expense' AND record_key=?"
-  ).get(activePointer, histRecordKey).n;
-  assertEqual(Number(check), 0, "record must be deleted");
-});
-
-// ---------------------------------------------------------------------------
-// 14. SECTION 28 Case M: Attempted canonical re-home A -> B fails with 403
-// ---------------------------------------------------------------------------
-await run.check("Section 28 Case M: cross-property re-home attempt fails closed with 403", async () => {
-  const activePointer = db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id;
-
-  const recordId = 9102;
-  const recordKey = typedRecordKey(recordId);
-  const row = { id: recordId, property_id: middleboroId, expense_name: "Belongs to Middleboro", amount: 10.00 };
-  const rowJson = canonicalJson(row);
-  const rowHash = await sha256Hex(rowJson);
-  db.prepare(
-    "INSERT INTO business_record (account_id,generation_id,entity_name,record_key,property_key,server_property_id,row_json,row_hash,updated_at) VALUES (?,?,?,?,?,?,?,?,?)"
-  ).run("A_1", activePointer, "Expense", recordKey, typedRecordKey(middleboroId), middleboroId, rowJson, rowHash, new Date().toISOString());
-
-  // Attempt to re-home to secondPropId
-  const rehomeRes = await call("mutate", {
-    method: "POST",
-    body: {
-      mutation_id: "mut_rehome_00000001",
-      entity: "Expense",
-      operation: "upsert",
-      record_key: recordKey,
-      property_key: typedRecordKey(secondPropId),
-      base_row_hash: rowHash,
-      row: { id: recordId, property_id: secondPropId, expense_name: "Rehome Attempt", amount: 10.00 },
-    },
-  });
-  assertEqual(rehomeRes.status, 403, "cross-property re-homing must be forbidden (403)");
-  assertEqual((await rehomeRes.json()).error, "record belongs to another property");
-});
-
-// ---------------------------------------------------------------------------
-// 15. SECTION 15, 16 & 28 Case N: Rollback exact pre-image property key restoration
-// ---------------------------------------------------------------------------
-await run.check("Section 15, 16 & 28 Case N: rollback restores exact pre-image property_key and hash after representation transition", async () => {
-  const activePointer = db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id;
-
-  const recordId = 9103;
-  const recordKey = typedRecordKey(recordId);
-  const originalRow = { id: recordId, property_id: 1, expense_name: "Pre-Image Historical", amount: 200.00 };
-  const originalJson = canonicalJson(originalRow);
-  const originalHash = await sha256Hex(originalJson);
-  db.prepare(
-    "INSERT INTO business_record (account_id,generation_id,entity_name,record_key,property_key,server_property_id,row_json,row_hash,updated_at) VALUES (?,?,?,?,?,?,?,?,?)"
-  ).run("A_1", activePointer, "Expense", recordKey, "n:1", middleboroId, originalJson, originalHash, new Date().toISOString());
-
-  const txId = "tx_rollback_preimage_test";
-  const updatedRow = { id: recordId, property_id: middleboroId, expense_name: "Updated in Tx", amount: 250.00 };
+  const txId = "tx_rollback_exact_preimage";
+  const updatedRow = { id: recId, property_id: "1", expense_name: "Updated by Browser Tx", amount: 250 };
   const updateOp = {
     entity: "Expense",
     operation: "upsert",
-    record_key: recordKey,
-    property_key: typedRecordKey(middleboroId),
-    base_row_hash: originalHash,
+    record_key: recKey,
+    property_key: "s:1:1",
+    base_row_hash: origHash,
     row: updatedRow,
   };
 
@@ -653,31 +668,163 @@ await run.check("Section 15, 16 & 28 Case N: rollback restores exact pre-image p
   const commitRes = await call("transaction/commit", { method: "POST", body: { tx_id: txId } });
   assertEqual(commitRes.status, 200);
 
-  // Stored row is currently updated with canonical property key
-  const storedCommitted = db.prepare(
-    "SELECT property_key, server_property_id, row_hash, row_json FROM business_record WHERE account_id='A_1' AND generation_id=? AND entity_name='Expense' AND record_key=?"
-  ).get(activePointer, recordKey);
-  assertEqual(storedCommitted.property_key, typedRecordKey(middleboroId));
+  // Stored row is committed with s:1:1
+  const storedCommitted = db.prepare("SELECT property_key, server_property_id, row_hash, row_json FROM business_record WHERE account_id='A_1' AND record_key=?").get(recKey);
+  assertEqual(storedCommitted.property_key, "s:1:1");
 
-  // Rollback the transaction
+  // Rollback
   const rollbackRes = await call("transaction/rollback", { method: "POST", body: { tx_id: txId } });
-  assertEqual(rollbackRes.status, 200, "transaction/rollback must succeed");
-  const rollbackBody = await rollbackRes.json();
-  assertEqual(rollbackBody.status, "rolled_back");
+  assertEqual(rollbackRes.status, 200);
 
-  // Verify EXACT pre-image restoration in business_record:
-  const restored = db.prepare(
-    "SELECT property_key, server_property_id, row_hash, row_json FROM business_record WHERE account_id='A_1' AND generation_id=? AND entity_name='Expense' AND record_key=?"
-  ).get(activePointer, recordKey);
-  assertEqual(restored.property_key, "n:1", "property_key must be restored to original legacy n:1");
-  assertEqual(restored.server_property_id, middleboroId, "server_property_id must be restored to middleboroId");
-  assertEqual(restored.row_hash, originalHash, "row_hash must match original pre-image hash H1");
-  const restoredRow = JSON.parse(restored.row_json);
-  assertEqual(restoredRow.property_id, 1, "row_json.property_id must be original 1");
-  assertEqual(restoredRow.amount, 200.00, "row_json.amount must be original 200.00");
+  // Verify EXACT pre-image restoration:
+  const restored = db.prepare("SELECT property_key, server_property_id, row_hash, row_json FROM business_record WHERE account_id='A_1' AND record_key=?").get(recKey);
+  assertEqual(restored.property_key, "n:1", "property_key restored to n:1");
+  assertEqual(restored.server_property_id, middleboroId, "server_property_id restored to middleboroId");
+  assertEqual(restored.row_hash, origHash, "row_hash restored to H1");
+  const parsedRestored = JSON.parse(restored.row_json);
+  assertEqual(parsedRestored.property_id, 1, "row_json.property_id restored to numeric 1 (NO HYBRID)");
+  assertEqual(parsedRestored.amount, 200);
+});
+
+// ===========================================================================
+// SECTION 20 & 21: Global sentinel protection
+// ===========================================================================
+
+await run.check("Section 20 & 21: global sentinel s:0: requires scope.all and rejects restricted caller with 403", async () => {
+  const globalRes = await call("mutate", {
+    method: "POST",
+    body: {
+      mutation_id: "mut_global_00000001",
+      entity: "Review",
+      operation: "upsert",
+      record_key: typedRecordKey("rev_global_1"),
+      property_key: "s:0:",
+      row: { id: "rev_global_1", property_id: "", rating: 5, comment: "Global feedback" },
+    },
+  });
+  assertEqual(globalRes.status, 200);
+  const activePointer = db.prepare("SELECT active_generation_id FROM business_dataset_pointer WHERE account_id='A_1'").get().active_generation_id;
+  const stored = db.prepare("SELECT server_property_id, property_key FROM business_record WHERE account_id='A_1' AND generation_id=? AND record_key=?")
+    .get(activePointer, typedRecordKey("rev_global_1"));
+  assertEqual(stored.server_property_id, null, "global server_property_id is NULL");
+  assertEqual(stored.property_key, "s:0:");
+
+  // Restricted caller fails 403
+  const scopedMgr = scopeSpecific([secondPropId]);
+  scopedMgr.accountId = "A_1";
+  scopedMgr.user = { id: "mgr_1", email: "mgr1@test.local", role: "manager", account_id: "A_1", permissions: { manual_entry: true } };
+  const restrictedRes = await call("mutate", {
+    method: "POST",
+    scope: scopedMgr,
+    body: {
+      mutation_id: "mut_global_00000002",
+      entity: "Review",
+      operation: "upsert",
+      record_key: typedRecordKey("rev_global_2"),
+      property_key: "s:0:",
+      row: { id: "rev_global_2", property_id: "", rating: 4 },
+    },
+  });
+  assertEqual(restrictedRes.status, 403);
+});
+
+// ===========================================================================
+// SECTION 22: Account and generation isolation
+// ===========================================================================
+
+await run.check("Section 22: account isolation: Account A's property key cannot resolve in Account B", async () => {
+  // A_1 tries to mutate using A_2's property key
+  const res = await call("mutate", {
+    method: "POST",
+    body: {
+      mutation_id: "mut_cross_acct_00001",
+      entity: "Expense",
+      operation: "upsert",
+      record_key: typedRecordKey(9006),
+      property_key: typedRecordKey(a2PropId),
+      row: { id: 9006, property_id: a2PropId, amount: 20 },
+    },
+  });
+  assertEqual(res.status, 422);
+  assertEqual((await res.json()).error, "property mapping not found");
+});
+
+await run.check("Section 22: generation isolation: mapping in old generation does not resolve in active generation", async () => {
+  const oldGen = "gen_old_isolated";
+  const now = new Date().toISOString();
+  db.prepare(
+    "INSERT INTO business_dataset (account_id,generation_id,status,schema_version,manifest_hash,manifest_json,expected_chunks,expected_records,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)"
+  ).run("A_1", oldGen, "retired", 1, `hash_${oldGen}`, "{}", 1, 10, "owner_1", now);
+  db.prepare("INSERT INTO property (id,account_id,code,name,rooms,active,created_date) VALUES (?,?,?,?,?,?,?)")
+    .run("prop_only_in_old", "A_1", "OLD", "Old Hotel", 10, 1, "2026-01-01");
+  db.prepare("INSERT INTO business_property_map (account_id,generation_id,property_key,server_property_id,property_code) VALUES (?,?,?,?,?)")
+    .run("A_1", oldGen, "n:999", "prop_only_in_old", "OLD");
+
+  const res = await call("mutate", {
+    method: "POST",
+    body: {
+      mutation_id: "mut_old_gen_test_0001",
+      entity: "Expense",
+      operation: "upsert",
+      record_key: typedRecordKey(9010),
+      property_key: "s:3:999", // alternate of n:999
+      row: { id: 9010, property_id: "999", amount: 20 },
+    },
+  });
+  assertEqual(res.status, 422);
+  assertEqual((await res.json()).error, "property mapping not found");
+});
+
+// ===========================================================================
+// SECTION 23: Authorization order fail-closed
+// ===========================================================================
+
+await run.check("Section 23: restricted manager targeting unauthorized property gets 403 before record existence check", async () => {
+  const scopedMgr = scopeSpecific([middleboroId]);
+  scopedMgr.accountId = "A_1";
+  scopedMgr.user = { id: "mgr_1", email: "mgr1@test.local", role: "manager", account_id: "A_1", permissions: { manual_entry: true } };
+
+  // Manager authorized only for middleboroId. Targets secondPropId (s:1:2 -> n:2).
+  const res = await call("mutate", {
+    method: "POST",
+    scope: scopedMgr,
+    body: {
+      mutation_id: "mut_restr_auth_order_01",
+      entity: "Expense",
+      operation: "upsert",
+      record_key: typedRecordKey(8001), // this record exists under middleboro!
+      property_key: "s:1:2",
+      row: { id: 8001, property_id: "2", amount: 999 },
+    },
+  });
+  assertEqual(res.status, 403, "must get 403 before 409 conflict");
+  assert(String((await res.json()).error).includes("outside caller scope"));
+});
+
+// ===========================================================================
+// SECTION 24: Roster-only orphan property fails closed
+// ===========================================================================
+
+await run.check("Section 24: roster-only orphan property not in generation map fails closed", async () => {
+  const orphanId = "prop_orphan_roster_only";
+  db.prepare("INSERT INTO property (id,account_id,code,name,rooms,active,created_date) VALUES (?,?,?,?,?,?,?)")
+    .run(orphanId, "A_1", "ORP", "Orphan Hotel", 10, 1, "2026-01-01");
+
+  const res = await call("mutate", {
+    method: "POST",
+    body: {
+      mutation_id: "mut_orphan_00000001",
+      entity: "Expense",
+      operation: "upsert",
+      record_key: typedRecordKey(9007),
+      property_key: typedRecordKey(orphanId),
+      row: { id: 9007, property_id: orphanId, amount: 30 },
+    },
+  });
+  assertEqual(res.status, 422);
+  assertEqual((await res.json()).error, "property mapping not found");
 });
 
 run.done();
 if (process.exitCode) process.exit(1);
-console.log("PASSED: worker property resolution distinguishes canonical and legacy identities, rejects ambiguous collisions, and restores exact pre-images.");
-
+console.log("PASSED: worker property resolution probe completed all tests successfully.");

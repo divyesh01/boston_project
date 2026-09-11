@@ -36,9 +36,9 @@ async function encoded(entity, row) {
 async function buildPayload() {
   const rows = [
     await encoded("Property", { id: 7, code: "NUM-7", name: "Numeric Seven", rooms: 10, active: true }),
-    await encoded("Property", { id: "7", code: "STR-7", name: "String Seven", rooms: 11, active: true }),
+    await encoded("Property", { id: 8, code: "STR-8", name: "Property Eight", rooms: 11, active: true }),
     await encoded("Expense", { id: 1, property_id: 7, expense_name: "Numeric", amount: 12.34 }),
-    await encoded("Expense", { id: 2, property_id: "7", expense_name: "String", amount: 56.78 }),
+    await encoded("Expense", { id: 2, property_id: 8, expense_name: "String", amount: 56.78 }),
   ];
   const chunks = [rows.slice(0, 2), rows.slice(2)];
   const descriptors = [];
@@ -196,7 +196,7 @@ await run.check("direct mutations reject server-managed scope fields", async () 
   const attempts = [
     { mutation_id: "scope_field_expense_create_01", entity: "Expense", operation: "upsert", record_key: typedRecordKey(101), property_key: typedRecordKey(7), row: { id: 101, property_id: 7, amount: 5, account_id: "A_1" } },
     { mutation_id: "scope_field_expense_update_02", entity: "Expense", operation: "upsert", record_key: typedRecordKey(1), property_key: typedRecordKey(7), base_row_hash: currentExpense.row_hash, row: { id: 1, property_id: 7, amount: 15, server_property_id: "injected" } },
-    { mutation_id: "scope_field_property_create_03", entity: "Property", operation: "upsert", record_key: typedRecordKey(8), property_key: typedRecordKey(8), row: { id: 8, code: "P-8", name: "Property Eight", server_property_id: "injected" } },
+    { mutation_id: "scope_field_property_create_03", entity: "Property", operation: "upsert", record_key: typedRecordKey(9), property_key: typedRecordKey(9), row: { id: 9, code: "P-9", name: "Property Nine", server_property_id: "injected" } },
   ];
   const property = db.prepare("SELECT row_hash,row_json FROM business_record WHERE generation_id=? AND entity_name='Property' AND record_key=?").get(generation, typedRecordKey(7));
   attempts.push({ mutation_id: "scope_field_property_update_04", entity: "Property", operation: "upsert", record_key: typedRecordKey(7), property_key: typedRecordKey(7), base_row_hash: property.row_hash, row: { ...JSON.parse(property.row_json), account_id: "A_1" } });
@@ -213,7 +213,7 @@ await run.check("stale write and cross-property write fail closed", async () => 
   const stale = await call("mutate", { method: "POST", body: { mutation_id: "mutation_expense_0002", entity: "Expense", operation: "upsert", record_key: typedRecordKey(1), property_key: typedRecordKey(7), row: { id: 1, property_id: 7, amount: 99 }, base_row_hash: "stale" } });
   assertEqual(stale.status, 409);
   const foreignPropertyKey = maps.find((row) => row.server_property_id !== maps[0].server_property_id).property_key;
-  const foreign = await call("mutate", { method: "POST", scope: restricted, body: { mutation_id: "mutation_expense_0003", entity: "Expense", operation: "upsert", record_key: typedRecordKey(99), property_key: foreignPropertyKey, row: { id: 99, property_id: foreignPropertyKey.startsWith("n:") ? Number(foreignPropertyKey.slice(2)) : "7", amount: 1 } } });
+  const foreign = await call("mutate", { method: "POST", scope: restricted, body: { mutation_id: "mutation_expense_0003", entity: "Expense", operation: "upsert", record_key: typedRecordKey(99), property_key: foreignPropertyKey, row: { id: 99, property_id: foreignPropertyKey.startsWith("n:") ? Number(foreignPropertyKey.slice(2)) : 8, amount: 1 } } });
   assertEqual(foreign.status, 403);
 });
 
@@ -307,14 +307,14 @@ await run.check("rollback restores a prior roster after live property codes are 
   const numeric = db.prepare("SELECT row_hash,row_json FROM business_record WHERE account_id='A_1' AND generation_id=? AND entity_name='Property' AND record_key=?").get(started.generation_id, typedRecordKey(7));
   const numericRow = { ...JSON.parse(numeric.row_json), code: "TEMP-NUM-7" };
   assertEqual((await call("mutate", { method: "POST", body: { mutation_id: "rollback_code_vacate_001", entity: "Property", operation: "upsert", record_key: typedRecordKey(7), property_key: typedRecordKey(7), base_row_hash: numeric.row_hash, row: numericRow } })).status, 200);
-  const stringy = db.prepare("SELECT row_hash,row_json FROM business_record WHERE account_id='A_1' AND generation_id=? AND entity_name='Property' AND record_key=?").get(started.generation_id, typedRecordKey("7"));
+  const stringy = db.prepare("SELECT row_hash,row_json FROM business_record WHERE account_id='A_1' AND generation_id=? AND entity_name='Property' AND record_key=?").get(started.generation_id, typedRecordKey(8));
   const stringRow = { ...JSON.parse(stringy.row_json), code: "NUM-7" };
-  assertEqual((await call("mutate", { method: "POST", body: { mutation_id: "rollback_code_reuse_002", entity: "Property", operation: "upsert", record_key: typedRecordKey("7"), property_key: typedRecordKey("7"), base_row_hash: stringy.row_hash, row: stringRow } })).status, 200);
+  assertEqual((await call("mutate", { method: "POST", body: { mutation_id: "rollback_code_reuse_002", entity: "Property", operation: "upsert", record_key: typedRecordKey(8), property_key: typedRecordKey(8), base_row_hash: stringy.row_hash, row: stringRow } })).status, 200);
 
   const rollback = await call("migration/rollback", { method: "POST", body: { generation_id: started.generation_id } });
   assertEqual(rollback.status, 200, `rollback failed after code reuse: ${JSON.stringify(await rollback.clone().json())}`);
   assertEqual(db.prepare("SELECT name FROM property WHERE account_id='A_1' AND code='NUM-7'").get().name, "Numeric Seven");
-  assertEqual(db.prepare("SELECT name FROM property WHERE account_id='A_1' AND code='STR-7'").get().name, "String Seven");
+  assertEqual(db.prepare("SELECT name FROM property WHERE account_id='A_1' AND code='STR-8'").get().name, "Property Eight");
 });
 
 await run.check("staged transaction preserves unchanged rows and accepts ordered idempotent chunks", async () => {
@@ -374,7 +374,7 @@ await run.check("concurrent transaction start replay converges on one generation
 
 await run.check("staged transaction enforces property scope and supports abort cleanup", async () => {
   const txId = "transaction_abort_0002";
-  const operation = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(300), property_key: typedRecordKey("7"), row: { id: 300, property_id: "7", amount: 3 } };
+  const operation = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(300), property_key: typedRecordKey(8), row: { id: 300, property_id: 8, amount: 3 } };
   const requestHash = await hash(canonicalJson([operation]));
   const started = await call("transaction/start", { method: "POST", body: { tx_id: txId, request_hash: requestHash, expected_chunks: 1, operation_count: 1 } });
   const startedBody = await started.json();
@@ -571,7 +571,7 @@ await run.check("property scope is enforced on a later chunk, not only the first
   for (let index = 0; index < 13; index += 1) {
     allowed.push({ entity: "Expense", operation: "upsert", record_key: typedRecordKey(1000 + index), property_key: typedRecordKey(7), row: { id: 1000 + index, property_id: 7, amount: 1 + index } });
   }
-  const smuggled = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(1099), property_key: typedRecordKey("7"), row: { id: 1099, property_id: "7", amount: 10.99 } };
+  const smuggled = { entity: "Expense", operation: "upsert", record_key: typedRecordKey(1099), property_key: typedRecordKey(8), row: { id: 1099, property_id: 8, amount: 10.99 } };
   const requestHash = await hash(canonicalJson([...allowed, smuggled]));
   const started = await call("transaction/start", { method: "POST", body: { tx_id: txId, request_hash: requestHash, expected_chunks: 2, operation_count: 14 } });
   const startedBody = await started.json();

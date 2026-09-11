@@ -67,6 +67,7 @@
 | 63 | Settings sync forensic audit findings: tax key mismatch, ETag 304 D1 read overhead, CAS 409 local clobber, stale form inputs, property scope loss, missing initial audit history, manager RBAC lockout, and double event notification | HIGH | FIXED 2026-09-08 | `worker/settings.js`, `src/lib/settingsStore.js`, `src/lib/settingsBus.js`, `src/pages/Settings.jsx`, `src/lib/settingsForensicFixes.test.js` | See section 69 |
 | 64 | Comprehensive settings forensic hardening: commission rate object preservation, tax config validation, threshold & pricing sync, ETag response headers, property-scoped isolation, echo loop prevention, and reactive view re-renders | HIGH | FIXED 2026-09-08 | `worker/settings.js`, `src/lib/settingsStore.js`, `src/lib/commissionRates.js`, `src/lib/taxConfig.js`, `src/lib/taxSettings.js`, `src/pages/Settings.jsx`, `src/pages/Payments.jsx`, `src/pages/OtaChannels.jsx`, `src/pages/MonthlyCalendar.jsx`, `src/pages/Pricing.jsx` | See section 70 |
 | 65 | Modern browser business rows use canonical server property IDs, but business_property_map retains historical property key, causing 422 property mapping not found on chunk upload and mutate | CRITICAL | FIXED 2026-09-11 | `worker/business-sync.js#uploadTransactionChunk`, `worker/business-sync.js#mutate`, `worker/business-sync.js#commitTransaction` | (This commit) |
+| 66 | Real browser sends property key s:1:1 while production map holds n:1, causing 422 property mapping not found during chunk transaction and direct mutate | CRITICAL | FIXED 2026-09-11 | `worker/business-sync.js#resolvePropertyKeyFromMappings`, `worker/business-sync.js#numericStringAlternateTypedKey` | (This commit) |
 
 ---
 
@@ -6987,3 +6988,49 @@ Rather than mutating D1 schema or inserting duplicate alias rows (violating `UNI
 - Tested with dedicated test suite `scripts/probe-worker-property-resolution.mjs` (15/15 passing) covering 10-file batch import simulation, mixed chunk failure atomicity, collision fail-closed behavior, mutate representation transitions, cross-property re-home rejection, and bit-for-bit rollback pre-image restoration.
 - Mutation tests (M1-M5) verified all regression guards fail when violated and pass when restored.
 - Write budget formula `6M + 12` verified unchanged in `scripts/probe-d1-write-budget.mjs` (0 map alias writes).
+
+## 78. Authoritative Numeric-String Property-Identity Equivalence (`n:1` ↔ `s:1:1`) (2026-09-11)
+
+### Problem & Root Cause
+Live browser attempts on `/upload` still failed closed with:
+`property mapping not found — rolled back cleanly (0 rows stored)`
+
+**Root Cause Analysis**:
+The browser client's `row.property_id = "1"` is encoded by `typedRecordKey` as `s:1:1`.
+The production D1 `business_property_map` holds `property_key = "n:1"` pointing to `prop_a7a6f3218025cc9fe42381be0141a134` (Middleboro).
+Section 77's resolver checked only Candidate A (`row.property_key === keyStr`) and Candidate B (`typedRecordKey(row.server_property_id) === keyStr`).
+Neither matched `s:1:1`. The previous rule "Do not collapse numeric 1 and string '1'" was too broad for the application, where property integer identities may be formatted as either numbers or numeric strings across client layers.
+
+### Core Architectural Solution
+The correct RRI rule is established:
+**Numeric property identity 1 and string property identity "1" MAY be equivalent when the authoritative property mapping makes that equivalence UNAMBIGUOUS. They must NOT be considered equivalent when both represent distinct properties.**
+
+1. **Strict Typed Alternate Helper (`numericStringAlternateTypedKey`)**:
+   - Handles bidirectional conversion: `n:<safe integer>` ↔ `s:<len>:<canonical integer string>`.
+   - Rejects non-canonical representations: leading zeros (`"01"`), signed integers (`"+1"`), decimal floats (`"1.0"`), exponential notation (`"1e0"`), negative zero (`"-0"`), whitespace, and unsafe integers.
+   - Preserves global sentinel isolation: `s:0:` returns `null` and never aliases `n:0`.
+2. **Authoritative Candidate C Resolution (`resolvePropertyKeyFromMappings`)**:
+   - Collects Candidate A (exact historical key), Candidate B (typed canonical server ID), and Candidate C (unambiguous numeric/string alternate historical key).
+   - Deduplicates candidates strictly by canonical `server_property_id`.
+   - If candidate count is 1: succeeds and returns canonical server ID.
+   - If candidate count is > 1 (e.g. `n:1 -> prop_A` and `s:1:1 -> prop_B` coexist): fails closed with 422 `{ error: "ambiguous property identity", code: "ambiguous_property_identity" }` (0 writes).
+   - If candidate count is 0: fails closed with 422 `property mapping not found` (0 writes).
+3. **Unified Contract Across Endpoints**:
+   - Both `transaction/chunk` and `mutate` share the identical `resolvePropertyKeyFromMappings` resolver.
+   - Direct mutations support same-property representation transitions (`n:1` ↔ `s:1:1` ↔ canonical) while forbidding cross-property re-homing (403).
+   - Transaction rollback preserves exact pre-image representation recorded in the journal.
+4. **Zero Schema & D1 State Changes**:
+   - Zero modifications to D1 tables, columns, or triggers.
+   - Zero alias rows inserted into `business_property_map`.
+   - Production business data writes during engineering: **STRICTLY 0**.
+
+### Verification & Mutation Proof
+- Dedicated test suite `scripts/probe-worker-property-resolution.mjs` (25/25 passing) covering R1–R13 requirements, exact 10-file browser payload simulation, failure atomicity, direct mutate M1–M3, representation transitions, cross-property re-home denial, rollback pre-image restoration, global sentinel isolation, account and generation isolation, and roster-only orphan property handling.
+- All 5 mutations (Mutations A–E) demonstrated and killed:
+  - Mutation A (disable Candidate C): failed R2, R4, R13, and 10-file simulation (422 property mapping not found).
+  - Mutation B (exact candidate unconditionally wins): failed R5, R6, and atomic collision rejection.
+  - Mutation C (loose integer conversion): failed R8 (`s:2:01`), R9 (`s:2:+1`), R10.
+  - Mutation D (leak `s:0:` to `n:0`): failed R12.
+  - Mutation E (resolver drift between chunk and mutate): failed direct mutate M1–M3.
+- All 11 targeted probes passed; 56 Vitest files (521 tests) passed; `verify:all` 168 suites passed, 0 failed.
+

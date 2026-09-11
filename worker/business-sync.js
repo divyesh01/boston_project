@@ -103,24 +103,102 @@ function isGlobalPropertyKey(key) { return key === GLOBAL_PROPERTY_KEY; }
 const GLOBAL_STAGING_TARGET_ID = "__account_global__";
 
 /**
+ * Strict typed alternate key helper for unambiguous numeric <-> string conversions.
+ *
+ * Case 1: n:<safe integer>
+ *   returns s:<declared length>:<payload>
+ *   Example: n:1 -> s:1:1
+ *   Example: n:0 -> s:1:0 (distinguished from account-global s:0:)
+ *
+ * Case 2: s:<declared length>:<payload>
+ *   returns n:<safe integer> only if payload is canonical decimal integer:
+ *   - typedRecordKey(payload) === key (canonical format check)
+ *   - /^-?\d+$/.test(payload)
+ *   - Number.isSafeInteger(Number(payload)) && !Object.is(Number(payload), -0)
+ *   - String(Number(payload)) === payload (no leading zeros like "01", no "+1", no "1.0", no "1e0")
+ *   Example: s:1:1 -> n:1
+ *   Example: s:1:0 -> n:0
+ *
+ * Malformed, non-canonical, or non-integer representations return null:
+ *   - "01", "+1", "1.0", "1e0", "-0", " 1", unsafe integers
+ *   - GLOBAL_PROPERTY_KEY "s:0:" returns null (never aliases n:0)
+ */
+export function numericStringAlternateTypedKey(key) {
+  if (typeof key !== "string" || !key) return null;
+  if (isGlobalPropertyKey(key)) return null;
+
+  if (key.startsWith("n:")) {
+    const numPart = key.slice(2);
+    if (!/^-?\d+$/.test(numPart)) return null;
+    const num = Number(numPart);
+    if (!Number.isSafeInteger(num) || Object.is(num, -0)) return null;
+    if (String(num) !== numPart) return null;
+    try {
+      return typedRecordKey(numPart);
+    } catch {
+      return null;
+    }
+  }
+
+  if (key.startsWith("s:")) {
+    const colonIdx = key.indexOf(":", 2);
+    if (colonIdx === -1) return null;
+    const lenStr = key.slice(2, colonIdx);
+    if (!/^\d+$/.test(lenStr)) return null;
+    const expectedLen = Number(lenStr);
+    const payload = key.slice(colonIdx + 1);
+    if (payload.length !== expectedLen) return null;
+
+    let canonicalCheck = null;
+    try {
+      canonicalCheck = typedRecordKey(payload);
+    } catch {
+      return null;
+    }
+    if (canonicalCheck !== key) return null;
+
+    if (!/^-?\d+$/.test(payload)) return null;
+    const num = Number(payload);
+    if (!Number.isSafeInteger(num) || Object.is(num, -0)) return null;
+    if (String(num) !== payload) return null;
+
+    try {
+      return typedRecordKey(num);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Resolves an incoming property_key against the generation's authoritative business_property_map.
  * Candidates are collected from:
- *   1. Legacy property_key match: map.property_key === incomingPropertyKey
- *   2. Canonical server_property_id match: typedRecordKey(String(map.server_property_id)) === incomingPropertyKey
+ *   A. Exact historical property_key match: String(map.property_key) === incomingPropertyKey
+ *   B. Canonical server_property_id match: typedRecordKey(String(map.server_property_id)) === incomingPropertyKey
+ *   C. Unambiguous numeric/string historical property key equivalent:
+ *      incomingAlternate !== null && String(map.property_key) === incomingAlternate
  *
- * If 0 candidates: throws 422 "property mapping not found"
- * If >1 candidates: throws 422 "ambiguous property identity" { code: "ambiguous_property_identity" }
- * If 1 candidate: returns canonical server_property_id string
+ * Candidate set deduplication: by canonical server_property_id.
+ *
+ * If 0 distinct candidates: throws 422 "property mapping not found"
+ * If >1 distinct candidates: throws 422 "ambiguous property identity" { code: "ambiguous_property_identity" }
+ * If 1 distinct candidate: returns canonical server_property_id string
  */
 export function resolvePropertyKeyFromMappings(mappings, incomingPropertyKey) {
   const keyStr = String(incomingPropertyKey || "");
   if (!keyStr) throw new SyncRequestError("property_key is required", 422);
   const candidates = new Set();
+  const incomingAlternate = numericStringAlternateTypedKey(keyStr);
+
   for (const row of mappings) {
     const serverId = String(row.server_property_id);
+    // Candidate A: exact historical map key
     if (String(row.property_key) === keyStr) {
       candidates.add(serverId);
     }
+    // Candidate B: typed canonical server property id
     let canonicalKey = null;
     try {
       canonicalKey = typedRecordKey(serverId);
@@ -130,7 +208,12 @@ export function resolvePropertyKeyFromMappings(mappings, incomingPropertyKey) {
     if (canonicalKey !== null && canonicalKey === keyStr) {
       candidates.add(serverId);
     }
+    // Candidate C: unambiguous numeric <-> string alternate historical key
+    if (incomingAlternate !== null && String(row.property_key) === incomingAlternate) {
+      candidates.add(serverId);
+    }
   }
+
   if (candidates.size === 0) {
     throw new SyncRequestError("property mapping not found", 422);
   }

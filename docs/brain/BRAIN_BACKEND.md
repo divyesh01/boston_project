@@ -672,6 +672,6 @@ Primary gates: `scripts/probe-cross-browser-sync-e2e.mjs`, `scripts/probe-gm-pro
   - The $100\,000$ D1 row budget is crossed between $M=7918$ (73,719 rows, under budget in isolation) and $M=17000$ (158,249 rows, EXCEEDS flag).
   - Session Read: 0 writes within 15-minute window; 1 write after window expiry.
 
-Primary gates: `scripts/probe-d1-write-budget.mjs` (4 assertions validating write bounds and session hysteresis), `scripts/probe-realtime-leader.mjs`, `scripts/probe-worker-business-sync.mjs`, `scripts/probe-business-sync-global-records.mjs`, and `scripts/verify-schema-parity.mjs`.
+Primary gates: `scripts/probe-d1-write-budget.mjs` (11 assertions: write bounds, session hysteresis, and five exact projection values with 100,000 budget checks), `scripts/probe-realtime-leader.mjs`, `scripts/probe-worker-business-sync.mjs`, `scripts/probe-business-sync-global-records.mjs`, and `scripts/verify-schema-parity.mjs`.
 
 

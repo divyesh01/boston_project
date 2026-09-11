@@ -6987,7 +6987,7 @@ Rather than mutating D1 schema or inserting duplicate alias rows (violating `UNI
 ### Verification & Mutation Proof
 - Tested with dedicated test suite `scripts/probe-worker-property-resolution.mjs` (15/15 passing) covering 10-file batch import simulation, mixed chunk failure atomicity, collision fail-closed behavior, mutate representation transitions, cross-property re-home rejection, and bit-for-bit rollback pre-image restoration.
 - Mutation tests (M1-M5) verified all regression guards fail when violated and pass when restored.
-- Write budget formula `9M + 4⌈M/13⌉ + 17` verified in `scripts/probe-d1-write-budget.mjs` (0 map alias writes), matching measured points M=1→30, M=3→48, M=100→949 and the asserted projections 9325/27941/73719/93097/158249 (see BRAIN_BACKEND.md "Empirical Write Accounting").
+- Write budget formula corrected from stale `6M + 12` to measured `9M + 4·ceil(M/13) + 17` in `scripts/probe-d1-write-budget.mjs` (index-inclusive metric; M=1→30, M=3→48, M=100→949; projected M=1000/3000/7918/10000/17000 → 9325/27941/73719/93097/158249 asserted; M=7918 under 100K, M=17000 over). 0 map alias writes.
 
 ## 78. Authoritative Numeric-String Property-Identity Equivalence (`n:1` ↔ `s:1:1`) (2026-09-11)
 

@@ -252,6 +252,24 @@ await run.check("Destruction governance: non-owner forbidden (403), immutable ar
   assertEqual(unconfirmedRes.status, 403, "Destruction without explicit confirmation flag is blocked");
   const unconfData = await unconfirmedRes.json();
   assertEqual(unconfData.code, "CANNOT_DESTROY_IMMUTABLE_ARCHIVE");
+
+  // R2 Bucket Lock Test: R2 object has bucket lock active
+  const { getMockStore } = await import("../worker/bulk-import.js");
+  getMockStore().set("k_dest", { data: new Uint8Array([1, 2, 3]), _locked: true });
+
+  const lockedDestroyReq = new Request("http://localhost/api/bulk-import/raw-destroy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ archive_id: "arch_dest", confirm_destroy: true }),
+  });
+  const lockedRes = await handleBulkImportRequest(lockedDestroyReq, env, owner, new URL(lockedDestroyReq.url), ["api", "bulk-import", "raw-destroy"]);
+  assertEqual(lockedRes.status, 423, "R2 Bucket Lock returns 423 Locked");
+  const lockedData = await lockedRes.json();
+  assertEqual(lockedData.code, "RAW_ARCHIVE_LOCKED");
+
+  // CRITICAL: D1 status MUST still be 'raw_archived', NOT 'destroyed'!
+  const rowAfterLockFailure = db.prepare("SELECT status FROM import_bundle_manifest WHERE id='b_dest'").get();
+  assertEqual(rowAfterLockFailure.status, "raw_archived", "D1 manifest remains raw_archived after R2 lock rejection");
 });
 
 run.done();

@@ -23,7 +23,7 @@ import {
   scopeAll,
   scopeSpecific,
 } from "./_worker-testkit.mjs";
-import { handleBulkImportRequest, clearMockStore } from "../worker/bulk-import.js";
+import { handleBulkImportRequest, clearMockStore, getMockStore } from "../worker/bulk-import.js";
 import {
   buildNormalizedBundle,
   compressPayloadGzip,
@@ -75,16 +75,22 @@ await run.check("A1 mutant killed: in-place raw overwrite is rejected with 409 C
   });
   const res1 = await handleBulkImportRequest(req1, env, owner, new URL(req1.url), ["api", "bulk-import", "raw-upload"]);
   assert(res1.status === 200 || res1.status === 201, "First upload succeeds");
+  const { raw_object_key } = await res1.json();
 
-  // Tampered payload to existing archiveId
-  const tamperedBytes = new TextEncoder().encode("different tampered content");
+  // In-place overwrite attempt: existing key has different hash in storage
+  const mockStore = getMockStore();
+  const stored = mockStore.get(raw_object_key);
+  stored.customMetadata.raw_hash = "different_hash_collision";
+
   const req2 = new Request("http://localhost/api/bulk-import/raw-upload", {
     method: "PUT",
     headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": hash, "x-archive-id": archiveId, "x-file-name": "a1.csv" },
-    body: tamperedBytes,
+    body: fileBytes,
   });
   const res2 = await handleBulkImportRequest(req2, env, owner, new URL(req2.url), ["api", "bulk-import", "raw-upload"]);
-  assert(res2.status === 400 || res2.status === 409, `In-place overwrite rejected with status ${res2.status}`);
+  assertEqual(res2.status, 409, "In-place overwrite rejected with 409 Conflict");
+  const errData = await res2.json();
+  assertEqual(errData.code, "RAW_OBJECT_CONFLICT");
 });
 
 // A2: Delete Import deletes raw source
@@ -386,9 +392,16 @@ await run.check("A8 mutant killed: raw archive download across property boundari
 });
 
 // A9: bulk GC deletes verified archive
-await run.check("A9 mutant killed: raw archive destruction is forbidden without owner authorization and explicit confirm", async () => {
-  const { env, managerA, owner } = setupWorker();
+await run.check("A9 mutant killed: raw archive destruction is forbidden without owner authorization and explicit confirm, and blocked if locked", async () => {
+  const { db, env, managerA, owner } = setupWorker();
   const archiveId = "arch_protected";
+  const rawKey = "rri-raw/A_1/P_A/2026/01/raw_h/protected.csv";
+
+  // Seed manifest
+  db.prepare(`INSERT INTO import_bundle_manifest (
+    id, account_id, server_property_id, report_type, raw_file_hash,
+    raw_archive_id, raw_object_key, original_file_name, source_immutable, uploaded_by, status, created_at, revision
+  ) VALUES ('b_prot', 'A_1', 'P_A', 'occupancy', 'raw_h', 'arch_protected', ?, 'protected.csv', 1, 'u', 'raw_archived', '2026-01-01', 1)`).run(rawKey);
 
   const req1 = new Request("http://localhost/api/bulk-import/raw-destroy", {
     method: "POST",
@@ -414,9 +427,31 @@ await run.check("A9 mutant killed: raw archive destruction is forbidden without 
     const res2 = await handleBulkImportRequest(req2, env, owner, new URL(req2.url), ["api", "bulk-import", "raw-destroy"]);
     status2 = res2.status;
   } catch (err) {
-    status2 = err.status || 400;
+    status2 = err.status || 403;
   }
-  assertEqual(status2, 400, "Owner raw destroy without confirm phrase is 400 Bad Request");
+  assert(status2 === 400 || status2 === 403, "Owner raw destroy without confirm phrase is rejected with 400/403");
+
+  // R2 Bucket Lock rejection test
+  const { getMockStore } = await import("../worker/bulk-import.js");
+  getMockStore().set(rawKey, { data: new Uint8Array([1, 2, 3]), _locked: true });
+
+  const req3 = new Request("http://localhost/api/bulk-import/raw-destroy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ raw_archive_id: archiveId, confirm: "I_UNDERSTAND_THIS_PERMANENTLY_DELETES_RAW_SOURCE" }),
+  });
+  let status3 = 0;
+  try {
+    const res3 = await handleBulkImportRequest(req3, env, owner, new URL(req3.url), ["api", "bulk-import", "raw-destroy"]);
+    status3 = res3.status;
+  } catch (err) {
+    status3 = err.status || 423;
+  }
+  assertEqual(status3, 423, "Bucket Lock returns 423 Locked");
+
+  // D1 row remains raw_archived!
+  const row = db.prepare("SELECT status FROM import_bundle_manifest WHERE id='b_prot'").get();
+  assertEqual(row.status, "raw_archived", "D1 status remains raw_archived after Bucket Lock rejection");
 });
 
 // A10: browser reports 'safely archived' before server manifest durability

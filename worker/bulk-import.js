@@ -157,9 +157,13 @@ async function checkRawDuplicate(request, env, scope) {
   });
 }
 
+const MAX_RAW_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB max per raw file
+const MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024; // 25 MB max per compressed bundle
+
 /**
  * Upload raw original file directly into R2 raw archive.
- * Write-once immutability: returns 200 if identical object exists; returns 409 if conflict.
+ * Streams request.body directly to R2 with native checksum verification and write-once immutability.
+ * Enforces 50 MB maximum file size limit to protect Worker memory.
  */
 async function uploadRawArchive(request, env, scope) {
   requireImportRole(scope);
@@ -180,18 +184,16 @@ async function uploadRawArchive(request, env, scope) {
     throw new BulkImportError("valid 64-character raw_hash is required", 400, { code: "IMPORT_INVALID_HASH" });
   }
 
-  const arrayBuffer = await request.arrayBuffer();
-  if (!arrayBuffer || arrayBuffer.byteLength === 0) {
-    throw new BulkImportError("raw file payload cannot be empty", 400, { code: "IMPORT_EMPTY_PAYLOAD" });
-  }
-
-  const computedHash = (await calculateSha256(arrayBuffer)).toLowerCase();
-  if (computedHash !== rawHash) {
-    throw new BulkImportError(`raw payload checksum mismatch: expected ${rawHash}, computed ${computedHash}`, 400, {
-      code: "RAW_HASH_MISMATCH",
-      expected: rawHash,
-      computed: computedHash,
-    });
+  // Memory protection: reject oversized payloads before buffering
+  const contentLengthHeader = request.headers.get("content-length");
+  if (contentLengthHeader) {
+    const cl = Number(contentLengthHeader);
+    if (cl > MAX_RAW_FILE_SIZE_BYTES) {
+      throw new BulkImportError(`file exceeds maximum allowed size of 50 MB (${cl} bytes)`, 413, {
+        code: "PAYLOAD_TOO_LARGE",
+        maxBytes: MAX_RAW_FILE_SIZE_BYTES,
+      });
+    }
   }
 
   const { yyyy, mm } = getR2DatePrefix(reportDate);
@@ -231,39 +233,66 @@ async function uploadRawArchive(request, env, scope) {
       }
     }
 
-    await rawStore.put(rawObjectKey, arrayBuffer, {
+    // Direct streaming to R2 with native Cloudflare SHA-256 verification (zero Worker RAM buffering)
+    await rawStore.put(rawObjectKey, request.body, {
       customMetadata,
       httpMetadata: {
         contentType: mimeType,
       },
+      sha256: rawHash,
     });
-  } else {
-    // Mock store fallback
-    if (mockObjectStore.has(rawObjectKey)) {
-      const existing = mockObjectStore.get(rawObjectKey);
-      const existingHash = existing.customMetadata?.raw_hash;
-      if (existingHash && existingHash.toLowerCase() === rawHash) {
-        return Response.json({
-          ok: true,
-          status: "already_archived",
-          raw_object_key: rawObjectKey,
-          raw_archive_id: rawArchiveId,
-          raw_hash: rawHash,
-          byte_length: existing.data?.byteLength || arrayBuffer.byteLength,
-        }, { status: 200 });
-      } else {
-        throw new BulkImportError("raw object key exists with different hash", 409, { code: "RAW_OBJECT_CONFLICT" });
-      }
-    }
 
-    mockObjectStore.set(rawObjectKey, {
-      data: arrayBuffer,
-      customMetadata,
-      httpMetadata: {
-        contentType: mimeType,
-      },
+    return Response.json({
+      ok: true,
+      status: "archived",
+      raw_object_key: rawObjectKey,
+      raw_archive_id: rawArchiveId,
+      raw_hash: rawHash,
+    }, { status: 201 });
+  }
+
+  // Fallback for mock object store (local tests)
+  if (mockObjectStore.has(rawObjectKey)) {
+    const existing = mockObjectStore.get(rawObjectKey);
+    const existingHash = existing.customMetadata?.raw_hash;
+    if (existingHash && existingHash.toLowerCase() === rawHash) {
+      return Response.json({
+        ok: true,
+        status: "already_archived",
+        raw_object_key: rawObjectKey,
+        raw_archive_id: rawArchiveId,
+        raw_hash: rawHash,
+        byte_length: existing.data?.byteLength || 0,
+      }, { status: 200 });
+    } else {
+      throw new BulkImportError("raw object key exists with different hash", 409, { code: "RAW_OBJECT_CONFLICT" });
+    }
+  }
+
+  const arrayBuffer = await request.arrayBuffer();
+  if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+    throw new BulkImportError("raw file payload cannot be empty", 400, { code: "IMPORT_EMPTY_PAYLOAD" });
+  }
+  if (arrayBuffer.byteLength > MAX_RAW_FILE_SIZE_BYTES) {
+    throw new BulkImportError(`file exceeds maximum allowed size of 50 MB`, 413, { code: "PAYLOAD_TOO_LARGE" });
+  }
+
+  const computedHash = (await calculateSha256(arrayBuffer)).toLowerCase();
+  if (computedHash !== rawHash) {
+    throw new BulkImportError(`raw payload checksum mismatch: expected ${rawHash}, computed ${computedHash}`, 400, {
+      code: "RAW_HASH_MISMATCH",
+      expected: rawHash,
+      computed: computedHash,
     });
   }
+
+  mockObjectStore.set(rawObjectKey, {
+    data: arrayBuffer,
+    customMetadata,
+    httpMetadata: {
+      contentType: mimeType,
+    },
+  });
 
   return Response.json({
     ok: true,
@@ -951,12 +980,14 @@ async function deleteBundle(request, env, scope) {
 }
 
 /**
- * Destroy raw archive (Owner only, gated by source_immutable policy).
+ * Destroy raw archive (Owner only, gated by source_immutable policy and Cloudflare R2 Bucket Locks).
+ * Attempts R2 deletion FIRST; if R2 deletion fails (e.g. object is protected by a Cloudflare R2 Bucket Lock rule),
+ * D1 remains intact and throws RAW_ARCHIVE_LOCKED.
  */
 async function destroyRawArchive(request, env, scope) {
   requireOwnerRole(scope);
   const body = await readJsonBody(request);
-  const archiveId = String(body.archive_id || body.bundle_id || "");
+  const archiveId = String(body.archive_id || body.bundle_id || body.raw_archive_id || "");
 
   if (!archiveId) throw new BulkImportError("archive_id is required", 400, { code: "IMPORT_ARCHIVE_REQUIRED" });
 
@@ -967,25 +998,42 @@ async function destroyRawArchive(request, env, scope) {
   );
   if (!manifest) throw new BulkImportError("archive not found", 404, { code: "RAW_ARCHIVE_NOT_FOUND" });
 
-  if (manifest.source_immutable === 1 && body.confirm_destroy !== true) {
-    throw new BulkImportError("cannot destroy immutable raw archive without explicit confirm_destroy flag", 403, {
+  if (manifest.source_immutable === 1 && body.confirm_destroy !== true && body.confirm !== "I_UNDERSTAND_THIS_PERMANENTLY_DELETES_RAW_SOURCE") {
+    throw new BulkImportError("cannot destroy immutable raw archive without explicit confirmation flag", 403, {
       code: "CANNOT_DESTROY_IMMUTABLE_ARCHIVE",
     });
   }
 
+  // ATTEMPT R2 DELETION FIRST!
+  // If R2 rejects deletion (e.g. Cloudflare R2 Bucket Lock retention rule is active),
+  // D1 MUST remain archived and return RAW_ARCHIVE_LOCKED.
+  const { rawStore } = getStores(env);
+  if (manifest.raw_object_key) {
+    if (rawStore && typeof rawStore.delete === "function") {
+      try {
+        await rawStore.delete(manifest.raw_object_key);
+      } catch (err) {
+        throw new BulkImportError(
+          `cannot destroy raw archive: R2 storage object is locked or protected by bucket retention policy (${err?.message || "locked by bucket retention policy"})`,
+          423,
+          { code: "RAW_ARCHIVE_LOCKED", details: String(err?.message || err) }
+        );
+      }
+    } else {
+      // Mock store
+      const stored = mockObjectStore.get(manifest.raw_object_key);
+      if (stored?._locked) {
+        throw new BulkImportError("cannot destroy raw archive: R2 storage object is locked or protected by bucket retention policy", 423, { code: "RAW_ARCHIVE_LOCKED" });
+      }
+      mockObjectStore.delete(manifest.raw_object_key);
+    }
+  }
+
+  // ONLY after R2 deletion succeeds, update D1 manifest
   const now = new Date().toISOString();
   await env.DB.prepare(
     "UPDATE import_bundle_manifest SET status = 'destroyed', archive_status = 'destroyed', deleted_at = ? WHERE account_id = ? AND id = ?"
   ).bind(now, scope.accountId, manifest.id).run();
-
-  const { rawStore } = getStores(env);
-  if (manifest.raw_object_key) {
-    if (rawStore && typeof rawStore.delete === "function") {
-      try { await rawStore.delete(manifest.raw_object_key); } catch {}
-    } else {
-      mockObjectStore.delete(manifest.raw_object_key);
-    }
-  }
 
   return Response.json({
     ok: true,

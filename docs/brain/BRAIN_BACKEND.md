@@ -737,6 +737,9 @@ Primary gates: `scripts/probe-d1-quota-auth-failure.mjs`, `scripts/probe-d1-quot
   - **Stage 1 (One-Shot Archival)**: When the user selects 50, 100, or more HotelKey files, the browser hashes each file and streams the untouched original directly to Cloudflare R2 (`PUT /api/bulk-import/raw-upload`), creating a `raw_archived` record in D1 (`POST /api/bulk-import/raw-archive`).
   - **Stage 2 (Progressive Processing)**: Files are processed progressively (parsed, normalized, activated).
   - **PC Loss / Network Interruption Resumption**: If the browser tab closes, crashes, or the computer loses power during processing, **the user never has to re-select or re-upload files**. A fresh browser session (Browser B) discovers all pending archives (`GET /api/bulk-import/pending`), fetches the raw payload directly from R2 (`GET /api/bulk-import/raw/:id`), and resumes processing with **0 local files re-uploaded**.
+- **Worker Memory Protection & True R2 Streaming**:
+  - Enforces `MAX_RAW_FILE_SIZE_BYTES = 50 * 1024 * 1024` (50 MB) and `MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024` (25 MB compressed) to prevent exceeding the Worker 128 MB RAM ceiling.
+  - Streams `request.body` directly to `rawStore.put(rawObjectKey, request.body, { customMetadata, httpMetadata, sha256: rawHash })` with native Cloudflare R2 SHA-256 validation.
 - **Write-Once Immutability & Tamper Resistance**:
   - Raw objects are content-addressed by SHA-256 hash.
   - Re-uploading the exact same bytes returns `200 OK` (idempotent no-op).
@@ -747,18 +750,28 @@ Primary gates: `scripts/probe-d1-quota-auth-failure.mjs`, `scripts/probe-d1-quot
   - Both original raw files (v1 and v2) remain permanently in R2.
   - D1 records authoritative bidirectional lineage pointers (`supersedes_bundle_id` and `superseded_by_bundle_id`).
   - Client hydration automatically renders active corrected figures while evicting obsolete rows from Dexie.
-- **Strict Delete Semantics**:
+- **Strict Delete Semantics & R2 Bucket Lock Governance**:
   - "Remove from Analytics" deactivates the normalized analytics bundle in D1 and evicts local Dexie rows, but **NEVER touches the raw archive in R2**.
-  - Raw source destruction is restricted to the repository owner, requires explicit confirmation, and respects bucket-level immutability locks.
+  - Cloudflare R2 Bucket Locks: Supports prefix retention rules (`rri-raw/*`) for fixed durations or indefinitely. Unlike AWS Compliance WORM, Cloudflare indefinite bucket lock rules can later be removed by an authorized account operator, providing safe governance without operational risk.
+  - `POST /api/bulk-import/raw-destroy` executes R2 deletion **FIRST**. If R2 rejects deletion due to an active Bucket Lock, D1 status remains `raw_archived` and the endpoint returns HTTP 423 `RAW_ARCHIVE_LOCKED`. D1 is updated to `destroyed` only after R2 confirms physical deletion.
 - **Bit-for-Bit SHA-256 Parity & Download Original**:
   - Every imported bundle in the UI features a "Download Original" button.
   - Downloads the original binary stream from R2 with identical byte length and SHA-256 checksum across CSV, XLSX, and XLS formats.
+- **Indexed D1 `rows_written` Metering**:
+  - Cloudflare D1 meters writes as: `table_rows_modified + sum(index_entries_modified)`.
+  - **Stage 1 (Raw Archival)**: 1 table row + 5 index entries (PK + `idx_bundle_raw_hash` + `idx_bundle_sync_revision` + `idx_bundle_property_type` + `idx_bundle_pending_processing`) = **6 metered writes**. (Partial indexes with `WHERE status = 'active'` consume 0 writes).
+  - **Stage 2 (Activation)**: Manifest update (1 table + 8 index = 9) + sync state update (1 table + 0 index = 1) + business change event (1 table + 3 index = 4) = **14 metered writes**.
+  - **Grand Total per File**: **20 metered `rows_written`** (compared to ~220,000 metered writes in the previous architecture, an **11,000× reduction**).
+  - **Daily Free Tier Capacity (80k budget)**: **4,000 entire files per day**.
+  - **Scaling**: Strictly $O(\text{files})$, completely row-invariant ($O(1)$ w.r.t row count).
 - **Primary Probes & Gates**:
   - `scripts/probe-bulk-import-archive-resume.mjs`
   - `scripts/probe-bulk-import-hash-parity.mjs`
   - `scripts/probe-bulk-import-immutable-source.mjs`
   - `scripts/probe-bulk-import-supersede-lineage.mjs`
   - `scripts/probe-bulk-import-archive-mutations.mjs`
+  - `scripts/probe-bulk-import-indexed-d1-writes.mjs`
+
 
 
 

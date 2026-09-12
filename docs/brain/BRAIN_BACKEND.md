@@ -879,3 +879,15 @@ row resurrection, then proved rows/history stay removed and cursors stay current
 Memory at maximum payload sizes, real cross-browser runtime, remote D1 migration
 and rollback, R2 lock error shapes and metered writes remain canary requirements.
 This continuation was completed directly by Codex under the owner's solo instruction.
+
+## Bulk import R2 lock recognition & test hardening — 2026-09-12
+
+Raw archive deletion (`destroyRawArchive` in `worker/bulk-import.js`) recognizes
+Cloudflare R2's native bucket lock policy error string terminating in numeric code
+`(10069)` (e.g. `delete: Object is protected by bucket lock policy. (10069)`), returning
+HTTP 423 `RAW_ARCHIVE_LOCKED`. Generic R2 operational failures (such as `(10043)`) stay
+503 `RAW_DESTRUCTION_PENDING`.
+Regression probes in `scripts/probe-bulk-import-integrity.mjs` explicitly verify
+`caughtError.code === 'IMPORT_REPLACEMENT_REQUIRED'` on concurrent overlapping commits
+and track `olderPromise` execution to completion without swallowing rejections.
+

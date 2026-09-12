@@ -124,7 +124,11 @@ await run.check('Same-source concurrent retries and cross-property lineage fail 
 await run.check('Generic R2 deletion failure stays retryable rather than labeled bucket lock', async () => {
   await setup(); const result = await executeBulkImport(scan(),meta('storage-error'));
   const originalDelete = env.RAW_ARCHIVE.delete.bind(env.RAW_ARCHIVE);
-  for (const message of ['Network unavailable','Service could not inspect ObjectLockedByBucketPolicy metadata']) {
+  for (const message of [
+    'Network unavailable',
+    'Service could not inspect ObjectLockedByBucketPolicy metadata',
+    'delete: arbitrary service failure (10043)'
+  ]) {
     env.RAW_ARCHIVE.delete = async () => { throw new Error(message); };
     const response = await post('raw-destroy',{archive_id:result.bundle_id,confirm_destroy:true});
     assertEqual(response.status,503); assertEqual((await response.json()).code,'RAW_DESTRUCTION_PENDING');
@@ -210,10 +214,16 @@ await run.check('Overlap re-checked at transaction time; interleaved activate ca
     return stmt;
   };
   armed = true;
-  let rejected = false;
-  try { await executeBulkImport(scan(100, '2026-09-01'), meta('a-overlap-a')); } catch { rejected = true; }
+  let caughtError = null;
+  try {
+    await executeBulkImport(scan(100, '2026-09-01'), meta('a-overlap-a'));
+  } catch (err) {
+    caughtError = err;
+  }
   env.DB.prepare = originalPrepare;
-  assert(rejected, 'A must fail closed against concurrent overlapping B');
+  assert(caughtError, 'A must fail closed against concurrent overlapping B');
+  assertEqual(caughtError.code, 'IMPORT_REPLACEMENT_REQUIRED', 'A must fail with IMPORT_REPLACEMENT_REQUIRED');
+  assert(caughtError.message?.includes('Report overlaps an active import'), 'A error message must indicate overlapping report');
   const active = db.prepare("SELECT * FROM import_bundle_manifest WHERE status='active'").all();
   assertEqual(active.length, 1, 'exactly one active bundle remains');
   assertEqual(active[0].raw_file_hash, await sha256Hex(new TextEncoder().encode('a-overlap-b')), 'B (the overlapping commit) is the surviving active');
@@ -231,6 +241,7 @@ await run.check('R2 retention lock code 10069 / ObjectLockedByBucketPolicy is re
     { factory: () => Object.assign(new Error('bucket policy lock'), { code: 'ObjectLockedByBucketPolicy' }) },
     { factory: () => ({ message: 'ObjectLockedByBucketPolicy: object retained' }) },
     { factory: () => new Error('R2 delete failed: Object locked (10069)') },
+    { factory: () => new Error('delete: Object is protected by bucket lock policy. (10069)') },
   ];
   for (const { factory } of lockCases) {
     await setup(); const result = await executeBulkImport(scan(), meta('lock-code'));
@@ -301,7 +312,11 @@ await run.check('Older all-property hydration cannot resurrect a newer property 
     }
     return response;
   };
-  const older = syncBulkBundles({force:true});
+  let olderResult = null;
+  let olderError = null;
+  const olderPromise = syncBulkBundles({force:true})
+    .then(res => { olderResult = res; return res; })
+    .catch(err => { olderError = err; throw err; });
   try {
     await paused;
     assertEqual((await post('delete',{bundle_id:result.bundle_id})).status,200);
@@ -309,12 +324,14 @@ await run.check('Older all-property hydration cannot resurrect a newer property 
     const newerRevision = await getLastBulkRevision('P_A');
     assertEqual(await localDb.PaymentDay.count(),0);
     release();
-    await older;
+    const olderOutcome = await olderPromise;
+    assert(!olderError, `older hydration must not reject: ${olderError?.message || olderError}`);
+    assert(olderOutcome && typeof olderOutcome === 'object', 'older hydration must complete successfully');
     assertEqual(await localDb.PaymentDay.count(),0,'stale active payload must not resurrect rows');
     assertEqual(await localDb.UploadedReport.count(),0,'stale history must not return');
     assertEqual(await getLastBulkRevision('P_A'),newerRevision);
     assertEqual(await getLastBulkRevision(),newerRevision);
-  } finally { release(); await older.catch(()=>{}); globalThis.fetch = routeFetch; }
+  } finally { release(); globalThis.fetch = routeFetch; }
 });
 await run.check('Real HTTP delivers opaque gzip exactly once', async () => {
   await setup();

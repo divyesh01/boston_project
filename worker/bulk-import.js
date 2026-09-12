@@ -1075,7 +1075,7 @@ async function destroyRawArchive(request, env, scope) {
     const code = String(error?.code ?? '');
     const message = String(error?.message ?? '');
     // Match structured R2 codes or the operation error marker, not generic failures.
-    const locked = code === '10069' || code === 'ObjectLockedByBucketPolicy' || /^(?:ObjectLockedByBucketPolicy(?::|$)|R2 (?:delete|DELETE)(?: operation)? failed:.*\(10069\)\s*$)/.test(message);
+    const locked = code === '10069' || code === 'ObjectLockedByBucketPolicy' || /^ObjectLockedByBucketPolicy(?::|$)/.test(message) || /\(10069\)\s*$/.test(message);
     // Preserve intent: generic errors can be ambiguous about physical deletion.
     throw new BulkImportError(locked ? "raw archive is retention locked" : "raw deletion pending; retry required",
       locked ? 423 : 503, { code: locked ? "RAW_ARCHIVE_LOCKED" : "RAW_DESTRUCTION_PENDING" });

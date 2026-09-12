@@ -38,6 +38,9 @@ import {
 import {
   isBulkImportEligible,
   executeBulkImport,
+  fetchPendingRawArchives,
+  downloadOriginalFile,
+  downloadRawArchiveFromServer,
 } from "@/lib/bulkImportPipeline";
 
 // Per-import undo. Deletes exactly the rows one import created, via the
@@ -47,8 +50,36 @@ import {
 // scoped and reversible by re-importing the file, so a full dialog would be
 // heavier than the action warrants.
 //
-// Imports predating ledger tracking have no recorded ids. Rather than offer a
-// button that always fails, those rows show nothing at all.
+// Download original untouched source file from R2 raw archive
+function DownloadOriginalButton({ upload: u }) {
+  const [downloading, setDownloading] = useState(false);
+  const archiveId = u.raw_archive_id || u.import_id;
+  if (!archiveId) return null;
+
+  const handleDownload = async () => {
+    setDownloading(true);
+    try {
+      await downloadOriginalFile(archiveId, u.file_name);
+    } catch (e) {
+      alert(`Could not download original file: ${e.message}`);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleDownload}
+      disabled={downloading}
+      title="Download exact original file from R2 archive"
+      className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-white/10 px-2.5 py-1 text-xs text-slate-300 transition-colors hover:border-[#00D4FF]/40 hover:text-[#00D4FF] disabled:opacity-40"
+    >
+      {downloading ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" /> : <ArrowDownToLine className="h-3.5 w-3.5 shrink-0" />}
+      Original
+    </button>
+  );
+}
+
 function UndoImportButton({ upload: u, disabled, onDone }) {
   const [confirming, setConfirming] = useState(false);
   const [working, setWorking] = useState(false);
@@ -214,6 +245,9 @@ const STATUS_LABEL = {
   pending: "Queued",
   scanning: "Scanning…",
   ready: "Ready to import",
+  archiving: "Uploading original…",
+  archived: "Original safely archived",
+  processing: "Processing…",
   importing: "Importing…",
   done: "Imported",
   error: "Failed",
@@ -290,6 +324,8 @@ export default function Import() {
   const [rebuilding, setRebuilding] = useState(false);
   const [incompleteImports, setIncompleteImports] = useState([]);
   const [checkingImports, setCheckingImports] = useState(false);
+  const [pendingRawArchives, setPendingRawArchives] = useState([]);
+  const [resumingArchiveId, setResumingArchiveId] = useState(null);
 
   const accessibleProperties = useMemo(
     () => properties.filter((p) => canAccessProperty(p.id)),
@@ -374,16 +410,52 @@ export default function Import() {
     }
   };
 
-  // Automatically check for interrupted sessions when property selection changes
+  // Automatically check for interrupted sessions and pending raw archives when property selection changes
   useEffect(() => {
     if (!propertyId) {
       setIncompleteImports([]);
+      setPendingRawArchives([]);
       return;
     }
     checkIncompleteImports().then((incomplete) => {
       if (incomplete?.length) setIncompleteImports(incomplete);
     });
+    fetchPendingRawArchives(propertyId).then((pending) => {
+      setPendingRawArchives(pending || []);
+    }).catch(() => {});
   }, [propertyId]);
+
+  const handleResumePending = async (pendingItem) => {
+    setResumingArchiveId(pendingItem.raw_archive_id || pendingItem.id);
+    try {
+      const { buffer } = await downloadRawArchiveFromServer(pendingItem.raw_archive_id || pendingItem.id);
+      let csvText = null;
+      if (/\.csv$/i.test(pendingItem.original_file_name)) {
+        csvText = new TextDecoder().decode(buffer);
+      }
+      const scan = await scanReport(pendingItem.report_type, "", {
+        propertyId: pendingItem.server_property_id,
+        propertyName: selectedProperty?.name || "",
+        importId: pendingItem.id,
+        sourceFile: pendingItem.original_file_name,
+        csvText,
+      });
+      await executeBulkImport(scan, {
+        propertyId: pendingItem.server_property_id,
+        propertyName: selectedProperty?.name || "",
+        importId: pendingItem.id,
+        sourceFile: pendingItem.original_file_name,
+        forceImport: true,
+      });
+      const updated = await fetchPendingRawArchives(pendingItem.server_property_id);
+      setPendingRawArchives(updated || []);
+      refetch();
+    } catch (e) {
+      alert(`Resume failed: ${e.message}`);
+    } finally {
+      setResumingArchiveId(null);
+    }
+  };
 
   const handlePropertyChange = (newPid) => {
     if (newPid === propertyId) return;
@@ -751,6 +823,14 @@ export default function Import() {
               sourceFile: item.name,
               forceImport,
               rawBytes,
+              mimeType: item.file?.type || (/\.csv$/i.test(item.name) ? 'text/csv' : 'application/octet-stream'),
+              onStageChange: (stage, msg) => {
+                setQueue((prev) => prev.map((q) => (q.key === item.key ? {
+                  ...q,
+                  status: stage === 'archiving' ? 'archiving' : stage === 'archived' ? 'archived' : stage === 'processing' ? 'processing' : q.status,
+                  stageMessage: msg,
+                } : q)));
+              },
             });
             if (result.duplicate) {
               setQueue((prev) => prev.map((q) => (q.key === item.key ? {
@@ -789,6 +869,7 @@ export default function Import() {
             property_id: effPropertyId,
             property_name: effPropertyName,
             import_id: result.importId || item.importId,
+            raw_archive_id: result.raw_archive_id || result.importId || item.importId,
             source_file: item.name,
             content_hash: item.contentHash || null,
             raw_rows: scanRawRows(item.scan),
@@ -1724,6 +1805,39 @@ export default function Import() {
           </div>
         )}
 
+        {pendingRawArchives.length > 0 && (
+          <div className="mt-4 rounded-xl border border-[#00D4FF]/30 bg-[#00D4FF]/[0.06] px-4 py-3">
+            <div className="flex items-start gap-3">
+              <UploadCloud className="mt-0.5 h-5 w-5 shrink-0 text-[#00D4FF]" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-slate-200">
+                  Found {pendingRawArchives.length} server-archived original file{pendingRawArchives.length === 1 ? "" : "s"} awaiting processing.
+                </p>
+                <p className="text-xs text-slate-400">
+                  These original files are safely stored in the R2 archive. You can resume processing without re-uploading the original file from your device.
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {pendingRawArchives.map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => handleResumePending(p)}
+                      disabled={resumingArchiveId === (p.raw_archive_id || p.id)}
+                      className="flex items-center gap-1.5 rounded-lg border border-[#00D4FF]/40 bg-[#00D4FF]/10 px-2.5 py-1 text-xs text-[#00D4FF] transition-colors hover:bg-[#00D4FF]/20 disabled:opacity-50"
+                    >
+                      {resumingArchiveId === (p.raw_archive_id || p.id) ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-3 w-3" />
+                      )}
+                      Resume {p.original_file_name} ({p.report_type})
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {incompleteImports.length > 0 && (
           <div className="mt-4 rounded-xl border border-[#FFB547]/20 bg-[#FFB547]/[0.06] px-4 py-3">
             <div className="flex items-start gap-3">
@@ -1900,6 +2014,7 @@ export default function Import() {
                   </div>
                   <div className="flex shrink-0 items-center gap-3">
                     <ImportOutcome upload={u} />
+                    <DownloadOriginalButton upload={u} />
                     <UndoImportButton
                       upload={u}
                       disabled={busy || importing || clearing}

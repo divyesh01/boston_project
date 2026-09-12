@@ -94,13 +94,14 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
                     raw_rows: [],
                     import_id: manifest.id,
                     file_hash: manifest.raw_file_hash || '',
+                    raw_archive_id: manifest.raw_archive_id || manifest.id,
                     created_date: manifest.activated_at || manifest.created_at,
                   });
                 }
               });
             }
           }
-        } else if (manifest.status === 'tombstoned') {
+        } else if (manifest.status === 'tombstoned' || manifest.status === 'superseded') {
           // Evict all local rows materialized from this bundle
           const entityCounts = manifest.entity_counts || {};
           const entitiesToEvict = Object.keys(entityCounts).filter((ent) => localDb[ent]);

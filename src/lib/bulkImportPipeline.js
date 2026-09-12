@@ -282,6 +282,171 @@ export async function checkDuplicateServer({ serverPropertyId = '', rawFileHash 
 }
 
 /**
+ * Preflight check if raw file is already archived in R2.
+ */
+export async function checkRawDuplicateServer({ serverPropertyId = '', rawFileHash = '' } = {}) {
+  try {
+    const res = await fetch('/api/bulk-import/raw-check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        server_property_id: serverPropertyId,
+        raw_file_hash: rawFileHash,
+      }),
+    });
+    if (!res.ok) return { exists: false, is_archived: false, is_active: false };
+    return await res.json();
+  } catch {
+    return { exists: false, is_archived: false, is_active: false };
+  }
+}
+
+/**
+ * Upload raw original file directly into R2 raw archive.
+ */
+export async function uploadRawArchiveToServer({
+  serverPropertyId,
+  reportType = 'unknown',
+  rawFileHash,
+  rawArchiveId,
+  originalFileName = 'report.csv',
+  mimeType = 'application/octet-stream',
+  reportDate = null,
+  rawBuffer,
+}) {
+  const headers = {
+    'Content-Type': mimeType,
+    'x-server-property-id': serverPropertyId,
+    'x-report-type': reportType,
+    'x-raw-hash': rawFileHash,
+    'x-archive-id': rawArchiveId,
+    'x-file-name': originalFileName,
+  };
+  if (reportDate) headers['x-report-date'] = reportDate;
+
+  const res = await fetch('/api/bulk-import/raw-upload', {
+    method: 'PUT',
+    headers,
+    body: rawBuffer,
+  });
+
+  if (!res.ok && res.status !== 200) {
+    const body = await res.json().catch(() => ({}));
+    const err = /** @type {Error & { code?: string }} */ (new Error(body.error || `Raw upload failed with status ${res.status}`));
+    err.code = body.code || 'RAW_UPLOAD_FAILED';
+    throw err;
+  }
+  return await res.json();
+}
+
+/**
+ * Record raw file archival in D1 manifest.
+ */
+export async function recordRawArchiveOnServer(metadata) {
+  const res = await fetch('/api/bulk-import/raw-archive', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(metadata),
+  });
+
+  if (!res.ok && res.status !== 200) {
+    const body = await res.json().catch(() => ({}));
+    const err = /** @type {Error & { code?: string }} */ (new Error(body.error || `Raw archive record failed with status ${res.status}`));
+    err.code = body.code || 'RAW_ARCHIVE_RECORD_FAILED';
+    throw err;
+  }
+  return await res.json();
+}
+
+/**
+ * Fetch pending raw archives waiting for processing.
+ */
+export async function fetchPendingRawArchives(serverPropertyId = '') {
+  try {
+    const url = new URL('/api/bulk-import/pending', typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
+    if (serverPropertyId) url.searchParams.set('server_property_id', serverPropertyId);
+    const res = await fetch(url.toString());
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.pending) ? data.pending : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Download exact original raw file from R2 archive.
+ */
+export async function downloadRawArchiveFromServer(archiveId) {
+  const res = await fetch(`/api/bulk-import/raw/${archiveId}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = /** @type {Error & { code?: string }} */ (new Error(body.error || `Download failed with status ${res.status}`));
+    err.code = body.code || 'RAW_DOWNLOAD_FAILED';
+    throw err;
+  }
+  const buffer = await res.arrayBuffer();
+  const rawHash = res.headers.get('x-raw-hash') || '';
+  const rawSize = Number(res.headers.get('x-raw-size') || buffer.byteLength);
+  return { buffer, rawHash, rawSize };
+}
+
+/**
+ * Trigger client browser download for original raw archive.
+ */
+export async function downloadOriginalFile(archiveId, suggestedFileName) {
+  const { buffer, rawHash } = await downloadRawArchiveFromServer(archiveId);
+  const blob = new Blob([buffer]);
+  if (typeof window !== 'undefined' && window.document) {
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = suggestedFileName || 'original_report.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+  }
+  return { ok: true, blob, rawHash };
+}
+
+/**
+ * Lineage supersede on server.
+ */
+export async function supersedeBundleOnServer({ oldBundleId, newBundleId }) {
+  const res = await fetch('/api/bulk-import/supersede', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ old_bundle_id: oldBundleId, new_bundle_id: newBundleId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = /** @type {Error & { code?: string }} */ (new Error(body.error || `Supersede failed with status ${res.status}`));
+    err.code = body.code || 'SUPERSEDE_FAILED';
+    throw err;
+  }
+  return await res.json();
+}
+
+/**
+ * Destroy raw archive on server (Owner only).
+ */
+export async function destroyRawArchiveOnServer({ archiveId, confirmDestroy = false }) {
+  const res = await fetch('/api/bulk-import/raw-destroy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ archive_id: archiveId, confirm_destroy: confirmDestroy }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = /** @type {Error & { code?: string }} */ (new Error(body.error || `Destroy failed with status ${res.status}`));
+    err.code = body.code || 'DESTROY_FAILED';
+    throw err;
+  }
+  return await res.json();
+}
+
+/**
  * Upload compressed bundle to /api/bulk-import/upload
  */
 export async function uploadBundleToServer({
@@ -336,10 +501,20 @@ export async function activateBundleOnServer(metadata) {
 }
 
 /**
- * Main execution entry point for bulk import.
+ * Main execution entry point for decoupled bulk import.
+ * Phase 1: Permanent untouched raw archival in R2 (Write-Once).
+ * Phase 2: Normalized processing and activation in D1.
  */
 export async function executeBulkImport(scanResult, meta = {}) {
-  const { propertyId, propertyName = '', sourceFile = 'report.csv', forceImport = false, rawBytes } = meta;
+  const {
+    propertyId,
+    propertyName = '',
+    sourceFile = 'report.csv',
+    forceImport = false,
+    rawBytes,
+    mimeType = 'application/octet-stream',
+    onStageChange,
+  } = meta;
 
   if (typeof propertyId !== 'string' || propertyId.trim() === '') {
     const err = /** @type {Error & { code?: string }} */ (new Error('Import refused: a non-empty propertyId is required to persist rows (property isolation boundary).'));
@@ -362,30 +537,69 @@ export async function executeBulkImport(scanResult, meta = {}) {
     ? await sha256Hex(rawBytes)
     : (scanResult.fileHash || await sha256Hex(sourceFile + ':' + (scanResult.totalRows || 0)));
 
-  // 2. Fast duplicate preflight check against server D1 manifest (0 writes!)
+  // 2. Fast duplicate check against server D1 manifest (0 writes!)
   if (!forceImport) {
-    const dupCheck = await checkDuplicateServer({
+    const rawCheck = await checkRawDuplicateServer({
       serverPropertyId: propertyId,
       rawFileHash,
     });
-    if (dupCheck.is_duplicate) {
+    if (rawCheck.exists && rawCheck.is_active) {
       return {
         count: 0,
         excluded: scanResult.totalRows || 0,
         duplicate: true,
-        reason: 'Duplicate file — already imported. Use Force Import to re-import.',
+        reason: 'Duplicate file — already imported and active. Use Force Import to re-import.',
       };
     }
   }
 
-  // 3. Build normalized bundle
-  const bundleId = `imp_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  // ============================================================================
+  // PHASE 1: Permanent One-Shot Raw Archival (Write-Once Immutability)
+  // ============================================================================
+  const rawArchiveId = `raw_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  let rawObjectKey = '';
+
+  if (rawBytes) {
+    onStageChange?.('archiving', 'Uploading original to permanent archive…');
+    const uploadRawRes = await uploadRawArchiveToServer({
+      serverPropertyId: propertyId,
+      reportType: scanResult.type || 'unknown',
+      rawFileHash,
+      rawArchiveId,
+      originalFileName: sourceFile,
+      mimeType,
+      rawBuffer: rawBytes,
+    });
+    rawObjectKey = uploadRawRes.raw_object_key;
+
+    // Record raw archive in D1 manifest (1 D1 write)
+    await recordRawArchiveOnServer({
+      raw_archive_id: rawArchiveId,
+      id: rawArchiveId,
+      server_property_id: propertyId,
+      report_type: scanResult.type || 'unknown',
+      raw_file_hash: rawFileHash,
+      raw_object_key: rawObjectKey,
+      original_file_name: sourceFile,
+      file_size: rawBytes.byteLength,
+      mime_type: mimeType,
+    });
+    onStageChange?.('archived', 'Original safely archived');
+  }
+
+  // ============================================================================
+  // PHASE 2: Normalized Analytics Processing
+  // ============================================================================
+  onStageChange?.('processing', 'Processing and normalising records…');
+
+  // Build normalized bundle
+  const bundleId = rawArchiveId || `imp_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
   const bundle = buildNormalizedBundle(scanResult, meta, bundleId);
 
-  // 4. Compute normalized hash
+  // Compute normalized hash
   const normalizedHash = await sha256Hex(bundle.ndjson);
 
-  // 5. Second duplicate preflight check against normalized hash (0 writes!)
+  // Preflight check against normalized hash
   if (!forceImport) {
     const dupCheckNormalized = await checkDuplicateServer({
       serverPropertyId: propertyId,
@@ -401,10 +615,10 @@ export async function executeBulkImport(scanResult, meta = {}) {
     }
   }
 
-  // 6. Gzip compression
+  // Gzip compression
   const compressedBuffer = await compressPayloadGzip(bundle.ndjson);
 
-  // 7. Upload to R2 storage
+  // Upload normalized bundle to R2
   const uploadResult = await uploadBundleToServer({
     serverPropertyId: propertyId,
     reportType: scanResult.type,
@@ -414,7 +628,7 @@ export async function executeBulkImport(scanResult, meta = {}) {
     compressedBuffer,
   });
 
-  // 8. Compact D1 activation (3 writes)
+  // Compact D1 activation (Updates raw_archived row, 3 D1 rows written)
   const activationResult = await activateBundleOnServer({
     id: bundleId,
     server_property_id: propertyId,
@@ -432,7 +646,7 @@ export async function executeBulkImport(scanResult, meta = {}) {
     compressed_size: compressedBuffer.byteLength,
   });
 
-  // 9. Materialize rows directly into local IndexedDB (Dexie)
+  // Materialize rows directly into local IndexedDB (Dexie)
   const entityTables = Object.keys(bundle.recordsByEntity)
     .filter((ent) => localDb[ent])
     .map((ent) => localDb[ent]);
@@ -459,12 +673,15 @@ export async function executeBulkImport(scanResult, meta = {}) {
     });
   }
 
+  onStageChange?.('done', 'Import complete');
+
   return {
     ok: true,
     count: bundle.totalRowCount,
     excluded: (scanResult.totalRows || bundle.totalRowCount) - bundle.totalRowCount,
     importId: bundleId,
     bundle_id: bundleId,
+    raw_archive_id: rawArchiveId,
     revision: activationResult.revision,
     duplicate: false,
   };

@@ -726,5 +726,40 @@ Primary gates: `scripts/probe-d1-quota-auth-failure.mjs`, `scripts/probe-d1-quot
   - `scripts/probe-bulk-import-e2e.mjs`
   - `scripts/probe-bulk-import-mutations.mjs`
 
+## Permanent One-Shot Raw Archive & Immutable Historical Data Plane
+
+- **Core Architecture & Philosophy**:
+  - Historical HotelKey reports are immutable source artifacts. Once a month or period closes, historical source files are never modified.
+  - Implements a two-tier storage topology:
+    1. `rri-raw/<account_id>/<server_property_id>/<yyyy>/<mm>/<raw_file_hash>/<safe_filename>`: Exact, untouched, byte-for-byte binary source archive (CSV, XLSX, XLS).
+    2. `rri-bulk/<account_id>/<server_property_id>/v1/<normalized_hash>.ndjson.gz`: Normalized, versioned, gzip NDJSON analytics bundle.
+- **Two-Stage Decoupled Ingestion Pipeline**:
+  - **Stage 1 (One-Shot Archival)**: When the user selects 50, 100, or more HotelKey files, the browser hashes each file and streams the untouched original directly to Cloudflare R2 (`PUT /api/bulk-import/raw-upload`), creating a `raw_archived` record in D1 (`POST /api/bulk-import/raw-archive`).
+  - **Stage 2 (Progressive Processing)**: Files are processed progressively (parsed, normalized, activated).
+  - **PC Loss / Network Interruption Resumption**: If the browser tab closes, crashes, or the computer loses power during processing, **the user never has to re-select or re-upload files**. A fresh browser session (Browser B) discovers all pending archives (`GET /api/bulk-import/pending`), fetches the raw payload directly from R2 (`GET /api/bulk-import/raw/:id`), and resumes processing with **0 local files re-uploaded**.
+- **Write-Once Immutability & Tamper Resistance**:
+  - Raw objects are content-addressed by SHA-256 hash.
+  - Re-uploading the exact same bytes returns `200 OK` (idempotent no-op).
+  - Attempting to overwrite an existing archive key with different content returns `409 Conflict`.
+  - Checksum verification: declared hash must match byte digest exactly; mismatches return `400 Bad Request`.
+- **Historical Report Correction & Supersede Lineage**:
+  - If an amended or corrected report arrives for a past month, the original raw file is **never overwritten**.
+  - Both original raw files (v1 and v2) remain permanently in R2.
+  - D1 records authoritative bidirectional lineage pointers (`supersedes_bundle_id` and `superseded_by_bundle_id`).
+  - Client hydration automatically renders active corrected figures while evicting obsolete rows from Dexie.
+- **Strict Delete Semantics**:
+  - "Remove from Analytics" deactivates the normalized analytics bundle in D1 and evicts local Dexie rows, but **NEVER touches the raw archive in R2**.
+  - Raw source destruction is restricted to the repository owner, requires explicit confirmation, and respects bucket-level immutability locks.
+- **Bit-for-Bit SHA-256 Parity & Download Original**:
+  - Every imported bundle in the UI features a "Download Original" button.
+  - Downloads the original binary stream from R2 with identical byte length and SHA-256 checksum across CSV, XLSX, and XLS formats.
+- **Primary Probes & Gates**:
+  - `scripts/probe-bulk-import-archive-resume.mjs`
+  - `scripts/probe-bulk-import-hash-parity.mjs`
+  - `scripts/probe-bulk-import-immutable-source.mjs`
+  - `scripts/probe-bulk-import-supersede-lineage.mjs`
+  - `scripts/probe-bulk-import-archive-mutations.mjs`
+
+
 
 

@@ -731,7 +731,7 @@ Primary gates: `scripts/probe-d1-quota-auth-failure.mjs`, `scripts/probe-d1-quot
 - **Core Architecture & Philosophy**:
   - Historical HotelKey reports are immutable source artifacts. Once a month or period closes, historical source files are never modified.
   - Implements a two-tier storage topology:
-    1. `rri-raw/<account_id>/<server_property_id>/<yyyy>/<mm>/<raw_file_hash>/<safe_filename>`: Exact, untouched, byte-for-byte binary source archive (CSV, XLSX, XLS).
+    1. `rri-raw/<account_id>/<server_property_id>/<raw_file_hash>`: Canonical, exact, untouched, byte-for-byte binary source archive (CSV, XLSX, XLS). Identical file bytes with different filenames or report periods resolve to ONE canonical object.
     2. `rri-bulk/<account_id>/<server_property_id>/v1/<normalized_hash>.ndjson.gz`: Normalized, versioned, gzip NDJSON analytics bundle.
 - **Two-Stage Decoupled Ingestion Pipeline**:
   - **Stage 1 (One-Shot Archival)**: When the user selects 50, 100, or more HotelKey files, the browser hashes each file and streams the untouched original directly to Cloudflare R2 (`PUT /api/bulk-import/raw-upload`), creating a `raw_archived` record in D1 (`POST /api/bulk-import/raw-archive`).
@@ -739,7 +739,13 @@ Primary gates: `scripts/probe-d1-quota-auth-failure.mjs`, `scripts/probe-d1-quot
   - **PC Loss / Network Interruption Resumption**: If the browser tab closes, crashes, or the computer loses power during processing, **the user never has to re-select or re-upload files**. A fresh browser session (Browser B) discovers all pending archives (`GET /api/bulk-import/pending`), fetches the raw payload directly from R2 (`GET /api/bulk-import/raw/:id`), and resumes processing with **0 local files re-uploaded**.
 - **Worker Memory Protection & True R2 Streaming**:
   - Enforces `MAX_RAW_FILE_SIZE_BYTES = 50 * 1024 * 1024` (50 MB) and `MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024` (25 MB compressed) to prevent exceeding the Worker 128 MB RAM ceiling.
-  - Streams `request.body` directly to `rawStore.put(rawObjectKey, request.body, { customMetadata, httpMetadata, sha256: rawHash })` with native Cloudflare R2 SHA-256 validation.
+  - Upfront `Content-Length` preflight validation rejects 0-byte bundles (`400 IMPORT_EMPTY_PAYLOAD`) and oversized bundles (`413 PAYLOAD_TOO_LARGE`) before body consumption.
+  - Unknown `Content-Length` bounded streaming: `createBoundedStream` monitors bytes chunk-by-chunk with zero full-body RAM buffering, aborting if bytes exceed 25 MB (413) or if stream terminates empty (400).
+  - Production R2 path streams `request.body` directly to `bulkStore.put` and `rawStore.put` with zero `request.arrayBuffer()` buffering.
+  - Validates SHA-256 natively in R2 via `x-payload-sha256` and `sha256` options.
+- **Concurrent Duplicate & Race Protection**:
+  - **Raw Upload Concurrency**: Browser A and B uploading identical raw bytes simultaneously resolve to 1 canonical R2 object key and 1 logical manifest via atomic `INSERT ... SELECT ... WHERE NOT EXISTS`.
+  - **Normalized Activation Concurrency**: Concurrent activations of the same normalized bundle resolve idempotently to 1 active bundle without duplicate analytics feed events or duplicate D1 rows.
 - **Write-Once Immutability & Tamper Resistance**:
   - Raw objects are content-addressed by SHA-256 hash.
   - Re-uploading the exact same bytes returns `200 OK` (idempotent no-op).
@@ -757,11 +763,9 @@ Primary gates: `scripts/probe-d1-quota-auth-failure.mjs`, `scripts/probe-d1-quot
 - **Bit-for-Bit SHA-256 Parity & Download Original**:
   - Every imported bundle in the UI features a "Download Original" button.
   - Downloads the original binary stream from R2 with identical byte length and SHA-256 checksum across CSV, XLSX, and XLS formats.
-- **Indexed D1 `rows_written` Metering**:
-  - Cloudflare D1 meters writes as: `table_rows_modified + sum(index_entries_modified)`.
-  - **Stage 1 (Raw Archival)**: 1 table row + 5 index entries (PK + `idx_bundle_raw_hash` + `idx_bundle_sync_revision` + `idx_bundle_property_type` + `idx_bundle_pending_processing`) = **6 metered writes**. (Partial indexes with `WHERE status = 'active'` consume 0 writes).
-  - **Stage 2 (Activation)**: Manifest update (1 table + 8 index = 9) + sync state update (1 table + 0 index = 1) + business change event (1 table + 3 index = 4) = **14 metered writes**.
-  - **Grand Total per File**: **20 metered `rows_written`** (compared to ~220,000 metered writes in the previous architecture, an **11,000× reduction**).
+- **D1 `rows_written` Metering & Accounting**:
+  - **Local Index Model**: 1 table row + 5 index entries = **6 metered writes** in Stage 1; manifest update (9) + sync state (1) + change event (4) = **14 metered writes** in Stage 2. Total: **20 metered rows_written/file** (estimated by index model).
+  - **Real Cloudflare D1 Measurement**: Staging D1 database (`boston-project-staging-data`) does not have migration 0005 applied; measurement against real remote D1 requires owner authorization for disposable non-production D1 creation.
   - **Daily Free Tier Capacity (80k budget)**: **4,000 entire files per day**.
   - **Scaling**: Strictly $O(\text{files})$, completely row-invariant ($O(1)$ w.r.t row count).
 - **Primary Probes & Gates**:
@@ -771,6 +775,9 @@ Primary gates: `scripts/probe-d1-quota-auth-failure.mjs`, `scripts/probe-d1-quot
   - `scripts/probe-bulk-import-supersede-lineage.mjs`
   - `scripts/probe-bulk-import-archive-mutations.mjs`
   - `scripts/probe-bulk-import-indexed-d1-writes.mjs`
+  - `scripts/probe-normalized-bundle-streaming.mjs`
+  - `scripts/probe-raw-concurrent-duplicate.mjs`
+  - `scripts/probe-normalized-concurrent-duplicate.mjs`
 
 
 

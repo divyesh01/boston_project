@@ -62,6 +62,39 @@ function sanitizeFilename(name) {
   return String(name || "report.csv").replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
+function createBoundedStream(inputStream, maxBytes, emptyCode = "IMPORT_EMPTY_PAYLOAD") {
+  let bytesRead = 0;
+  const transform = new TransformStream({
+    transform(chunk, controller) {
+      bytesRead += chunk.byteLength;
+      if (bytesRead > maxBytes) {
+        controller.error(
+          new BulkImportError(`payload exceeds maximum allowed size of ${Math.round(maxBytes / (1024 * 1024))} MB`, 413, {
+            code: "PAYLOAD_TOO_LARGE",
+            maxBytes,
+          })
+        );
+        return;
+      }
+      controller.enqueue(chunk);
+    },
+    flush(controller) {
+      if (bytesRead === 0) {
+        controller.error(
+          new BulkImportError("payload cannot be empty", 400, {
+            code: emptyCode,
+          })
+        );
+      }
+    },
+  });
+
+  return {
+    stream: inputStream.pipeThrough(transform),
+    getBytesRead: () => bytesRead,
+  };
+}
+
 function getR2DatePrefix(reportDate) {
   let yyyy = "2026";
   let mm = "01";
@@ -186,8 +219,11 @@ async function uploadRawArchive(request, env, scope) {
 
   // Memory protection: reject oversized payloads before buffering
   const contentLengthHeader = request.headers.get("content-length");
-  if (contentLengthHeader) {
+  if (contentLengthHeader !== null && contentLengthHeader !== "") {
     const cl = Number(contentLengthHeader);
+    if (cl === 0) {
+      throw new BulkImportError("raw file payload cannot be empty", 400, { code: "IMPORT_EMPTY_PAYLOAD" });
+    }
     if (cl > MAX_RAW_FILE_SIZE_BYTES) {
       throw new BulkImportError(`file exceeds maximum allowed size of 50 MB (${cl} bytes)`, 413, {
         code: "PAYLOAD_TOO_LARGE",
@@ -196,9 +232,12 @@ async function uploadRawArchive(request, env, scope) {
     }
   }
 
-  const { yyyy, mm } = getR2DatePrefix(reportDate);
-  const safeName = sanitizeFilename(originalFileName);
-  const rawObjectKey = `rri-raw/${scope.accountId}/${propertyId}/${yyyy}/${mm}/${rawHash}/${safeName}`;
+  if (!request.body) {
+    throw new BulkImportError("raw file payload cannot be empty", 400, { code: "IMPORT_EMPTY_PAYLOAD" });
+  }
+
+  // Canonical raw object key: same account + property + raw SHA-256 resolves to ONE canonical raw object
+  const rawObjectKey = request.headers.get("x-raw-object-key") || url.searchParams.get("raw_object_key") || `rri-raw/${scope.accountId}/${propertyId}/${rawHash}`;
 
   const { rawStore } = getStores(env);
 
@@ -215,32 +254,57 @@ async function uploadRawArchive(request, env, scope) {
   };
 
   // Write-once immutability check
-  if (rawStore && typeof rawStore.head === "function") {
-    const existing = await rawStore.head(rawObjectKey);
-    if (existing) {
-      const existingHash = existing.customMetadata?.raw_hash;
-      if (existingHash && existingHash.toLowerCase() === rawHash) {
-        return Response.json({
-          ok: true,
-          status: "already_archived",
-          raw_object_key: rawObjectKey,
-          raw_archive_id: rawArchiveId,
-          raw_hash: rawHash,
-          byte_length: existing.size,
-        }, { status: 200 });
-      } else {
-        throw new BulkImportError("raw object key exists with different hash", 409, { code: "RAW_OBJECT_CONFLICT" });
+  if (rawStore && typeof rawStore.put === "function") {
+    if (typeof rawStore.head === "function") {
+      const existing = await rawStore.head(rawObjectKey);
+      if (existing) {
+        const existingHash = existing.customMetadata?.raw_hash;
+        if (existingHash && existingHash.toLowerCase() === rawHash) {
+          return Response.json({
+            ok: true,
+            status: "already_archived",
+            raw_object_key: rawObjectKey,
+            raw_archive_id: rawArchiveId,
+            raw_hash: rawHash,
+            byte_length: existing.size,
+          }, { status: 200 });
+        } else {
+          throw new BulkImportError("raw object key exists with different hash", 409, { code: "RAW_OBJECT_CONFLICT" });
+        }
       }
     }
 
-    // Direct streaming to R2 with native Cloudflare SHA-256 verification (zero Worker RAM buffering)
-    await rawStore.put(rawObjectKey, request.body, {
-      customMetadata,
-      httpMetadata: {
-        contentType: mimeType,
-      },
-      sha256: rawHash,
-    });
+    // Direct streaming to R2 with native Cloudflare SHA-256 verification and bounded stream
+    const bounded = createBoundedStream(request.body, MAX_RAW_FILE_SIZE_BYTES, "IMPORT_EMPTY_PAYLOAD");
+    try {
+      await rawStore.put(rawObjectKey, bounded.stream, {
+        customMetadata,
+        httpMetadata: {
+          contentType: mimeType,
+        },
+        sha256: rawHash,
+      });
+    } catch (err) {
+      if (err instanceof BulkImportError) throw err;
+      if (err?.code === "PAYLOAD_TOO_LARGE" || String(err?.message || "").includes("PAYLOAD_TOO_LARGE")) {
+        throw new BulkImportError("file exceeds maximum allowed size of 50 MB", 413, {
+          code: "PAYLOAD_TOO_LARGE",
+          maxBytes: MAX_RAW_FILE_SIZE_BYTES,
+        });
+      }
+      if (err?.code === "IMPORT_EMPTY_PAYLOAD" || String(err?.message || "").includes("IMPORT_EMPTY_PAYLOAD")) {
+        throw new BulkImportError("raw file payload cannot be empty", 400, {
+          code: "IMPORT_EMPTY_PAYLOAD",
+        });
+      }
+      if (String(err?.message || "").toLowerCase().includes("checksum") || String(err?.message || "").includes("sha256")) {
+        throw new BulkImportError(`raw payload checksum mismatch: expected ${rawHash}`, 400, {
+          code: "RAW_HASH_MISMATCH",
+          expected: rawHash,
+        });
+      }
+      throw err;
+    }
 
     return Response.json({
       ok: true,
@@ -248,6 +312,7 @@ async function uploadRawArchive(request, env, scope) {
       raw_object_key: rawObjectKey,
       raw_archive_id: rawArchiveId,
       raw_hash: rawHash,
+      byte_length: bounded.getBytesRead(),
     }, { status: 201 });
   }
 
@@ -269,15 +334,33 @@ async function uploadRawArchive(request, env, scope) {
     }
   }
 
-  const arrayBuffer = await request.arrayBuffer();
-  if (!arrayBuffer || arrayBuffer.byteLength === 0) {
-    throw new BulkImportError("raw file payload cannot be empty", 400, { code: "IMPORT_EMPTY_PAYLOAD" });
-  }
-  if (arrayBuffer.byteLength > MAX_RAW_FILE_SIZE_BYTES) {
-    throw new BulkImportError(`file exceeds maximum allowed size of 50 MB`, 413, { code: "PAYLOAD_TOO_LARGE" });
+  const reader = request.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_RAW_FILE_SIZE_BYTES) {
+        throw new BulkImportError("file exceeds maximum allowed size of 50 MB", 413, { code: "PAYLOAD_TOO_LARGE" });
+      }
+      chunks.push(value);
+    }
   }
 
-  const computedHash = (await calculateSha256(arrayBuffer)).toLowerCase();
+  if (totalBytes === 0) {
+    throw new BulkImportError("raw file payload cannot be empty", 400, { code: "IMPORT_EMPTY_PAYLOAD" });
+  }
+
+  const combined = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  const computedHash = (await calculateSha256(combined.buffer)).toLowerCase();
   if (computedHash !== rawHash) {
     throw new BulkImportError(`raw payload checksum mismatch: expected ${rawHash}, computed ${computedHash}`, 400, {
       code: "RAW_HASH_MISMATCH",
@@ -287,7 +370,7 @@ async function uploadRawArchive(request, env, scope) {
   }
 
   mockObjectStore.set(rawObjectKey, {
-    data: arrayBuffer,
+    data: combined.buffer,
     customMetadata,
     httpMetadata: {
       contentType: mimeType,
@@ -300,7 +383,7 @@ async function uploadRawArchive(request, env, scope) {
     raw_object_key: rawObjectKey,
     raw_archive_id: rawArchiveId,
     raw_hash: rawHash,
-    byte_length: arrayBuffer.byteLength,
+    byte_length: totalBytes,
   }, { status: 201 });
 }
 
@@ -362,21 +445,44 @@ async function recordRawArchive(request, env, scope) {
       processing_status, schema_version, parser_version, row_count, entity_counts_json,
       min_date, max_date, original_file_name, file_size, compressed_size,
       uploaded_by, source_immutable, attempt_count, status, created_at, archived_at, revision
-    ) VALUES (
-      ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, 'archived',
-      'pending', 1, 1, 0, '{}',
-      ?, ?, ?, ?, 0,
-      ?, 1, 0, 'raw_archived', ?, ?, 0
+    )
+    SELECT ?, ?, ?, ?, ?,
+           ?, ?, ?, ?, 'archived',
+           'pending', 1, 1, 0, '{}',
+           ?, ?, ?, ?, 0,
+           ?, 1, 0, 'raw_archived', ?, ?, 0
+    WHERE NOT EXISTS (
+      SELECT 1 FROM import_bundle_manifest
+       WHERE account_id = ? AND server_property_id = ? AND raw_file_hash = ? AND status NOT IN ('tombstoned', 'destroyed')
     )`
   ).bind(
     bundleId, scope.accountId, propertyId, reportType, rawHash,
     rawArchiveId, rawObjectKey, fileSize, mimeType,
     minDate, maxDate, originalFileName, fileSize,
-    String(scope.user?.id || ""), now, now
+    String(scope.user?.id || ""), now, now,
+    scope.accountId, propertyId, rawHash
   );
 
-  await statement.run();
+  const res = await statement.run();
+  if (res?.meta?.changes === 0 || res?.changes === 0) {
+    const winner = await queryFirst(
+      env,
+      `SELECT id, status, archive_status, processing_status, raw_object_key
+         FROM import_bundle_manifest
+        WHERE account_id = ? AND server_property_id = ? AND raw_file_hash = ? AND status NOT IN ('tombstoned', 'destroyed')`,
+      [scope.accountId, propertyId, rawHash]
+    );
+    if (winner) {
+      return Response.json({
+        ok: true,
+        status: "already_recorded",
+        bundle_id: winner.id,
+        archive_status: winner.archive_status || "archived",
+        processing_status: winner.processing_status || "pending",
+        raw_object_key: winner.raw_object_key,
+      }, { status: 200 });
+    }
+  }
 
   return Response.json({
     ok: true,
@@ -495,6 +601,7 @@ async function uploadBundle(request, env, scope) {
   const rawHash = request.headers.get("x-raw-hash") || url.searchParams.get("raw_hash") || "";
   const normalizedHash = request.headers.get("x-normalized-hash") || url.searchParams.get("normalized_hash") || "";
   const rowCount = Number(request.headers.get("x-row-count") || url.searchParams.get("row_count") || 0);
+  const payloadSha256 = request.headers.get("x-payload-sha256") || request.headers.get("x-content-sha256") || null;
 
   if (!propertyId) throw new BulkImportError("x-server-property-id is required", 400, { code: "IMPORT_PROPERTY_REQUIRED" });
   assertPropertyInScope(scope, propertyId);
@@ -503,12 +610,26 @@ async function uploadBundle(request, env, scope) {
     throw new BulkImportError("valid 64-character normalized_hash is required", 400, { code: "IMPORT_INVALID_HASH" });
   }
 
-  const objectKey = `rri-bulk/${scope.accountId}/${propertyId}/v1/${normalizedHash}.ndjson.gz`;
+  // Preflight Content-Length inspection
+  const contentLengthHeader = request.headers.get("content-length");
+  if (contentLengthHeader !== null && contentLengthHeader !== "") {
+    const cl = Number(contentLengthHeader);
+    if (cl === 0) {
+      throw new BulkImportError("bundle payload cannot be empty", 400, { code: "IMPORT_EMPTY_PAYLOAD" });
+    }
+    if (cl > MAX_BUNDLE_SIZE_BYTES) {
+      throw new BulkImportError(`bundle exceeds maximum allowed size of 25 MB (${cl} bytes)`, 413, {
+        code: "PAYLOAD_TOO_LARGE",
+        maxBytes: MAX_BUNDLE_SIZE_BYTES,
+      });
+    }
+  }
 
-  const arrayBuffer = await request.arrayBuffer();
-  if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+  if (!request.body) {
     throw new BulkImportError("bundle payload cannot be empty", 400, { code: "IMPORT_EMPTY_PAYLOAD" });
   }
+
+  const objectKey = `rri-bulk/${scope.accountId}/${propertyId}/v1/${normalizedHash}.ndjson.gz`;
 
   const customMetadata = {
     account_id: scope.accountId,
@@ -523,30 +644,130 @@ async function uploadBundle(request, env, scope) {
 
   const { bulkStore } = getStores(env);
 
+  // Production R2 streaming path (zero Worker RAM buffering)
   if (bulkStore && typeof bulkStore.put === "function") {
-    await bulkStore.put(objectKey, arrayBuffer, {
+    if (typeof bulkStore.head === "function") {
+      const existing = await bulkStore.head(objectKey);
+      if (existing) {
+        return Response.json({
+          ok: true,
+          status: "already_uploaded",
+          object_key: objectKey,
+          normalized_hash: normalizedHash,
+          byte_length: existing.size,
+        }, { status: 200 });
+      }
+    }
+
+    const bounded = createBoundedStream(request.body, MAX_BUNDLE_SIZE_BYTES, "IMPORT_EMPTY_PAYLOAD");
+    const r2Options = {
       customMetadata,
       httpMetadata: {
         contentType: "application/x-ndjson",
         contentEncoding: "gzip",
       },
-    });
-  } else {
-    mockObjectStore.set(objectKey, {
-      data: arrayBuffer,
-      customMetadata,
-      httpMetadata: {
-        contentType: "application/x-ndjson",
-        contentEncoding: "gzip",
-      },
-    });
+    };
+    if (payloadSha256 && isValidHash(payloadSha256)) {
+      r2Options.sha256 = payloadSha256;
+    }
+
+    try {
+      await bulkStore.put(objectKey, bounded.stream, r2Options);
+    } catch (err) {
+      if (err instanceof BulkImportError) throw err;
+      if (err?.code === "PAYLOAD_TOO_LARGE" || String(err?.message || "").includes("PAYLOAD_TOO_LARGE")) {
+        throw new BulkImportError(`bundle exceeds maximum allowed size of 25 MB`, 413, {
+          code: "PAYLOAD_TOO_LARGE",
+          maxBytes: MAX_BUNDLE_SIZE_BYTES,
+        });
+      }
+      if (err?.code === "IMPORT_EMPTY_PAYLOAD" || String(err?.message || "").includes("IMPORT_EMPTY_PAYLOAD")) {
+        throw new BulkImportError("bundle payload cannot be empty", 400, {
+          code: "IMPORT_EMPTY_PAYLOAD",
+        });
+      }
+      if (String(err?.message || "").toLowerCase().includes("checksum") || String(err?.message || "").includes("sha256")) {
+        throw new BulkImportError(`bundle checksum verification failed`, 400, {
+          code: "BUNDLE_HASH_MISMATCH",
+        });
+      }
+      throw err;
+    }
+
+    return Response.json({
+      ok: true,
+      status: "uploaded",
+      object_key: objectKey,
+      normalized_hash: normalizedHash,
+      byte_length: bounded.getBytesRead(),
+    }, { status: 201 });
   }
+
+  // Fallback for mock object store (local tests)
+  if (mockObjectStore.has(objectKey)) {
+    const existing = mockObjectStore.get(objectKey);
+    return Response.json({
+      ok: true,
+      status: "already_uploaded",
+      object_key: objectKey,
+      normalized_hash: normalizedHash,
+      byte_length: existing.data?.byteLength || 0,
+    }, { status: 200 });
+  }
+
+  const reader = request.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_BUNDLE_SIZE_BYTES) {
+        throw new BulkImportError(`bundle exceeds maximum allowed size of 25 MB`, 413, {
+          code: "PAYLOAD_TOO_LARGE",
+          maxBytes: MAX_BUNDLE_SIZE_BYTES,
+        });
+      }
+      chunks.push(value);
+    }
+  }
+
+  if (totalBytes === 0) {
+    throw new BulkImportError("bundle payload cannot be empty", 400, { code: "IMPORT_EMPTY_PAYLOAD" });
+  }
+
+  const combined = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  if (payloadSha256 && isValidHash(payloadSha256)) {
+    const computed = await calculateSha256(combined.buffer);
+    if (computed.toLowerCase() !== payloadSha256.toLowerCase()) {
+      throw new BulkImportError(`bundle checksum verification failed`, 400, {
+        code: "BUNDLE_HASH_MISMATCH",
+      });
+    }
+  }
+
+  mockObjectStore.set(objectKey, {
+    data: combined.buffer,
+    customMetadata,
+    httpMetadata: {
+      contentType: "application/x-ndjson",
+      contentEncoding: "gzip",
+    },
+  });
 
   return Response.json({
     ok: true,
+    status: "uploaded",
     object_key: objectKey,
     normalized_hash: normalizedHash,
-    byte_length: arrayBuffer.byteLength,
+    byte_length: totalBytes,
   }, { status: 201 });
 }
 
@@ -615,7 +836,8 @@ async function activateBundle(request, env, scope) {
       status: "already_active",
       bundle_id: existing.id,
       revision: existing.revision,
-    });
+      superseded_count: 0,
+    }, { status: 200 });
   }
 
   const existingRaw = (existing && (existing.status === "raw_archived" || existing.status === "failed_processing")) ? existing : null;
@@ -731,7 +953,8 @@ async function activateBundle(request, env, scope) {
           status: "already_active",
           bundle_id: active.id,
           revision: active.revision,
-        });
+          superseded_count: 0,
+        }, { status: 200 });
       }
     }
     throw err;

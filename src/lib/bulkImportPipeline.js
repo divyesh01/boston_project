@@ -457,6 +457,7 @@ export async function uploadBundleToServer({
   rowCount,
   compressedBuffer,
 }) {
+  const payloadSha256 = await sha256Hex(compressedBuffer);
   const res = await fetch('/api/bulk-import/upload', {
     method: 'PUT',
     headers: {
@@ -466,6 +467,7 @@ export async function uploadBundleToServer({
       'x-report-type': reportType,
       'x-raw-hash': rawFileHash,
       'x-normalized-hash': normalizedHash,
+      'x-payload-sha256': payloadSha256,
       'x-row-count': String(rowCount),
     },
     body: compressedBuffer,

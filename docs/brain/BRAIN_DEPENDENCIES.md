@@ -13,20 +13,20 @@ graph TD
   Card[Card<br/>(40 imports)]
   decimal[decimal<br/>(36 imports)]
   useGlobalFilters[useGlobalFilters<br/>(29 imports)]
-  securityUtils[securityUtils<br/>(26 imports)]
+  securityUtils[securityUtils<br/>(28 imports)]
   useHotelData[useHotelData<br/>(25 imports)]
   status[status<br/>(24 imports)]
   button[button<br/>(16 imports)]
+  settingsStore[settingsStore<br/>(15 imports)]
   KpiCard[KpiCard<br/>(13 imports)]
+  localDb[localDb<br/>(12 imports)]
   input[input<br/>(12 imports)]
   usetoast[use-toast<br/>(12 imports)]
-  localDb[localDb<br/>(11 imports)]
+  settingsBus[settingsBus<br/>(12 imports)]
   AuthContext[AuthContext<br/>(11 imports)]
+  csvParser[csvParser<br/>(11 imports)]
   label[label<br/>(10 imports)]
-  payrollCalc[payrollCalc<br/>(9 imports)]
-  calculationService[calculationService<br/>(9 imports)]
-  settingsStore[settingsStore<br/>(9 imports)]
-  commissionRates[commissionRates<br/>(8 imports)]
+  realtime[realtime<br/>(9 imports)]
 ```
 
 ### Top Danger Zones
@@ -38,17 +38,17 @@ graph TD
 | Card | 40 | [CRITICAL] |
 | decimal | 36 | [CRITICAL] |
 | useGlobalFilters | 29 | [CRITICAL] |
-| securityUtils | 26 | [CRITICAL] |
+| securityUtils | 28 | [CRITICAL] |
 | useHotelData | 25 | [CRITICAL] |
 | status | 24 | [CRITICAL] |
 | button | 16 | [CRITICAL] |
+| settingsStore | 15 | [HIGH] |
 | KpiCard | 13 | [HIGH] |
+| localDb | 12 | [HIGH] |
 | input | 12 | [HIGH] |
 | use-toast | 12 | [HIGH] |
-| localDb | 11 | [HIGH] |
+| settingsBus | 12 | [HIGH] |
 | AuthContext | 11 | [HIGH] |
+| csvParser | 11 | [HIGH] |
 | label | 10 | [HIGH] |
-| payrollCalc | 9 | [HIGH] |
-| calculationService | 9 | [HIGH] |
-| settingsStore | 9 | [HIGH] |
-| commissionRates | 8 | [HIGH] |
+| realtime | 9 | [HIGH] |

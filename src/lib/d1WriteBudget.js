@@ -36,6 +36,52 @@ export function estimateAuthoritativeTransactionWrites(operationCount) {
 }
 
 /**
+ * Writes consumed during staging (chunk uploads):
+ * 1 row in business_record_staging + 1 in business_staging_target + 1 index write
+ * per operation = 3 writes/op; plus 1 chunk receipt + 1 cursor update per chunk = 2 writes/chunk;
+ * plus 2 startup writes.
+ */
+export function estimateStagingWrites(operationCount, chunkCount) {
+  const o = Math.max(0, Math.floor(Number(operationCount) || 0));
+  const c = Math.max(0, Math.floor(Number(chunkCount) || 0));
+  if (o === 0 && c === 0) return 0;
+  return 3 * o + 2 * c + 2;
+}
+
+/**
+ * Writes consumed during commit action:
+ * Staged deltas applied to active business_record, change feed, rollback journal,
+ * active pointer swap, revision update, and UploadedReport history settlement.
+ */
+export function estimateCommitActionWrites(operationCount, chunkCount) {
+  const o = Math.max(0, Math.floor(Number(operationCount) || 0));
+  const c = Math.max(0, Math.floor(Number(chunkCount) || 0));
+  if (o === 0 && c === 0) return 0;
+  return 6 * o + 2 * c + 15;
+}
+
+/**
+ * Writes consumed during abort/expiry cleanup action:
+ * Deleting staged records, targets, and chunk receipts, plus status update.
+ */
+export function estimateCleanupActionWrites(operationCount, chunkCount) {
+  const o = Math.max(0, Math.floor(Number(operationCount) || 0));
+  const c = Math.max(0, Math.floor(Number(chunkCount) || 0));
+  if (o === 0 && c === 0) return 0;
+  return 3 * o + c + 1;
+}
+
+/**
+ * Total writes consumed by an aborted transaction across both staging and cleanup.
+ */
+export function estimateAbortedTransactionWrites(operationCount, chunkCount) {
+  const o = Math.max(0, Math.floor(Number(operationCount) || 0));
+  const c = Math.max(0, Math.floor(Number(chunkCount) || 0));
+  if (o === 0 && c === 0) return 0;
+  return 6 * o + 3 * c + 3;
+}
+
+/**
  * Returns the current or given date's UTC day key formatted as YYYY-MM-DD.
  * Ensures all budget windows align bit-exact with Cloudflare's 00:00 UTC reset.
  *
@@ -60,6 +106,70 @@ export function getNextUtcMidnight(date = new Date()) {
   const d = date instanceof Date ? date : new Date(date);
   const next = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1, 0, 0, 0, 0));
   return next.toISOString();
+}
+
+/**
+ * Calculates exact consumed writes today and active reserved writes today from
+ * the set of transactions that touched or reserve capacity in today's UTC window.
+ *
+ * @param {Array<object>} transactions
+ * @param {string} [nowIso]
+ * @param {string} [utcDayStart]
+ * @returns {{ consumedWritesToday: number, activeReservedWritesToday: number, totalWritesToday: number, remainingDailyBudget: number, totalCommittedWrites: number, totalPendingReservedWrites: number }}
+ */
+export function calculateDailyWritesFromTransactions(
+  transactions = [],
+  nowIso = new Date().toISOString(),
+  utcDayStart = `${getUtcDayKey()}T00:00:00.000Z`
+) {
+  let consumedWritesToday = 0;
+  let activeReservedWritesToday = 0;
+
+  for (const t of transactions) {
+    const opCount = Math.max(0, Math.floor(Number(t.operation_count) || 0));
+    const chunks = Math.max(1, Math.floor(Number(t.expected_chunks) || 0) || Math.ceil(opCount / CHUNK_SIZE));
+    const createdAt = String(t.created_at || "");
+    const committedAt = String(t.committed_at || "");
+    const rolledBackAt = String(t.rolled_back_at || "");
+    const expiresAt = String(t.expires_at || "");
+    const status = String(t.status || "");
+
+    if (createdAt >= utcDayStart) {
+      // Created today:
+      if (status === "committed") {
+        consumedWritesToday += estimateAuthoritativeTransactionWrites(opCount);
+      } else if (status === "pending" && expiresAt > nowIso) {
+        activeReservedWritesToday += estimateAuthoritativeTransactionWrites(opCount);
+      } else if (status === "aborted" || status === "expired" || status === "conflict") {
+        // Staged writes + cleanup deletes executed today
+        consumedWritesToday += estimateAbortedTransactionWrites(opCount, chunks);
+      }
+    } else {
+      // Created before today:
+      if (committedAt >= utcDayStart) {
+        // Committed today
+        consumedWritesToday += estimateCommitActionWrites(opCount, chunks);
+      } else if (rolledBackAt >= utcDayStart) {
+        // Aborted or expired today -> cleanup deletes hit today's quota!
+        consumedWritesToday += estimateCleanupActionWrites(opCount, chunks);
+      } else if (status === "pending" && expiresAt > nowIso) {
+        // Created yesterday, still pending today -> reserves commit/cleanup writes today
+        activeReservedWritesToday += estimateCommitActionWrites(opCount, chunks);
+      }
+    }
+  }
+
+  const totalWritesToday = consumedWritesToday + activeReservedWritesToday;
+  const remainingDailyBudget = Math.max(0, FREE_PLAN_SAFE_IMPORT_BUDGET - totalWritesToday);
+
+  return {
+    consumedWritesToday,
+    activeReservedWritesToday,
+    totalWritesToday,
+    totalCommittedWrites: consumedWritesToday,
+    totalPendingReservedWrites: activeReservedWritesToday,
+    remainingDailyBudget,
+  };
 }
 
 /**

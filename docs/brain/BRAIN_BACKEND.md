@@ -686,10 +686,13 @@ Primary gates: `scripts/probe-d1-write-budget.mjs` (11 assertions: write bounds,
   - Session verification in `authenticateAppSession` catches quota errors and returns `{ ok: false, serviceUnavailable: true }`, which `worker/index.js` routes as 503 instead of treating as invalid credentials.
 - **Canonical Write Budget & Admission Control**:
   - `worker/budget.js` and `src/lib/d1WriteBudget.js` share the bit-exact calibrated formula:
-    `estimateAuthoritativeTransactionWrites(M) = 9M + 4*ceil(M/13) + 17`.
-  - Cap: Free plan allows 100,000 writes/day; 20,000 writes are reserved exclusively for auth, security, and essential operations; the safe daily import ceiling is 80,000 writes.
-  - Server-side admission control in `startTransaction` checks both individual file projections and daily UTC cumulative reservations, rejecting oversized imports with HTTP 409 `D1_IMPORT_WRITE_BUDGET_EXCEEDED` before creating any staging or transaction rows (0 database writes).
-  - Frontend preflight in `src/pages/Import.jsx` flags oversized files on scan with `⚠ Exceeds write budget` and disables the Import button.
+- **Atomic Database-Level Budget Reservation**:
+  - `startTransaction` enforces the daily write budget inside the `env.DB.batch` transaction using an atomic SQL CHECK constraint on `business_mutation_guard` (`${txId}:budget`).
+  - Simultaneous requests from Browser A and Browser B cannot race: SQLite serializes the batch, the first reservation commits, and any concurrent reservation oversubscribing the 80,000 budget fails `CHECK (ok = 1)`, immediately rolling back the entire batch with 0 staging or dataset rows written.
+- **Irreversible Consumed-Write Accounting & Cross-Midnight Cleanup Attribution**:
+  - Staging writes ($3O + 2C + 2$) and cleanup writes ($3O + C + 1$) remain charged against the daily budget when a transaction is aborted or expires ($6O + 3C + 3$ total).
+  - For transactions created before 00:00 UTC and aborted/expired after 00:00 UTC, the physical cleanup writes ($3O + C + 1 = 9,235$ writes for 3,001 ops) are charged against today's budget because the DELETE statements execute today.
+  - `abortTransaction`, `expirePendingTransactions`, and commit conflict cleanup record `rolled_back_at = now` on `business_staging_transaction` to accurately track cross-day cleanup execution.
 - **Orphan Transaction Recovery**:
   - Added `GET /api/business-sync/transaction/pending` (owner/admin scoped) to discover pending or stranded transactions without requiring the originating browser outbox.
   - Owners can explicitly invoke `POST /api/business-sync/transaction/abort` to safely clean up all staging records, staging targets, and dataset rows while leaving active generations intact.
@@ -697,7 +700,7 @@ Primary gates: `scripts/probe-d1-write-budget.mjs` (11 assertions: write bounds,
   - Default release gate (`verify:all`) is 100% deterministic, offline, and runs without consuming Cloudflare account quota.
   - `probe-worker-auth-remote.mjs` is guarded by `ALLOW_REMOTE_D1_MUTATION_TESTS=true` and explicit test DB allowlists, preventing test runs from draining production account quota.
 
-Primary gates: `scripts/probe-d1-quota-auth-failure.mjs`, `scripts/probe-d1-quota-admission.mjs`, `scripts/probe-orphan-transaction-recovery.mjs`, `scripts/probe-import-write-amplification-breakdown.mjs`, and `scripts/probe-suite-integrity.mjs`.
+Primary gates: `scripts/probe-d1-quota-auth-failure.mjs`, `scripts/probe-d1-quota-admission.mjs`, `scripts/probe-atomic-budget-concurrency.mjs`, `scripts/probe-orphan-transaction-recovery.mjs`, `scripts/probe-import-write-amplification-breakdown.mjs`, and `scripts/probe-suite-integrity.mjs`.
 
 
 

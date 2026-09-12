@@ -3,7 +3,9 @@ import { queryAll, queryFirst } from "./db.js";
 import {
   evaluateImportAdmission,
   getUtcDayKey,
+  getNextUtcMidnight,
   estimateAuthoritativeTransactionWrites,
+  calculateDailyWritesFromTransactions,
   FREE_PLAN_SAFE_IMPORT_BUDGET,
 } from "./budget.js";
 
@@ -648,7 +650,7 @@ async function expirePendingTransactions(env, scope, now) {
         env.DB.prepare("DELETE FROM business_staging_target WHERE account_id=? AND tx_id=?").bind(scope.accountId, row.tx_id),
         env.DB.prepare("DELETE FROM business_mutation_guard WHERE account_id=? AND request_hash=?").bind(scope.accountId, row.request_hash),
         env.DB.prepare("UPDATE business_dataset SET status='aborted' WHERE account_id=? AND generation_id=? AND status='staging'").bind(scope.accountId, row.staging_generation_id),
-        env.DB.prepare("UPDATE business_staging_transaction SET status='expired' WHERE account_id=? AND tx_id=? AND status='pending'").bind(scope.accountId, row.tx_id),
+        env.DB.prepare("UPDATE business_staging_transaction SET status='expired', rolled_back_at=? WHERE account_id=? AND tx_id=? AND status='pending'").bind(now, scope.accountId, row.tx_id),
       ]);
     } catch (error) {
       // The transaction stopped being pending-and-expired while the sweep held a
@@ -684,22 +686,15 @@ async function startTransaction(request, env, scope) {
   }
 
   const utcDayStart = `${getUtcDayKey(nowMs)}T00:00:00.000Z`;
-  const todaysTransactions = await queryAll(
+  const relevantTransactions = await queryAll(
     env,
-    "SELECT tx_id, status, operation_count, expires_at FROM business_staging_transaction WHERE account_id=? AND created_at >= ?",
-    [scope.accountId, utcDayStart]
+    "SELECT tx_id, status, operation_count, next_chunk_index, expected_chunks, created_at, expires_at, committed_at, rolled_back_at FROM business_staging_transaction WHERE account_id=? AND (created_at >= ? OR committed_at >= ? OR rolled_back_at >= ? OR (status='pending' AND expires_at > ?))",
+    [scope.accountId, utcDayStart, utcDayStart, utcDayStart, now]
   );
-  let committedWritesToday = 0;
-  let activeReservedWritesToday = 0;
-  for (const t of (todaysTransactions || [])) {
-    if (t.tx_id === txId) continue;
-    const writes = estimateAuthoritativeTransactionWrites(Number(t.operation_count) || 0);
-    if (t.status === "committed") {
-      committedWritesToday += writes;
-    } else if (t.status === "pending" && String(t.expires_at) > now) {
-      activeReservedWritesToday += writes;
-    }
-  }
+  const otherTxs = (relevantTransactions || []).filter((t) => t.tx_id !== txId);
+  const dailyAccounting = calculateDailyWritesFromTransactions(otherTxs, now, utcDayStart);
+  const committedWritesToday = dailyAccounting.consumedWritesToday;
+  const activeReservedWritesToday = dailyAccounting.activeReservedWritesToday;
 
   const planTier = env.D1_PLAN_TIER || "free";
   const admission = evaluateImportAdmission(operationCount, committedWritesToday, activeReservedWritesToday, planTier);
@@ -712,6 +707,10 @@ async function startTransaction(request, env, scope) {
     });
   }
 
+  const isPaid = String(planTier).toLowerCase() === "paid";
+  const safeLimit = isPaid ? 999_999_999 : FREE_PLAN_SAFE_IMPORT_BUDGET;
+  const projectedWrites = admission.projectedWrites;
+
   const pending = await queryFirst(env, "SELECT COUNT(*) AS count FROM business_staging_transaction WHERE account_id=? AND status='pending' AND expires_at>?", [scope.accountId, now]);
   if (Number(pending?.count || 0) >= MAX_PENDING_TRANSACTIONS) throw new SyncRequestError("pending transaction limit reached", 409);
   const baseline = await queryFirst(env, "SELECT p.active_generation_id,s.revision FROM business_dataset_pointer p JOIN business_sync_state s ON s.account_id=p.account_id WHERE p.account_id=?", [scope.accountId]);
@@ -723,13 +722,42 @@ async function startTransaction(request, env, scope) {
   const manifestJson = canonicalJson({ type: "transaction", tx_id: txId, request_hash: requestHash, expected_chunks: expectedChunks, operation_count: operationCount, base_revision: baseRevision });
   const manifestHash = await sha256(manifestJson);
   const baseCount = await queryFirst(env, "SELECT COUNT(*) AS count FROM business_record WHERE account_id=? AND generation_id=?", [scope.accountId, baseGenerationId]);
+
+  const budgetGuardSql = `INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at)
+SELECT ?,?,?,
+  CASE WHEN (
+    COALESCE((
+      SELECT SUM(
+        CASE
+          WHEN created_at >= ?4 AND status = 'committed' THEN
+            (9 * operation_count + 4 * ((operation_count + 12) / 13) + 17)
+          WHEN created_at >= ?4 AND status = 'pending' AND expires_at > ?5 THEN
+            (9 * operation_count + 4 * ((operation_count + 12) / 13) + 17)
+          WHEN created_at >= ?4 AND status IN ('aborted', 'expired', 'conflict') THEN
+            (6 * (CASE WHEN next_chunk_index * 13 < operation_count THEN next_chunk_index * 13 ELSE operation_count END) + 3 * next_chunk_index + 3)
+          WHEN created_at < ?4 AND committed_at >= ?4 THEN
+            (6 * operation_count + 2 * ((operation_count + 12) / 13) + 15)
+          WHEN created_at < ?4 AND rolled_back_at >= ?4 THEN
+            (3 * (CASE WHEN next_chunk_index * 13 < operation_count THEN next_chunk_index * 13 ELSE operation_count END) + next_chunk_index + 1)
+          WHEN created_at < ?4 AND status = 'pending' AND expires_at > ?5 THEN
+            (6 * operation_count + 2 * ((operation_count + 12) / 13) + 15)
+          ELSE 0
+        END
+      )
+      FROM business_staging_transaction
+      WHERE account_id = ?1 AND tx_id <> ?6
+    ), 0) + ?7 <= ?8
+  ) THEN 1 ELSE 0 END,
+  ?5`;
+
   try {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO business_mutation_guard (account_id,mutation_id,request_hash,ok,created_at) SELECT ?,?,?,CASE WHEN (SELECT COUNT(*) FROM business_staging_transaction WHERE account_id=? AND status='pending' AND expires_at>? AND tx_id<>?) < ? THEN 1 ELSE 0 END,?").bind(scope.accountId, `${txId}:cap`, requestHash, scope.accountId, now, txId, MAX_PENDING_TRANSACTIONS, now),
+      env.DB.prepare(budgetGuardSql).bind(scope.accountId, `${txId}:budget`, requestHash, utcDayStart, now, txId, projectedWrites, safeLimit),
       env.DB.prepare("INSERT INTO business_dataset (account_id,generation_id,status,schema_version,manifest_hash,manifest_json,expected_chunks,expected_records,previous_generation_id,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)").bind(scope.accountId, stagingGenerationId, "staging", 1, manifestHash, manifestJson, expectedChunks, Number(baseCount?.count || 0), baseGenerationId, String(scope.user.id), now),
       env.DB.prepare("INSERT INTO business_property_map (account_id,generation_id,property_key,server_property_id,property_code) SELECT account_id,?,property_key,server_property_id,property_code FROM business_property_map WHERE account_id=? AND generation_id=?").bind(stagingGenerationId, scope.accountId, baseGenerationId),
       env.DB.prepare("INSERT INTO business_staging_transaction (account_id,tx_id,request_hash,base_generation_id,base_revision,staging_generation_id,status,expected_chunks,next_chunk_index,operation_count,created_by,created_at,expires_at) VALUES (?,?,?,?,?,?,'pending',?,0,?,?,?,?)").bind(scope.accountId, txId, requestHash, baseGenerationId, baseRevision, stagingGenerationId, expectedChunks, operationCount, String(scope.user.id), now, expiresAt),
-      env.DB.prepare("DELETE FROM business_mutation_guard WHERE account_id=? AND mutation_id=?").bind(scope.accountId, `${txId}:cap`),
+      env.DB.prepare("DELETE FROM business_mutation_guard WHERE account_id=? AND mutation_id IN (?,?)").bind(scope.accountId, `${txId}:cap`, `${txId}:budget`),
     ]);
   } catch (error) {
     const concurrent = await queryFirst(env, "SELECT * FROM business_staging_transaction WHERE account_id=? AND tx_id=?", [scope.accountId, txId]);
@@ -737,7 +765,22 @@ async function startTransaction(request, env, scope) {
       if (concurrent.request_hash !== requestHash || Number(concurrent.expected_chunks) !== expectedChunks || Number(concurrent.operation_count) !== operationCount) throw error;
       return Response.json({ tx_id: txId, generation_id: concurrent.staging_generation_id, status: concurrent.status, resumed: true });
     }
-    if (isGuardViolation(error)) throw new SyncRequestError("pending transaction limit reached", 409);
+    if (isGuardViolation(error)) {
+      const pendingCheck = await queryFirst(env, "SELECT COUNT(*) AS count FROM business_staging_transaction WHERE account_id=? AND status='pending' AND expires_at>?", [scope.accountId, now]);
+      if (Number(pendingCheck?.count || 0) >= MAX_PENDING_TRANSACTIONS) {
+        throw new SyncRequestError("pending transaction limit reached", 409);
+      }
+      throw new SyncRequestError(
+        `File requires ${projectedWrites.toLocaleString()} database writes, but concurrent reservation exceeded today's safe Free plan import budget. Capacity resets at 00:00 UTC.`,
+        409,
+        {
+          code: "D1_IMPORT_WRITE_BUDGET_EXCEEDED",
+          projected_writes: projectedWrites,
+          remaining_budget: 0,
+          reset_boundary_utc: getNextUtcMidnight(nowMs),
+        }
+      );
+    }
     throw error;
   }
   return Response.json({ tx_id: txId, generation_id: stagingGenerationId, status: "pending", resumed: false }, { status: 201 });
@@ -868,7 +911,7 @@ async function transactionStatus(url, env, scope) {
   if (!/^[A-Za-z0-9_-]{16,128}$/.test(txId)) throw new SyncRequestError("tx_id is invalid", 422);
   const tx = await loadStagingTransaction(env, scope, txId);
   const receipts = await queryFirst(env, "SELECT COALESCE(SUM(record_count),0) AS received_operations FROM business_migration_chunk WHERE account_id=? AND generation_id=?", [scope.accountId, tx.staging_generation_id]);
-  return Response.json({ tx_id: tx.tx_id, status: tx.rolled_back_at ? "rolled_back" : tx.status, base_generation_id: tx.base_generation_id, base_revision: Number(tx.base_revision), staging_generation_id: tx.staging_generation_id, expected_chunks: Number(tx.expected_chunks), received_chunks: Number(tx.next_chunk_index), expected_operations: Number(tx.operation_count), received_operations: Number(receipts?.received_operations || 0), created_at: tx.created_at, expires_at: tx.expires_at, committed_at: tx.committed_at || null, rolled_back_at: tx.rolled_back_at || null });
+  return Response.json({ tx_id: tx.tx_id, status: (tx.status === "committed" && tx.rolled_back_at) ? "rolled_back" : tx.status, base_generation_id: tx.base_generation_id, base_revision: Number(tx.base_revision), staging_generation_id: tx.staging_generation_id, expected_chunks: Number(tx.expected_chunks), received_chunks: Number(tx.next_chunk_index), expected_operations: Number(tx.operation_count), received_operations: Number(receipts?.received_operations || 0), created_at: tx.created_at, expires_at: tx.expires_at, committed_at: tx.committed_at || null, rolled_back_at: tx.rolled_back_at || null });
 }
 
 async function listPendingTransactions(request, env, scope) {
@@ -934,7 +977,7 @@ async function abortTransaction(request, env, scope) {
       env.DB.prepare("DELETE FROM business_staging_target WHERE account_id=? AND tx_id=?").bind(scope.accountId, txId),
       env.DB.prepare("DELETE FROM business_mutation_guard WHERE account_id=? AND request_hash=?").bind(scope.accountId, tx.request_hash),
       env.DB.prepare("UPDATE business_dataset SET status='aborted' WHERE account_id=? AND generation_id=? AND status='staging'").bind(scope.accountId, generationId),
-      env.DB.prepare("UPDATE business_staging_transaction SET status='aborted' WHERE account_id=? AND tx_id=? AND status='pending'").bind(scope.accountId, txId),
+      env.DB.prepare("UPDATE business_staging_transaction SET status='aborted', rolled_back_at=? WHERE account_id=? AND tx_id=? AND status='pending'").bind(now, scope.accountId, txId),
     ]);
   } catch (error) {
     if (!isGuardViolation(error)) throw error;
@@ -1053,7 +1096,7 @@ async function commitTransaction(request, env, scope) {
           env.DB.prepare("DELETE FROM business_staging_target WHERE account_id=? AND tx_id=?").bind(scope.accountId, txId),
           env.DB.prepare("DELETE FROM business_mutation_guard WHERE account_id=? AND request_hash=?").bind(scope.accountId, requestHash),
           env.DB.prepare("UPDATE business_dataset SET status='aborted' WHERE account_id=? AND generation_id=? AND status='staging'").bind(scope.accountId, tx.staging_generation_id),
-          env.DB.prepare("UPDATE business_staging_transaction SET status='conflict' WHERE account_id=? AND tx_id=? AND status='pending'").bind(scope.accountId, txId),
+          env.DB.prepare("UPDATE business_staging_transaction SET status='conflict', rolled_back_at=? WHERE account_id=? AND tx_id=? AND status='pending'").bind(now, scope.accountId, txId),
         ]);
       } catch (cleanupError) {
         if (!isGuardViolation(cleanupError)) throw cleanupError;

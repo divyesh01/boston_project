@@ -779,10 +779,11 @@ Primary gates: `scripts/probe-d1-quota-auth-failure.mjs`, `scripts/probe-d1-quot
   - `scripts/probe-raw-concurrent-duplicate.mjs`
   - `scripts/probe-normalized-concurrent-duplicate.mjs`
   - `scripts/probe-raw-canonical-security.mjs`
-- **Server Canonical Key Enforcement**:
-  - `uploadRawArchive` strictly computes the canonical key `rri-raw/<account_id>/<server_property_id>/<raw_hash>` server-side.
-  - Client attempts to supply `x-raw-object-key` or `raw_object_key` query parameters are ignored/rejected; clients have zero ability to choose or override the R2 raw storage path.
-  - Path traversal and cross-account/cross-property injection attempts fail closed with 403 `SCOPE_DENIED` or 400 `IMPORT_INVALID_HASH`.
+- **Server Canonical Key Enforcement & Dual-Boundary Verification**:
+  - `uploadRawArchive` strictly computes the canonical key `rri-raw/<account_id>/<server_property_id>/<raw_hash>` server-side; client attempts to supply `x-raw-object-key` or `raw_object_key` are disregarded.
+  - `recordRawArchive` NEVER trusts `body.raw_object_key`. It computes the canonical key server-side, executes an R2 `head()` check verifying object existence, `account_id`, `server_property_id`, and `raw_hash` metadata ownership before creating the D1 manifest row.
+  - `downloadRawArchive` enforces a strict scope boundary check (`raw_object_key.startsWith('rri-raw/<account_id>/<property_id>/')`) preventing cross-tenant object confusion.
+  - Path traversal and cross-account/cross-property injection attempts fail closed with 403 `SCOPE_DENIED`, 403 `RAW_OBJECT_SCOPE_MISMATCH`, or 400 `IMPORT_INVALID_HASH`.
 
 
 

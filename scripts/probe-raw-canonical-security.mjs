@@ -381,6 +381,168 @@ await run.check("7. concurrent upload & manifest creation of identical raw bytes
   assertEqual(rows[0].raw_object_key, expectedKey, "Manifest points to canonical raw key");
 });
 
+// 8. recordRawArchive NEVER trusts body.raw_object_key and enforces canonical key in D1
+await run.check("8. recordRawArchive ignores malicious raw_object_key and stores canonical key in D1", async () => {
+  const { db, env, owner } = setupWorker();
+  const fileBytes = new TextEncoder().encode("Date,Rooms,Revenue\n2025-08-08,120,6000\n");
+  const rawHash = await sha256Hex(fileBytes);
+  const canonicalKey = `rri-raw/A_1/P_A/${rawHash}`;
+  const maliciousTargetKey = "rri-raw/victim_account/victim_prop/stolen.csv";
+
+  // First, upload raw file so canonical object exists in R2
+  const upReq = new Request("http://localhost/api/bulk-import/raw-upload", {
+    method: "PUT",
+    headers: {
+      "x-server-property-id": "P_A",
+      "x-raw-hash": rawHash,
+      "x-archive-id": "arch_honest_upload",
+      "Content-Type": "text/csv",
+    },
+    body: fileBytes,
+  });
+  const upRes = await handleBulkImportRequest(upReq, env, owner, new URL(upReq.url), ["api", "bulk-import", "raw-upload"]);
+  assertEqual(upRes.status, 201, "Raw upload succeeded");
+
+  // Malicious client calls raw-archive attempting to point manifest at victim object
+  const recReq = new Request("http://localhost/api/bulk-import/raw-archive", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: "bundle_malicious_key",
+      raw_archive_id: "arch_malicious_key",
+      server_property_id: "P_A",
+      report_type: "occupancy",
+      raw_file_hash: rawHash,
+      raw_object_key: maliciousTargetKey, // ATTEMPTED BYPASS
+      original_file_name: "innocent.csv",
+      file_size: fileBytes.byteLength,
+    }),
+  });
+
+  const recRes = await handleBulkImportRequest(recReq, env, owner, new URL(recReq.url), ["api", "bulk-import", "raw-archive"]);
+  assertEqual(recRes.status, 201, "Manifest recording succeeded");
+  const recData = await recRes.json();
+  assertEqual(recData.raw_object_key, canonicalKey, "Response confirms canonical key, not malicious key");
+
+  // Verify actual row stored in D1
+  const storedRow = db.prepare("SELECT raw_object_key FROM import_bundle_manifest WHERE id='bundle_malicious_key'").get();
+  assertEqual(storedRow.raw_object_key, canonicalKey, "D1 manifest stored canonical key, ignoring client raw_object_key");
+  assert(storedRow.raw_object_key !== maliciousTargetKey, "D1 manifest NEVER contains client-supplied malicious key");
+});
+
+// 9. recordRawArchive fails with 404 RAW_OBJECT_NOT_FOUND if canonical R2 object was not uploaded first
+await run.check("9. recordRawArchive fails closed with 404 if canonical R2 object does not exist", async () => {
+  const { env, owner } = setupWorker();
+  const phantomHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+  const recReq = new Request("http://localhost/api/bulk-import/raw-archive", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: "bundle_phantom",
+      raw_archive_id: "arch_phantom",
+      server_property_id: "P_A",
+      report_type: "occupancy",
+      raw_file_hash: phantomHash,
+      original_file_name: "phantom.csv",
+      file_size: 100,
+    }),
+  });
+
+  let status = 0;
+  let code = "";
+  try {
+    const res = await handleBulkImportRequest(recReq, env, owner, new URL(recReq.url), ["api", "bulk-import", "raw-archive"]);
+    status = res.status;
+    const body = await res.json();
+    code = body.code || "";
+  } catch (err) {
+    status = err.status || 404;
+    code = err.details?.code || "";
+  }
+
+  assertEqual(status, 404, "recordRawArchive rejects phantom archive without R2 object (404 Not Found)");
+  assertEqual(code, "RAW_OBJECT_NOT_FOUND", "Error code is RAW_OBJECT_NOT_FOUND");
+});
+
+// 10. recordRawArchive validates R2 customMetadata ownership
+await run.check("10. recordRawArchive rejects R2 object when customMetadata does not match caller scope", async () => {
+  const { env, owner } = setupWorker();
+  const mockStore = getMockStore();
+  const fileBytes = new TextEncoder().encode("Spoofed metadata test\n");
+  const rawHash = await sha256Hex(fileBytes);
+  const canonicalKey = `rri-raw/A_1/P_A/${rawHash}`;
+
+  // Pre-seed mock store with canonical key but tampered account_id in metadata
+  mockStore.set(canonicalKey, {
+    data: fileBytes.buffer,
+    customMetadata: {
+      account_id: "VICTIM_ACCOUNT",
+      server_property_id: "P_A",
+      raw_hash: rawHash,
+    },
+  });
+
+  const recReq = new Request("http://localhost/api/bulk-import/raw-archive", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: "bundle_tampered_meta",
+      raw_archive_id: "arch_tampered_meta",
+      server_property_id: "P_A",
+      report_type: "occupancy",
+      raw_file_hash: rawHash,
+      file_size: fileBytes.byteLength,
+    }),
+  });
+
+  let status = 0;
+  let code = "";
+  try {
+    const res = await handleBulkImportRequest(recReq, env, owner, new URL(recReq.url), ["api", "bulk-import", "raw-archive"]);
+    status = res.status;
+    const body = await res.json();
+    code = body.code || "";
+  } catch (err) {
+    status = err.status || 403;
+    code = err.details?.code || "";
+  }
+
+  assertEqual(status, 403, "Account mismatch in R2 metadata returns 403 Forbidden");
+  assertEqual(code, "RAW_OBJECT_ACCOUNT_MISMATCH", "Error code is RAW_OBJECT_ACCOUNT_MISMATCH");
+});
+
+// 11. downloadRawArchive fails closed with 403 RAW_OBJECT_SCOPE_MISMATCH on tampered raw_object_key
+await run.check("11. downloadRawArchive rejects manifest with foreign raw_object_key fail-closed", async () => {
+  const { db, env, owner } = setupWorker();
+  const archiveId = "arch_foreign_key";
+
+  // Simulate a maliciously tampered or legacy corrupted manifest pointing to another account's object
+  db.prepare(`INSERT INTO import_bundle_manifest (
+    id, account_id, server_property_id, report_type, raw_file_hash,
+    raw_archive_id, raw_object_key, original_file_name, source_immutable, uploaded_by, status, created_at, revision
+  ) VALUES (
+    'b_foreign', 'A_1', 'P_A', 'occupancy', '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+    ?, 'rri-raw/VICTIM_ACCOUNT/P_SECRET/victim_file.csv', 'report.csv', 1, 'user_1', 'raw_archived', '2026-01-01', 1
+  )`).run(archiveId);
+
+  const dlReq = new Request(`http://localhost/api/bulk-import/raw/${archiveId}`);
+  let status = 0;
+  let code = "";
+  try {
+    const dlRes = await handleBulkImportRequest(dlReq, env, owner, new URL(dlReq.url), ["api", "bulk-import", "raw", archiveId]);
+    status = dlRes.status;
+    const body = await dlRes.json();
+    code = body.code || "";
+  } catch (err) {
+    status = err.status || 403;
+    code = err.details?.code || "";
+  }
+
+  assertEqual(status, 403, "Download of manifest with foreign raw_object_key returns 403 Forbidden");
+  assertEqual(code, "RAW_OBJECT_SCOPE_MISMATCH", "Error code is RAW_OBJECT_SCOPE_MISMATCH");
+});
+
 run.done();
 if (process.exitCode) process.exit(1);
 console.log("PASSED: probe-raw-canonical-security completed.");

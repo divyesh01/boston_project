@@ -401,9 +401,8 @@ async function recordRawArchive(request, env, scope) {
   const propertyId = String(body.server_property_id || "");
   const reportType = String(body.report_type || "unknown");
   const rawHash = String(body.raw_file_hash || "").toLowerCase();
-  const rawObjectKey = String(body.raw_object_key || "");
-  const originalFileName = String(body.original_file_name || "report.csv");
-  const fileSize = Number(body.file_size || body.raw_size || 0);
+  const originalFileName = sanitizeFilename(body.original_file_name || "report.csv");
+  let fileSize = Number(body.file_size || body.raw_size || 0);
   const mimeType = String(body.mime_type || body.raw_mime_type || "application/octet-stream");
   const minDate = body.min_date ? String(body.min_date) : null;
   const maxDate = body.max_date ? String(body.max_date) : null;
@@ -416,8 +415,57 @@ async function recordRawArchive(request, env, scope) {
     throw new BulkImportError("valid raw_file_hash is required", 400, { code: "IMPORT_INVALID_HASH" });
   }
 
-  if (!rawObjectKey) {
-    throw new BulkImportError("raw_object_key is required", 400, { code: "IMPORT_OBJECT_KEY_REQUIRED" });
+  // Canonical raw object key: NEVER trust body.raw_object_key or client-supplied paths.
+  // The server ALWAYS computes the canonical key itself: rri-raw/<account_id>/<server_property_id>/<raw_hash>
+  const canonicalObjectKey = `rri-raw/${scope.accountId}/${propertyId}/${rawHash}`;
+  const rawObjectKey = canonicalObjectKey;
+
+  // HEAD the R2 object to verify existence and metadata ownership before creating D1 manifest
+  const { rawStore } = getStores(env);
+  let rawObjectHead = null;
+  if (rawStore && typeof rawStore.head === "function") {
+    rawObjectHead = await rawStore.head(canonicalObjectKey);
+    if (!rawObjectHead) {
+      throw new BulkImportError("raw archive object not found in storage", 404, {
+        code: "RAW_OBJECT_NOT_FOUND",
+        raw_object_key: canonicalObjectKey,
+      });
+    }
+    const meta = rawObjectHead.customMetadata || {};
+    if (meta.account_id && meta.account_id !== scope.accountId) {
+      throw new BulkImportError("raw archive object account mismatch", 403, { code: "RAW_OBJECT_ACCOUNT_MISMATCH" });
+    }
+    if (meta.server_property_id && meta.server_property_id !== propertyId) {
+      throw new BulkImportError("raw archive object property mismatch", 403, { code: "RAW_OBJECT_PROPERTY_MISMATCH" });
+    }
+    if (meta.raw_hash && meta.raw_hash.toLowerCase() !== rawHash) {
+      throw new BulkImportError("raw archive object hash mismatch", 400, { code: "RAW_OBJECT_HASH_MISMATCH" });
+    }
+    if (!fileSize && rawObjectHead.size) {
+      fileSize = rawObjectHead.size;
+    }
+  } else {
+    // Mock store fallback for local tests
+    const stored = mockObjectStore.get(canonicalObjectKey);
+    if (!stored) {
+      throw new BulkImportError("raw archive object not found in storage", 404, {
+        code: "RAW_OBJECT_NOT_FOUND",
+        raw_object_key: canonicalObjectKey,
+      });
+    }
+    const meta = stored.customMetadata || {};
+    if (meta.account_id && meta.account_id !== scope.accountId) {
+      throw new BulkImportError("raw archive object account mismatch", 403, { code: "RAW_OBJECT_ACCOUNT_MISMATCH" });
+    }
+    if (meta.server_property_id && meta.server_property_id !== propertyId) {
+      throw new BulkImportError("raw archive object property mismatch", 403, { code: "RAW_OBJECT_PROPERTY_MISMATCH" });
+    }
+    if (meta.raw_hash && meta.raw_hash.toLowerCase() !== rawHash) {
+      throw new BulkImportError("raw archive object hash mismatch", 400, { code: "RAW_OBJECT_HASH_MISMATCH" });
+    }
+    if (!fileSize && stored.data?.byteLength) {
+      fileSize = stored.data.byteLength;
+    }
   }
 
   const existing = await queryFirst(
@@ -489,6 +537,7 @@ async function recordRawArchive(request, env, scope) {
     ok: true,
     bundle_id: bundleId,
     raw_archive_id: rawArchiveId,
+    raw_object_key: canonicalObjectKey,
     status: "raw_archived",
     archive_status: "archived",
     processing_status: "pending",
@@ -553,6 +602,14 @@ async function downloadRawArchive(parts, env, scope) {
 
   if (!manifest.raw_object_key) {
     throw new BulkImportError("no raw archive object associated with manifest", 404, { code: "RAW_OBJECT_NOT_FOUND" });
+  }
+
+  // Security invariant: raw_object_key must strictly belong to the manifest's account and authorized property
+  const expectedPrefix = `rri-raw/${scope.accountId}/${manifest.server_property_id}/`;
+  if (!manifest.raw_object_key.startsWith(expectedPrefix)) {
+    throw new BulkImportError("raw archive object key does not belong to authorized account and property", 403, {
+      code: "RAW_OBJECT_SCOPE_MISMATCH",
+    });
   }
 
   const { rawStore } = getStores(env);

@@ -25,7 +25,7 @@ export function testR2Binding() {
     async delete(key) {
       if (objects.get(key)?._locked) {
         const error = new Error('bucket retention lock');
-        error.code = 'BucketLocked';
+        error.code = 10069;
         throw error;
       }
       objects.delete(key);

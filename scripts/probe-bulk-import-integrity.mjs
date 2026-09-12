@@ -33,6 +33,39 @@ async function setup() {
 const scan = (total = 100, date = '2026-09-01') => ({ type: 'payments', totalRows: 1, rowsToImport: [{date,total}] });
 const meta = bytes => ({propertyId:'P_A',sourceFile:'payments.csv',rawBytes:new TextEncoder().encode(bytes)});
 async function post(action, body) { return fetch(`/api/bulk-import/${action}`, {method:'POST',body:JSON.stringify(body)}); }
+await run.check('Populated 0005 to 0006 preserves all prior columns, indexes and constraints', async () => {
+  const migrationDb = new DatabaseSync(':memory:');
+  try {
+    const names = readdirSync(new URL('../migrations-production/',import.meta.url)).filter(n=>n.endsWith('.sql')).sort();
+    for (const name of names.filter(n=>n<'0006')) migrationDb.exec(readFileSync(new URL(`../migrations-production/${name}`,import.meta.url),'utf8'));
+    migrationDb.prepare('INSERT INTO account(id,name,created_date) VALUES(?,?,?)').run('migration-account','fixture','2026-09-12');
+    for (const [i,status] of ['active','superseded','raw_archived'].entries()) {
+      migrationDb.prepare(`INSERT INTO import_bundle_manifest(id,account_id,server_property_id,report_type,raw_file_hash,normalized_hash,
+        original_file_name,uploaded_by,created_at,status,archive_status,revision,parser_version,schema_version,raw_archive_id,raw_object_key)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(`m${i}`,'migration-account','P_A','payments',`raw${i}`,`normalized${i}`,
+        `file${i}.csv`,'owner','2026-09-12',status,'archived',10+i,7,1,`m${i}`,`key${i}`);
+    }
+    const before = migrationDb.prepare('SELECT * FROM import_bundle_manifest ORDER BY id').all();
+    const indexes = migrationDb.prepare("SELECT name,sql FROM sqlite_master WHERE type='index' AND tbl_name='import_bundle_manifest' ORDER BY name").all();
+    const migration = readFileSync(new URL('../migrations-production/0006_bulk_import_integrity.sql',import.meta.url),'utf8');
+    migrationDb.exec('BEGIN'); migrationDb.exec(migration); migrationDb.exec('ROLLBACK');
+    assertEqual(JSON.stringify(migrationDb.prepare('SELECT * FROM import_bundle_manifest ORDER BY id').all()),JSON.stringify(before),'rollback preserves original rows');
+    migrationDb.exec('BEGIN'); migrationDb.exec(migration); migrationDb.exec('COMMIT');
+    const after = migrationDb.prepare('SELECT * FROM import_bundle_manifest ORDER BY id').all();
+    for (let i=0;i<before.length;i++) {
+      for (const key of Object.keys(before[i])) assertEqual(after[i][key],before[i][key],`preserve ${key}`);
+      assertEqual(after[i].identity_version,1); assertEqual(after[i].raw_destroyed_at,null);
+    }
+    assertEqual(JSON.stringify(migrationDb.prepare("SELECT name,sql FROM sqlite_master WHERE type='index' AND tbl_name='import_bundle_manifest' ORDER BY name").all()),JSON.stringify(indexes));
+    for (const state of ['destroying','destroyed']) migrationDb.prepare('UPDATE import_bundle_manifest SET archive_status=? WHERE id=?').run(state,'m0');
+    for (const sql of ["UPDATE import_bundle_manifest SET archive_status='invalid' WHERE id='m0'",
+      "UPDATE import_bundle_manifest SET normalized_hash='normalized0',status='active' WHERE id='m1'",
+      "UPDATE import_bundle_manifest SET account_id='missing' WHERE id='m0'"]) {
+      let rejected=false;try {migrationDb.exec(sql);} catch {rejected=true;} assert(rejected,'constraint must reject invalid mutation');
+    }
+    assertEqual(migrationDb.prepare('PRAGMA foreign_key_check').all().length,0);
+  } finally { migrationDb.close(); }
+});
 await run.check('Canonical normalized/raw bindings reject cross-account keys and missing metadata', async () => {
   await setup();
   const result = await executeBulkImport(scan(), meta('original'));
@@ -90,10 +123,18 @@ await run.check('Same-source concurrent retries and cross-property lineage fail 
 });
 await run.check('Generic R2 deletion failure stays retryable rather than labeled bucket lock', async () => {
   await setup(); const result = await executeBulkImport(scan(),meta('storage-error'));
-  env.RAW_ARCHIVE.delete = async () => { throw new Error('Network unavailable'); };
-  const response = await post('raw-destroy',{archive_id:result.bundle_id,confirm_destroy:true});
-  assertEqual(response.status,503); assertEqual((await response.json()).code,'RAW_DESTRUCTION_PENDING');
-  assertEqual(db.prepare('SELECT archive_status FROM import_bundle_manifest WHERE id=?').get(result.bundle_id).archive_status,'destroying');
+  const originalDelete = env.RAW_ARCHIVE.delete.bind(env.RAW_ARCHIVE);
+  for (const message of ['Network unavailable','Service could not inspect ObjectLockedByBucketPolicy metadata']) {
+    env.RAW_ARCHIVE.delete = async () => { throw new Error(message); };
+    const response = await post('raw-destroy',{archive_id:result.bundle_id,confirm_destroy:true});
+    assertEqual(response.status,503); assertEqual((await response.json()).code,'RAW_DESTRUCTION_PENDING');
+    assertEqual(db.prepare('SELECT archive_status FROM import_bundle_manifest WHERE id=?').get(result.bundle_id).archive_status,'destroying');
+  }
+  env.RAW_ARCHIVE.delete = async key => { await originalDelete(key); throw new Error('Response lost after deletion'); };
+  assertEqual((await post('raw-destroy',{archive_id:result.bundle_id,confirm_destroy:true})).status,503);
+  env.RAW_ARCHIVE.delete = originalDelete;
+  assertEqual((await post('raw-destroy',{archive_id:result.bundle_id,confirm_destroy:true})).status,200);
+  assertEqual(db.prepare('SELECT archive_status FROM import_bundle_manifest WHERE id=?').get(result.bundle_id).archive_status,'destroyed');
 });
 await run.check('Resume activates original pending manifest without uploading raw again', async () => {
   await setup();
@@ -145,6 +186,60 @@ await run.check('Raw deletion survives D1 completion failure without changing an
   assertEqual(after.status,'active'); assertEqual(after.archive_status,'destroyed'); assertEqual(after.revision,manifest.revision);
   assertEqual((await fetch(`/api/bulk-import/bundle/${manifest.id}`)).status,200);
 });
+await run.check('Overlap re-checked at transaction time; interleaved activate cannot bypass', async () => {
+  await setup();
+  const originalPrepare = env.DB.prepare.bind(env.DB);
+  let armed = false;
+  env.DB.prepare = (sql) => {
+    const stmt = originalPrepare(sql);
+    const originalBind = stmt.bind.bind(stmt);
+    stmt.bind = (...args) => {
+      const bound = originalBind(...args);
+      const originalFirst = bound.first.bind(bound);
+      bound.first = async () => {
+        const isOverlap = sql.startsWith('SELECT id FROM import_bundle_manifest') && sql.includes('id<>?');
+        const oldResult = await originalFirst();
+        if (isOverlap && armed) {
+          armed = false;
+          await executeBulkImport(scan(200, '2026-09-01'), meta('a-overlap-b'));
+        }
+        return oldResult;
+      };
+      return bound;
+    };
+    return stmt;
+  };
+  armed = true;
+  let rejected = false;
+  try { await executeBulkImport(scan(100, '2026-09-01'), meta('a-overlap-a')); } catch { rejected = true; }
+  env.DB.prepare = originalPrepare;
+  assert(rejected, 'A must fail closed against concurrent overlapping B');
+  const active = db.prepare("SELECT * FROM import_bundle_manifest WHERE status='active'").all();
+  assertEqual(active.length, 1, 'exactly one active bundle remains');
+  assertEqual(active[0].raw_file_hash, await sha256Hex(new TextEncoder().encode('a-overlap-b')), 'B (the overlapping commit) is the surviving active');
+  assertEqual(db.prepare('SELECT revision FROM business_sync_state WHERE account_id=?').get('A_1').revision, 1, 'exactly one revision allocated');
+  assertEqual(db.prepare('SELECT COUNT(*) n FROM business_change').get().n, 1, 'exactly one change event persisted');
+  assertEqual(db.prepare("SELECT status FROM import_bundle_manifest WHERE raw_file_hash=?").get(await sha256Hex(new TextEncoder().encode('a-overlap-a'))).status, 'raw_archived', 'A stays raw_archived, never active');
+  let guardOk = true;
+  for (const row of db.prepare('SELECT ok FROM business_mutation_guard').all()) if (!row.ok) guardOk = false;
+  assert(guardOk, 'no failed activation guard row persisted');
+});
+await run.check('R2 retention lock code 10069 / ObjectLockedByBucketPolicy is recognized', async () => {
+  const lockCases = [
+    { factory: () => Object.assign(new Error('bucket policy lock'), { code: 10069 }) },
+    { factory: () => Object.assign(new Error('bucket policy lock'), { code: '10069' }) },
+    { factory: () => Object.assign(new Error('bucket policy lock'), { code: 'ObjectLockedByBucketPolicy' }) },
+    { factory: () => ({ message: 'ObjectLockedByBucketPolicy: object retained' }) },
+    { factory: () => new Error('R2 delete failed: Object locked (10069)') },
+  ];
+  for (const { factory } of lockCases) {
+    await setup(); const result = await executeBulkImport(scan(), meta('lock-code'));
+    env.RAW_ARCHIVE.delete = async () => { throw factory(); };
+    const response = await post('raw-destroy', { archive_id: result.bundle_id, confirm_destroy: true });
+    assertEqual(response.status, 423, 'retention lock must yield 423');
+    assertEqual((await response.json()).code, 'RAW_ARCHIVE_LOCKED', 'lock must be labeled, not pending');
+  }
+});
 await run.check('Concurrent distinct activation retries allocate distinct revisions', async () => {
   await setup();
   const outputs = await Promise.all([executeBulkImport(scan(100,'2026-09-01'),meta('concurrent-1')),executeBulkImport(scan(200,'2026-09-02'),meta('concurrent-2'))]);
@@ -186,6 +281,40 @@ await run.check('Legacy cache overlap is reconciled and bulk-only reset prevents
   await syncBulkBundles({force:true,propertyId:'P_A'});
   assertEqual(await localDb.PaymentDay.count(),0);
   assert([...getMockStore().keys()].some(key=>key.startsWith('rri-raw/')),'Reset retains raw source');
+});
+await run.check('Older all-property hydration cannot resurrect a newer property tombstone', async () => {
+  await setup();
+  const result = await executeBulkImport(scan(), meta('stale-hydration'));
+  const routeFetch = globalThis.fetch;
+  let release, started;
+  const paused = new Promise(resolve => { started = resolve; });
+  const resume = new Promise(resolve => { release = resolve; });
+  let armed = true;
+  globalThis.fetch = async (...args) => {
+    const response = await routeFetch(...args);
+    if (armed && String(args[0]).includes('/bundle/')) {
+      armed = false;
+      const bytes = await response.arrayBuffer();
+      started();
+      await resume;
+      return new Response(bytes, {status: response.status, headers: response.headers});
+    }
+    return response;
+  };
+  const older = syncBulkBundles({force:true});
+  try {
+    await paused;
+    assertEqual((await post('delete',{bundle_id:result.bundle_id})).status,200);
+    await syncBulkBundles({force:true,propertyId:'P_A'});
+    const newerRevision = await getLastBulkRevision('P_A');
+    assertEqual(await localDb.PaymentDay.count(),0);
+    release();
+    await older;
+    assertEqual(await localDb.PaymentDay.count(),0,'stale active payload must not resurrect rows');
+    assertEqual(await localDb.UploadedReport.count(),0,'stale history must not return');
+    assertEqual(await getLastBulkRevision('P_A'),newerRevision);
+    assertEqual(await getLastBulkRevision(),newerRevision);
+  } finally { release(); await older.catch(()=>{}); globalThis.fetch = routeFetch; }
 });
 await run.check('Real HTTP delivers opaque gzip exactly once', async () => {
   await setup();

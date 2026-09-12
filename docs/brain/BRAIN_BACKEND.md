@@ -791,7 +791,7 @@ Primary gates: `scripts/probe-d1-quota-auth-failure.mjs`, `scripts/probe-d1-quot
 
 
 
-## Bulk import integrity � 2026-09-12 implementation
+## Bulk import integrity — 2026-09-12 implementation
 
 The frozen review baseline was `fe532fde3af650527437adf6f8876506c5bdb26d`.
 `worker/bulk-import.js` now computes and verifies exact account/property/hash object
@@ -852,3 +852,30 @@ migration/rollback or deployment readiness. Apply/test migration in staging befo
 code rollout. Do not roll back to the reviewed destructive handler; keep bulk routes
 unavailable while restoring a verified compatible release. A short independent review
 of the resulting commit is still required before production.
+
+## Bulk import final review corrections — 2026-09-12
+
+Activation now repeats the overlap predicate inside the D1 batch before changing
+any manifest. A competing overlapping activation aborts the entire transaction,
+including its revision, event and guard rows. Guard conflicts retry fresh validation,
+so simultaneous identical content remains an idempotent success. The regression pauses A after its
+preflight overlap query, commits B, then releases A with a fresh revision read.
+
+Raw deletion recognizes R2 code 10069 / ObjectLockedByBucketPolicy and the R2
+operation error marker. Generic failures remain 503 with durable destroying intent;
+a retry can complete even after deletion succeeded but its response was lost.
+The explicit test R2 binding now reports the documented numeric lock code.
+
+Hydration uses a shared commit token in BusinessSyncState, checked and changed in
+the same transaction as rows, history and cursor. An older all/property or other-tab
+page cannot commit after another hydration without refetching current authority.
+Five consecutive conflicts stop with a retry message. Network work stays outside
+Dexie transactions. Force callers recheck the flight after waiting.
+
+The integrity probe includes populated 0005-to-0006 preservation of all old columns,
+active/superseded/raw-archived states, indexes, constraints and local transaction
+rollback; no migration SQL changed. The stale hydration probe first reproduced
+row resurrection, then proved rows/history stay removed and cursors stay current.
+Memory at maximum payload sizes, real cross-browser runtime, remote D1 migration
+and rollback, R2 lock error shapes and metered writes remain canary requirements.
+This continuation was completed directly by Codex under the owner's solo instruction.

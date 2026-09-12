@@ -767,6 +767,15 @@ async function activateBundle(request, env, scope) {
   const revision = Number(state.revision) + 1;
   const now = new Date().toISOString();
   const statements = [];
+  // Transaction-time overlap guard: a concurrent activation can commit an
+  // overlapping bundle after the preflight SELECT above returned null but before
+  // this batch executes, and it would allocate a distinct revision, so the unique
+  // business_change seq cannot catch it. Re-check the overlap predicate at commit
+  // time behind CHECK(ok=1), which rolls back the whole batch atomically.
+  statements.push(env.DB.prepare(`INSERT INTO business_mutation_guard(account_id,mutation_id,request_hash,ok,created_at)
+    VALUES(?,?,?,CASE WHEN NOT EXISTS(SELECT 1 FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND report_type=?
+      AND status='active' AND id<>? AND (raw_file_hash=? OR (min_date<=? AND max_date>=?)) LIMIT 1) THEN 1 ELSE 0 END,?)`)
+    .bind(scope.accountId,`overlap-activate:${bundleId}`,hash,scope.accountId,propertyId,String(body.report_type||''),predecessorId||'',rawHash,maxDate||'',minDate||'',now));
   if (source && !raw) statements.push(env.DB.prepare(`INSERT INTO business_mutation_guard(account_id,mutation_id,request_hash,ok,created_at)
     VALUES(?,?,?,CASE WHEN EXISTS(SELECT 1 FROM import_bundle_manifest WHERE account_id=? AND id=? AND archive_status='archived') THEN 1 ELSE 0 END,?)`)
     .bind(scope.accountId,`source-activate:${bundleId}`,hash,scope.accountId,source.id,now));
@@ -1063,7 +1072,10 @@ async function destroyRawArchive(request, env, scope) {
   try {
     await rawStore.delete(key);
   } catch (error) {
-    const locked = ['BucketLocked', 'ObjectLocked', 'RetentionPolicyViolation'].includes(String(error?.code || ''));
+    const code = String(error?.code ?? '');
+    const message = String(error?.message ?? '');
+    // Match structured R2 codes or the operation error marker, not generic failures.
+    const locked = code === '10069' || code === 'ObjectLockedByBucketPolicy' || /^(?:ObjectLockedByBucketPolicy(?::|$)|R2 (?:delete|DELETE)(?: operation)? failed:.*\(10069\)\s*$)/.test(message);
     // Preserve intent: generic errors can be ambiguous about physical deletion.
     throw new BulkImportError(locked ? "raw archive is retention locked" : "raw deletion pending; retry required",
       locked ? 423 : 503, { code: locked ? "RAW_ARCHIVE_LOCKED" : "RAW_DESTRUCTION_PENDING" });
@@ -1139,7 +1151,7 @@ async function retryRevision(operation) {
   for (let attempt = 0; attempt < 5; attempt++) {
     try { return await operation(); }
     catch (error) {
-      if (!/business_change.account_id, business_change.seq|business_mutation_guard.account_id, business_mutation_guard.mutation_id|import_bundle_manifest.account_id, import_bundle_manifest.server_property_id, import_bundle_manifest.normalized_hash/.test(String(error?.message || error))) throw error;
+      if (!/CHECK constraint failed: ok|business_change.account_id, business_change.seq|business_mutation_guard.account_id, business_mutation_guard.mutation_id|import_bundle_manifest.account_id, import_bundle_manifest.server_property_id, import_bundle_manifest.normalized_hash/.test(String(error?.message || error))) throw error;
     }
   }
   throw new BulkImportError('Concurrent import; retry request', 409, { code: 'IMPORT_REVISION_CONFLICT' });

@@ -12,9 +12,20 @@ import { createCredential } from "../worker/password-credential.js";
 import { isTransientD1ProvisioningOutage } from "./_cloudflare-transient.mjs";
 import { REPO_ROOT } from "./_repo-root.mjs";
 
+// Safety guard: require explicit opt-in to avoid draining shared Cloudflare account D1 write quota
+if (process.env.ALLOW_REMOTE_D1_MUTATION_TESTS !== "true") {
+  console.log("MUTATION_GUARD: probe-worker-auth-remote requires ALLOW_REMOTE_D1_MUTATION_TESTS=true to protect Cloudflare D1 account quota");
+  process.exit(0);
+}
+
+
 const npxCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npx-cli.js");
 const suffix = `${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`;
 const database = `rri-auth-regression-${suffix}`;
+if (/production|boston-project-production-auth/i.test(database)) {
+  throw new Error(`CRITICAL: Remote test database ${database} cannot be production!`);
+}
+
 const work = await mkdtemp(path.join(tmpdir(), "rri-auth-remote-"));
 const config = path.join(work, "wrangler.jsonc");
 const envFile = path.join(work, ".env");

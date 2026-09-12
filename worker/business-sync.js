@@ -1,5 +1,11 @@
 import { assertPropertyInScope, ScopeError } from "./scope.js";
 import { queryAll, queryFirst } from "./db.js";
+import {
+  evaluateImportAdmission,
+  getUtcDayKey,
+  estimateAuthoritativeTransactionWrites,
+  FREE_PLAN_SAFE_IMPORT_BUDGET,
+} from "./budget.js";
 
 const MAX_CHUNK_ROWS = 40;
 const MAX_PAGE_ROWS = 500;
@@ -677,6 +683,35 @@ async function startTransaction(request, env, scope) {
     return Response.json({ tx_id: txId, generation_id: existing.staging_generation_id, status: existing.status, resumed: true });
   }
 
+  const utcDayStart = `${getUtcDayKey(nowMs)}T00:00:00.000Z`;
+  const todaysTransactions = await queryAll(
+    env,
+    "SELECT tx_id, status, operation_count, expires_at FROM business_staging_transaction WHERE account_id=? AND created_at >= ?",
+    [scope.accountId, utcDayStart]
+  );
+  let committedWritesToday = 0;
+  let activeReservedWritesToday = 0;
+  for (const t of (todaysTransactions || [])) {
+    if (t.tx_id === txId) continue;
+    const writes = estimateAuthoritativeTransactionWrites(Number(t.operation_count) || 0);
+    if (t.status === "committed") {
+      committedWritesToday += writes;
+    } else if (t.status === "pending" && String(t.expires_at) > now) {
+      activeReservedWritesToday += writes;
+    }
+  }
+
+  const planTier = env.D1_PLAN_TIER || "free";
+  const admission = evaluateImportAdmission(operationCount, committedWritesToday, activeReservedWritesToday, planTier);
+  if (!admission.admitted) {
+    throw new SyncRequestError(admission.rejectionReason, 409, {
+      code: "D1_IMPORT_WRITE_BUDGET_EXCEEDED",
+      projected_writes: admission.projectedWrites,
+      remaining_budget: admission.remainingBudget,
+      reset_boundary_utc: admission.resetBoundaryUtc,
+    });
+  }
+
   const pending = await queryFirst(env, "SELECT COUNT(*) AS count FROM business_staging_transaction WHERE account_id=? AND status='pending' AND expires_at>?", [scope.accountId, now]);
   if (Number(pending?.count || 0) >= MAX_PENDING_TRANSACTIONS) throw new SyncRequestError("pending transaction limit reached", 409);
   const baseline = await queryFirst(env, "SELECT p.active_generation_id,s.revision FROM business_dataset_pointer p JOIN business_sync_state s ON s.account_id=p.account_id WHERE p.account_id=?", [scope.accountId]);
@@ -834,6 +869,37 @@ async function transactionStatus(url, env, scope) {
   const tx = await loadStagingTransaction(env, scope, txId);
   const receipts = await queryFirst(env, "SELECT COALESCE(SUM(record_count),0) AS received_operations FROM business_migration_chunk WHERE account_id=? AND generation_id=?", [scope.accountId, tx.staging_generation_id]);
   return Response.json({ tx_id: tx.tx_id, status: tx.rolled_back_at ? "rolled_back" : tx.status, base_generation_id: tx.base_generation_id, base_revision: Number(tx.base_revision), staging_generation_id: tx.staging_generation_id, expected_chunks: Number(tx.expected_chunks), received_chunks: Number(tx.next_chunk_index), expected_operations: Number(tx.operation_count), received_operations: Number(receipts?.received_operations || 0), created_at: tx.created_at, expires_at: tx.expires_at, committed_at: tx.committed_at || null, rolled_back_at: tx.rolled_back_at || null });
+}
+
+async function listPendingTransactions(request, env, scope) {
+  requireMutationRole(scope);
+  const role = String(scope.user?.role || "").toLowerCase();
+  if (!["owner", "admin"].includes(role)) throw new SyncRequestError("forbidden", 403);
+  const now = new Date().toISOString();
+  await expirePendingTransactions(env, scope, now);
+  const rows = await queryAll(
+    env,
+    "SELECT tx_id, request_hash, base_generation_id, base_revision, staging_generation_id, status, expected_chunks, next_chunk_index, operation_count, created_by, created_at, expires_at FROM business_staging_transaction WHERE account_id=? AND status='pending' ORDER BY created_at DESC",
+    [scope.accountId]
+  );
+  return Response.json({
+    ok: true,
+    transactions: (rows || []).map((r) => ({
+      tx_id: r.tx_id,
+      request_hash: r.request_hash,
+      base_generation_id: r.base_generation_id,
+      base_revision: Number(r.base_revision),
+      staging_generation_id: r.staging_generation_id,
+      status: r.status,
+      expected_chunks: Number(r.expected_chunks),
+      received_chunks: Number(r.next_chunk_index),
+      operation_count: Number(r.operation_count),
+      created_by: r.created_by,
+      created_at: r.created_at,
+      expires_at: r.expires_at,
+      is_all_chunks_received: Number(r.next_chunk_index) === Number(r.expected_chunks),
+    })),
+  });
 }
 
 async function abortTransaction(request, env, scope) {
@@ -1522,6 +1588,7 @@ export async function handleBusinessSyncRequest(request, env, scope, url, parts)
     if (action === "transaction" && parts[3] === "abort" && request.method === "POST") return await abortTransaction(request, env, scope);
     if (action === "transaction" && parts[3] === "rollback" && request.method === "POST") return await rollbackTransaction(request, env, scope);
     if (action === "transaction" && parts[3] === "status" && request.method === "GET") return await transactionStatus(url, env, scope);
+    if (action === "transaction" && parts[3] === "pending" && request.method === "GET") return await listPendingTransactions(request, env, scope);
     return responseError("not found", 404);
   } catch (error) {
     if (error instanceof SyncRequestError) return responseError(error.message, error.status, error.details);

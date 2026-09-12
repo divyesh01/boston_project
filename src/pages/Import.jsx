@@ -30,6 +30,11 @@ import { queryClientInstance } from "@/lib/query-client";
 import { toCents, formatCents } from "@/lib/decimal";
 import { inspectUploadFile } from "@/lib/uploadGuard";
 import BusinessMigrationCard from "@/components/BusinessMigrationCard";
+import {
+  evaluateImportAdmission,
+  estimateAuthoritativeTransactionWrites,
+  FREE_PLAN_SAFE_IMPORT_BUDGET,
+} from "@/lib/d1WriteBudget";
 
 // Per-import undo. Deletes exactly the rows one import created, via the
 // rollback ledger — unlike "Clear all imported data", which wipes every table.
@@ -477,6 +482,8 @@ export default function Import() {
         });
         // Content hash (SHA-256) for duplicate detection before the import runs.
         const contentHash = await sha256File(item.file);
+        const opCount = scan.totalRows || scan.rowsToImport?.length || 0;
+        const admission = evaluateImportAdmission(opCount);
         setQueue((prev) => prev.map((q) => (q.key === item.key ? {
           ...q,
           status: "ready",
@@ -487,6 +494,9 @@ export default function Import() {
           propertyName: scanPname,
           originalPropertyId: scanPid,
           originalPropertyName: scanPname,
+          projectedWrites: admission.projectedWrites,
+          isBudgetBlocked: !admission.admitted,
+          budgetReason: admission.rejectionReason,
         } : q)));
       } catch (e) {
         setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: e.message || "Could not read file" } : q)));
@@ -522,6 +532,8 @@ export default function Import() {
         businessDate,
         csvText,
       });
+      const opCount = scan.totalRows || scan.rowsToImport?.length || 0;
+      const admission = evaluateImportAdmission(opCount);
       setQueue((prev) => prev.map((q) => (q.key === item.key ? {
         ...q,
         status: "ready",
@@ -530,6 +542,9 @@ export default function Import() {
         propertyName: effRe.name || "",
         originalPropertyId: q.originalPropertyId || q.propertyId,
         originalPropertyName: q.originalPropertyName || q.propertyName,
+        projectedWrites: admission.projectedWrites,
+        isBudgetBlocked: !admission.admitted,
+        budgetReason: admission.rejectionReason,
       } : q)));
     } catch (e) {
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: e.message || "Could not re-scan file" } : q)));
@@ -538,6 +553,11 @@ export default function Import() {
 
   const importSingle = async (item, { isBatch = false } = {}) => {
     if (!item.scan || item.status === "done") return null;
+    if (item.isBudgetBlocked) {
+      const msg = item.budgetReason || "File exceeds safe database write allowance for Free plan (~80k writes/day).";
+      setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: msg } : q)));
+      return { name: item.name, ok: false, error: msg };
+    }
     // Resolve through the snapshot chain so a file scanned before the property
     // was chosen can still import once it is chosen — no re-upload required.
     // This is what repairs the stuck "10 failed … propertyId is required" queue:
@@ -797,7 +817,11 @@ export default function Import() {
     // Include retryable failures: files that scanned fine but failed to import
     // (e.g. the old "propertyId is required" queue) carry scan data and can be
     // retried now that a property resolves — without forcing a re-upload.
-    const pending = queue.filter((q) => (q.status === "ready" || q.status === "error") && q.scan);
+    const blocked = queue.filter((q) => (q.status === "ready" || q.status === "error") && q.scan && q.isBudgetBlocked);
+    if (blocked.length > 0 && !importingRef.current && !importing) {
+      alert(`Cannot import: ${blocked.length} file(s) exceed the safe Free plan database write allowance (~80,000 writes/day).`);
+    }
+    const pending = queue.filter((q) => (q.status === "ready" || q.status === "error") && q.scan && !q.isBudgetBlocked);
     if (!pending.length || importingRef.current || importing) return;
 
     // Check if any pending items require explicit reassignment
@@ -1012,8 +1036,9 @@ export default function Import() {
     batchImported,
     batchExcluded,
   } = getQueueMetrics(queue);
-  const retryableCount = queue.filter((q) => q.status === "error" && q.scan).length;
-  const readyCount = baseReadyCount + retryableCount;
+  const retryableCount = queue.filter((q) => q.status === "error" && q.scan && !q.isBudgetBlocked).length;
+  const readyCount = queue.filter((q) => q.status === "ready" && q.scan && !q.isBudgetBlocked).length + retryableCount;
+  const budgetBlockedCount = queue.filter((q) => q.isBudgetBlocked).length;
 
   const handleRetrySingle = async (item) => {
     let targetItem = item;
@@ -1437,6 +1462,14 @@ export default function Import() {
                       <span className="truncate">{q.name}</span>
                     </span>
                     <span className="flex shrink-0 items-center gap-2">
+                      {q.isBudgetBlocked && (
+                        <span
+                          className="rounded-full bg-[#FF6B6B]/15 px-2.5 py-0.5 text-xs text-[#FF6B6B]"
+                          title={q.budgetReason}
+                        >
+                          ⚠ Exceeds write budget (~{q.projectedWrites?.toLocaleString()} writes)
+                        </span>
+                      )}
                       <span
                         className={`rounded-full px-2.5 py-0.5 text-xs ${
                           q.status === "done"
@@ -1469,8 +1502,13 @@ export default function Import() {
                             const r = await runSingleItem(q);
                             if (r) { setResults((prev) => [...prev, r]); refetch(); }
                           }}
-                          disabled={importing}
-                          className="rounded-lg bg-[#6C63FF]/20 px-3 py-1 text-xs text-[#6C63FF] transition-colors hover:bg-[#6C63FF]/35 disabled:opacity-40"
+                          disabled={importing || q.isBudgetBlocked}
+                          title={q.isBudgetBlocked ? q.budgetReason : "Import"}
+                          className={`rounded-lg px-3 py-1 text-xs transition-colors disabled:opacity-40 ${
+                            q.isBudgetBlocked
+                              ? "bg-slate-700 text-slate-400 cursor-not-allowed"
+                              : "bg-[#6C63FF]/20 text-[#6C63FF] hover:bg-[#6C63FF]/35"
+                          }`}
                         >
                           Import
                         </button>

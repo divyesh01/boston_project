@@ -91,3 +91,25 @@ function requireDb(env) {
   }
   return env.DB;
 }
+
+/**
+ * Identify if an error represents Cloudflare D1 account or database daily quota exhaustion.
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+export function isD1QuotaError(error) {
+  if (!error) return false;
+  if (typeof error === "object" && /** @type {any} */ (error).code === "D1_SERVICE_QUOTA_EXHAUSTED") return true;
+  const str = String(/** @type {any} */ (error)?.message || /** @type {any} */ (error)?.cause?.message || error);
+  return /daily\s+limits?\s+have\s+been\s+exceeded|quota\s+(?:exceeded|reached)|limit\s+(?:exceeded|reached)|exceeded\s+the\s+daily\s+limits?|daily\s+row\s+(?:read|write)\s+limit|D1_SERVICE_QUOTA_EXHAUSTED|D1_DAILY_WRITE_QUOTA_EXHAUSTED|database\s+capacity\s+exceeded/i.test(str);
+}
+
+export class D1QuotaExhaustedError extends Error {
+  constructor(message = "Database server temporarily unavailable. Capacity resets at 00:00 UTC.", details = {}) {
+    super(message);
+    this.name = "D1QuotaExhaustedError";
+    this.status = 503;
+    this.code = "D1_SERVICE_QUOTA_EXHAUSTED";
+    this.details = details;
+  }
+}

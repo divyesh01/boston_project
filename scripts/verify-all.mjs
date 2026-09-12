@@ -209,6 +209,7 @@ const EXCLUDE = new Map([
   // below imposes. So this file is excluded for the same reason as the harness it drives: swept,
   // it can leave both a mutated tracked source and a stale index lock on disk.
   ["probe-hotelkey-mutation-crashsafe.mjs", "spawns the harness above, and holds .git/index.lock for a whole run — run via npm run hotelkey:crashsafe"],
+  ["probe-worker-auth-remote.mjs", "creates remote D1 databases and runs remote mutations against Cloudflare account — run deliberately with explicit opt-in only"],
 ]);
 // NOT AN OMISSION: there is no entry above for probe-auth-hardening.mjs, and adding one would
 // be a loss of security coverage rather than a tidy-up.

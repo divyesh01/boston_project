@@ -674,4 +674,30 @@ Primary gates: `scripts/probe-cross-browser-sync-e2e.mjs`, `scripts/probe-gm-pro
 
 Primary gates: `scripts/probe-d1-write-budget.mjs` (11 assertions: write bounds, session hysteresis, and five exact projection values with 100,000 budget checks), `scripts/probe-realtime-leader.mjs`, `scripts/probe-worker-business-sync.mjs`, `scripts/probe-business-sync-global-records.mjs`, and `scripts/verify-schema-parity.mjs`.
 
+---
+
+## D1 Account Quota Outage Protection & Write Budget Architecture (2026-09-12)
+
+- **Root Cause & Outage Chain**: Cloudflare Free plans enforce an account-wide limit of 100,000 D1 rows written per day, resetting at 00:00 UTC. Prior to this fix, bulk hotel imports (e.g. 7,918 to 17,000 operations) consumed between 73,719 and 158,249 writes, exhausting the account quota. Once exhausted, D1 returned quota errors for all reads and writes, disabling session creation and validation.
+- **Fail-Closed Auth & Truthful 503**:
+  - Auth remains strictly fail-closed: no unverified sessions or unpersisted cookies are issued.
+  - `isD1QuotaError` in `worker/db.js` normalizes Cloudflare daily read and write quota exceptions.
+  - `login` in `worker/app-auth.js` returns HTTP 503 `D1_SERVICE_QUOTA_EXHAUSTED` with 0 cookie and 0 lockout increment (avoiding false "Invalid password" and false account lockout).
+  - Session verification in `authenticateAppSession` catches quota errors and returns `{ ok: false, serviceUnavailable: true }`, which `worker/index.js` routes as 503 instead of treating as invalid credentials.
+- **Canonical Write Budget & Admission Control**:
+  - `worker/budget.js` and `src/lib/d1WriteBudget.js` share the bit-exact calibrated formula:
+    `estimateAuthoritativeTransactionWrites(M) = 9M + 4*ceil(M/13) + 17`.
+  - Cap: Free plan allows 100,000 writes/day; 20,000 writes are reserved exclusively for auth, security, and essential operations; the safe daily import ceiling is 80,000 writes.
+  - Server-side admission control in `startTransaction` checks both individual file projections and daily UTC cumulative reservations, rejecting oversized imports with HTTP 409 `D1_IMPORT_WRITE_BUDGET_EXCEEDED` before creating any staging or transaction rows (0 database writes).
+  - Frontend preflight in `src/pages/Import.jsx` flags oversized files on scan with `⚠ Exceeds write budget` and disables the Import button.
+- **Orphan Transaction Recovery**:
+  - Added `GET /api/business-sync/transaction/pending` (owner/admin scoped) to discover pending or stranded transactions without requiring the originating browser outbox.
+  - Owners can explicitly invoke `POST /api/business-sync/transaction/abort` to safely clean up all staging records, staging targets, and dataset rows while leaving active generations intact.
+- **Account-Wide Test Safety & Deterministic Gates**:
+  - Default release gate (`verify:all`) is 100% deterministic, offline, and runs without consuming Cloudflare account quota.
+  - `probe-worker-auth-remote.mjs` is guarded by `ALLOW_REMOTE_D1_MUTATION_TESTS=true` and explicit test DB allowlists, preventing test runs from draining production account quota.
+
+Primary gates: `scripts/probe-d1-quota-auth-failure.mjs`, `scripts/probe-d1-quota-admission.mjs`, `scripts/probe-orphan-transaction-recovery.mjs`, `scripts/probe-import-write-amplification-breakdown.mjs`, and `scripts/probe-suite-integrity.mjs`.
+
+
 

@@ -22,7 +22,7 @@
 import { authenticate } from "./auth.js";
 import { resolveScope, scopeConstraint } from "./scope.js";
 import { parseChunk, importChunk } from "./import.js";
-import { queryAll } from "./db.js";
+import { isD1QuotaError, queryAll } from "./db.js";
 import { handleEntityRequest } from "./entities.js";
 import { handleUsersRequest } from "./users.js";
 import { handleBusinessSyncRequest } from "./business-sync.js";
@@ -324,6 +324,12 @@ async function handleRequest(request, env, _ctx) {
   // App sessions are the primary identity and work in every browser profile.
   // Access JWTs remain a compatibility fallback for the existing staged API.
   let auth = await authenticateAppSession(request, env);
+  if (auth.ok === false && auth.serviceUnavailable) {
+    return jsonResponse({
+      error: "Database server temporarily unavailable. Capacity resets at 00:00 UTC.",
+      code: "D1_SERVICE_QUOTA_EXHAUSTED",
+    }, 503);
+  }
   if (auth.ok === false && !appSessionCookiePresent(request) && env.ACCESS_AUD && env.ACCESS_TEAM_DOMAIN) {
     auth = await authenticate(request, env);
   }
@@ -388,6 +394,12 @@ export default {
     try {
       return secureApiResponse(request, await handleRequest(request, env, ctx));
     } catch (error) {
+      if (isD1QuotaError(error) || /** @type {any} */ (error)?.code === "D1_SERVICE_QUOTA_EXHAUSTED" || /** @type {any} */ (error)?.name === "D1QuotaExhaustedError") {
+        return secureApiResponse(request, jsonResponse({
+          error: "Database server temporarily unavailable. Capacity resets at 00:00 UTC.",
+          code: "D1_SERVICE_QUOTA_EXHAUSTED",
+        }, 503));
+      }
       console.error(JSON.stringify({
         message: "unhandled worker request failure",
         path: new URL(request.url).pathname,

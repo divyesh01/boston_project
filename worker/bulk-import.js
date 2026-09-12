@@ -236,8 +236,9 @@ async function uploadRawArchive(request, env, scope) {
     throw new BulkImportError("raw file payload cannot be empty", 400, { code: "IMPORT_EMPTY_PAYLOAD" });
   }
 
-  // Canonical raw object key: same account + property + raw SHA-256 resolves to ONE canonical raw object
-  const rawObjectKey = request.headers.get("x-raw-object-key") || url.searchParams.get("raw_object_key") || `rri-raw/${scope.accountId}/${propertyId}/${rawHash}`;
+  // Canonical raw object key: server MUST ALWAYS compute the canonical key itself.
+  // Clients are NEVER allowed to choose or override the R2 object path via headers or query parameters.
+  const rawObjectKey = `rri-raw/${scope.accountId}/${propertyId}/${rawHash}`;
 
   const { rawStore } = getStores(env);
 

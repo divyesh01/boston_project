@@ -26,6 +26,7 @@ import { isD1QuotaError, queryAll } from "./db.js";
 import { handleEntityRequest } from "./entities.js";
 import { handleUsersRequest } from "./users.js";
 import { handleBusinessSyncRequest } from "./business-sync.js";
+import { handleBulkImportRequest } from "./bulk-import.js";
 import { handleSettingsRequest } from "./settings.js";
 import { appSessionCookiePresent, authenticateAppSession, handleAppAuthRequest, sameOriginMutation } from "./app-auth.js";
 import { permissionsForSession } from "./session-permissions.js";
@@ -359,6 +360,9 @@ async function handleRequest(request, env, _ctx) {
   if (parts[1] === "business-sync") {
     if (!syncApiEnabled) return jsonResponse({ error: "business-data sync is disabled" }, 404);
     return handleBusinessSyncRequest(request, env, scoped.scope, url, parts);
+  }
+  if (parts[1] === "bulk-import") {
+    return handleBulkImportRequest(request, env, scoped.scope, url, parts);
   }
   if (parts[1] === "settings") {
     return handleSettingsRequest(request, env, scoped.scope, url, parts);

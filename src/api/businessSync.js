@@ -370,6 +370,14 @@ export function createBusinessSyncClient({
         return { rebuild: true };
       }
       for (const change of page.items) {
+        if (change.entity_name === 'ImportBundle') {
+          try {
+            const { syncBulkBundles } = await import('../lib/bulkHydrationService.js');
+            await syncBulkBundles();
+          } catch {}
+          revision = Number(change.seq);
+          continue;
+        }
         if (change.generation_id !== state.generation_id || change.operation === 'property_delete') return { rebuild: true };
         const table = localDb[change.entity_name];
         if (!table) continue;
@@ -396,6 +404,10 @@ export function createBusinessSyncClient({
         if (!force && prior?.generation_id && !prior?.roster_only) {
           try {
             const applied = await applyFeed(prior);
+            try {
+              const { syncBulkBundles } = await import('../lib/bulkHydrationService.js');
+              await syncBulkBundles();
+            } catch {}
             if (!applied.rebuild) {
               if (allowDuringTransaction || transactionPending) {
                 return { active: true, rebuilt: false, ...applied.state };
@@ -455,6 +467,10 @@ export function createBusinessSyncClient({
           hydrationPromise = null;
           return hydrate({ force: true });
         }
+        try {
+          const { syncBulkBundles } = await import('../lib/bulkHydrationService.js');
+          await syncBulkBundles({ force });
+        } catch {}
         return { active: true, rebuilt: true, ...applied.state };
       } finally {
         isHydrating = false;

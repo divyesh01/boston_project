@@ -196,10 +196,12 @@ export function evaluateImportAdmission(
   operationCount,
   committedToday = 0,
   activeReservedToday = 0,
-  planMode = "free"
+  planMode = "free",
+  options = {}
 ) {
   const count = Math.max(0, Math.floor(Number(operationCount) || 0));
-  const projected = estimateAuthoritativeTransactionWrites(count);
+  const isBulk = options?.isBulkImport === true;
+  const projected = isBulk ? 3 : estimateAuthoritativeTransactionWrites(count);
   const isPaid = String(planMode || "").toLowerCase() === "paid";
   const budget = isPaid ? Infinity : FREE_PLAN_SAFE_IMPORT_BUDGET;
   const committed = Math.max(0, Number(committedToday) || 0);

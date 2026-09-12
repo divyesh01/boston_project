@@ -1635,7 +1635,18 @@ export async function handleBusinessSyncRequest(request, env, scope, url, parts)
     return responseError("not found", 404);
   } catch (error) {
     if (error instanceof SyncRequestError) return responseError(error.message, error.status, error.details);
-    if (error instanceof ScopeError) return responseError(error.message, 403);
-    throw error;
+    if (error instanceof ScopeError) return responseError(error.message, 403, { code: "SCOPE_DENIED" });
+    const incidentId = `inc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    console.error(JSON.stringify({
+      incident_id: incidentId,
+      message: "business sync unhandled error",
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    }));
+    return responseError(
+      `Internal sync error (${incidentId}): ${error instanceof Error ? error.message : String(error)}`,
+      500,
+      { code: "BUSINESS_SYNC_INTERNAL_ERROR", incident_id: incidentId }
+    );
   }
 }

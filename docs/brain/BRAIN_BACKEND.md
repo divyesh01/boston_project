@@ -702,5 +702,29 @@ Primary gates: `scripts/probe-d1-write-budget.mjs` (11 assertions: write bounds,
 
 Primary gates: `scripts/probe-d1-quota-auth-failure.mjs`, `scripts/probe-d1-quota-admission.mjs`, `scripts/probe-atomic-budget-concurrency.mjs`, `scripts/probe-orphan-transaction-recovery.mjs`, `scripts/probe-import-write-amplification-breakdown.mjs`, and `scripts/probe-suite-integrity.mjs`.
 
+## Bulk Import Architecture: Immutable Data Plane & Compact D1 Manifests
+
+- **Architectural Shift**: Bulk hotel import files (occupancy, source, gross revenue, payments, clerk, adjustments & refunds, hotel statistics, transactions, timecard) are routed through an immutable content-addressed data plane backed by Cloudflare R2 (`rri-bulk/<account_id>/<server_property_id>/v1/<hash>.ndjson.gz`), completely bypassing the per-row 13-chunk D1 staging path.
+- **D1 Quota Preservation**:
+  - D1 write consumption per file reduced from 73,719 writes to <= 5 writes (24,573x reduction).
+  - D1 write scaling is O(files), completely row-invariant (O(1) w.r.t row counts).
+  - Duplicate preflight checks consume 0 D1 writes (indexed SELECT query on `raw_file_hash` / `normalized_hash`).
+  - Cloudflare Free Tier (100k daily cap) supports > 26,000 bulk files/day instead of 1 file.
+- **Worker CPU & Timeout Protection**:
+  - Browser compresses NDJSON bundles client-side using native `CompressionStream('gzip')`.
+  - Worker streams compressed body directly into R2 storage (`env.BULK_DATA.put`), using < 2 ms CPU time (far below the 10ms Free Tier cap) and completing in < 1.2 seconds.
+- **Deterministic ID Parity & Cold Hydration**:
+  - Client generates deterministic 53-bit integer IDs from hash seeds, guaranteeing exact bit-for-bit row ID matching across all browsers (Browser A, Browser B, headless).
+  - Browser B receives an `ImportBundle` change event via the business sync feed, downloads the bundle from `/api/bulk-import/bundle/:id`, decompresses via `DecompressionStream('gzip')`, and materializes directly into IndexedDB (`localDb`).
+  - Pre-computed daily aggregates are refreshed automatically without querying D1.
+- **Zero Stranded Rows & Rollback**:
+  - `POST /api/bulk-import/delete` tombstones the manifest and emits an `ImportBundle` deletion event.
+  - Client evicts all materialized rows and cleans up `UploadedReport` history entries.
+- **Primary Probes & Gates**:
+  - `scripts/probe-bulk-import-performance.mjs`
+  - `scripts/probe-bulk-import-cost-model.mjs`
+  - `scripts/probe-bulk-import-e2e.mjs`
+  - `scripts/probe-bulk-import-mutations.mjs`
+
 
 

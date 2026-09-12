@@ -35,6 +35,10 @@ import {
   estimateAuthoritativeTransactionWrites,
   FREE_PLAN_SAFE_IMPORT_BUDGET,
 } from "@/lib/d1WriteBudget";
+import {
+  isBulkImportEligible,
+  executeBulkImport,
+} from "@/lib/bulkImportPipeline";
 
 // Per-import undo. Deletes exactly the rows one import created, via the
 // rollback ledger — unlike "Clear all imported data", which wipes every table.
@@ -82,6 +86,13 @@ function UndoImportButton({ upload: u, disabled, onDone }) {
         setError(res.error || "Undo failed");
         setConfirming(false);
         return;
+      }
+      if (u.import_id && u.property_id) {
+        fetch('/api/bulk-import/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bundle_id: u.import_id, server_property_id: u.property_id }),
+        }).catch(() => {});
       }
       // Drop the history row too, so the list reflects that this import's data
       // is gone. Leaving it would imply the rows are still queryable.
@@ -483,7 +494,8 @@ export default function Import() {
         // Content hash (SHA-256) for duplicate detection before the import runs.
         const contentHash = await sha256File(item.file);
         const opCount = scan.totalRows || scan.rowsToImport?.length || 0;
-        const admission = evaluateImportAdmission(opCount);
+        const isBulk = isBulkImportEligible(scan.type || type);
+        const admission = evaluateImportAdmission(opCount, 0, 0, "free", { isBulkImport: isBulk });
         setQueue((prev) => prev.map((q) => (q.key === item.key ? {
           ...q,
           status: "ready",
@@ -533,7 +545,8 @@ export default function Import() {
         csvText,
       });
       const opCount = scan.totalRows || scan.rowsToImport?.length || 0;
-      const admission = evaluateImportAdmission(opCount);
+      const isBulk = isBulkImportEligible(scan.type || type);
+      const admission = evaluateImportAdmission(opCount, 0, 0, "free", { isBulkImport: isBulk });
       setQueue((prev) => prev.map((q) => (q.key === item.key ? {
         ...q,
         status: "ready",
@@ -724,13 +737,38 @@ export default function Import() {
             : q));
         }, 35000);
         try {
-          result = await importReport(item.scan, {
-            propertyId: effPropertyId,
-            propertyName: effPropertyName,
-            importId: item.importId,
-            sourceFile: item.name,
-            forceImport,
-          });
+          if (isBulkImportEligible(item.scan?.type || type)) {
+            let rawBytes = null;
+            if (item.file) {
+              try {
+                rawBytes = new Uint8Array(await item.file.arrayBuffer());
+              } catch {}
+            }
+            result = await executeBulkImport(item.scan, {
+              propertyId: effPropertyId,
+              propertyName: effPropertyName,
+              importId: item.importId,
+              sourceFile: item.name,
+              forceImport,
+              rawBytes,
+            });
+            if (result.duplicate) {
+              setQueue((prev) => prev.map((q) => (q.key === item.key ? {
+                ...q,
+                status: "duplicate",
+                error: result.reason || "Duplicate file — already imported. Use Force Import to re-import.",
+              } : q)));
+              return { name: item.name, ok: false, duplicate: true, error: "Duplicate file" };
+            }
+          } else {
+            result = await importReport(item.scan, {
+              propertyId: effPropertyId,
+              propertyName: effPropertyName,
+              importId: item.importId,
+              sourceFile: item.name,
+              forceImport,
+            });
+          }
         } finally {
           clearTimeout(stillImportingTimer);
           if (stillImportingNotified) {
@@ -1178,7 +1216,11 @@ export default function Import() {
         const res = await db.functions.invoke("importDriveFile", { fileId, fileName });
         const fileUrl = res.data.file_url;
         const scan = await scanReport(type, fileUrl, { ...meta, sourceFile: fileName });
-        result = await importReport(scan, { ...meta, sourceFile: fileName });
+        if (isBulkImportEligible(scan.type || type)) {
+          result = await executeBulkImport(scan, { ...meta, sourceFile: fileName });
+        } else {
+          result = await importReport(scan, { ...meta, sourceFile: fileName });
+        }
         await db.entities.UploadedReport.create({
           file_name: fileName,
           report_type: scan.type || type,

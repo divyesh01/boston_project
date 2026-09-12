@@ -932,7 +932,7 @@ CREATE TABLE IF NOT EXISTS import_bundle_manifest (
   raw_file_hash           TEXT NOT NULL,
   raw_size                INTEGER DEFAULT 0,
   raw_mime_type           TEXT,
-  archive_status          TEXT CHECK (archive_status IN ('pending', 'archived', 'failed')) DEFAULT 'pending',
+  archive_status          TEXT CHECK (archive_status IN ('pending', 'archived', 'failed', 'destroying', 'destroyed')) DEFAULT 'pending',
   processing_status       TEXT CHECK (processing_status IN ('pending', 'processing', 'active', 'failed')) DEFAULT 'pending',
   normalized_hash         TEXT,
   object_key              TEXT,
@@ -961,6 +961,9 @@ CREATE TABLE IF NOT EXISTS import_bundle_manifest (
   superseded_at           TEXT,
   superseded_by_user      TEXT,
   revision                INTEGER NOT NULL DEFAULT 0,
+  identity_version        INTEGER NOT NULL DEFAULT 1,
+  raw_destroy_requested_at TEXT,
+  raw_destroyed_at         TEXT,
   FOREIGN KEY (account_id) REFERENCES account(id) ON DELETE CASCADE
 );
 
@@ -983,4 +986,3 @@ CREATE INDEX IF NOT EXISTS idx_bundle_property_type
 
 CREATE INDEX IF NOT EXISTS idx_bundle_pending_processing
   ON import_bundle_manifest (account_id, server_property_id, status);
-

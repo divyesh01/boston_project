@@ -373,7 +373,7 @@ export function createBusinessSyncClient({
         if (change.entity_name === 'ImportBundle') {
           try {
             const { syncBulkBundles } = await import('../lib/bulkHydrationService.js');
-            await syncBulkBundles();
+            await syncBulkBundles({ force: true });
           } catch {}
           revision = Number(change.seq);
           continue;
@@ -406,7 +406,7 @@ export function createBusinessSyncClient({
             const applied = await applyFeed(prior);
             try {
               const { syncBulkBundles } = await import('../lib/bulkHydrationService.js');
-              await syncBulkBundles();
+              await syncBulkBundles({ force: true });
             } catch {}
             if (!applied.rebuild) {
               if (allowDuringTransaction || transactionPending) {
@@ -469,7 +469,7 @@ export function createBusinessSyncClient({
         }
         try {
           const { syncBulkBundles } = await import('../lib/bulkHydrationService.js');
-          await syncBulkBundles({ force });
+          await syncBulkBundles({ force: true });
         } catch {}
         return { active: true, rebuilt: true, ...applied.state };
       } finally {

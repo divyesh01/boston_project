@@ -11,7 +11,8 @@ import {
   seedUser,
   scopeAll,
 } from "./_worker-testkit.mjs";
-import { handleBulkImportRequest, clearMockStore } from "../worker/bulk-import.js";
+import { handleBulkImportRequest } from "../worker/bulk-import.js";
+import { clearMockStore, testR2Binding } from "./_r2-testkit.mjs";
 import { sha256Hex } from "../src/lib/bulkImportPipeline.js";
 
 const run = makeRunner("probe-bulk-import-hash-parity");
@@ -25,7 +26,7 @@ function setupWorker() {
     .run("P_A", "A_1", "RRI-PARITY", "Red Roof Inn Parity", 100, "123 Main St", "Boston", "MA", "617-555-0100", 1, "2026-01-01");
   db.prepare("INSERT OR IGNORE INTO business_sync_state (account_id, revision) VALUES (?, ?)").run("A_1", 0);
 
-  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true" });
+  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true", RAW_ARCHIVE: testR2Binding(), BULK_DATA: testR2Binding() });
   const owner = scopeAll(["P_A"]);
   owner.accountId = "A_1";
   owner.user.id = "user_owner";

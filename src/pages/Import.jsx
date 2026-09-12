@@ -112,22 +112,26 @@ function UndoImportButton({ upload: u, disabled, onDone }) {
     setWorking(true);
     setError("");
     try {
-      const res = await rollbackImportSession(u.import_id);
+      const res = u.bulk_import_id
+        ? await fetch('/api/bulk-import/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bundle_id: u.bulk_import_id, server_property_id: u.property_id }),
+        }).then(async response => {
+          if (!response.ok) throw new Error('Bundle removal failed; retry Undo');
+          const { syncBulkBundles } = await import('@/lib/bulkHydrationService');
+          await syncBulkBundles({ force: true, propertyId: u.property_id });
+          return { success: true, error: null };
+        })
+        : await rollbackImportSession(u.import_id);
       if (!res.success) {
         setError(res.error || "Undo failed");
         setConfirming(false);
         return;
       }
-      if (u.import_id && u.property_id) {
-        fetch('/api/bulk-import/delete', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ bundle_id: u.import_id, server_property_id: u.property_id }),
-        }).catch(() => {});
-      }
       // Drop the history row too, so the list reflects that this import's data
       // is gone. Leaving it would imply the rows are still queryable.
-      await db.entities.UploadedReport.delete(u.id);
+      if (!u.bulk_import_id) await db.entities.UploadedReport.delete(u.id);
       rotateCsrfToken();
       // Rebuild the materialized daily aggregate so the removed rows stop
       // contributing to the Dashboard's pre-summed metrics.
@@ -439,6 +443,7 @@ export default function Import() {
         importId: pendingItem.id,
         sourceFile: pendingItem.original_file_name,
         csvText,
+        rawBytes: buffer,
       });
       await executeBulkImport(scan, {
         propertyId: pendingItem.server_property_id,
@@ -446,9 +451,12 @@ export default function Import() {
         importId: pendingItem.id,
         sourceFile: pendingItem.original_file_name,
         forceImport: true,
+        rawBytes: buffer,
+        resumeManifest: pendingItem,
       });
       const updated = await fetchPendingRawArchives(pendingItem.server_property_id);
       setPendingRawArchives(updated || []);
+      refreshAggregates(pendingItem.server_property_id);
       refetch();
     } catch (e) {
       alert(`Resume failed: ${e.message}`);
@@ -859,7 +867,7 @@ export default function Import() {
         // a presentation timeout cannot prove that a late create did not land.
         // If it fails, the catch below rolls back the committed import session
         // before any later file may start.
-        await db.entities.UploadedReport.create({
+        if (!result.bulk) await db.entities.UploadedReport.create({
             file_name: item.name,
             report_type: item.scan.type || type,
             rows_imported: result.count,
@@ -888,7 +896,7 @@ export default function Import() {
         // Neither present means the import was rejected before a session existed
         // (e.g. blocked validation), so there is nothing to undo.
         const sessionId = err?.importId || result?.importId;
-        if (sessionId) {
+        if (sessionId && !err?.bulkCommitted && !result?.bulk) {
           const res = await rollbackImportSession(sessionId).catch((e) => ({
             success: false,
             error: e?.message || "Rollback threw",
@@ -1298,11 +1306,13 @@ export default function Import() {
         const fileUrl = res.data.file_url;
         const scan = await scanReport(type, fileUrl, { ...meta, sourceFile: fileName });
         if (isBulkImportEligible(scan.type || type)) {
-          result = await executeBulkImport(scan, { ...meta, sourceFile: fileName });
+          const originalResponse = await fetch(fileUrl);
+          if (!originalResponse.ok) throw new Error("Original download failed");
+          result = await executeBulkImport(scan, { ...meta, sourceFile: fileName, rawBytes: await originalResponse.arrayBuffer() });
         } else {
           result = await importReport(scan, { ...meta, sourceFile: fileName });
         }
-        await db.entities.UploadedReport.create({
+        if (!result.bulk) await db.entities.UploadedReport.create({
           file_name: fileName,
           report_type: scan.type || type,
           rows_imported: result.count,
@@ -1325,7 +1335,7 @@ export default function Import() {
         // then failed left them in the ledger with no history row and no Undo.
         let message = friendlyImportError(e?.response?.data ? { ...e, message: e.response.data.error } : e);
         const sessionId = e?.importId || result?.importId;
-        if (sessionId) {
+        if (sessionId && !e?.bulkCommitted && !result?.bulk) {
           const rb = await rollbackImportSession(sessionId).catch((err) => ({
             success: false,
             error: err?.message || "Rollback threw",

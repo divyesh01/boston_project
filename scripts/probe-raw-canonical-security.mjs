@@ -18,7 +18,8 @@ import {
   scopeAll,
   scopeSpecific,
 } from "./_worker-testkit.mjs";
-import { handleBulkImportRequest, clearMockStore, getMockStore } from "../worker/bulk-import.js";
+import { handleBulkImportRequest } from "../worker/bulk-import.js";
+import { clearMockStore, getMockStore, testR2Binding } from "./_r2-testkit.mjs";
 import { sha256Hex } from "../src/lib/bulkImportPipeline.js";
 
 const run = makeRunner("probe-raw-canonical-security");
@@ -40,7 +41,7 @@ function setupWorker() {
   db.prepare("INSERT OR IGNORE INTO property (id, account_id, code, name, rooms, address, city, state, phone, active, created_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
     .run("P_VICTIM", "A_2", "RRI-V", "Victim Property", 80, "789 Victim St", "Boston", "MA", "617-555-0300", 1, "2026-01-01");
 
-  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true" });
+  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true", RAW_ARCHIVE:testR2Binding(), BULK_DATA:testR2Binding() });
   const owner = scopeAll(["P_A", "P_B"]);
   owner.accountId = "A_1";
   owner.user.id = "user_owner_1";
@@ -509,10 +510,10 @@ await run.check("10. recordRawArchive rejects R2 object when customMetadata does
   }
 
   assertEqual(status, 403, "Account mismatch in R2 metadata returns 403 Forbidden");
-  assertEqual(code, "RAW_OBJECT_ACCOUNT_MISMATCH", "Error code is RAW_OBJECT_ACCOUNT_MISMATCH");
+  assertEqual(code, "IMPORT_OBJECT_SCOPE_MISMATCH", "Error code is IMPORT_OBJECT_SCOPE_MISMATCH");
 });
 
-// 11. downloadRawArchive fails closed with 403 RAW_OBJECT_SCOPE_MISMATCH on tampered raw_object_key
+// 11. downloadRawArchive fails closed with 403 IMPORT_OBJECT_SCOPE_MISMATCH on tampered raw_object_key
 await run.check("11. downloadRawArchive rejects manifest with foreign raw_object_key fail-closed", async () => {
   const { db, env, owner } = setupWorker();
   const archiveId = "arch_foreign_key";
@@ -540,7 +541,7 @@ await run.check("11. downloadRawArchive rejects manifest with foreign raw_object
   }
 
   assertEqual(status, 403, "Download of manifest with foreign raw_object_key returns 403 Forbidden");
-  assertEqual(code, "RAW_OBJECT_SCOPE_MISMATCH", "Error code is RAW_OBJECT_SCOPE_MISMATCH");
+  assertEqual(code, "IMPORT_OBJECT_SCOPE_MISMATCH", "Error code is IMPORT_OBJECT_SCOPE_MISMATCH");
 });
 
 run.done();

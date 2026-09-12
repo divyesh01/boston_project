@@ -21,7 +21,8 @@ import {
   scopeAll,
   scopeSpecific,
 } from "./_worker-testkit.mjs";
-import { handleBulkImportRequest, clearMockStore, getMockStore } from "../worker/bulk-import.js";
+import { handleBulkImportRequest } from "../worker/bulk-import.js";
+import { clearMockStore, getMockStore, testR2Binding } from "./_r2-testkit.mjs";
 import { sha256Hex, compressPayloadGzip } from "../src/lib/bulkImportPipeline.js";
 
 const run = makeRunner("probe-normalized-concurrent-duplicate");
@@ -37,7 +38,7 @@ function setupWorker() {
     .run("P_A", "A_1", "RRI-A", "Red Roof Inn A", 100, "123 Main St", "Boston", "MA", "617-555-0100", 1, "2026-01-01");
   db.prepare("INSERT OR IGNORE INTO business_sync_state (account_id, revision) VALUES (?, ?)").run("A_1", 0);
 
-  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true" });
+  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true", RAW_ARCHIVE:testR2Binding(), BULK_DATA:testR2Binding() });
   const owner = scopeAll(["P_A"]);
   owner.accountId = "A_1";
   owner.user.id = "user_owner";
@@ -58,7 +59,7 @@ function setupWorker() {
 await run.check("Concurrent upload and activation of same normalized hash resolves idempotently without duplicates", async () => {
   const { db, env, owner } = setupWorker();
 
-  const ndjson = '{"entity":"OccupancyDay","row":{"date":"2025-08-01","rooms":75}}\n';
+  const ndjson = '{"entity":"OccupancyDay","row":{"property_id":"P_A","date":"2025-08-01","rooms":75}}\n';
   const normalizedHash = await sha256Hex(ndjson);
   const compressedBuffer = await compressPayloadGzip(ndjson);
   const rawHash = await sha256Hex("raw_source_content");
@@ -174,15 +175,15 @@ await run.check("Concurrent upload and activation of same normalized hash resolv
 await run.check("High concurrency race: 5 concurrent activations resolve to exactly 1 active manifest and 1 revision", async () => {
   const { db, env, owner } = setupWorker();
 
-  const ndjson = '{"entity":"OccupancyDay","row":{"date":"2025-09-01","rooms":80}}\n';
+  const ndjson = '{"entity":"OccupancyDay","row":{"property_id":"P_A","date":"2025-09-01","rooms":80}}\n';
   const normalizedHash = await sha256Hex(ndjson);
   const expectedObjectKey = `rri-bulk/A_1/P_A/v1/${normalizedHash}.ndjson.gz`;
 
   // Seed storage with normalized object
   const mockStore = getMockStore();
   mockStore.set(expectedObjectKey, {
-    data: new Uint8Array(100).buffer,
-    customMetadata: { normalized_hash: normalizedHash },
+    data: await compressPayloadGzip(ndjson),
+    customMetadata: { account_id:"A_1",server_property_id:"P_A",normalized_hash: normalizedHash,row_count:"1",entity_counts_json:'{"OccupancyDay":1}' },
   });
 
   const promises = [];

@@ -1,3 +1,4 @@
+import { normalizedContent, contentHash } from '../../worker/bulk-contract.js';
 import localDb from '../api/localDb.js';
 
 export const ENTITY_MAP = Object.freeze({
@@ -60,15 +61,17 @@ export async function compressPayloadGzip(payloadString) {
   if (typeof CompressionStream !== 'undefined') {
     const cs = new CompressionStream('gzip');
     const writer = cs.writable.getWriter();
-    writer.write(bytes);
-    writer.close();
+    const writing = (async () => { await writer.write(bytes); await writer.close(); })();
+    void writing.catch(() => {});
     const chunks = [];
     const reader = cs.readable.getReader();
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       chunks.push(value);
+      if (chunks.reduce((n, c) => n + c.byteLength, 0) > 64 * 1024 * 1024) throw new Error("Decoded bundle too large");
     }
+    await writing;
     const totalLen = chunks.reduce((acc, c) => acc + c.byteLength, 0);
     const result = new Uint8Array(totalLen);
     let offset = 0;
@@ -78,8 +81,7 @@ export async function compressPayloadGzip(payloadString) {
     }
     return result;
   }
-  // Fallback: return raw bytes
-  return bytes;
+  throw new Error("Gzip compression unavailable");
 }
 
 /**
@@ -90,15 +92,17 @@ export async function decompressPayloadGzip(buffer) {
   if (typeof DecompressionStream !== 'undefined') {
     const ds = new DecompressionStream('gzip');
     const writer = ds.writable.getWriter();
-    writer.write(bytes);
-    writer.close();
+    const writing = (async () => { await writer.write(bytes); await writer.close(); })();
+    void writing.catch(() => {});
     const chunks = [];
     const reader = ds.readable.getReader();
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       chunks.push(value);
+      if (chunks.reduce((n, c) => n + c.byteLength, 0) > 64 * 1024 * 1024) throw new Error("Decoded bundle too large");
     }
+    await writing;
     const totalLen = chunks.reduce((acc, c) => acc + c.byteLength, 0);
     const result = new Uint8Array(totalLen);
     let offset = 0;
@@ -108,7 +112,7 @@ export async function decompressPayloadGzip(buffer) {
     }
     return new TextDecoder().decode(result);
   }
-  return new TextDecoder().decode(bytes);
+  throw new Error('Gzip decompression unavailable');
 }
 
 function dedupByKey(arr, keyFn) {
@@ -456,6 +460,7 @@ export async function uploadBundleToServer({
   normalizedHash,
   rowCount,
   compressedBuffer,
+  identityVersion = 1,
 }) {
   const payloadSha256 = await sha256Hex(compressedBuffer);
   const res = await fetch('/api/bulk-import/upload', {
@@ -469,6 +474,7 @@ export async function uploadBundleToServer({
       'x-normalized-hash': normalizedHash,
       'x-payload-sha256': payloadSha256,
       'x-row-count': String(rowCount),
+      'x-identity-version': String(identityVersion),
     },
     body: compressedBuffer,
   });
@@ -516,6 +522,9 @@ export async function executeBulkImport(scanResult, meta = {}) {
     rawBytes,
     mimeType = 'application/octet-stream',
     onStageChange,
+    resumeManifest = null,
+    supersedesBundleId: requestedPredecessor = null,
+    expectedRevision: requestedRevision = null,
   } = meta;
 
   if (typeof propertyId !== 'string' || propertyId.trim() === '') {
@@ -535,9 +544,11 @@ export async function executeBulkImport(scanResult, meta = {}) {
   }
 
   // 1. Calculate raw file hash
-  const rawFileHash = rawBytes
-    ? await sha256Hex(rawBytes)
-    : (scanResult.fileHash || await sha256Hex(sourceFile + ':' + (scanResult.totalRows || 0)));
+  if (!rawBytes) throw new Error('Original bytes are required for import or resume');
+  const rawFileHash = await sha256Hex(rawBytes);
+  if (resumeManifest && (resumeManifest.raw_file_hash !== rawFileHash || resumeManifest.server_property_id !== propertyId)) {
+    throw new Error('Resume source hash or property mismatch');
+  }
 
   // 2. Fast duplicate check against server D1 manifest (0 writes!)
   if (!forceImport) {
@@ -558,10 +569,10 @@ export async function executeBulkImport(scanResult, meta = {}) {
   // ============================================================================
   // PHASE 1: Permanent One-Shot Raw Archival (Write-Once Immutability)
   // ============================================================================
-  const rawArchiveId = `raw_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  let rawArchiveId = resumeManifest?.id || `raw_${crypto.randomUUID()}`;
   let rawObjectKey = '';
 
-  if (rawBytes) {
+  if (!resumeManifest) {
     onStageChange?.('archiving', 'Uploading original to permanent archive…');
     const uploadRawRes = await uploadRawArchiveToServer({
       serverPropertyId: propertyId,
@@ -575,7 +586,7 @@ export async function executeBulkImport(scanResult, meta = {}) {
     rawObjectKey = uploadRawRes.raw_object_key;
 
     // Record raw archive in D1 manifest (1 D1 write)
-    await recordRawArchiveOnServer({
+    const recorded = await recordRawArchiveOnServer({
       raw_archive_id: rawArchiveId,
       id: rawArchiveId,
       server_property_id: propertyId,
@@ -586,6 +597,7 @@ export async function executeBulkImport(scanResult, meta = {}) {
       file_size: rawBytes.byteLength,
       mime_type: mimeType,
     });
+    rawArchiveId = recorded.bundle_id;
     onStageChange?.('archived', 'Original safely archived');
   }
 
@@ -595,27 +607,11 @@ export async function executeBulkImport(scanResult, meta = {}) {
   onStageChange?.('processing', 'Processing and normalising records…');
 
   // Build normalized bundle
-  const bundleId = rawArchiveId || `imp_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  let bundleId = rawArchiveId || `imp_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
   const bundle = buildNormalizedBundle(scanResult, meta, bundleId);
 
   // Compute normalized hash
-  const normalizedHash = await sha256Hex(bundle.ndjson);
-
-  // Preflight check against normalized hash
-  if (!forceImport) {
-    const dupCheckNormalized = await checkDuplicateServer({
-      serverPropertyId: propertyId,
-      normalizedHash,
-    });
-    if (dupCheckNormalized.is_duplicate) {
-      return {
-        count: 0,
-        excluded: bundle.totalRowCount,
-        duplicate: true,
-        reason: 'Duplicate content — normalized data already imported.',
-      };
-    }
-  }
+  const normalizedHash = await contentHash(normalizedContent(bundle.ndjson.split("\n").filter(Boolean).map(line => JSON.parse(line))));
 
   // Gzip compression
   const compressedBuffer = await compressPayloadGzip(bundle.ndjson);
@@ -628,17 +624,42 @@ export async function executeBulkImport(scanResult, meta = {}) {
     normalizedHash,
     rowCount: bundle.totalRowCount,
     compressedBuffer,
+    identityVersion: 2,
   });
+
+  let supersedesBundleId = requestedPredecessor, expectedRevision = requestedRevision;
+  if (forceImport && !supersedesBundleId) {
+    let revision = 0, afterId = '';
+    const candidates = [];
+    for (;;) {
+      const query = new URLSearchParams({server_property_id: propertyId, since_revision: String(revision), after_id: afterId});
+      const response = await fetch(`/api/bulk-import/manifest?${query}`);
+      if (!response.ok) throw new Error('Cannot verify replacement authority');
+      const { manifests } = await response.json();
+      for (const m of manifests) if (m.status === 'active' && m.report_type === scanResult.type && m.normalized_hash !== normalizedHash &&
+        (m.raw_file_hash === rawFileHash || (m.min_date && m.max_date && bundle.minDate && bundle.maxDate && m.min_date <= bundle.maxDate && m.max_date >= bundle.minDate))) candidates.push(m);
+      if (manifests.length < 200) break;
+      const last = manifests[manifests.length - 1]; revision = last.revision; afterId = last.id;
+    }
+    if (candidates.length > 1) throw new Error('Correction overlaps multiple reports; reconcile the reports before importing');
+    if (candidates.length === 1) { supersedesBundleId = candidates[0].id; expectedRevision = candidates[0].revision; }
+  }
+
+  if (supersedesBundleId === bundleId) bundleId = `raw_${crypto.randomUUID()}`;
 
   // Compact D1 activation (Updates raw_archived row, 3 D1 rows written)
   const activationResult = await activateBundleOnServer({
     id: bundleId,
+    source_archive_id: rawArchiveId,
     server_property_id: propertyId,
     report_type: scanResult.type,
     raw_file_hash: rawFileHash,
     normalized_hash: normalizedHash,
     object_key: uploadResult.object_key,
     schema_version: 1,
+    identity_version: 2,
+    supersedes_bundle_id: supersedesBundleId,
+    expected_revision: expectedRevision,
     row_count: bundle.totalRowCount,
     entity_counts: bundle.entityCounts,
     min_date: bundle.minDate,
@@ -648,41 +669,30 @@ export async function executeBulkImport(scanResult, meta = {}) {
     compressed_size: compressedBuffer.byteLength,
   });
 
-  // Materialize rows directly into local IndexedDB (Dexie)
-  const entityTables = Object.keys(bundle.recordsByEntity)
-    .filter((ent) => localDb[ent])
-    .map((ent) => localDb[ent]);
-  const tablesToOpen = localDb.ImportRecordIds
-    ? [...entityTables, localDb.ImportRecordIds]
-    : entityTables;
-
-  if (tablesToOpen.length > 0) {
-    await localDb.transaction('rw', tablesToOpen, async () => {
-      for (const [entityName, rows] of Object.entries(bundle.recordsByEntity)) {
-        if (localDb[entityName] && rows.length > 0) {
-          await localDb[entityName].bulkPut(rows);
-          if (localDb.ImportRecordIds) {
-            await localDb.ImportRecordIds.put({
-              import_id: bundleId,
-              entity: entityName,
-              record_ids: rows.map((r) => r.id),
-              created_date: new Date().toISOString(),
-              status: 'active',
-            });
-          }
-        }
+  const { syncBulkBundles } = await import('./bulkHydrationService.js');
+  try {
+    await syncBulkBundles({ force: true, propertyId });
+  } catch (cause) {
+    const error = Object.assign(
+      new Error('Import saved on the server; local download failed. Refresh to retry synchronization.', { cause }),
+      {
+        bulkCommitted: true,
+        importId: activationResult.bundle_id,
+        authoritativeOutcomeUnknown: true,
       }
-    });
+    );
+    throw error;
   }
 
   onStageChange?.('done', 'Import complete');
 
   return {
     ok: true,
+    bulk: true,
     count: bundle.totalRowCount,
     excluded: (scanResult.totalRows || bundle.totalRowCount) - bundle.totalRowCount,
-    importId: bundleId,
-    bundle_id: bundleId,
+    importId: activationResult.bundle_id,
+    bundle_id: activationResult.bundle_id,
     raw_archive_id: rawArchiveId,
     revision: activationResult.revision,
     duplicate: false,

@@ -1,6 +1,6 @@
 // scripts/probe-normalized-bundle-streaming.mjs
 // Verifies Section 2, 3, 4:
-// 1. Production R2 path streams request.body directly to bulkStore.put (zero arrayBuffer buffering).
+// 1. Production R2 path bounds the request stream and verifies decoded content before R2 persistence.
 // 2. Upfront Content-Length rejection: >25 MB returns 413 PAYLOAD_TOO_LARGE, 0 bytes returns 400 IMPORT_EMPTY_PAYLOAD.
 // 3. Unknown Content-Length bounded size enforcement: stream exceeding 25 MB aborts with 413 without full buffering.
 // 4. Unknown Content-Length empty stream validation: stream with 0 bytes aborts with 400 IMPORT_EMPTY_PAYLOAD.
@@ -18,8 +18,9 @@ import {
   scopeAll,
   scopeSpecific,
 } from "./_worker-testkit.mjs";
-import { handleBulkImportRequest, clearMockStore } from "../worker/bulk-import.js";
-import { sha256Hex } from "../src/lib/bulkImportPipeline.js";
+import { handleBulkImportRequest } from "../worker/bulk-import.js";
+import { clearMockStore, testR2Binding } from "./_r2-testkit.mjs";
+import { sha256Hex, compressPayloadGzip } from "../src/lib/bulkImportPipeline.js";
 
 const run = makeRunner("probe-normalized-bundle-streaming");
 
@@ -34,7 +35,7 @@ function setupWorker() {
   db.prepare("INSERT OR IGNORE INTO property (id, account_id, code, name, rooms, address, city, state, phone, active, created_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
     .run("P_B", "A_1", "RRI-B", "Red Roof Inn B", 120, "456 Oak St", "Boston", "MA", "617-555-0200", 1, "2026-01-01");
 
-  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true" });
+  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true", RAW_ARCHIVE:testR2Binding(), BULK_DATA:testR2Binding() });
   const owner = scopeAll(["P_A", "P_B"]);
   owner.accountId = "A_1";
   owner.user.id = "user_owner";
@@ -52,10 +53,11 @@ function setupWorker() {
 }
 
 // 1. Regression test: request.arrayBuffer() is NEVER called in production R2 path
-await run.check("Production R2 path streams request.body directly without arrayBuffer buffering", async () => {
+await run.check("Production R2 path bounds and validates request stream before persisting bytes", async () => {
   const { env, owner } = setupWorker();
-  const samplePayload = new TextEncoder().encode('{"entity":"OccupancyDay","row":{"date":"2025-08-01","rooms":50}}\n');
-  const normalizedHash = await sha256Hex("dummy_ndjson_data");
+  const ndjson = '{"entity":"OccupancyDay","row":{"property_id":"P_A","date":"2025-08-01","rooms":50}}\n';
+  const samplePayload = await compressPayloadGzip(ndjson);
+  const normalizedHash = await sha256Hex(ndjson);
   const payloadHash = await sha256Hex(samplePayload);
 
   let r2PutCalled = false;
@@ -65,19 +67,15 @@ await run.check("Production R2 path streams request.body directly without arrayB
 
   // Mock R2 bucket bound to env.BULK_DATA
   env.BULK_DATA = {
+    ...testR2Binding(),
     async head() { return null; },
     async put(key, body, options) {
       r2PutCalled = true;
       putKey = key;
-      putBodyType = typeof body?.getReader === "function" ? "ReadableStream" : typeof body;
+      putBodyType = body instanceof ArrayBuffer ? "ArrayBuffer" : typeof body;
       putOptions = options;
 
-      // Drain the stream to simulate real R2 consumption
-      const reader = body.getReader();
-      while (true) {
-        const { done } = await reader.read();
-        if (done) break;
-      }
+      await new Response(body).arrayBuffer();
       return { key, size: samplePayload.byteLength };
     },
   };
@@ -108,7 +106,7 @@ await run.check("Production R2 path streams request.body directly without arrayB
   assertEqual(res.status, 201, "Streaming upload returns 201 Created");
   assert(!arrayBufferCalled, "request.arrayBuffer() was NEVER called in production path");
   assert(r2PutCalled, "bulkStore.put was called");
-  assertEqual(putBodyType, "ReadableStream", "bulkStore.put received a ReadableStream directly");
+  assertEqual(putBodyType, "ArrayBuffer", "R2 receives bounded, validated compressed bytes");
   assertEqual(putKey, `rri-bulk/A_1/P_A/v1/${normalizedHash}.ndjson.gz`, "Object key matches content-addressed format");
   assertEqual(putOptions?.httpMetadata?.contentEncoding, "gzip", "Preserves gzip contentEncoding");
   assertEqual(putOptions?.httpMetadata?.contentType, "application/x-ndjson", "Preserves ndjson contentType");
@@ -121,6 +119,7 @@ await run.check("Upfront Content-Length > 25 MB is rejected with HTTP 413 PAYLOA
   const normalizedHash = await sha256Hex("test_oversized");
 
   env.BULK_DATA = {
+    ...testR2Binding(),
     async put() { throw new Error("Should not be called!"); },
   };
 
@@ -147,6 +146,7 @@ await run.check("Upfront Content-Length = 0 is rejected with HTTP 400 IMPORT_EMP
   const normalizedHash = await sha256Hex("test_empty");
 
   env.BULK_DATA = {
+    ...testR2Binding(),
     async put() { throw new Error("Should not be called!"); },
   };
 
@@ -187,6 +187,7 @@ await run.check("Unknown Content-Length: stream exceeding 25 MB aborts with 413 
   });
 
   env.BULK_DATA = {
+    ...testR2Binding(),
     async head() { return null; },
     async put(key, stream) {
       const reader = stream.getReader();
@@ -227,6 +228,7 @@ await run.check("Unknown Content-Length: empty stream (0 bytes) returns 400 IMPO
   });
 
   env.BULK_DATA = {
+    ...testR2Binding(),
     async head() { return null; },
     async put(key, stream) {
       const reader = stream.getReader();
@@ -262,9 +264,10 @@ await run.check("Idempotent upload returns HTTP 200 already_uploaded when object
   const normalizedHash = await sha256Hex("idempotent_sample");
 
   env.BULK_DATA = {
+    ...testR2Binding(),
     async head(key) {
       if (key.includes(normalizedHash)) {
-        return { size: samplePayload.byteLength, customMetadata: { normalized_hash: normalizedHash } };
+        return { size: samplePayload.byteLength, customMetadata: { account_id:"A_1",server_property_id:"P_A",normalized_hash: normalizedHash } };
       }
       return null;
     },

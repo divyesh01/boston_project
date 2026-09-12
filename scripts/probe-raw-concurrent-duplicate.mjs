@@ -19,7 +19,8 @@ import {
   scopeAll,
   scopeSpecific,
 } from "./_worker-testkit.mjs";
-import { handleBulkImportRequest, clearMockStore, getMockStore } from "../worker/bulk-import.js";
+import { handleBulkImportRequest } from "../worker/bulk-import.js";
+import { clearMockStore, getMockStore, testR2Binding } from "./_r2-testkit.mjs";
 import { sha256Hex } from "../src/lib/bulkImportPipeline.js";
 
 const run = makeRunner("probe-raw-concurrent-duplicate");
@@ -37,7 +38,7 @@ function setupWorker() {
   db.prepare("INSERT OR IGNORE INTO property (id, account_id, code, name, rooms, address, city, state, phone, active, created_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
     .run("P_B", "A_1", "RRI-B", "Red Roof Inn B", 120, "456 Oak St", "Boston", "MA", "617-555-0200", 1, "2026-01-01");
 
-  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true" });
+  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true", RAW_ARCHIVE:testR2Binding(), BULK_DATA:testR2Binding() });
   const owner = scopeAll(["P_A", "P_B"]);
   owner.accountId = "A_1";
   owner.user.id = "user_owner";
@@ -201,7 +202,7 @@ await run.check("High concurrency race: 5 concurrent manifest recordings yield e
   const mockStore = getMockStore();
   mockStore.set(canonicalKey, {
     data: rawBytes.buffer,
-    customMetadata: { raw_hash: rawHash },
+    customMetadata: { account_id:"A_1",server_property_id:"P_A",raw_hash: rawHash },
   });
 
   const promises = [];

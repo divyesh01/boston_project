@@ -10,6 +10,9 @@ every module and symbol below still exists and that `PROTECTED` matches
 
 | Module | Invariant | Risk | Area |
 |---|---|---|---|
+| `worker/bulk-contract.js#normalizedContent` | Content identity excludes generated provenance; rows must belong to the manifest property and an allowed entity. | HIGH | HotelKey import |
+| `worker/bulk-import.js#handleBulkImportRequest` | Canonical verified storage, atomic activation/replacement and retryable revisions govern analytics authority. | HIGH | HotelKey import |
+| `src/lib/bulkHydrationService.js#syncBulkBundles` | A verified page and its cursor persist in one transaction; failures remain retryable. | HIGH | Business sync |
 | `src/lib/reportParsers.js#parseReport` | Every row of a HotelKey export is either imported or reported; none is silently dropped. | HIGH | HotelKey import |
 | `src/lib/universalParser.js#parseHotelReport` | Report type detection is content-driven; an unrecognised report fails loudly rather than parsing as another type. | HIGH | HotelKey import |
 | `src/lib/importValidation.js#validateImport` | Structure, types, constraints and semantics all run before persistence; a `null` amount stays distinguishable from `0`. | HIGH | HotelKey import |

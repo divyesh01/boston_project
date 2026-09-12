@@ -1,6 +1,6 @@
 // scripts/probe-bulk-import-archive-mutations.mjs
 // Verifies Section 56 Mutation Tests A1 through A10:
-// A1: replace raw object in place -> FAILS (rejected by 409 Conflict)
+// A1: replace raw object in place -> FAILS (rejected by 403 scope rejection)
 // A2: Delete Import deletes raw source -> FAILS (raw source preserved)
 // A3: processing retry requires File object from local browser -> FAILS (server archive resume needs no local file)
 // A4: same filename causes identity collision -> FAILS (content-addressed hash avoids collision)
@@ -23,7 +23,8 @@ import {
   scopeAll,
   scopeSpecific,
 } from "./_worker-testkit.mjs";
-import { handleBulkImportRequest, clearMockStore, getMockStore } from "../worker/bulk-import.js";
+import { handleBulkImportRequest } from "../worker/bulk-import.js";
+import { clearMockStore, getMockStore, testR2Binding } from "./_r2-testkit.mjs";
 import {
   buildNormalizedBundle,
   compressPayloadGzip,
@@ -44,7 +45,7 @@ function setupWorker() {
     .run("P_B", "A_1", "RRI-B", "Red Roof Inn B", 120, "456 Oak St", "Boston", "MA", "617-555-0200", 1, "2026-01-01");
   db.prepare("INSERT OR IGNORE INTO business_sync_state (account_id, revision) VALUES (?, ?)").run("A_1", 0);
 
-  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true" });
+  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true", RAW_ARCHIVE: testR2Binding(), BULK_DATA: testR2Binding() });
   const owner = scopeAll(["P_A", "P_B"]);
   owner.accountId = "A_1";
   owner.user.id = "user_owner";
@@ -62,7 +63,7 @@ function setupWorker() {
 }
 
 // A1: replace raw object in place
-await run.check("A1 mutant killed: in-place raw overwrite is rejected with 409 Conflict", async () => {
+await run.check("A1 mutant killed: in-place raw overwrite is rejected with 403 scope rejection", async () => {
   const { env, owner } = setupWorker();
   const fileBytes = new TextEncoder().encode("original content");
   const hash = await sha256Hex(fileBytes);
@@ -88,9 +89,9 @@ await run.check("A1 mutant killed: in-place raw overwrite is rejected with 409 C
     body: fileBytes,
   });
   const res2 = await handleBulkImportRequest(req2, env, owner, new URL(req2.url), ["api", "bulk-import", "raw-upload"]);
-  assertEqual(res2.status, 409, "In-place overwrite rejected with 409 Conflict");
+  assertEqual(res2.status, 403, "In-place overwrite rejected with 403 scope rejection");
   const errData = await res2.json();
-  assertEqual(errData.code, "RAW_OBJECT_CONFLICT");
+  assertEqual(errData.code, "IMPORT_OBJECT_SCOPE_MISMATCH");
 });
 
 // A2: Delete Import deletes raw source
@@ -395,13 +396,13 @@ await run.check("A8 mutant killed: raw archive download across property boundari
 await run.check("A9 mutant killed: raw archive destruction is forbidden without owner authorization and explicit confirm, and blocked if locked", async () => {
   const { db, env, managerA, owner } = setupWorker();
   const archiveId = "arch_protected";
-  const rawKey = "rri-raw/A_1/P_A/2026/01/raw_h/protected.csv";
+  const rawKey = "rri-raw/A_1/P_A/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
   // Seed manifest
   db.prepare(`INSERT INTO import_bundle_manifest (
     id, account_id, server_property_id, report_type, raw_file_hash,
     raw_archive_id, raw_object_key, original_file_name, source_immutable, uploaded_by, status, created_at, revision
-  ) VALUES ('b_prot', 'A_1', 'P_A', 'occupancy', 'raw_h', 'arch_protected', ?, 'protected.csv', 1, 'u', 'raw_archived', '2026-01-01', 1)`).run(rawKey);
+  ) VALUES ('b_prot', 'A_1', 'P_A', 'occupancy', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'arch_protected', ?, 'protected.csv', 1, 'u', 'raw_archived', '2026-01-01', 1)`).run(rawKey);
 
   const req1 = new Request("http://localhost/api/bulk-import/raw-destroy", {
     method: "POST",
@@ -432,8 +433,8 @@ await run.check("A9 mutant killed: raw archive destruction is forbidden without 
   assert(status2 === 400 || status2 === 403, "Owner raw destroy without confirm phrase is rejected with 400/403");
 
   // R2 Bucket Lock rejection test
-  const { getMockStore } = await import("../worker/bulk-import.js");
-  getMockStore().set(rawKey, { data: new Uint8Array([1, 2, 3]), _locked: true });
+  const { getMockStore } = await import("./_r2-testkit.mjs");
+  getMockStore().set(rawKey, { data: new Uint8Array([1, 2, 3]), customMetadata: {account_id:"A_1",server_property_id:"P_A",raw_hash:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, _locked: true });
 
   const req3 = new Request("http://localhost/api/bulk-import/raw-destroy", {
     method: "POST",

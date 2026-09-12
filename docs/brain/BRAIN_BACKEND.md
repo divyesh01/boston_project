@@ -789,3 +789,66 @@ Primary gates: `scripts/probe-d1-quota-auth-failure.mjs`, `scripts/probe-d1-quot
 
 
 
+
+
+## Bulk import integrity — 2026-09-12 implementation
+
+The frozen review baseline was `fe532fde3af650527437adf6f8876506c5bdb26d`.
+`worker/bulk-import.js` now computes and verifies exact account/property/hash object
+keys, requires both R2 bindings, and has no production memory store. Test bindings
+live only in `scripts/_r2-testkit.mjs` and are injected explicitly.
+
+`worker/bulk-contract.js` defines the entity allowlist and version-2 business-content
+hash. Generated IDs, import provenance and timestamps are excluded from identity.
+The server validates gzip, content hash, entity, property and counts before upload;
+activation derives report coverage from those verified bytes. Raw input is capped
+at 50 MiB, compressed bundles at 25 MiB, and decoded bundles at 16 MiB. These limits
+are correctness guards, not proof of remote CPU/memory suitability.
+
+Raw deletion uses `archived -> destroying -> destroyed`, independent of analytics
+`status`. Migration `0006_bulk_import_integrity.sql` expands the CHECK from 0005
+without changing 0005 or dropping any manifest columns/data. Intent is durable
+before deletion; retry completes after an ambiguous deletion or failed D1 completion.
+Only recognized retention errors are labeled locked. Ordinary storage failures stay
+pending. A source shared by multiple manifests receives the same raw lifecycle state.
+No background reconciliation scheduler has been deployed: the owner retries the
+same confirmed request. Analytics deletion tombstones manifests and retains immutable
+normalized bytes; a separate reference-aware collector is required for physical GC.
+
+Activation and replacement commit manifest(s), revision and feed together. Conflicting
+revision allocations retry the full transaction. Replacement requires an active,
+same-property/report predecessor with its expected revision. Multiple overlapping
+reports fail closed for explicit reconciliation. The UI's Force Import selects a
+single overlapping predecessor and sends its revision. Parser corrections can reuse
+one original while producing a new analytics version. Identical business content
+resolves to the existing active bundle.
+
+Resume passes archived bytes, original hash and manifest identity through CSV/XLS/XLSX
+parsing and activation. Excel uses the existing local xlsx dependency, requires one
+sheet, and never silently skips additional sheets. Hydration verifies complete pages
+before atomically committing rows, evictions and a property-specific (revision,id)
+cursor. The ID tie-breaker preserves same-revision replacements across page boundaries.
+HTTP sends opaque `application/gzip` bytes without Content-Encoding, so decoding occurs
+exactly once. Rows are assigned manifest-owned local identities.
+
+Bulk report rows replace overlapping legacy cache rows for covered entity/dates.
+Legacy cache rebuilds reapply the complete bulk authority. Reset tombstones applicable
+bulk manifests as well as deleting legacy business records, including bulk-only
+accounts; original raw files remain. Existing overlapping active R2 reports from older
+code are not automatically adjudicated: reconcile them before enabling production.
+
+Evidence: `scripts/probe-bulk-import-integrity.mjs` calls the real pipeline and
+hydration service against sequential production migrations, explicit R2 doubles and
+real Dexie. It covers isolation, missing bindings, identity, replacement, same-source
+parser correction, CSV/XLS/XLSX resume, hydration failures, deletion recovery,
+concurrency, legacy/reset and real local HTTP gzip behavior. Existing bulk probes
+retain their assertions; cost probes now count writes separately from SELECTs and
+actually generate their claimed 100k rows.
+
+Solo implementation was explicitly requested: no Gemini, OpenCode or subagent calls.
+Production was not changed. Remote Cloudflare tests await an isolated Worker, D1 and
+R2 target; local tests do not establish bucket-lock error shapes, CPU limits, live
+migration/rollback or deployment readiness. Apply/test migration in staging before
+code rollout. Do not roll back to the reviewed destructive handler; keep bulk routes
+unavailable while restoring a verified compatible release. A short independent review
+of the resulting commit is still required before production.

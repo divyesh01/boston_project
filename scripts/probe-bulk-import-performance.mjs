@@ -12,7 +12,8 @@ import {
   seedUser,
   scopeAll,
 } from "./_worker-testkit.mjs";
-import { handleBulkImportRequest, clearMockStore } from "../worker/bulk-import.js";
+import { handleBulkImportRequest } from "../worker/bulk-import.js";
+import { clearMockStore, testR2Binding } from "./_r2-testkit.mjs";
 import { compressPayloadGzip, sha256Hex } from "../src/lib/bulkImportPipeline.js";
 
 const run = makeRunner("probe-bulk-import-performance");
@@ -26,7 +27,7 @@ function setupEnv() {
     .run("P_A", "A_1", "RRI-PERF", "Red Roof Inn Perf", 100, "123 Perf St", "Boston", "MA", "617-555-0100", 1, "2026-01-01");
   db.prepare("INSERT OR IGNORE INTO business_sync_state (account_id, revision) VALUES (?, ?)").run("A_1", 0);
 
-  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true" });
+  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true", RAW_ARCHIVE: testR2Binding(), BULK_DATA: testR2Binding() });
   const owner = scopeAll(["P_A"]);
   owner.accountId = "A_1";
   owner.user.id = "user_owner";
@@ -46,7 +47,7 @@ await run.check("Bulk import of 18 files consumes <= 5 D1 writes per file and sc
     const rawHash = await sha256Hex(rawFileContent);
     const ndjson = Array.from({ length: rowsPerFile }, (_, i) => JSON.stringify({
       entity: "OccupancyDay",
-      row: { id: f * 10000 + i, date: "2026-08-01", property_id: "P_A", rooms_occupied: 50 }
+      row: { id: f * 10000 + i, date: `2026-08-${String(f).padStart(2,"0")}`, property_id: "P_A", rooms_occupied: 50 }
     })).join('\n');
     const normalizedHash = await sha256Hex(ndjson);
     const compressed = await compressPayloadGzip(ndjson);
@@ -88,7 +89,7 @@ await run.check("Bulk import of 18 files consumes <= 5 D1 writes per file and sc
     const activateRes = await handleBulkImportRequest(activateReq, env, owner, new URL(activateReq.url), ["api", "bulk-import", "activate"]);
     assertEqual(activateRes.status, 201, `Activate file ${f} status`);
 
-    const writesForThisFile = stats.statements - stmtsBefore;
+    const writesForThisFile = stats.calls.slice(stmtsBefore).filter(c => /^\s*(INSERT|UPDATE|DELETE)/i.test(c.sql)).length;
     assert(writesForThisFile <= 5, `Expected <= 5 D1 writes for file ${f}, got ${writesForThisFile}`);
     totalD1Writes += writesForThisFile;
   }
@@ -104,8 +105,8 @@ await run.check("100k-row single report file consumes <= 5 D1 writes (O(1) with 
   const rowCount = 100_000;
 
   const rawHash = "a".repeat(64);
-  const normalizedHash = "b".repeat(64);
-  const ndjson = JSON.stringify({ entity: "TransactionLine", row: { id: 1, count: rowCount } });
+  const ndjson = Array.from({length: rowCount}, (_, id) => JSON.stringify({ entity: "TransactionLine", row: { id, property_id: "P_A" } })).join("\n");
+  const normalizedHash = await sha256Hex(ndjson);
   const compressed = await compressPayloadGzip(ndjson);
 
   const uploadReq = new Request("http://localhost/api/bulk-import/upload", {
@@ -143,7 +144,7 @@ await run.check("100k-row single report file consumes <= 5 D1 writes (O(1) with 
   const activateRes = await handleBulkImportRequest(activateReq, env, owner, new URL(activateReq.url), ["api", "bulk-import", "activate"]);
   assertEqual(activateRes.status, 201);
 
-  const writesFor100k = stats.statements - stmtsBefore;
+  const writesFor100k = stats.calls.slice(stmtsBefore).filter(c => /^\s*(INSERT|UPDATE|DELETE)/i.test(c.sql)).length;
   assert(writesFor100k <= 5, `100k-row import consumed ${writesFor100k} D1 writes, expected <= 5`);
 });
 

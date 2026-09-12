@@ -2,7 +2,7 @@
 // Verifies write-once immutability, overwrite refusal, and tamper rejection:
 // 1. First upload of raw file creates permanent archive (201 Created).
 // 2. Duplicate upload of identical raw file is idempotent (200 OK).
-// 3. Attempted overwrite of existing object key with DIFFERENT bytes fails closed (409 Conflict).
+// 3. Attempted overwrite of existing object key with DIFFERENT bytes fails closed (403 scope rejection).
 // 4. Tampered payload checksum (declared hash != computed hash) is rejected (400 Bad Request).
 // 5. "Remove from Analytics" (POST /delete) tombstones analytics data, but raw R2 archive is NEVER deleted.
 // 6. Direct raw archive destruction is gated by owner authorization and immutability policy.
@@ -17,7 +17,8 @@ import {
   scopeAll,
   scopeSpecific,
 } from "./_worker-testkit.mjs";
-import { handleBulkImportRequest, clearMockStore, getMockStore } from "../worker/bulk-import.js";
+import { handleBulkImportRequest } from "../worker/bulk-import.js";
+import { clearMockStore, getMockStore, testR2Binding } from "./_r2-testkit.mjs";
 import { sha256Hex, compressPayloadGzip } from "../src/lib/bulkImportPipeline.js";
 
 const run = makeRunner("probe-bulk-import-immutable-source");
@@ -33,7 +34,7 @@ function setupWorker() {
     .run("P_A", "A_1", "RRI-IMMUT", "Red Roof Inn Immut", 100, "123 Main St", "Boston", "MA", "617-555-0100", 1, "2026-01-01");
   db.prepare("INSERT OR IGNORE INTO business_sync_state (account_id, revision) VALUES (?, ?)").run("A_1", 0);
 
-  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true" });
+  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true", RAW_ARCHIVE: testR2Binding(), BULK_DATA: testR2Binding() });
   const owner = scopeAll(["P_A"]);
   owner.accountId = "A_1";
   owner.user.id = "user_owner";
@@ -49,7 +50,7 @@ function setupWorker() {
   return { db, env, stats, owner, staff };
 }
 
-await run.check("Write-once immutability: idempotent 200 on identical file, 409 Conflict on overwrite attempt", async () => {
+await run.check("Write-once immutability: idempotent 200 on identical file, 403 scope rejection on overwrite attempt", async () => {
   const { env, owner } = setupWorker();
   const propertyId = "P_A";
 
@@ -105,9 +106,9 @@ await run.check("Write-once immutability: idempotent 200 on identical file, 409 
     body: contentA,
   });
   const upRes3 = await handleBulkImportRequest(upReq3, env, owner, new URL(upReq3.url), ["api", "bulk-import", "raw-upload"]);
-  assertEqual(upRes3.status, 409, "Object key collision with different content returns 409 Conflict");
+  assertEqual(upRes3.status, 403, "Object key collision with different content returns 403 scope rejection");
   const data3 = await upRes3.json();
-  assertEqual(data3.code, "RAW_OBJECT_CONFLICT");
+  assertEqual(data3.code, "IMPORT_OBJECT_SCOPE_MISMATCH");
 
   // Restore stored hash
   storedObj.customMetadata.raw_hash = hashA;
@@ -176,7 +177,7 @@ await run.check("Delete / Undo semantics: 'Remove from Analytics' leaves raw arc
   await handleBulkImportRequest(recReq, env, owner, new URL(recReq.url), ["api", "bulk-import", "raw-archive"]);
 
   // Upload normalized bundle & activate
-  const normPayload = JSON.stringify({ entity: "OccupancyDay", row: { count: 1 } });
+  const normPayload = JSON.stringify({ entity: "OccupancyDay", row: { count: 1, property_id: "P_A" } });
   const normHash = await sha256Hex(normPayload);
   const compressed = await compressPayloadGzip(normPayload);
 
@@ -231,7 +232,7 @@ await run.check("Destruction governance: non-owner forbidden (403), immutable ar
   db.prepare(`INSERT INTO import_bundle_manifest (
     id, account_id, server_property_id, report_type, raw_file_hash,
     raw_archive_id, raw_object_key, original_file_name, source_immutable, uploaded_by, status, created_at, revision
-  ) VALUES ('b_dest', 'A_1', 'P_A', 'occupancy', 'raw_h', 'arch_dest', 'k_dest', 'file.csv', 1, 'u', 'raw_archived', '2026-01-01', 1)`).run();
+  ) VALUES ('b_dest', 'A_1', 'P_A', 'occupancy', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'arch_dest', 'rri-raw/A_1/P_A/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'file.csv', 1, 'u', 'raw_archived', '2026-01-01', 1)`).run();
 
   // Non-owner staff attempts to destroy raw archive
   const staffDestroyReq = new Request("http://localhost/api/bulk-import/raw-destroy", {
@@ -254,8 +255,8 @@ await run.check("Destruction governance: non-owner forbidden (403), immutable ar
   assertEqual(unconfData.code, "CANNOT_DESTROY_IMMUTABLE_ARCHIVE");
 
   // R2 Bucket Lock Test: R2 object has bucket lock active
-  const { getMockStore } = await import("../worker/bulk-import.js");
-  getMockStore().set("k_dest", { data: new Uint8Array([1, 2, 3]), _locked: true });
+  const { getMockStore } = await import("./_r2-testkit.mjs");
+  getMockStore().set("rri-raw/A_1/P_A/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", { data: new Uint8Array([1, 2, 3]), customMetadata: {account_id:"A_1",server_property_id:"P_A",raw_hash:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, _locked: true });
 
   const lockedDestroyReq = new Request("http://localhost/api/bulk-import/raw-destroy", {
     method: "POST",

@@ -1549,10 +1549,7 @@ async function resetImportedData(request, env, scope) {
   }
 
   const pointer = await queryFirst(env, "SELECT active_generation_id FROM business_dataset_pointer WHERE account_id=?", [scope.accountId]);
-  if (!pointer) {
-    return Response.json({ ok: true, deleted_records: 0, message: "no active dataset" });
-  }
-  const activeGenerationId = String(pointer.active_generation_id);
+  const activeGenerationId = pointer ? String(pointer.active_generation_id) : 'bulk';
 
   const placeholders = targetEntities.map(() => "?").join(",");
   const countSql = isAllProperties
@@ -1588,6 +1585,11 @@ async function resetImportedData(request, env, scope) {
     ).bind(scope.accountId, ...targetEntities, propertyId));
   }
 
+  // Reset analytics authority in both planes; original R2 archives remain intact.
+  statements.push(env.DB.prepare(`UPDATE import_bundle_manifest SET status='tombstoned',deleted_at=?,revision=?
+    WHERE account_id=? AND status='active' AND (?='all' OR server_property_id=?)
+    AND EXISTS (SELECT 1 FROM json_each(entity_counts_json) WHERE key IN (${placeholders}))`)
+    .bind(now,newRevision,scope.accountId,isAllProperties ? 'all' : propertyId,propertyId,...targetEntities));
   statements.push(env.DB.prepare(
     "INSERT INTO business_change (account_id,seq,generation_id,entity_name,record_key,server_property_id,operation,row_json,row_hash,mutation_id,request_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
   ).bind(scope.accountId, newRevision, activeGenerationId, targetEntities[0] || "OccupancyDay", "__reset__", isAllProperties ? null : propertyId, "property_delete", null, null, resetMutationId, resetHash, now));

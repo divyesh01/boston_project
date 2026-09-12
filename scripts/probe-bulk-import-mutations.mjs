@@ -21,7 +21,8 @@ import {
   scopeAll,
   scopeSpecific,
 } from "./_worker-testkit.mjs";
-import { handleBulkImportRequest, clearMockStore, getMockStore } from "../worker/bulk-import.js";
+import { handleBulkImportRequest } from "../worker/bulk-import.js";
+import { clearMockStore, getMockStore, testR2Binding } from "./_r2-testkit.mjs";
 import {
   buildNormalizedBundle,
   compressPayloadGzip,
@@ -44,7 +45,7 @@ function setupEnv() {
 
   db.prepare("INSERT OR IGNORE INTO business_sync_state (account_id, revision) VALUES (?, ?)").run("A_1", 0);
 
-  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true" });
+  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true", RAW_ARCHIVE: testR2Binding(), BULK_DATA: testR2Binding() });
   const owner = scopeAll(["P_A", "P_B"]);
   owner.accountId = "A_1";
   owner.user.id = "user_owner";
@@ -69,10 +70,10 @@ await run.check("M1: Proving per-row D1 path consumes > 10,000 writes while bund
 
   // Bundle path
   const { env, stats, owner } = setupEnv();
-  const ndjson = JSON.stringify({ entity: "OccupancyDay", row: { count: rowCount } });
+  const ndjson = Array.from({length: rowCount}, (_, id) => JSON.stringify({ entity: "OccupancyDay", row: { id, property_id: "P_A" } })).join("\n");
+  const normHash = await sha256Hex(ndjson);
   const compressed = await compressPayloadGzip(ndjson);
   const rawHash = "1".repeat(64);
-  const normHash = "2".repeat(64);
 
   const uploadReq = new Request("http://localhost/api/bulk-import/upload", {
     method: "PUT",
@@ -95,7 +96,7 @@ await run.check("M1: Proving per-row D1 path consumes > 10,000 writes while bund
     }),
   });
   await handleBulkImportRequest(activateReq, env, owner, new URL(activateReq.url), ["api", "bulk-import", "activate"]);
-  const bundleWrites = stats.statements - stmtsBefore;
+  const bundleWrites = stats.calls.slice(stmtsBefore).filter(c => /^\s*(INSERT|UPDATE|DELETE)/i.test(c.sql)).length;
   assert(bundleWrites <= 5, `Bundle path consumed ${bundleWrites} writes, expected <= 5`);
   assert(bundleWrites < legacyWrites / 1000, "Bundle path achieves > 1000x write reduction");
 });
@@ -150,8 +151,8 @@ await run.check("M3: R2 object without active D1 manifest is invisible to hydrat
 await run.check("M4: Property authorization is strictly enforced on object fetch (Property isolation)", async () => {
   const { env, owner, restricted } = setupEnv();
   // Owner uploads a bundle for property P_B
-  const normHash = "b400".padStart(64, "0");
   const ndjson = JSON.stringify({ entity: "OccupancyDay", row: { property_id: "P_B" } });
+  const normHash = await sha256Hex(ndjson);
   const compressed = await compressPayloadGzip(ndjson);
 
   const uploadReq = new Request("http://localhost/api/bulk-import/upload", {
@@ -196,8 +197,8 @@ await run.check("M5: Tampered hash is rejected during activation and upload", as
 
 await run.check("M6: Concurrent duplicate imports resolve idempotently to exactly 1 active manifest", async () => {
   const { env, owner } = setupEnv();
-  const normHash = "c600".padStart(64, "0");
-  const ndjson = JSON.stringify({ entity: "OccupancyDay", row: { id: 1 } });
+  const ndjson = JSON.stringify({ entity: "OccupancyDay", row: { id: 1, property_id: "P_A" } });
+  const normHash = await sha256Hex(ndjson);
   const compressed = await compressPayloadGzip(ndjson);
 
   const uploadReq = new Request("http://localhost/api/bulk-import/upload", {
@@ -231,8 +232,8 @@ await run.check("M6: Concurrent duplicate imports resolve idempotently to exactl
 
 await run.check("M7: D1 activation failure after R2 upload leaves 0 active manifests", async () => {
   const { db, env, owner } = setupEnv();
-  const normHash = "d700".padStart(64, "0");
-  const ndjson = JSON.stringify({ entity: "OccupancyDay", row: { id: 1 } });
+  const ndjson = JSON.stringify({ entity: "OccupancyDay", row: { id: 1, property_id: "P_A" } });
+  const normHash = await sha256Hex(ndjson);
   const compressed = await compressPayloadGzip(ndjson);
 
   // Upload succeeds
@@ -272,9 +273,9 @@ await run.check("M8: Failed/empty upload leaves no active manifest", async () =>
 
 await run.check("M9: Architecture gate: Bulk import routes do not invoke 13-row transaction chunk endpoint", async () => {
   const { env, stats, owner } = setupEnv();
-  const ndjson = JSON.stringify({ entity: "OccupancyDay", row: { id: 1 } });
+  const ndjson = JSON.stringify({ entity: "OccupancyDay", row: { id: 1, property_id: "P_A" } });
+  const normHash = await sha256Hex(ndjson);
   const compressed = await compressPayloadGzip(ndjson);
-  const normHash = "9".repeat(64);
 
   // Execute full bulk import flow
   const uploadReq = new Request("http://localhost/api/bulk-import/upload", {
@@ -306,7 +307,7 @@ await run.check("M10: Revoked session / unauthorized user is denied access to kn
     body: JSON.stringify({ id: "b_m10", server_property_id: "P_A", report_type: "occupancy", normalized_hash: normHash }),
   });
   // Need object in store first
-  getMockStore().set(`rri-bulk/A_1/P_A/v1/${normHash}.ndjson.gz`, { data: new Uint8Array([1, 2, 3]) });
+  getMockStore().set(`rri-bulk/A_1/P_A/v1/${normHash}.ndjson.gz`, { data: new Uint8Array([1, 2, 3]), customMetadata: { account_id:"A_1",server_property_id:"P_A",normalized_hash:normHash,row_count:"1",entity_counts_json:'{"OccupancyDay":1}' } });
   await handleBulkImportRequest(activateReq, env, owner, new URL(activateReq.url), ["api", "bulk-import", "activate"]);
 
   // Unauthenticated caller (null or empty scope)

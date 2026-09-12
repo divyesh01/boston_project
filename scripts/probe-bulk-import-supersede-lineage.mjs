@@ -17,7 +17,8 @@ import {
   seedUser,
   scopeAll,
 } from "./_worker-testkit.mjs";
-import { handleBulkImportRequest, clearMockStore } from "../worker/bulk-import.js";
+import { handleBulkImportRequest } from "../worker/bulk-import.js";
+import { clearMockStore, testR2Binding } from "./_r2-testkit.mjs";
 import {
   buildNormalizedBundle,
   compressPayloadGzip,
@@ -44,7 +45,7 @@ function setupWorker() {
     .run("P_A", "A_1", "RRI-LINEAGE", "Red Roof Inn Lineage", 100, "123 Main St", "Boston", "MA", "617-555-0100", 1, "2026-01-01");
   db.prepare("INSERT OR IGNORE INTO business_sync_state (account_id, revision) VALUES (?, ?)").run("A_1", 0);
 
-  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true" });
+  const { env, stats } = makeInstrumentedEnv(db, { ENABLE_BUSINESS_SYNC_API: "true", RAW_ARCHIVE: testR2Binding(), BULK_DATA: testR2Binding() });
   const owner = scopeAll(["P_A"]);
   owner.accountId = "A_1";
   owner.user.id = "user_owner";
@@ -181,21 +182,11 @@ await run.check("Supersede lineage: corrected export replaces active bundle whil
       normalized_hash: v2NormHash,
       row_count: 2,
       supersedes_bundle_id: v1BundleId,
+      expected_revision: db.prepare("SELECT revision FROM import_bundle_manifest WHERE id=?").get(v1BundleId).revision,
     }),
   });
-  await handleBulkImportRequest(act2, env, owner, new URL(act2.url), ["api", "bulk-import", "activate"]);
-
-  // Explicit supersede call
-  const supReq = new Request("http://localhost/api/bulk-import/supersede", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      old_bundle_id: v1BundleId,
-      new_bundle_id: v2BundleId,
-    }),
-  });
-  const supRes = await handleBulkImportRequest(supReq, env, owner, new URL(supReq.url), ["api", "bulk-import", "supersede"]);
-  assertEqual(supRes.status, 200, "Supersede call succeeds");
+  const replacement = await handleBulkImportRequest(act2, env, owner, new URL(act2.url), ["api", "bulk-import", "activate"]);
+  assertEqual(replacement.status, 201, "Atomic replacement succeeds");
 
   // Step 3: Assert D1 Lineage State
   const rowV1 = db.prepare("SELECT * FROM import_bundle_manifest WHERE id=?").get(v1BundleId);

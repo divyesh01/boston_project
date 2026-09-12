@@ -11,6 +11,7 @@ exists and each command still resolves.
 
 | Area | Suite | Kind | Command |
 |---|---|---|---|
+| HotelKey import | `scripts/probe-bulk-import-integrity.mjs` | probe | `node --import ./scripts/_loader-boot.mjs scripts/probe-bulk-import-integrity.mjs` |
 | HotelKey import | `src/lib/hotelKeyParserFixtures.test.js` | vitest | `npx vitest run src/lib/hotelKeyParserFixtures.test.js` |
 | HotelKey import | `src/lib/hotelKeyImportFixtures.test.js` | vitest | `npx vitest run src/lib/hotelKeyImportFixtures.test.js` |
 | HotelKey import | `scripts/probe-hotelkey-mutations.mjs` | probe | `npm run hotelkey:mutate` |

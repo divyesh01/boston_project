@@ -1,16 +1,6 @@
+import { parseBundle, normalizedContent, contentHash, REPORT_ENTITY } from './bulk-contract.js';
 import { assertPropertyInScope, ScopeError } from "./scope.js";
 import { queryAll, queryFirst } from "./db.js";
-
-// In-memory object store fallback for local test harnesses when env.BULK_DATA or env.RAW_ARCHIVE is not bound
-const mockObjectStore = new Map();
-
-export function getMockStore() {
-  return mockObjectStore;
-}
-
-export function clearMockStore() {
-  mockObjectStore.clear();
-}
 
 class BulkImportError extends Error {
   constructor(message, status = 400, details = {}) {
@@ -113,9 +103,35 @@ function getR2DatePrefix(reportDate) {
 }
 
 function getStores(env) {
-  const rawStore = env.RAW_ARCHIVE || env.BULK_DATA || null;
-  const bulkStore = env.BULK_DATA || env.RAW_ARCHIVE || null;
-  return { rawStore, bulkStore };
+  for (const name of ["RAW_ARCHIVE", "BULK_DATA"]) {
+    if (!env[name] || ["head", "get", "put", "delete"].some((method) => typeof env[name][method] !== "function")) {
+      throw new BulkImportError(`R2 binding ${name} is required`, 503, { code: "IMPORT_STORAGE_UNAVAILABLE" });
+    }
+  }
+  return { rawStore: env.RAW_ARCHIVE, bulkStore: env.BULK_DATA };
+}
+
+function canonicalKey(scope, propertyId, hash, raw = false) {
+  if (!isValidHash(hash)) throw new BulkImportError("invalid content hash", 400, { code: "IMPORT_INVALID_HASH" });
+  return raw ? `rri-raw/${scope.accountId}/${propertyId}/${hash.toLowerCase()}`
+    : `rri-bulk/${scope.accountId}/${propertyId}/v1/${hash.toLowerCase()}.ndjson.gz`;
+}
+
+function verifyObject(head, scope, propertyId, hash, raw = false) {
+  if (!head) throw new BulkImportError("object not found", 404, { code: "IMPORT_OBJECT_NOT_FOUND" });
+  const meta = head.customMetadata || {};
+  if (meta.account_id !== scope.accountId || meta.server_property_id !== propertyId ||
+      meta[raw ? "raw_hash" : "normalized_hash"] !== hash.toLowerCase()) {
+    throw new BulkImportError("object metadata does not match manifest", 403, { code: "IMPORT_OBJECT_SCOPE_MISMATCH" });
+  }
+}
+
+function manifestKey(manifest, scope, raw = false) {
+  const key = canonicalKey(scope, manifest.server_property_id, raw ? manifest.raw_file_hash : manifest.normalized_hash, raw);
+  if ((raw ? manifest.raw_object_key : manifest.object_key) !== key) {
+    throw new BulkImportError("noncanonical object key", 403, { code: "IMPORT_OBJECT_SCOPE_MISMATCH" });
+  }
+  return key;
 }
 
 /**
@@ -126,7 +142,7 @@ async function checkDuplicate(request, env, scope) {
   const body = await readJsonBody(request);
   const propertyId = String(body.server_property_id || "");
   const rawHash = String(body.raw_file_hash || "");
-  const normalizedHash = String(body.normalized_hash || "");
+  const normalizedHash = String(body.normalized_hash || "").toLowerCase();
 
   if (!propertyId) throw new BulkImportError("server_property_id is required", 400, { code: "IMPORT_PROPERTY_REQUIRED" });
   assertPropertyInScope(scope, propertyId);
@@ -259,6 +275,7 @@ async function uploadRawArchive(request, env, scope) {
     if (typeof rawStore.head === "function") {
       const existing = await rawStore.head(rawObjectKey);
       if (existing) {
+        verifyObject(existing, scope, propertyId, rawHash, true);
         const existingHash = existing.customMetadata?.raw_hash;
         if (existingHash && existingHash.toLowerCase() === rawHash) {
           return Response.json({
@@ -284,6 +301,7 @@ async function uploadRawArchive(request, env, scope) {
           contentType: mimeType,
         },
         sha256: rawHash,
+        onlyIf: { etagDoesNotMatch: "*" },
       });
     } catch (err) {
       if (err instanceof BulkImportError) throw err;
@@ -317,75 +335,7 @@ async function uploadRawArchive(request, env, scope) {
     }, { status: 201 });
   }
 
-  // Fallback for mock object store (local tests)
-  if (mockObjectStore.has(rawObjectKey)) {
-    const existing = mockObjectStore.get(rawObjectKey);
-    const existingHash = existing.customMetadata?.raw_hash;
-    if (existingHash && existingHash.toLowerCase() === rawHash) {
-      return Response.json({
-        ok: true,
-        status: "already_archived",
-        raw_object_key: rawObjectKey,
-        raw_archive_id: rawArchiveId,
-        raw_hash: rawHash,
-        byte_length: existing.data?.byteLength || 0,
-      }, { status: 200 });
-    } else {
-      throw new BulkImportError("raw object key exists with different hash", 409, { code: "RAW_OBJECT_CONFLICT" });
-    }
-  }
 
-  const reader = request.body.getReader();
-  const chunks = [];
-  let totalBytes = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) {
-      totalBytes += value.byteLength;
-      if (totalBytes > MAX_RAW_FILE_SIZE_BYTES) {
-        throw new BulkImportError("file exceeds maximum allowed size of 50 MB", 413, { code: "PAYLOAD_TOO_LARGE" });
-      }
-      chunks.push(value);
-    }
-  }
-
-  if (totalBytes === 0) {
-    throw new BulkImportError("raw file payload cannot be empty", 400, { code: "IMPORT_EMPTY_PAYLOAD" });
-  }
-
-  const combined = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    combined.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-
-  const computedHash = (await calculateSha256(combined.buffer)).toLowerCase();
-  if (computedHash !== rawHash) {
-    throw new BulkImportError(`raw payload checksum mismatch: expected ${rawHash}, computed ${computedHash}`, 400, {
-      code: "RAW_HASH_MISMATCH",
-      expected: rawHash,
-      computed: computedHash,
-    });
-  }
-
-  mockObjectStore.set(rawObjectKey, {
-    data: combined.buffer,
-    customMetadata,
-    httpMetadata: {
-      contentType: mimeType,
-    },
-  });
-
-  return Response.json({
-    ok: true,
-    status: "archived",
-    raw_object_key: rawObjectKey,
-    raw_archive_id: rawArchiveId,
-    raw_hash: rawHash,
-    byte_length: totalBytes,
-  }, { status: 201 });
 }
 
 /**
@@ -431,6 +381,7 @@ async function recordRawArchive(request, env, scope) {
         raw_object_key: canonicalObjectKey,
       });
     }
+    verifyObject(rawObjectHead, scope, propertyId, rawHash, true);
     const meta = rawObjectHead.customMetadata || {};
     if (meta.account_id && meta.account_id !== scope.accountId) {
       throw new BulkImportError("raw archive object account mismatch", 403, { code: "RAW_OBJECT_ACCOUNT_MISMATCH" });
@@ -443,28 +394,6 @@ async function recordRawArchive(request, env, scope) {
     }
     if (!fileSize && rawObjectHead.size) {
       fileSize = rawObjectHead.size;
-    }
-  } else {
-    // Mock store fallback for local tests
-    const stored = mockObjectStore.get(canonicalObjectKey);
-    if (!stored) {
-      throw new BulkImportError("raw archive object not found in storage", 404, {
-        code: "RAW_OBJECT_NOT_FOUND",
-        raw_object_key: canonicalObjectKey,
-      });
-    }
-    const meta = stored.customMetadata || {};
-    if (meta.account_id && meta.account_id !== scope.accountId) {
-      throw new BulkImportError("raw archive object account mismatch", 403, { code: "RAW_OBJECT_ACCOUNT_MISMATCH" });
-    }
-    if (meta.server_property_id && meta.server_property_id !== propertyId) {
-      throw new BulkImportError("raw archive object property mismatch", 403, { code: "RAW_OBJECT_PROPERTY_MISMATCH" });
-    }
-    if (meta.raw_hash && meta.raw_hash.toLowerCase() !== rawHash) {
-      throw new BulkImportError("raw archive object hash mismatch", 400, { code: "RAW_OBJECT_HASH_MISMATCH" });
-    }
-    if (!fileSize && stored.data?.byteLength) {
-      fileSize = stored.data.byteLength;
     }
   }
 
@@ -596,7 +525,7 @@ async function downloadRawArchive(parts, env, scope) {
   if (!manifest) throw new BulkImportError("raw archive not found", 404, { code: "RAW_ARCHIVE_NOT_FOUND" });
   assertPropertyInScope(scope, manifest.server_property_id);
 
-  if (manifest.status === "destroyed") {
+  if (manifest.archive_status === "destroyed" || manifest.archive_status === "destroying") {
     throw new BulkImportError("raw archive has been destroyed", 410, { code: "RAW_ARCHIVE_DESTROYED" });
   }
 
@@ -605,12 +534,7 @@ async function downloadRawArchive(parts, env, scope) {
   }
 
   // Security invariant: raw_object_key must strictly belong to the manifest's account and authorized property
-  const expectedPrefix = `rri-raw/${scope.accountId}/${manifest.server_property_id}/`;
-  if (!manifest.raw_object_key.startsWith(expectedPrefix)) {
-    throw new BulkImportError("raw archive object key does not belong to authorized account and property", 403, {
-      code: "RAW_OBJECT_SCOPE_MISMATCH",
-    });
-  }
+  manifestKey(manifest, scope, true);
 
   const { rawStore } = getStores(env);
 
@@ -618,6 +542,7 @@ async function downloadRawArchive(parts, env, scope) {
     const object = await rawStore.get(manifest.raw_object_key);
     if (!object) throw new BulkImportError("raw archive object not found in storage", 404, { code: "RAW_OBJECT_NOT_FOUND" });
 
+    verifyObject(object, scope, manifest.server_property_id, manifest.raw_file_hash, true);
     return new Response(object.body, {
       status: 200,
       headers: {
@@ -630,20 +555,7 @@ async function downloadRawArchive(parts, env, scope) {
     });
   }
 
-  // Mock store fallback
-  const stored = mockObjectStore.get(manifest.raw_object_key);
-  if (!stored) throw new BulkImportError("raw archive object not found in storage", 404, { code: "RAW_OBJECT_NOT_FOUND" });
 
-  return new Response(stored.data, {
-    status: 200,
-    headers: {
-      "Content-Type": manifest.raw_mime_type || "application/octet-stream",
-      "Content-Disposition": `attachment; filename="${manifest.original_file_name || 'report.csv'}"`,
-      "x-raw-hash": manifest.raw_file_hash,
-      "x-raw-size": String(manifest.raw_size || 0),
-      "x-archive-id": manifest.raw_archive_id || manifest.id,
-    },
-  });
 }
 
 /**
@@ -657,7 +569,7 @@ async function uploadBundle(request, env, scope) {
   const propertyId = request.headers.get("x-server-property-id") || url.searchParams.get("server_property_id") || "";
   const reportType = request.headers.get("x-report-type") || url.searchParams.get("report_type") || "";
   const rawHash = request.headers.get("x-raw-hash") || url.searchParams.get("raw_hash") || "";
-  const normalizedHash = request.headers.get("x-normalized-hash") || url.searchParams.get("normalized_hash") || "";
+  const normalizedHash = (request.headers.get("x-normalized-hash") || url.searchParams.get("normalized_hash") || "").toLowerCase();
   const rowCount = Number(request.headers.get("x-row-count") || url.searchParams.get("row_count") || 0);
   const payloadSha256 = request.headers.get("x-payload-sha256") || request.headers.get("x-content-sha256") || null;
 
@@ -687,7 +599,7 @@ async function uploadBundle(request, env, scope) {
     throw new BulkImportError("bundle payload cannot be empty", 400, { code: "IMPORT_EMPTY_PAYLOAD" });
   }
 
-  const objectKey = `rri-bulk/${scope.accountId}/${propertyId}/v1/${normalizedHash}.ndjson.gz`;
+  const objectKey = canonicalKey(scope, propertyId, normalizedHash);
 
   const customMetadata = {
     account_id: scope.accountId,
@@ -702,11 +614,12 @@ async function uploadBundle(request, env, scope) {
 
   const { bulkStore } = getStores(env);
 
-  // Production R2 streaming path (zero Worker RAM buffering)
+  // Bound compressed and decoded payloads before verifying the complete content.
   if (bulkStore && typeof bulkStore.put === "function") {
     if (typeof bulkStore.head === "function") {
       const existing = await bulkStore.head(objectKey);
       if (existing) {
+        verifyObject(existing, scope, propertyId, normalizedHash);
         return Response.json({
           ok: true,
           status: "already_uploaded",
@@ -718,6 +631,33 @@ async function uploadBundle(request, env, scope) {
     }
 
     const bounded = createBoundedStream(request.body, MAX_BUNDLE_SIZE_BYTES, "IMPORT_EMPTY_PAYLOAD");
+    const compressed = await new Response(bounded.stream).arrayBuffer();
+    let text, items;
+    try {
+      const decoded = createBoundedStream(new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip')), 16 * 1024 * 1024);
+      text = await new Response(decoded.stream).text();
+      items = parseBundle(text, propertyId);
+    } catch (error) {
+      if (error instanceof BulkImportError) throw error;
+      throw new BulkImportError('Invalid gzip or bundle rows', 400, { code: 'IMPORT_INVALID_BUNDLE' });
+    }
+    const identityVersion = Number(request.headers.get('x-identity-version') || 1);
+    if (![1, 2].includes(identityVersion)) throw new BulkImportError('Unsupported identity version');
+    const computed = await contentHash(identityVersion === 2 ? normalizedContent(items) : text);
+    if (computed !== normalizedHash || (request.headers.has("x-row-count") && items.length !== rowCount)) throw new BulkImportError('Bundle hash/count mismatch', 400, { code: 'BUNDLE_HASH_MISMATCH' });
+    const entityNames = [...new Set(items.map(item => item.entity))];
+    if (entityNames.length !== 1) throw new BulkImportError('One report entity is required');
+    const detectedType = Object.keys(REPORT_ENTITY).find(type => REPORT_ENTITY[type] === entityNames[0]);
+    if (reportType && reportType !== detectedType) throw new BulkImportError('Report type does not match payload');
+    customMetadata.report_type = detectedType;
+    const dates = items.map(item => String(item.row.date || item.row.business_date || item.row.shift_date || '')).filter(Boolean).sort();
+    customMetadata.min_date = dates[0] || '';
+    customMetadata.max_date = dates[dates.length - 1] || '';
+    customMetadata.row_count = String(items.length);
+    customMetadata.identity_version = String(identityVersion);
+    customMetadata.entity_counts_json = JSON.stringify(items.reduce((counts, item) => {
+      counts[item.entity] = (counts[item.entity] || 0) + 1; return counts;
+    }, {}));
     const r2Options = {
       customMetadata,
       httpMetadata: {
@@ -730,7 +670,7 @@ async function uploadBundle(request, env, scope) {
     }
 
     try {
-      await bulkStore.put(objectKey, bounded.stream, r2Options);
+      await bulkStore.put(objectKey, compressed, { ...r2Options, onlyIf: { etagDoesNotMatch: "*" } });
     } catch (err) {
       if (err instanceof BulkImportError) throw err;
       if (err?.code === "PAYLOAD_TOO_LARGE" || String(err?.message || "").includes("PAYLOAD_TOO_LARGE")) {
@@ -761,72 +701,7 @@ async function uploadBundle(request, env, scope) {
     }, { status: 201 });
   }
 
-  // Fallback for mock object store (local tests)
-  if (mockObjectStore.has(objectKey)) {
-    const existing = mockObjectStore.get(objectKey);
-    return Response.json({
-      ok: true,
-      status: "already_uploaded",
-      object_key: objectKey,
-      normalized_hash: normalizedHash,
-      byte_length: existing.data?.byteLength || 0,
-    }, { status: 200 });
-  }
 
-  const reader = request.body.getReader();
-  const chunks = [];
-  let totalBytes = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) {
-      totalBytes += value.byteLength;
-      if (totalBytes > MAX_BUNDLE_SIZE_BYTES) {
-        throw new BulkImportError(`bundle exceeds maximum allowed size of 25 MB`, 413, {
-          code: "PAYLOAD_TOO_LARGE",
-          maxBytes: MAX_BUNDLE_SIZE_BYTES,
-        });
-      }
-      chunks.push(value);
-    }
-  }
-
-  if (totalBytes === 0) {
-    throw new BulkImportError("bundle payload cannot be empty", 400, { code: "IMPORT_EMPTY_PAYLOAD" });
-  }
-
-  const combined = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    combined.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-
-  if (payloadSha256 && isValidHash(payloadSha256)) {
-    const computed = await calculateSha256(combined.buffer);
-    if (computed.toLowerCase() !== payloadSha256.toLowerCase()) {
-      throw new BulkImportError(`bundle checksum verification failed`, 400, {
-        code: "BUNDLE_HASH_MISMATCH",
-      });
-    }
-  }
-
-  mockObjectStore.set(objectKey, {
-    data: combined.buffer,
-    customMetadata,
-    httpMetadata: {
-      contentType: "application/x-ndjson",
-      contentEncoding: "gzip",
-    },
-  });
-
-  return Response.json({
-    ok: true,
-    status: "uploaded",
-    object_key: objectKey,
-    normalized_hash: normalizedHash,
-    byte_length: totalBytes,
-  }, { status: 201 });
 }
 
 /**
@@ -837,194 +712,93 @@ async function uploadBundle(request, env, scope) {
 async function activateBundle(request, env, scope) {
   requireImportRole(scope);
   const body = await readJsonBody(request);
-
-  const bundleId = String(body.id || `imp_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`);
-  const propertyId = String(body.server_property_id || "");
-  const reportType = String(body.report_type || "");
-  const rawHash = String(body.raw_file_hash || "");
-  const normalizedHash = String(body.normalized_hash || "");
-  const objectKey = String(body.object_key || `rri-bulk/${scope.accountId}/${propertyId}/v1/${normalizedHash}.ndjson.gz`);
-  const schemaVersion = Number(body.schema_version || 1);
-  const rowCount = Number(body.row_count || 0);
-  const entityCountsJson = typeof body.entity_counts === "object" ? JSON.stringify(body.entity_counts) : String(body.entity_counts_json || "{}");
-  const minDate = body.min_date ? String(body.min_date) : null;
-  const maxDate = body.max_date ? String(body.max_date) : null;
-  const originalFileName = String(body.original_file_name || "report.csv");
-  const fileSize = Number(body.file_size || 0);
-  const compressedSize = Number(body.compressed_size || 0);
-  const supersedesBundleId = body.supersedes_bundle_id ? String(body.supersedes_bundle_id) : null;
-  const now = new Date().toISOString();
-
-  if (!propertyId) throw new BulkImportError("server_property_id is required", 400, { code: "IMPORT_PROPERTY_REQUIRED" });
+  const propertyId = String(body.server_property_id || '');
+  if (!propertyId) throw new BulkImportError('Property required', 400);
   assertPropertyInScope(scope, propertyId);
-
-  if (!isValidHash(normalizedHash)) {
-    throw new BulkImportError("valid normalized_hash is required", 400, { code: "IMPORT_INVALID_HASH" });
-  }
-
-  // Verify normalized object exists in storage before activation
+  const hash = String(body.normalized_hash || '').toLowerCase();
+  const rawHash = String(body.raw_file_hash || '').toLowerCase();
+  const key = canonicalKey(scope, propertyId, hash);
+  if (body.object_key && body.object_key !== key) throw new BulkImportError('Noncanonical object key', 403, { code: 'IMPORT_OBJECT_SCOPE_MISMATCH' });
   const { bulkStore } = getStores(env);
-  let objectExists = false;
-  if (bulkStore && typeof bulkStore.head === "function") {
-    const head = await bulkStore.head(objectKey);
-    objectExists = !!head;
-  } else {
-    objectExists = mockObjectStore.has(objectKey);
+  const head = await bulkStore.head(key);
+  verifyObject(head, scope, propertyId, hash);
+  const reportType = head.customMetadata.report_type || String(body.report_type || '');
+  if (body.report_type !== reportType) throw new BulkImportError('Report type mismatch');
+  const minDate = head.customMetadata.min_date || null, maxDate = head.customMetadata.max_date || null;
+  const identityVersion = Number(head.customMetadata.identity_version || 1);
+  const counts = JSON.parse(head.customMetadata.entity_counts_json || '{}');
+  const rowCount = Number(head.customMetadata.row_count);
+  if ((body.row_count != null && body.row_count !== rowCount) || (body.entity_counts && JSON.stringify(Object.entries(body.entity_counts).sort()) !== JSON.stringify(Object.entries(counts).sort()))) {
+    throw new BulkImportError('Manifest counts do not match verified payload', 400, { code: 'IMPORT_COUNT_MISMATCH' });
   }
-
-  if (!objectExists) {
-    throw new BulkImportError("bundle payload object does not exist in storage", 400, { code: "IMPORT_OBJECT_NOT_FOUND" });
+  const active = await queryFirst(env, "SELECT * FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND normalized_hash=? AND status='active'", [scope.accountId, propertyId, hash]);
+  if (active) {
+    // A distinct original with identical business content remains archived, but is no longer pending processing.
+    if (body.id && body.id !== active.id) await env.DB.prepare(`UPDATE import_bundle_manifest SET status='superseded',
+      processing_status='active',superseded_by_bundle_id=? WHERE account_id=? AND server_property_id=? AND id=?
+      AND raw_file_hash=? AND status IN ('raw_archived','failed_processing')`)
+      .bind(active.id,scope.accountId,propertyId,String(body.id),rawHash).run();
+    return Response.json({ ok: true, status: 'already_active', bundle_id: active.id, revision: active.revision });
   }
-
-  // Single query for idempotency and raw_archived presence
-  const existing = await queryFirst(
-    env,
-    `SELECT id, revision, status, normalized_hash, raw_archive_id, raw_object_key, raw_size, raw_mime_type
-       FROM import_bundle_manifest
-      WHERE account_id = ?
-        AND server_property_id = ?
-        AND (normalized_hash = ? OR id = ? OR (raw_file_hash = ? AND ? <> ''))
-      LIMIT 1`,
-    [scope.accountId, propertyId, normalizedHash, bundleId, rawHash, rawHash]
-  );
-
-  if (existing && existing.status === "active" && existing.normalized_hash === normalizedHash) {
-    return Response.json({
-      ok: true,
-      status: "already_active",
-      bundle_id: existing.id,
-      revision: existing.revision,
-      superseded_count: 0,
-    }, { status: 200 });
+  const raw = await queryFirst(env, "SELECT * FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND raw_file_hash=? AND status IN ('raw_archived','failed_processing') AND archive_status='archived' ORDER BY created_at,id LIMIT 1", [scope.accountId, propertyId, rawHash]);
+  const source = raw || (body.source_archive_id ? await queryFirst(env,
+    "SELECT * FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND id=? AND raw_file_hash=? AND archive_status='archived'",
+    [scope.accountId,propertyId,String(body.source_archive_id),rawHash]) : null);
+  if (identityVersion === 2 && (!source || (raw && raw.id !== body.id))) throw new BulkImportError('Original archive required', 409, { code: 'IMPORT_ARCHIVE_REQUIRED' });
+  if (source) {
+    const sourceKey = manifestKey(source, scope, true);
+    verifyObject(await env.RAW_ARCHIVE.head(sourceKey),scope,propertyId,rawHash,true);
   }
-
-  const existingRaw = (existing && (existing.status === "raw_archived" || existing.status === "failed_processing")) ? existing : null;
-
-  const syncState = await queryFirst(
-    env,
-    "SELECT revision FROM business_sync_state WHERE account_id=?",
-    [scope.accountId]
-  );
-  const currentRevision = Number(syncState?.revision || 0);
-  const newRevision = currentRevision + 1;
-
-  const targetBundleId = existingRaw ? existingRaw.id : bundleId;
-  const changeMutationId = `bulk:${targetBundleId}:activate`;
-  const changeRowJson = JSON.stringify({
-    bundle_id: targetBundleId,
-    server_property_id: propertyId,
-    report_type: reportType,
-    object_key: objectKey,
-    normalized_hash: normalizedHash,
-    row_count: rowCount,
-    entity_counts: JSON.parse(entityCountsJson),
-  });
-
+  const bundleId = raw?.id || String(body.id || crypto.randomUUID());
+  const predecessorId = body.supersedes_bundle_id ? String(body.supersedes_bundle_id) : null;
+  let predecessor = null;
+  if (predecessorId) {
+    predecessor = await queryFirst(env, "SELECT * FROM import_bundle_manifest WHERE account_id=? AND id=?", [scope.accountId, predecessorId]);
+    if (!predecessor || predecessor.id === bundleId || predecessor.server_property_id !== propertyId ||
+        predecessor.report_type !== body.report_type || predecessor.status !== 'active' || predecessor.superseded_by_bundle_id ||
+        Number(body.expected_revision) !== predecessor.revision) throw new BulkImportError('Replacement is stale or out of scope', 409, { code: 'IMPORT_LINEAGE_CONFLICT' });
+  }
+  const overlap = await queryFirst(env, `SELECT id FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND report_type=?
+    AND status='active' AND id<>? AND (raw_file_hash=? OR (min_date<=? AND max_date>=?)) LIMIT 1`,
+    [scope.accountId, propertyId, String(body.report_type || ''), predecessorId || '', rawHash, maxDate || '', minDate || '']);
+  if (overlap) throw new BulkImportError('Report overlaps an active import; select its replacement explicitly', 409, { code: 'IMPORT_REPLACEMENT_REQUIRED', existing_bundle_id: overlap.id });
+  const state = await queryFirst(env, 'SELECT revision FROM business_sync_state WHERE account_id=?', [scope.accountId]);
+  if (!state) throw new BulkImportError('Sync state is not initialized', 409);
+  const revision = Number(state.revision) + 1;
+  const now = new Date().toISOString();
   const statements = [];
-
-  if (existingRaw) {
-    statements.push(
-      env.DB.prepare(
-        `UPDATE import_bundle_manifest SET
-          report_type = ?,
-          normalized_hash = ?,
-          object_key = ?,
-          normalized_object_key = ?,
-          schema_version = ?,
-          parser_version = 1,
-          row_count = ?,
-          entity_counts_json = ?,
-          min_date = ?,
-          max_date = ?,
-          compressed_size = ?,
-          processing_status = 'active',
-          status = 'active',
-          activated_at = ?,
-          supersedes_bundle_id = COALESCE(?, supersedes_bundle_id),
-          revision = ?
-        WHERE account_id = ? AND id = ?`
-      ).bind(
-        reportType, normalizedHash, objectKey, objectKey,
-        schemaVersion, rowCount, entityCountsJson,
-        minDate, maxDate, compressedSize,
-        now, supersedesBundleId, newRevision,
-        scope.accountId, existingRaw.id
-      )
-    );
+  if (source && !raw) statements.push(env.DB.prepare(`INSERT INTO business_mutation_guard(account_id,mutation_id,request_hash,ok,created_at)
+    VALUES(?,?,?,CASE WHEN EXISTS(SELECT 1 FROM import_bundle_manifest WHERE account_id=? AND id=? AND archive_status='archived') THEN 1 ELSE 0 END,?)`)
+    .bind(scope.accountId,`source-activate:${bundleId}`,hash,scope.accountId,source.id,now));
+  if (raw) statements.push(env.DB.prepare(`INSERT INTO business_mutation_guard(account_id,mutation_id,request_hash,ok,created_at)
+    VALUES(?,?,?,CASE WHEN EXISTS(SELECT 1 FROM import_bundle_manifest WHERE account_id=? AND id=?
+      AND status IN ('raw_archived','failed_processing') AND archive_status='archived') THEN 1 ELSE 0 END,?)`)
+    .bind(scope.accountId,`raw-activate:${bundleId}`,hash,scope.accountId,bundleId,now));
+  // CHECK(ok=1) aborts the complete transaction if concurrent state changed.
+  if (predecessor) statements.push(env.DB.prepare(`INSERT INTO business_mutation_guard(account_id,mutation_id,request_hash,ok,created_at)
+    VALUES (?,?,?, CASE WHEN EXISTS(SELECT 1 FROM import_bundle_manifest WHERE account_id=? AND id=? AND status='active' AND revision=?) THEN 1 ELSE 0 END,?)`)
+    .bind(scope.accountId, `replace:${bundleId}`, hash, scope.accountId, predecessor.id, predecessor.revision, now));
+  if (predecessor) statements.push(env.DB.prepare("UPDATE import_bundle_manifest SET status='superseded',superseded_by_bundle_id=?,superseded_at=?,revision=? WHERE account_id=? AND id=?")
+    .bind(bundleId, now, revision, scope.accountId, predecessor.id));
+  if (raw) {
+    statements.push(env.DB.prepare(`UPDATE import_bundle_manifest SET normalized_hash=?,object_key=?,normalized_object_key=?,identity_version=?,
+      report_type=?,row_count=?,entity_counts_json=?,min_date=?,max_date=?,compressed_size=?,processing_status='active',status='active',activated_at=?,revision=?,supersedes_bundle_id=?
+      WHERE account_id=? AND id=? AND status IN ('raw_archived','failed_processing')`)
+      .bind(hash,key,key,identityVersion,String(body.report_type||''),rowCount,JSON.stringify(counts),minDate,maxDate,head.size,now,revision,predecessorId,scope.accountId,bundleId));
   } else {
-    statements.push(
-      env.DB.prepare(
-        `INSERT INTO import_bundle_manifest (
-          id, account_id, server_property_id, report_type, raw_file_hash,
-          normalized_hash, object_key, normalized_object_key, schema_version,
-          parser_version, row_count, entity_counts_json, min_date, max_date,
-          original_file_name, file_size, compressed_size, uploaded_by,
-          archive_status, processing_status, status, created_at, activated_at,
-          supersedes_bundle_id, revision
-        ) VALUES (
-          ?, ?, ?, ?, ?,
-          ?, ?, ?, ?,
-          1, ?, ?, ?, ?,
-          ?, ?, ?, ?,
-          'archived', 'active', 'active', ?, ?,
-          ?, ?
-        )`
-      ).bind(
-        bundleId, scope.accountId, propertyId, reportType, rawHash,
-        normalizedHash, objectKey, objectKey, schemaVersion,
-        rowCount, entityCountsJson, minDate, maxDate,
-        originalFileName, fileSize, compressedSize, String(scope.user?.id || ""),
-        now, now, supersedesBundleId, newRevision
-      )
-    );
+    statements.push(env.DB.prepare(`INSERT INTO import_bundle_manifest(id,account_id,server_property_id,report_type,raw_file_hash,normalized_hash,object_key,normalized_object_key,
+      identity_version,row_count,entity_counts_json,min_date,max_date,original_file_name,compressed_size,uploaded_by,processing_status,status,created_at,activated_at,revision,supersedes_bundle_id)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'active','active',?,?,?,?)`)
+      .bind(bundleId,scope.accountId,propertyId,String(body.report_type||''),rawHash,hash,key,key,identityVersion,rowCount,JSON.stringify(counts),minDate,maxDate,String(body.original_file_name||'report.csv'),head.size,String(scope.user.id),now,now,revision,predecessorId));
+    if (source) statements.push(env.DB.prepare("UPDATE import_bundle_manifest SET raw_archive_id=?,raw_object_key=?,raw_size=?,raw_mime_type=?,archive_status='archived' WHERE account_id=? AND id=?")
+      .bind(source.raw_archive_id||source.id,source.raw_object_key,source.raw_size,source.raw_mime_type,scope.accountId,bundleId));
   }
-
-  statements.push(
-    env.DB.prepare("UPDATE business_sync_state SET revision=? WHERE account_id=?").bind(newRevision, scope.accountId)
-  );
-
-  statements.push(
-    env.DB.prepare(
-      `INSERT INTO business_change (
-        account_id, seq, generation_id, entity_name, record_key,
-        server_property_id, operation, row_json, row_hash, mutation_id,
-        request_hash, created_at
-      ) VALUES (?, ?, 'bulk', 'ImportBundle', ?, ?, 'upsert', ?, ?, ?, ?, ?)`
-    ).bind(
-      scope.accountId, newRevision, targetBundleId, propertyId,
-      changeRowJson, normalizedHash, changeMutationId, `hash:${normalizedHash}`, now
-    )
-  );
-
-  try {
-    await env.DB.batch(statements);
-  } catch (err) {
-    if (/UNIQUE constraint failed/i.test(String(err?.message || err))) {
-      const active = await queryFirst(
-        env,
-        "SELECT id, revision FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND normalized_hash=? AND status='active'",
-        [scope.accountId, propertyId, normalizedHash]
-      );
-      if (active) {
-        return Response.json({
-          ok: true,
-          status: "already_active",
-          bundle_id: active.id,
-          revision: active.revision,
-          superseded_count: 0,
-        }, { status: 200 });
-      }
-    }
-    throw err;
-  }
-
-  return Response.json({
-    ok: true,
-    bundle_id: targetBundleId,
-    status: "active",
-    revision: newRevision,
-    row_count: rowCount,
-  }, { status: 201 });
+  statements.push(env.DB.prepare('UPDATE business_sync_state SET revision=? WHERE account_id=?').bind(revision,scope.accountId));
+  statements.push(env.DB.prepare(`INSERT INTO business_change(account_id,seq,generation_id,entity_name,record_key,server_property_id,operation,row_json,row_hash,mutation_id,request_hash,created_at)
+    VALUES(?,?,'bulk','ImportBundle',?,?,'upsert',?,?,?,?,?)`)
+    .bind(scope.accountId,revision,bundleId,propertyId,JSON.stringify({bundle_id:bundleId}),hash,`bulk:${bundleId}:activate`,hash,now));
+  await env.DB.batch(statements);
+  return Response.json({ok:true,status:'active',bundle_id:bundleId,revision,row_count:rowCount,superseded_count:predecessor ? 1 : 0},{status:201});
 }
 
 /**
@@ -1034,9 +808,10 @@ async function activateBundle(request, env, scope) {
 async function getManifest(url, env, scope) {
   const propertyId = url.searchParams.get("server_property_id");
   const sinceRevision = Number(url.searchParams.get("since_revision") || 0);
+  const afterId = url.searchParams.get("after_id") || "";
 
-  let sql = `SELECT * FROM import_bundle_manifest WHERE account_id = ? AND revision > ?`;
-  const params = [scope.accountId, sinceRevision];
+  let sql = `SELECT * FROM import_bundle_manifest WHERE account_id = ? AND (revision > ? OR (revision = ? AND id > ?))`;
+  const params = [scope.accountId, sinceRevision, sinceRevision, afterId];
 
   if (propertyId) {
     assertPropertyInScope(scope, propertyId);
@@ -1051,10 +826,11 @@ async function getManifest(url, env, scope) {
     params.push(...allowed);
   }
 
-  sql += ` ORDER BY revision ASC LIMIT 200`;
+  sql += ` ORDER BY revision ASC, id ASC LIMIT 200`;
   const manifests = await queryAll(env, sql, params);
 
   return Response.json({
+    scope: `${scope.accountId}:${[...scope.propertyIds].sort().join(",")}`,
     manifests: manifests.map((m) => ({
       ...m,
       entity_counts: JSON.parse(m.entity_counts_json || "{}"),
@@ -1085,14 +861,15 @@ async function downloadBundle(parts, env, scope) {
   const { bulkStore } = getStores(env);
 
   if (bulkStore && typeof bulkStore.get === "function") {
-    const object = await bulkStore.get(manifest.object_key);
+    const object = await bulkStore.get(manifestKey(manifest, scope));
     if (!object) throw new BulkImportError("bundle data object not found in storage", 404, { code: "IMPORT_OBJECT_NOT_FOUND" });
 
+    verifyObject(object, scope, manifest.server_property_id, manifest.normalized_hash);
     return new Response(object.body, {
       status: 200,
       headers: {
-        "Content-Type": "application/x-ndjson",
-        "Content-Encoding": "gzip",
+        "Content-Type": "application/gzip",
+        "Cache-Control": "private, no-store",
         "x-bundle-id": manifest.id,
         "x-normalized-hash": manifest.normalized_hash,
         "x-row-count": String(manifest.row_count),
@@ -1100,19 +877,7 @@ async function downloadBundle(parts, env, scope) {
     });
   }
 
-  const stored = mockObjectStore.get(manifest.object_key);
-  if (!stored) throw new BulkImportError("bundle data object not found in storage", 404, { code: "IMPORT_OBJECT_NOT_FOUND" });
 
-  return new Response(stored.data, {
-    status: 200,
-    headers: {
-      "Content-Type": "application/x-ndjson",
-      "Content-Encoding": "gzip",
-      "x-bundle-id": manifest.id,
-      "x-normalized-hash": manifest.normalized_hash,
-      "x-row-count": String(manifest.row_count),
-    },
-  });
 }
 
 /**
@@ -1145,11 +910,22 @@ async function supersedeBundle(request, env, scope) {
   if (!newManifest) throw new BulkImportError("new bundle not found", 404, { code: "IMPORT_BUNDLE_NOT_FOUND" });
   assertPropertyInScope(scope, newManifest.server_property_id);
 
+  if (oldBundleId === newBundleId || oldManifest.server_property_id !== newManifest.server_property_id ||
+      oldManifest.report_type !== newManifest.report_type || oldManifest.status !== 'active' || newManifest.status !== 'active' ||
+      oldManifest.supersedes_bundle_id || newManifest.superseded_by_bundle_id || newManifest.supersedes_bundle_id ||
+      Number(body.expected_revision) !== oldManifest.revision) {
+    throw new BulkImportError('Invalid or stale lineage', 409, { code: 'IMPORT_LINEAGE_CONFLICT' });
+  }
   const syncState = await queryFirst(env, "SELECT revision FROM business_sync_state WHERE account_id=?", [scope.accountId]);
   const newRevision = Number(syncState?.revision || 0) + 1;
   const now = new Date().toISOString();
 
   const statements = [
+    env.DB.prepare(`INSERT INTO business_mutation_guard(account_id,mutation_id,request_hash,ok,created_at)
+      VALUES(?,?,?, CASE WHEN EXISTS(SELECT 1 FROM import_bundle_manifest WHERE account_id=? AND id=? AND status='active' AND revision=?)
+      AND EXISTS(SELECT 1 FROM import_bundle_manifest WHERE account_id=? AND id=? AND status='active' AND revision=?) THEN 1 ELSE 0 END,?)`)
+      .bind(scope.accountId, `supersede:${oldBundleId}:${newBundleId}`, newBundleId,
+        scope.accountId,oldBundleId,oldManifest.revision,scope.accountId,newBundleId,newManifest.revision,now),
     env.DB.prepare(
       `UPDATE import_bundle_manifest
           SET status = 'superseded',
@@ -1193,7 +969,7 @@ async function supersedeBundle(request, env, scope) {
 
 /**
  * Delete / tombstone an imported bundle from analytics.
- * Marks manifest tombstoned, cleans derivative normalized object, BUT NEVER deletes raw archive!
+ * Marks manifest tombstoned; immutable payload collection is a separate operation.
  */
 async function deleteBundle(request, env, scope) {
   requireImportRole(scope);
@@ -1209,6 +985,7 @@ async function deleteBundle(request, env, scope) {
   );
   if (!manifest) throw new BulkImportError("active bundle not found", 404, { code: "IMPORT_BUNDLE_NOT_FOUND" });
   assertPropertyInScope(scope, manifest.server_property_id);
+  manifestKey(manifest, scope);
 
   const syncState = await queryFirst(env, "SELECT revision FROM business_sync_state WHERE account_id=?", [scope.accountId]);
   const newRevision = Number(syncState?.revision || 0) + 1;
@@ -1242,15 +1019,8 @@ async function deleteBundle(request, env, scope) {
 
   await env.DB.batch(statements);
 
-  // Clean up derivative normalized bundle in R2, but NEVER touch raw archive
-  const { bulkStore } = getStores(env);
-  if (manifest.object_key && manifest.object_key !== manifest.raw_object_key) {
-    if (bulkStore && typeof bulkStore.delete === "function") {
-      try { await bulkStore.delete(manifest.object_key); } catch {}
-    } else {
-      mockObjectStore.delete(manifest.object_key);
-    }
-  }
+  // Keep immutable payloads here. A concurrent reactivation can still reference the
+  // same content key; physical collection requires a separate reference-aware GC.
 
   return Response.json({
     ok: true,
@@ -1269,58 +1039,39 @@ async function destroyRawArchive(request, env, scope) {
   requireOwnerRole(scope);
   const body = await readJsonBody(request);
   const archiveId = String(body.archive_id || body.bundle_id || body.raw_archive_id || "");
-
-  if (!archiveId) throw new BulkImportError("archive_id is required", 400, { code: "IMPORT_ARCHIVE_REQUIRED" });
-
-  const manifest = await queryFirst(
-    env,
-    "SELECT * FROM import_bundle_manifest WHERE account_id = ? AND (id = ? OR raw_archive_id = ?)",
-    [scope.accountId, archiveId, archiveId]
-  );
+  const manifest = await queryFirst(env,
+    "SELECT * FROM import_bundle_manifest WHERE account_id=? AND (id=? OR raw_archive_id=?)",
+    [scope.accountId, archiveId, archiveId]);
   if (!manifest) throw new BulkImportError("archive not found", 404, { code: "RAW_ARCHIVE_NOT_FOUND" });
-
-  if (manifest.source_immutable === 1 && body.confirm_destroy !== true && body.confirm !== "I_UNDERSTAND_THIS_PERMANENTLY_DELETES_RAW_SOURCE") {
-    throw new BulkImportError("cannot destroy immutable raw archive without explicit confirmation flag", 403, {
-      code: "CANNOT_DESTROY_IMMUTABLE_ARCHIVE",
-    });
+  assertPropertyInScope(scope, manifest.server_property_id);
+  if (body.confirm_destroy !== true && body.confirm !== "I_UNDERSTAND_THIS_PERMANENTLY_DELETES_RAW_SOURCE") {
+    throw new BulkImportError("explicit confirmation required", 403, { code: "CANNOT_DESTROY_IMMUTABLE_ARCHIVE" });
   }
-
-  // ATTEMPT R2 DELETION FIRST!
-  // If R2 rejects deletion (e.g. Cloudflare R2 Bucket Lock retention rule is active),
-  // D1 MUST remain archived and return RAW_ARCHIVE_LOCKED.
+  const key = manifestKey(manifest, scope, true);
+  if (manifest.archive_status === "destroyed") return Response.json({ ok: true, archive_id: archiveId, status: "destroyed" });
   const { rawStore } = getStores(env);
-  if (manifest.raw_object_key) {
-    if (rawStore && typeof rawStore.delete === "function") {
-      try {
-        await rawStore.delete(manifest.raw_object_key);
-      } catch (err) {
-        throw new BulkImportError(
-          `cannot destroy raw archive: R2 storage object is locked or protected by bucket retention policy (${err?.message || "locked by bucket retention policy"})`,
-          423,
-          { code: "RAW_ARCHIVE_LOCKED", details: String(err?.message || err) }
-        );
-      }
-    } else {
-      // Mock store
-      const stored = mockObjectStore.get(manifest.raw_object_key);
-      if (stored?._locked) {
-        throw new BulkImportError("cannot destroy raw archive: R2 storage object is locked or protected by bucket retention policy", 423, { code: "RAW_ARCHIVE_LOCKED" });
-      }
-      mockObjectStore.delete(manifest.raw_object_key);
-    }
+  const head = await rawStore.head(key);
+  if (head) verifyObject(head, scope, manifest.server_property_id, manifest.raw_file_hash, true);
+  else if (manifest.archive_status !== "destroying") {
+    throw new BulkImportError("archived source is missing; reconciliation required", 409, { code: "RAW_OBJECT_MISSING" });
   }
-
-  // ONLY after R2 deletion succeeds, update D1 manifest
-  const now = new Date().toISOString();
-  await env.DB.prepare(
-    "UPDATE import_bundle_manifest SET status = 'destroyed', archive_status = 'destroyed', deleted_at = ? WHERE account_id = ? AND id = ?"
-  ).bind(now, scope.accountId, manifest.id).run();
-
-  return Response.json({
-    ok: true,
-    archive_id: archiveId,
-    status: "destroyed",
-  });
+  // Durable intent first. A retry can complete after deletion even when HEAD is absent.
+  await env.DB.prepare(`UPDATE import_bundle_manifest SET archive_status='destroying',
+    raw_destroy_requested_at=COALESCE(raw_destroy_requested_at, ?)
+    WHERE account_id=? AND raw_object_key=? AND archive_status IN ('archived','destroying')`)
+    .bind(new Date().toISOString(), scope.accountId, key).run();
+  try {
+    await rawStore.delete(key);
+  } catch (error) {
+    const locked = ['BucketLocked', 'ObjectLocked', 'RetentionPolicyViolation'].includes(String(error?.code || ''));
+    // Preserve intent: generic errors can be ambiguous about physical deletion.
+    throw new BulkImportError(locked ? "raw archive is retention locked" : "raw deletion pending; retry required",
+      locked ? 423 : 503, { code: locked ? "RAW_ARCHIVE_LOCKED" : "RAW_DESTRUCTION_PENDING" });
+  }
+  await env.DB.prepare(`UPDATE import_bundle_manifest SET archive_status='destroyed', raw_destroyed_at=?
+    WHERE account_id=? AND raw_object_key=? AND archive_status='destroying'`)
+    .bind(new Date().toISOString(), scope.accountId, key).run();
+  return Response.json({ ok: true, archive_id: archiveId, status: "destroyed" });
 }
 
 /**
@@ -1328,6 +1079,7 @@ async function destroyRawArchive(request, env, scope) {
  */
 export async function handleBulkImportRequest(request, env, scope, url, parts) {
   try {
+    getStores(env);
     const action = parts[2] || "";
 
     if (action === "check-duplicate" && request.method === "POST") {
@@ -1352,7 +1104,7 @@ export async function handleBulkImportRequest(request, env, scope, url, parts) {
       return await uploadBundle(request, env, scope);
     }
     if (action === "activate" && request.method === "POST") {
-      return await activateBundle(request, env, scope);
+      return await retryRevision(() => activateBundle(request.clone(), env, scope));
     }
     if (action === "manifest" && request.method === "GET") {
       return await getManifest(url, env, scope);
@@ -1361,10 +1113,10 @@ export async function handleBulkImportRequest(request, env, scope, url, parts) {
       return await downloadBundle(parts, env, scope);
     }
     if (action === "supersede" && request.method === "POST") {
-      return await supersedeBundle(request, env, scope);
+      return await retryRevision(() => supersedeBundle(request.clone(), env, scope));
     }
     if (action === "delete" && request.method === "POST") {
-      return await deleteBundle(request, env, scope);
+      return await retryRevision(() => deleteBundle(request.clone(), env, scope));
     }
     if (action === "raw-destroy" && request.method === "POST") {
       return await destroyRawArchive(request, env, scope);
@@ -1378,6 +1130,17 @@ export async function handleBulkImportRequest(request, env, scope, url, parts) {
     if (error instanceof ScopeError) {
       return responseError(error.message, 403, { code: "SCOPE_DENIED" });
     }
+    if (/CHECK constraint failed: ok/.test(String(error?.message || error))) return responseError("Concurrent state changed",409,{code:"IMPORT_LINEAGE_CONFLICT"});
     throw error;
   }
+}
+
+async function retryRevision(operation) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try { return await operation(); }
+    catch (error) {
+      if (!/business_change.account_id, business_change.seq|business_mutation_guard.account_id, business_mutation_guard.mutation_id|import_bundle_manifest.account_id, import_bundle_manifest.server_property_id, import_bundle_manifest.normalized_hash/.test(String(error?.message || error))) throw error;
+    }
+  }
+  throw new BulkImportError('Concurrent import; retry request', 409, { code: 'IMPORT_REVISION_CONFLICT' });
 }

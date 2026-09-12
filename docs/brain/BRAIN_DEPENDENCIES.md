@@ -18,8 +18,8 @@ graph TD
   status[status<br/>(24 imports)]
   button[button<br/>(16 imports)]
   settingsStore[settingsStore<br/>(15 imports)]
+  localDb[localDb<br/>(14 imports)]
   KpiCard[KpiCard<br/>(13 imports)]
-  localDb[localDb<br/>(12 imports)]
   input[input<br/>(12 imports)]
   usetoast[use-toast<br/>(12 imports)]
   settingsBus[settingsBus<br/>(12 imports)]
@@ -43,8 +43,8 @@ graph TD
 | status | 24 | [CRITICAL] |
 | button | 16 | [CRITICAL] |
 | settingsStore | 15 | [HIGH] |
+| localDb | 14 | [HIGH] |
 | KpiCard | 13 | [HIGH] |
-| localDb | 12 | [HIGH] |
 | input | 12 | [HIGH] |
 | use-toast | 12 | [HIGH] |
 | settingsBus | 12 | [HIGH] |

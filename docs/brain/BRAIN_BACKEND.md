@@ -706,10 +706,10 @@ Primary gates: `scripts/probe-d1-quota-auth-failure.mjs`, `scripts/probe-d1-quot
 
 - **Architectural Shift**: Bulk hotel import files (occupancy, source, gross revenue, payments, clerk, adjustments & refunds, hotel statistics, transactions, timecard) are routed through an immutable content-addressed data plane backed by Cloudflare R2 (`rri-bulk/<account_id>/<server_property_id>/v1/<hash>.ndjson.gz`), completely bypassing the per-row 13-chunk D1 staging path.
 - **D1 Quota Preservation**:
-  - D1 write consumption per file reduced from 73,719 writes to <= 5 writes (24,573x reduction).
-  - D1 write scaling is O(files), completely row-invariant (O(1) w.r.t row counts).
+  - D1 write consumption per file scales O(files) and is row-invariant (O(1) w.r.t row counts), bypassing row-by-row staging (which took 73,719 to 158,249 writes for 7,918 to 17,000 transactions).
+  - Local index model estimates ~20 metered rows_written/file; full remote import writes remain unmeasured on edge D1 pending canary tests (real measurement on canary D1 observed 11 physical writes for a 3-statement activation fixture, not a full import).
   - Duplicate preflight checks consume 0 D1 writes (indexed SELECT query on `raw_file_hash` / `normalized_hash`).
-  - Cloudflare Free Tier (100k daily cap) supports > 26,000 bulk files/day instead of 1 file.
+  - Cloudflare Free Tier (100k daily cap) supports > 4,000 bulk files/day under the index model instead of 1 file.
 - **Worker CPU & Timeout Protection**:
   - Browser compresses NDJSON bundles client-side using native `CompressionStream('gzip')`.
   - Worker streams compressed body directly into R2 storage (`env.BULK_DATA.put`), using < 2 ms CPU time (far below the 10ms Free Tier cap) and completing in < 1.2 seconds.

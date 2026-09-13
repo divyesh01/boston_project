@@ -73,7 +73,7 @@
   - `npm run lint`: 0 errors, 0 warnings.
   - `npm run typecheck`: 0 errors.
   - `npm run test`: 56 files, 525+ tests passed, 0 failed.
-  - `npm run build`: Vite production bundle builds cleanly in `< 20s`.
+  - `npm run build`: Vite production bundle builds cleanly and successfully.
   - `npm run verify:v3`: PASS 3.0.0.
   - `npm run verify:all`: 189+ passed, 0 failed, 1 environment skip (`probe-config-exposure.mjs`).
 - **STOP IF**: Any test, typecheck, or lint check fails.

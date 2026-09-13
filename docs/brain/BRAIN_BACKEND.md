@@ -891,3 +891,19 @@ Regression probes in `scripts/probe-bulk-import-integrity.mjs` explicitly verify
 `caughtError.code === 'IMPORT_REPLACEMENT_REQUIRED'` on concurrent overlapping commits
 and track `olderPromise` execution to completion without swallowing rejections.
 
+## Pre-production engineering, release runbooks & audit kit — 2026-09-13
+
+Pre-production operational readiness established before remote canary resumption:
+
+- **Read-Only D1 Audit Kit**:
+  - `scripts/audit-production-d1-readonly.sql` provides 17 pure read-only SQL queries covering migration tracking, table inventory, manifest status distributions, active dataset pointer, legacy row counts, date coverage, account/property scoping, sync revisions, overlap candidates, orphan checks, supersede lineage integrity, raw archive lifecycle states, index presence, and foreign key checks.
+  - `scripts/audit-production-d1-readonly.mjs` statically asserts that 100% of statements are non-mutating (`SELECT` / `PRAGMA foreign_key_check`) with zero mutating DDL/DML keywords permitted.
+- **Rollout & Rollback Runbooks**:
+  - `docs/RUNBOOK_PRODUCTION_ROLLOUT.md` establishes 18 sequential gates (Gate 0 platform entitlement through Gate 17 sign-off) with explicit stop conditions and no unverified shortcuts.
+  - `docs/RUNBOOK_ROLLBACK_INCIDENT.md` specifies non-destructive first-line responses, classification levels, and emergency code/traffic reversion playbooks.
+- **Documentation Truth on D1 Write Costs**:
+  - `11 physical D1 rows_written`: REAL CLOUDFLARE MEASURED on canary D1 `7e746318-2280-4907-931d-9c257b62ee78` for a 3-statement activation SQL fixture (`rows_written [6, 1, 4]`).
+  - `3 SQL write statements`: LOCAL SQLITE MEASURED in test harness.
+  - `20 metered rows_written/file`: ESTIMATED / MODELED by local index model (1+5 Stage 1, 9+1+4 Stage 2).
+  - Full HotelKey report import on production Cloudflare D1: UNMEASURED until Cloudflare Worker R2 binding error 10136 is resolved and remote canary end-to-end import executes.
+

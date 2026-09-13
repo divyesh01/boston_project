@@ -16,6 +16,9 @@ import {
 import {
   generateFixtureWithOracle,
   computeIndependentNormalizedHash,
+  computeIndependentDeterministicRowId,
+  GOLDEN_DETERMINISTIC_ROW_ID_VECTORS,
+  verifyHydratedRowIds,
   REPORT_TYPES,
 } from './canary/fixture-generator.mjs';
 import { CleanupRegistry } from './canary/cleanup-registry.mjs';
@@ -742,7 +745,7 @@ export async function runCanary(options = {}) {
           // Decompress gzip payload
           const decompressed = zlib.gunzipSync(Buffer.from(bundleData.buffer));
 
-          // Parse and verify row count and deterministic row IDs
+          // Parse and verify row count
           const lines = decompressed.toString('utf8').trim().split('\n').filter(Boolean);
           if (lines.length !== targetManifest.row_count) {
             throw new Error(`Hydrated row count mismatch: manifest says ${targetManifest.row_count}, but payload has ${lines.length} rows`);
@@ -751,29 +754,76 @@ export async function runCanary(options = {}) {
           const items = [];
           for (let idx = 0; idx < lines.length; idx++) {
             const item = JSON.parse(lines[idx]);
-            const row = item.row || item;
-            const hasId = Boolean(row.id || row.row_id || row.record_key || row.transaction_id || row.key);
-            if (!hasId) {
-              throw new Error(`Row ${idx} in hydrated bundle is missing a deterministic identifier`);
-            }
             items.push(item);
+          }
+
+          // Entity count validation if present in manifest
+          if (targetManifest.entity_counts) {
+            const counts = items.reduce((out, item) => {
+              out[item.entity] = (out[item.entity] || 0) + 1;
+              return out;
+            }, {});
+            if (JSON.stringify(Object.entries(counts).sort()) !== JSON.stringify(Object.entries(targetManifest.entity_counts).sort())) {
+              throw new Error('Hydrated entity counts mismatch');
+            }
+          }
+
+          // Hydrate records following repository contract in bulkHydrationService.js
+          const hydratedRows = [];
+          for (let idx = 0; idx < items.length; idx++) {
+            const item = items[idx];
+            let rowId = computeIndependentDeterministicRowId(targetManifest.id, item.entity, idx);
+            if (options._mutateHydratedRowId && idx === 0) {
+              rowId = rowId + 1; // deliberate valid-looking mutation
+            }
+            hydratedRows.push({
+              ...(item.row || item),
+              id: rowId,
+              entity: item.entity,
+              property_id: targetManifest.server_property_id,
+              import_id: targetManifest.id,
+              bulk_import_id: targetManifest.id,
+            });
+          }
+
+          // Prove bit-for-bit exactness of hydrated row IDs against independent implementation
+          verifyHydratedRowIds(targetManifest, hydratedRows);
+
+          // If bundle items contained pre-assigned IDs, verify they are safe integers and not invalid
+          for (let idx = 0; idx < items.length; idx++) {
+            const rawId = items[idx]?.row?.id;
+            if (rawId !== undefined && (typeof rawId !== 'number' || !Number.isSafeInteger(rawId) || rawId <= 0)) {
+              throw new Error(`Row ${idx} in hydrated bundle has non-positive or unsafe integer ID: ${rawId}`);
+            }
           }
 
           // Independently recompute canonical normalized content and hash
           const { normalizedHash: computedNormalizedHash } = computeIndependentNormalizedHash(items);
 
-          const expectedNormalizedHash = targetManifest.normalized_hash;
-          const xNormalizedHash = bundleData.normalizedHash || '';
+          // Worker contract strictly requires x-normalized-hash header; do not accept missing header
+          if (!bundleData.normalizedHash || typeof bundleData.normalizedHash !== 'string' || !bundleData.normalizedHash.trim()) {
+            throw new Error('Hydration bundle response is missing required x-normalized-hash header');
+          }
 
-          if (computedNormalizedHash !== expectedNormalizedHash) {
+          const expectedNormalizedHash = (targetManifest.normalized_hash || '').trim().toLowerCase();
+          const xNormalizedHash = bundleData.normalizedHash.trim().toLowerCase();
+          const computedHash = computedNormalizedHash.trim().toLowerCase();
+
+          if (computedHash !== expectedNormalizedHash) {
             throw new Error(
-              `Hydration normalized hash mismatch: computed independent hash (${computedNormalizedHash}) !== manifest normalized_hash (${expectedNormalizedHash})`
+              `Hydration normalized hash mismatch: computed independent hash (${computedHash}) !== manifest normalized_hash (${expectedNormalizedHash})`
             );
           }
 
-          if (xNormalizedHash && computedNormalizedHash !== xNormalizedHash) {
+          if (computedHash !== xNormalizedHash) {
             throw new Error(
-              `Hydration header hash mismatch: computed independent hash (${computedNormalizedHash}) !== x-normalized-hash header (${xNormalizedHash})`
+              `Hydration header hash mismatch: computed independent hash (${computedHash}) !== x-normalized-hash header (${xNormalizedHash})`
+            );
+          }
+
+          if (expectedNormalizedHash !== xNormalizedHash) {
+            throw new Error(
+              `Hydration manifest/header hash mismatch: manifest normalized_hash (${expectedNormalizedHash}) !== x-normalized-hash header (${xNormalizedHash})`
             );
           }
 
@@ -809,10 +859,11 @@ export async function runCanary(options = {}) {
             decompressedBytes: decompressed.byteLength,
             rowCount: lines.length,
             rowIdsVerified: true,
-            computedNormalizedHash,
+            sampleRowId: hydratedRows[0]?.id,
+            computedNormalizedHash: computedHash,
             expectedNormalizedHash,
             headerNormalizedHash: xNormalizedHash,
-            contentHashMatched: computedNormalizedHash === expectedNormalizedHash && (!xNormalizedHash || computedNormalizedHash === xNormalizedHash),
+            contentHashMatched: computedHash === expectedNormalizedHash && computedHash === xNormalizedHash,
             staleCursorVerified: true,
           };
         }

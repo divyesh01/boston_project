@@ -21,8 +21,12 @@ import {
   createRng,
   generateSyntheticCsv,
   generateFixtureWithOracle,
+  computeIndependentDeterministicRowId,
+  GOLDEN_DETERMINISTIC_ROW_ID_VECTORS,
+  verifyHydratedRowIds,
   REPORT_TYPES,
 } from './canary/fixture-generator.mjs';
+import { generateDeterministicRowId } from '../src/lib/bulkImportPipeline.js';
 import { CleanupRegistry } from './canary/cleanup-registry.mjs';
 import { CanaryClient, CanaryApiError } from './canary/canary-client.mjs';
 import { runCanary } from './canary-bulk-import.mjs';
@@ -315,6 +319,34 @@ async function runTests() {
   assert(quotedFixture.rawCsv.includes('"'), 'contains quoted fields');
   assert(quotedFixture.rawCsv.includes('-$') || quotedFixture.rawCsv.includes('$-'), 'contains negative amounts');
 
+  // ── 5B. Deterministic Row IDs Golden Vectors & Mutation Rejection ─────────
+  console.log('5B. Deterministic Row IDs Golden Vectors & Parity');
+  assertEqual(GOLDEN_DETERMINISTIC_ROW_ID_VECTORS.length, 5, 'covers 5 fixed golden vectors');
+
+  for (const v of GOLDEN_DETERMINISTIC_ROW_ID_VECTORS) {
+    const computed = computeIndependentDeterministicRowId(v.bundleHash, v.entityName, v.naturalKeyOrIndex);
+    assertEqual(computed, v.expectedId, `golden vector ${v.bundleHash}:${v.entityName}:${v.naturalKeyOrIndex} matches independently`);
+
+    // Verify contract parity with production function
+    const prodVal = generateDeterministicRowId(v.bundleHash, v.entityName, v.naturalKeyOrIndex);
+    assertEqual(computed, prodVal, `independent implementation matches production contract for ${v.bundleHash}`);
+  }
+
+  // Direct hydration verification positive test
+  const testManifest = { id: 'm_det_test', server_property_id: 'prop-canary-88' };
+  const validHydratedRows = [
+    { entity: 'OccupancyDay', id: computeIndependentDeterministicRowId(testManifest.id, 'OccupancyDay', 0), date: '2026-09-01' },
+    { entity: 'OccupancyDay', id: computeIndependentDeterministicRowId(testManifest.id, 'OccupancyDay', 1), date: '2026-09-02' },
+  ];
+  assertEqual(verifyHydratedRowIds(testManifest, validHydratedRows), true, 'verifyHydratedRowIds passes valid rows');
+
+  // Direct hydration verification negative test: mutated valid-looking 53-bit int MUST throw
+  assertThrows(
+    () => verifyHydratedRowIds(testManifest, [{ ...validHydratedRows[0], id: validHydratedRows[0].id + 1 }]),
+    'DETERMINISTIC_ROW_ID_MISMATCH',
+    'verifyHydratedRowIds throws on valid-looking incorrect row ID'
+  );
+
   // ── 6. Expected Oracle & Canonical Keys ────────────────────────────────────
   console.log('6. Fixture Oracle & Canonical Keys');
   const oracleFixture = await generateFixtureWithOracle({
@@ -582,6 +614,143 @@ async function runTests() {
     assert(
       /normalized hash mismatch/i.test(tamperedHydrationResult.stages.hydration?.error || ''),
       'hydration error describes normalized hash mismatch'
+    );
+
+    // ── 12B. Valid-Looking Mutated Row ID Rejection in Hydration ─────────────
+    console.log('12B. Valid-Looking Mutated Row ID Rejection in Hydration');
+    const validTestFixture = await generateFixtureWithOracle({
+      reportType: 'occupancy',
+      rowCount: 2,
+      accountId: 'acc-1',
+      propertyId: 'canary-prop-1',
+    });
+
+    const mockValidHydrationFetch = async (input) => {
+      const urlStr = String(input);
+      if (urlStr.includes('/api/bulk-import/manifest')) {
+        if (urlStr.includes('since_revision=1')) {
+          return new Response(JSON.stringify({ manifests: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({
+          manifests: [{
+            id: 'bundle-valid-row-id-1',
+            status: 'active',
+            row_count: validTestFixture.rowCount,
+            revision: 1,
+            normalized_hash: validTestFixture.normalizedHash,
+          }]
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (urlStr.includes('/api/bulk-import/bundle/')) {
+        return new Response(validTestFixture.compressedBundle, {
+          status: 200,
+          headers: {
+            'content-type': 'application/gzip',
+            'x-normalized-hash': validTestFixture.normalizedHash,
+          },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+
+    const mutatedRowIdResult = await runCanary({
+      hydration: true,
+      _mutateHydratedRowId: true,
+      target: 'http://localhost:8787',
+      fetchImpl: mockValidHydrationFetch,
+    });
+
+    assertEqual(mutatedRowIdResult.verdict, 'FAIL', 'fails verdict when row ID is mutated');
+    assertEqual(mutatedRowIdResult.stages.hydration?.ok, false, 'hydration stage fails on mutated row ID');
+    assert(
+      /deterministic ID mismatch/i.test(mutatedRowIdResult.stages.hydration?.error || ''),
+      'hydration error describes deterministic ID mismatch'
+    );
+
+    // ── 12C. Missing x-normalized-hash Header Rejection ─────────────────────
+    console.log('12C. Missing x-normalized-hash Header Rejection');
+    const mockMissingHeaderFetch = async (input) => {
+      const urlStr = String(input);
+      if (urlStr.includes('/api/bulk-import/manifest')) {
+        if (urlStr.includes('since_revision=1')) {
+          return new Response(JSON.stringify({ manifests: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({
+          manifests: [{
+            id: 'bundle-missing-header-1',
+            status: 'active',
+            row_count: validTestFixture.rowCount,
+            revision: 1,
+            normalized_hash: validTestFixture.normalizedHash,
+          }]
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (urlStr.includes('/api/bulk-import/bundle/')) {
+        return new Response(validTestFixture.compressedBundle, {
+          status: 200,
+          headers: {
+            'content-type': 'application/gzip',
+            // OMITTED: 'x-normalized-hash'
+          },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+
+    const missingHeaderResult = await runCanary({
+      hydration: true,
+      target: 'http://localhost:8787',
+      fetchImpl: mockMissingHeaderFetch,
+    });
+
+    assertEqual(missingHeaderResult.verdict, 'FAIL', 'fails verdict when x-normalized-hash is missing');
+    assertEqual(missingHeaderResult.stages.hydration?.ok, false, 'hydration stage fails on missing header');
+    assert(
+      /missing required x-normalized-hash header/i.test(missingHeaderResult.stages.hydration?.error || ''),
+      'hydration error describes missing x-normalized-hash header'
+    );
+
+    // ── 12D. Incorrect x-normalized-hash Header Rejection ───────────────────
+    console.log('12D. Incorrect x-normalized-hash Header Rejection');
+    const mockIncorrectHeaderFetch = async (input) => {
+      const urlStr = String(input);
+      if (urlStr.includes('/api/bulk-import/manifest')) {
+        if (urlStr.includes('since_revision=1')) {
+          return new Response(JSON.stringify({ manifests: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({
+          manifests: [{
+            id: 'bundle-bad-header-1',
+            status: 'active',
+            row_count: validTestFixture.rowCount,
+            revision: 1,
+            normalized_hash: validTestFixture.normalizedHash,
+          }]
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (urlStr.includes('/api/bulk-import/bundle/')) {
+        return new Response(validTestFixture.compressedBundle, {
+          status: 200,
+          headers: {
+            'content-type': 'application/gzip',
+            'x-normalized-hash': 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+          },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+
+    const incorrectHeaderResult = await runCanary({
+      hydration: true,
+      target: 'http://localhost:8787',
+      fetchImpl: mockIncorrectHeaderFetch,
+    });
+
+    assertEqual(incorrectHeaderResult.verdict, 'FAIL', 'fails verdict when x-normalized-hash is incorrect');
+    assertEqual(incorrectHeaderResult.stages.hydration?.ok, false, 'hydration stage fails on incorrect header');
+    assert(
+      /Hydration header hash mismatch/i.test(incorrectHeaderResult.stages.hydration?.error || ''),
+      'hydration error describes header hash mismatch'
     );
 
     // ── 13. Injected Failure After R2 Upload & Failure Cleanup Verification ──

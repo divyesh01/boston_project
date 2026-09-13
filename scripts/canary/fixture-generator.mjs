@@ -503,3 +503,108 @@ export async function generateFixtureWithOracle({
     reportType,
   };
 }
+
+/**
+ * Canonical independent implementation of the deterministic row ID contract.
+ * Generates a 53-bit safe positive integer from (bundleHash, entityName, naturalKeyOrIndex).
+ * Does NOT invoke production functions or oracle helpers.
+ *
+ * @param {string} bundleHash
+ * @param {string} entityName
+ * @param {string|number} naturalKeyOrIndex
+ * @returns {number}
+ */
+export function computeIndependentDeterministicRowId(bundleHash, entityName, naturalKeyOrIndex) {
+  const seed = `${bundleHash}:${entityName}:${naturalKeyOrIndex}`;
+  let h1 = 0xdeadbeef, h2 = 0x41c64e6d;
+  for (let i = 0; i < seed.length; i++) {
+    const ch = seed.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  const positive = 4294967296 * (2097151 & h2) + (h1 >>> 0);
+  return positive || 1;
+}
+
+/**
+ * Fixed golden test vectors with independently calculated expected IDs.
+ */
+export const GOLDEN_DETERMINISTIC_ROW_ID_VECTORS = Object.freeze([
+  {
+    bundleHash: 'b1',
+    entityName: 'OccupancyDay',
+    naturalKeyOrIndex: 0,
+    expectedId: 6811476845828004,
+  },
+  {
+    bundleHash: 'b1',
+    entityName: 'OccupancyDay',
+    naturalKeyOrIndex: 1,
+    expectedId: 479622915388860,
+  },
+  {
+    bundleHash: 'b2',
+    entityName: 'PaymentDay',
+    naturalKeyOrIndex: 0,
+    expectedId: 336813182422118,
+  },
+  {
+    bundleHash: 'manifest-123',
+    entityName: 'TransactionLine',
+    naturalKeyOrIndex: 'txn_abc_1',
+    expectedId: 2680716296142322,
+  },
+  {
+    bundleHash: 'bundle_20260913',
+    entityName: 'ClerkShiftRecord',
+    naturalKeyOrIndex: 42,
+    expectedId: 2541957113421333,
+  },
+]);
+
+/**
+ * Validates an array of hydrated rows against the deterministic row ID contract.
+ * Asserts bit-for-bit identity against computeIndependentDeterministicRowId.
+ * Throws on any missing, non-integer, non-positive, or mismatched row ID.
+ *
+ * @param {object} manifest - Manifest containing .id
+ * @param {Array<object>} hydratedRows - Hydrated row objects with .id and .entity
+ * @returns {boolean} true if all row IDs pass verification
+ */
+export function verifyHydratedRowIds(manifest, hydratedRows) {
+  if (!manifest || !manifest.id) {
+    throw new Error('Hydration verification requires a valid manifest with an id');
+  }
+  if (!Array.isArray(hydratedRows)) {
+    throw new Error('Hydration verification requires an array of hydrated rows');
+  }
+
+  for (let idx = 0; idx < hydratedRows.length; idx++) {
+    const row = hydratedRows[idx];
+    const entity = row.entity || row._entity;
+    if (!entity) {
+      throw new Error(`Hydrated row ${idx} is missing required entity name`);
+    }
+
+    const expectedId = computeIndependentDeterministicRowId(manifest.id, entity, idx);
+
+    if (typeof row.id !== 'number' || !Number.isSafeInteger(row.id) || row.id <= 0) {
+      const err = new Error(`Hydrated row ${idx} ID is not a safe positive integer: ${row.id}`);
+      err.code = 'INVALID_ROW_ID_FORMAT';
+      throw err;
+    }
+    if (row.id !== expectedId) {
+      const err = new Error(
+        `Hydrated row ${idx} deterministic ID mismatch: actual ${row.id} !== expected ${expectedId}`
+      );
+      err.code = 'DETERMINISTIC_ROW_ID_MISMATCH';
+      throw err;
+    }
+  }
+
+  return true;
+}

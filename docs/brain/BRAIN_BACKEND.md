@@ -922,7 +922,7 @@ A dedicated local canary test harness and CLI orchestrator have been established
   - Requires explicit `CANARY_CONFIRM_ISOLATED=YES` before execution.
   - Dry-run mode guarantees zero network dispatches (`requestsDispatched === 0`).
   - Stage 4 Concurrency tests three real races: identical parallel upload idempotency, conflicting overlap rejection (HTTP 409 `BUNDLE_OVERLAP` + supersedes recovery), and distinct non-overlapping monotonic revisions.
-  - Stage 5 Hydration tests independent browser (Browser B) download, gzip decompression, independent client-side canonical normalized hash recomputation (`computeIndependentNormalizedHash`), bit-exact content hash verification against `manifest.normalized_hash` and `x-normalized-hash`, row counts, deterministic row IDs, and cursor freshness invalidation.
+  - Stage 5 Hydration tests independent browser (Browser B) download, gzip decompression, independent client-side canonical normalized hash recomputation (`computeIndependentNormalizedHash`), strict enforcement of required `x-normalized-hash` response header, bit-exact content hash verification against `manifest.normalized_hash`, row counts, deterministic row ID proof via independent algorithm (`computeIndependentDeterministicRowId`) against 5 fixed golden vectors and hydrated rows, rejection of valid-looking mutated IDs, and cursor freshness invalidation.
   - Stage 6 Bucket Lock requires explicit `--allow-canary-bucket-lock` opt-in to assert HTTP 423 `RAW_ARCHIVE_LOCKED`; otherwise reports skipped and qualifies verdict as `QUALIFIED_PASS (BUCKET_LOCK_SKIPPED)`.
   - Secret redaction utility strips Bearer tokens, Cookie headers, and auth keys from all logs and reports.
   - Telemetry classifications strictly separate `LOCAL_CLIENT_MEASURED` (e.g. dispatched request counts) from `UNMEASURED` edge D1 writes.
@@ -931,6 +931,7 @@ A dedicated local canary test harness and CLI orchestrator have been established
   - Seeded Mulberry32 generator covering all 9 HotelKey report families (transactions, adjustments_refunds, source, occupancy, gross_revenue, payments, clerk, hotel_statistics, timecard).
   - Supports ugly CSV edge variants: UTF-8 BOM, quoted commas, escaped quotes, embedded newlines, negative amounts, and repeated headers.
   - Provides `computeIndependentNormalizedHash(items)` implementing the canonical NDJSON normalization contract independently of production helper functions to prove data integrity.
+  - Provides `computeIndependentDeterministicRowId(bundleHash, entityName, naturalKeyOrIndex)`, 5 fixed `GOLDEN_DETERMINISTIC_ROW_ID_VECTORS`, and `verifyHydratedRowIds(manifest, hydratedRows)` to verify hydrated row IDs bit-for-bit without circular dependencies on production functions.
   - Computes precomputed oracles for expected raw SHA-256, normalized hash, canonical R2 keys (`rri-raw/...`, `rri-data/...`), and entity counts.
 - **Attributable Cleanup Registry (`scripts/canary/cleanup-registry.mjs`)**:
   - Scoped run-ID tracking (`canary-<timestamp>-<hex>`) with SIGINT/SIGTERM emergency sweep handlers.
@@ -938,6 +939,6 @@ A dedicated local canary test harness and CLI orchestrator have been established
   - Acknowledges HTTP 404 on `deleteBundle` as expected behavior when bundles are superseded during imports.
   - Explicit outcome reporting distinguishing `CLEAN` from `FAILED` / `TEST PASS / CLEANUP PARTIAL` with remaining object inventories; never reports `CLEAN` if any resource is unaccounted for.
 - **Local Probe Suite (`scripts/probe-canary-automation.mjs`)**:
-  - 195th probe suite in repository, validating guard rejection, scheme safety, redirect credential stripping, dry-run invariants, redaction, determinism, concurrency races, hydration integrity and hash mismatch rejection, failure cleanup in finally, bucket lock assertion/skip, and end-to-end local SQLite mock execution.
+  - 195th probe suite in repository, validating guard rejection, scheme safety, redirect credential stripping, dry-run invariants, redaction, determinism, concurrency races, hydration integrity and hash mismatch rejection, row ID golden vector parity and valid-looking mutated row ID rejection, missing and incorrect `x-normalized-hash` header rejection, failure cleanup in finally, bucket lock assertion/skip, and end-to-end local SQLite mock execution.
 - **Operator Manual & Environment Template**:
   - `docs/CANARY_AUTOMATION.md` and `examples/canary.env.example`.

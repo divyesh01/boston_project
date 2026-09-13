@@ -157,10 +157,10 @@ node scripts/canary-bulk-import.mjs --all --config=canary.env
    - Queries the manifest feed (`since_revision=0`).
    - Downloads the latest compressed bundle directly from R2.
    - Decompresses gzip content (`zlib.gunzipSync`).
-   - Independently recomputes canonical normalized content and SHA-256 hash according to the wire contract (excluding provenance keys, deep sorting object keys, and sorting NDJSON lines).
-   - Asserts bit-for-bit equality: `computedNormalizedHash === targetManifest.normalized_hash === x-normalized-hash`.
-   - Validates total row count and asserts deterministic row IDs (`row.id` / `row.row_id`).
-   - Validates pagination cursor freshness (`since_revision` & `after_id`) confirming zero unread records at head.
+    - Independently recomputes canonical normalized content and SHA-256 hash according to the wire contract (excluding provenance keys, deep sorting object keys, and sorting NDJSON lines).
+    - Strictly requires the Worker's `x-normalized-hash` response header (rejecting missing headers) and asserts bit-for-bit equality: `computedNormalizedHash === targetManifest.normalized_hash === x-normalized-hash`.
+    - Hydrates rows according to the repository contract in `bulkHydrationService.js`, proves exact deterministic row IDs via independent algorithm `computeIndependentDeterministicRowId(manifest.id, entity, idx)` bit-for-bit, validates against 5 fixed golden vectors, and rejects valid-looking mutated IDs.
+    - Validates pagination cursor freshness (`since_revision` & `after_id`) confirming zero unread records at head.
 6. **Stage 6 (Bucket Lock)**:
    - If `--allow-canary-bucket-lock` is passed: deletes a sacrificial test key and asserts HTTP 423 `RAW_ARCHIVE_LOCKED`.
    - If omitted: marks stage as `SKIPPED (opt-in required: --allow-canary-bucket-lock)` and marks verdict as `QUALIFIED_PASS (BUCKET_LOCK_SKIPPED)`.

@@ -1,7 +1,7 @@
 // scripts/canary/canary-client.mjs
 // Safe HTTP client for interacting with the RRI Canary Worker endpoint.
 
-import { assertNotProductionTarget, redactSecrets } from './production-guard.mjs';
+import { assertNotProductionTarget, assertSafeRedirect, redactSecrets } from './production-guard.mjs';
 
 export class CanaryApiError extends Error {
   /**
@@ -49,7 +49,8 @@ export class CanaryClient {
   }
 
   /**
-   * Internal request dispatcher with strict production guard and dry-run protection.
+   * Internal request dispatcher with strict production guard, dry-run protection,
+   * manual redirect inspection, and cross-origin credential stripping.
    * @param {string} path
    * @param {RequestInit & { json?: any, rawBody?: Uint8Array | ArrayBuffer }} [options]
    */
@@ -57,32 +58,32 @@ export class CanaryClient {
     // Assert again before every call
     assertNotProductionTarget({ url: this.baseUrl });
 
-    const method = (options.method || 'GET').toUpperCase();
-    const url = `${this.baseUrl}${path.startsWith('/') ? path : '/' + path}`;
+    let currentMethod = (options.method || 'GET').toUpperCase();
+    let currentUrl = `${this.baseUrl}${path.startsWith('/') ? path : '/' + path}`;
 
-    const headers = new Headers(options.headers || {});
-    if (this.authToken && !headers.has('Authorization')) {
-      headers.set('Authorization', `Bearer ${this.authToken}`);
+    const currentHeaders = new Headers(options.headers || {});
+    if (this.authToken && !currentHeaders.has('Authorization')) {
+      currentHeaders.set('Authorization', `Bearer ${this.authToken}`);
     }
-    if (this.authCookie && !headers.has('Cookie')) {
-      headers.set('Cookie', this.authCookie);
+    if (this.authCookie && !currentHeaders.has('Cookie')) {
+      currentHeaders.set('Cookie', this.authCookie);
     }
 
-    let body = options.body;
+    let currentBody = options.body;
     if (options.json !== undefined) {
-      headers.set('Content-Type', 'application/json');
-      body = JSON.stringify(options.json);
+      currentHeaders.set('Content-Type', 'application/json');
+      currentBody = JSON.stringify(options.json);
     } else if (options.rawBody !== undefined) {
-      body = options.rawBody;
+      currentBody = options.rawBody;
     }
 
     if (this.dryRun) {
       this.plannedRequests.push({
-        method,
-        url: redactSecrets(url),
-        headers: redactSecrets(Object.fromEntries(headers.entries())),
-        hasBody: Boolean(body),
-        bodyLength: body ? (body.byteLength || body.length || 0) : 0,
+        method: currentMethod,
+        url: redactSecrets(currentUrl),
+        headers: redactSecrets(Object.fromEntries(currentHeaders.entries())),
+        hasBody: Boolean(currentBody),
+        bodyLength: currentBody ? (currentBody.byteLength || currentBody.length || 0) : 0,
       });
 
       return {
@@ -97,31 +98,70 @@ export class CanaryClient {
       };
     }
 
-    this.requestsDispatched++;
+    let redirectCount = 0;
+    const MAX_REDIRECTS = 5;
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    while (true) {
+      assertNotProductionTarget({ url: currentUrl });
+      this.requestsDispatched++;
 
-    try {
-      const response = await this.fetch(url, {
-        method,
-        headers,
-        body,
-        signal: controller.signal,
-      });
-      return response;
-    } catch (err) {
-      if (err.name === 'AbortError') {
-        throw new CanaryApiError(`Request timed out after ${this.timeoutMs}ms`, 504, 'GATEWAY_TIMEOUT', { url, method });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+      try {
+        const response = await this.fetch(currentUrl, {
+          method: currentMethod,
+          headers: currentHeaders,
+          body: currentBody,
+          signal: controller.signal,
+          redirect: 'manual',
+        });
+
+        // Intercept redirects to protect against production targets and credential leakage
+        if ([301, 302, 303, 307, 308].includes(response.status)) {
+          const locationHeader = response.headers.get('location');
+          if (!locationHeader) {
+            throw new CanaryApiError(`Redirect status ${response.status} missing Location header`, response.status, 'INVALID_REDIRECT');
+          }
+          redirectCount++;
+          if (redirectCount > MAX_REDIRECTS) {
+            throw new CanaryApiError('Exceeded maximum redirect limit of 5', 508, 'TOO_MANY_REDIRECTS');
+          }
+
+          const { resolvedUrl, isCrossOrigin } = assertSafeRedirect(currentUrl, locationHeader);
+          currentUrl = resolvedUrl;
+
+          // Strip credentials across origins to prevent token/cookie leakage
+          if (isCrossOrigin) {
+            currentHeaders.delete('Authorization');
+            currentHeaders.delete('Cookie');
+          }
+
+          // Adjust method/body for 303 or standard POST->GET redirect semantics
+          if (response.status === 303 || ((response.status === 301 || response.status === 302) && currentMethod !== 'GET' && currentMethod !== 'HEAD')) {
+            currentMethod = 'GET';
+            currentBody = undefined;
+            currentHeaders.delete('Content-Type');
+            currentHeaders.delete('Content-Length');
+          }
+          continue;
+        }
+
+        return response;
+      } catch (err) {
+        if (err instanceof CanaryApiError) throw err;
+        if (err?.name === 'AbortError') {
+          throw new CanaryApiError(`Request timed out after ${this.timeoutMs}ms`, 504, 'GATEWAY_TIMEOUT', { url: currentUrl, method: currentMethod });
+        }
+        throw new CanaryApiError(
+          `Network request failed: ${err.message}`,
+          503,
+          'CANARY_FETCH_FAILED',
+          { url: redactSecrets(currentUrl), method: currentMethod, originalError: err.message }
+        );
+      } finally {
+        clearTimeout(timer);
       }
-      throw new CanaryApiError(
-        `Network request failed: ${err.message}`,
-        503,
-        'CANARY_FETCH_FAILED',
-        { url: redactSecrets(url), method, originalError: err.message }
-      );
-    } finally {
-      clearTimeout(timer);
     }
   }
 

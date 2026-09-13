@@ -72,7 +72,12 @@ export function generateSyntheticCsv(reportType, rowCount = 5, options = {}) {
     negativeAmounts = false,
     extraWhitespace = false,
     repeatedHeader = false,
+    baseMonth = 9,
+    baseYear = 2026,
+    dayOffset = 0,
   } = options;
+
+  const getDate = (offset = 0) => offsetDate((dayOffset || 0) + offset, baseYear, baseMonth);
 
   let headers = [];
   const rows = [];
@@ -82,7 +87,7 @@ export function generateSyntheticCsv(reportType, rowCount = 5, options = {}) {
     case 'transactions': {
       headers = ['Date', 'Time', 'Folio Number', 'Room Number', 'Guest Name', 'Transaction Code', 'Description', 'Amount', 'Clerk Name'];
       for (let i = 0; i < rowCount; i++) {
-        const date = offsetDate(i % 14);
+        const date = getDate(i % 14);
         const time = `${String(8 + (i % 12)).padStart(2, '0')}:15:00`;
         const folio = `F${10000 + i}`;
         const room = String(101 + (i % 40));
@@ -117,7 +122,7 @@ export function generateSyntheticCsv(reportType, rowCount = 5, options = {}) {
     case 'adjustments_refunds': {
       headers = ['Date', 'Time', 'Username', 'Room Number', 'Transaction Number', 'Reason', 'Adjusted Amount', 'Type'];
       for (let i = 0; i < rowCount; i++) {
-        const date = offsetDate(i % 14);
+        const date = getDate(i % 14);
         const time = '14:30:00';
         const user = `user_${(i % 3) + 1}`;
         const room = String(201 + (i % 20));
@@ -152,7 +157,7 @@ export function generateSyntheticCsv(reportType, rowCount = 5, options = {}) {
         { name: 'Booking.com', code: 'BDC' },
       ];
       for (let i = 0; i < rowCount; i++) {
-        const date = offsetDate(Math.floor(i / sources.length));
+        const date = getDate(Math.floor(i / sources.length));
         const s = sources[i % sources.length];
         const sold = Math.floor(5 + rng() * 20);
         const rev = +(sold * (70 + rng() * 30)).toFixed(2);
@@ -174,7 +179,7 @@ export function generateSyntheticCsv(reportType, rowCount = 5, options = {}) {
     case 'occupancy': {
       headers = ['Date', 'Rooms Available', 'Rooms Sold', 'Comp Rooms', 'Out of Order', 'Occupancy Rate'];
       for (let i = 0; i < rowCount; i++) {
-        const date = offsetDate(i);
+        const date = getDate(i);
         const avail = 50;
         const sold = Math.floor(25 + rng() * 25);
         const comp = Math.floor(rng() * 3);
@@ -197,7 +202,7 @@ export function generateSyntheticCsv(reportType, rowCount = 5, options = {}) {
     case 'gross_revenue': {
       headers = ['Date', 'Room Revenue', 'Tax', 'Food & Beverage', 'Other Revenue', 'Total Revenue'];
       for (let i = 0; i < rowCount; i++) {
-        const date = offsetDate(i);
+        const date = getDate(i);
         const roomRev = +(2000 + rng() * 1500).toFixed(2);
         const tax = +(roomRev * 0.12).toFixed(2);
         const fb = +(100 + rng() * 50).toFixed(2);
@@ -220,7 +225,7 @@ export function generateSyntheticCsv(reportType, rowCount = 5, options = {}) {
     case 'payments': {
       headers = ['Date', 'Cash', 'Visa', 'MasterCard', 'Amex', 'Discover', 'Direct Bill', 'Total Payments'];
       for (let i = 0; i < rowCount; i++) {
-        const date = offsetDate(i);
+        const date = getDate(i);
         const cash = +(100 + rng() * 200).toFixed(2);
         const visa = +(800 + rng() * 600).toFixed(2);
         const mc = +(400 + rng() * 300).toFixed(2);
@@ -248,7 +253,7 @@ export function generateSyntheticCsv(reportType, rowCount = 5, options = {}) {
     case 'clerk': {
       headers = ['Shift Date', 'Clerk Name', 'Payment Type', 'Amount', 'Record Type', 'Section Key'];
       for (let i = 0; i < rowCount; i++) {
-        const date = offsetDate(i % 7);
+        const date = getDate(i % 7);
         const clerk = `Clerk_${(i % 3) + 1}`;
         const pType = (i % 2 === 0) ? 'Visa' : 'Cash';
         const amt = +(150 + rng() * 300).toFixed(2);
@@ -271,7 +276,7 @@ export function generateSyntheticCsv(reportType, rowCount = 5, options = {}) {
     case 'hotel_statistics': {
       headers = ['Business Date', 'Section', 'Metric Name', 'Period', 'Property ID', 'Value'];
       for (let i = 0; i < rowCount; i++) {
-        const date = offsetDate(i % 10);
+        const date = getDate(i % 10);
         const sec = 'Summary';
         const metric = `Metric_${(i % 4) + 1}`;
         const period = 'Day';
@@ -294,7 +299,7 @@ export function generateSyntheticCsv(reportType, rowCount = 5, options = {}) {
       headers = ['Employee Name', 'Shift Date', 'Clock In', 'Clock Out', 'Total Hours', 'Department'];
       for (let i = 0; i < rowCount; i++) {
         const emp = `Employee_${(i % 5) + 1}`;
-        const date = offsetDate(i % 14);
+        const date = getDate(i % 14);
         const cin = '08:00';
         const cout = '16:30';
         const hrs = 8.5;

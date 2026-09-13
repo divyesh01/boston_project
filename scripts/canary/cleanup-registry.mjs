@@ -11,23 +11,60 @@ export class CleanupRegistry {
     this.createdBundleKeys = new Set();
     this.createdBundleIds = new Set();
     this.createdArchiveIds = new Set();
+    this.mappedRawKeys = new Set();
+    this.mappedBundleKeys = new Set();
+    this.orphanedR2Keys = new Set();
     this._signalHandlerInstalled = false;
   }
 
   /**
    * Record a created raw object key.
    * @param {string} key
+   * @param {boolean} [mapped]
    */
-  trackRawKey(key) {
-    if (key) this.createdRawKeys.add(String(key));
+  trackRawKey(key, mapped = false) {
+    if (key) {
+      const k = String(key);
+      this.createdRawKeys.add(k);
+      if (mapped) this.mappedRawKeys.add(k);
+    }
   }
 
   /**
    * Record a created bundle object key.
    * @param {string} key
+   * @param {boolean} [mapped]
    */
-  trackBundleKey(key) {
-    if (key) this.createdBundleKeys.add(String(key));
+  trackBundleKey(key, mapped = false) {
+    if (key) {
+      const k = String(key);
+      this.createdBundleKeys.add(k);
+      if (mapped) this.mappedBundleKeys.add(k);
+    }
+  }
+
+  /**
+   * Mark a raw key as successfully mapped to a D1 record.
+   * @param {string} key
+   */
+  markRawKeyMapped(key) {
+    if (key) this.mappedRawKeys.add(String(key));
+  }
+
+  /**
+   * Mark a bundle key as successfully mapped to a D1 record.
+   * @param {string} key
+   */
+  markBundleKeyMapped(key) {
+    if (key) this.mappedBundleKeys.add(String(key));
+  }
+
+  /**
+   * Explicitly record an unmapped / orphaned R2 key.
+   * @param {string} key
+   */
+  trackOrphanedR2Key(key) {
+    if (key) this.orphanedR2Keys.add(String(key));
   }
 
   /**
@@ -81,6 +118,7 @@ export class CleanupRegistry {
    *   deleted: number,
    *   locked: number,
    *   failed: number,
+   *   orphanedR2Keys: string[],
    *   remainingKeys: string[],
    *   verdict: 'CLEAN' | 'PARTIAL' | 'FAILED' | 'SKIPPED',
    *   reportStatus: string,
@@ -93,6 +131,17 @@ export class CleanupRegistry {
     let failed = 0;
     const remainingKeys = [];
 
+    // Identify unmapped R2 keys that were never committed to D1 manifests
+    const unmappedRaw = [...this.createdRawKeys].filter((k) => !this.mappedRawKeys.has(k));
+    const unmappedBundles = [...this.createdBundleKeys].filter((k) => !this.mappedBundleKeys.has(k));
+    for (const key of [...unmappedRaw, ...unmappedBundles, ...this.orphanedR2Keys]) {
+      this.orphanedR2Keys.add(key);
+      const tag = `${key} (unmapped-r2-orphan)`;
+      if (!remainingKeys.includes(tag)) {
+        remainingKeys.push(tag);
+      }
+    }
+
     if (!client || typeof client.deleteBundle !== 'function') {
       return {
         runId: this.runId,
@@ -100,7 +149,8 @@ export class CleanupRegistry {
         deleted: 0,
         locked: 0,
         failed: 0,
-        remainingKeys: [...this.createdRawKeys, ...this.createdBundleKeys],
+        orphanedR2Keys: [...this.orphanedR2Keys],
+        remainingKeys: [...remainingKeys, ...this.createdRawKeys, ...this.createdBundleKeys],
         verdict: 'SKIPPED',
         reportStatus: 'NO_CLIENT_FOR_CLEANUP',
       };
@@ -114,9 +164,16 @@ export class CleanupRegistry {
           deleted++;
         } else {
           failed++;
+          remainingKeys.push(bundleId);
         }
       } catch (err) {
-        failed++;
+        // If 404 IMPORT_BUNDLE_NOT_FOUND, the bundle was already superseded, tombstoned, or deactivated
+        if (err?.status === 404 && (err?.code === 'IMPORT_BUNDLE_NOT_FOUND' || /bundle not found/i.test(err?.message))) {
+          deleted++;
+        } else {
+          failed++;
+          remainingKeys.push(bundleId);
+        }
       }
     }
 
@@ -146,8 +203,8 @@ export class CleanupRegistry {
     }
 
     let verdict = 'CLEAN';
-    if (failed > 0) {
-      verdict = deleted > 0 ? 'PARTIAL' : 'FAILED';
+    if (this.orphanedR2Keys.size > 0 || failed > 0) {
+      verdict = (deleted > 0) ? 'PARTIAL' : 'FAILED';
     } else if (locked > 0) {
       verdict = 'PARTIAL';
     }
@@ -162,6 +219,7 @@ export class CleanupRegistry {
       deleted,
       locked,
       failed,
+      orphanedR2Keys: [...this.orphanedR2Keys],
       remainingKeys,
       verdict,
       reportStatus,

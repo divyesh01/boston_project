@@ -37,13 +37,96 @@ export const FORBIDDEN_D1_IDS = Object.freeze([
 export function extractHostname(rawUrl) {
   if (!rawUrl || typeof rawUrl !== 'string') return '';
   const trimmed = rawUrl.trim();
-  const withProto = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  const withProto = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
   try {
-    const parsed = new URL(withProto);
-    return parsed.hostname.toLowerCase().replace(/\.+$/, '');
+    return new URL(withProto).hostname.toLowerCase().replace(/\.+$/, '');
   } catch {
     return trimmed.toLowerCase().split('/')[0].split(':')[0].replace(/\.+$/, '');
   }
+}
+
+/**
+ * Extracts, validates, and normalizes target URL, rejecting forbidden schemes, userinfo, and production hosts.
+ * @param {string} rawUrl
+ * @returns {{ url: URL, hostname: string }}
+ */
+export function validateTargetUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') {
+    throw new ProductionGuardError('Target URL must be a non-empty string', 'INVALID_CANARY_URL');
+  }
+
+  // Always check forbidden production hostnames first
+  const host = extractHostname(rawUrl);
+  for (const forbidden of FORBIDDEN_HOSTNAMES) {
+    if (host === forbidden || host.endsWith(`.${forbidden}`)) {
+      throw new ProductionGuardError(
+        `Refusing to target production host: ${host}`,
+        'PRODUCTION_TARGET_FORBIDDEN'
+      );
+    }
+  }
+
+  const trimmed = rawUrl.trim();
+  const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed);
+  const toParse = hasScheme ? trimmed : `https://${trimmed}`;
+  let parsed;
+  try {
+    parsed = new URL(toParse);
+  } catch {
+    throw new ProductionGuardError(`Invalid URL structure: ${rawUrl}`, 'INVALID_CANARY_URL');
+  }
+
+  // Userinfo safety: reject credentials in target URL
+  if (parsed.username || parsed.password || /@[^/]+/.test(rawUrl)) {
+    throw new ProductionGuardError(`URL userinfo/embedded credentials are forbidden in target URL: ${rawUrl}`, 'INVALID_CANARY_URL');
+  }
+
+  // Scheme safety: strictly require https or local http
+  const protocol = parsed.protocol.toLowerCase();
+  if (protocol !== 'https:' && protocol !== 'http:') {
+    throw new ProductionGuardError(`Disallowed URL scheme '${protocol}': only HTTPS is permitted for canary targets`, 'INVALID_CANARY_URL');
+  }
+
+  const hostname = parsed.hostname.toLowerCase().replace(/\.+$/, '');
+  if (protocol === 'http:' && hostname !== 'localhost' && hostname !== '127.0.0.1') {
+    throw new ProductionGuardError(`Insecure HTTP scheme is only permitted for localhost/127.0.0.1, got: ${hostname}`, 'INVALID_CANARY_URL');
+  }
+
+  return { url: parsed, hostname };
+}
+
+/**
+ * Validates that redirect destination is safe and reports whether credentials must be stripped.
+ * @param {string} fromUrl
+ * @param {string} locationHeader
+ * @returns {{ resolvedUrl: string, isCrossOrigin: boolean }}
+ */
+export function assertSafeRedirect(fromUrl, locationHeader) {
+  if (!locationHeader || typeof locationHeader !== 'string') {
+    throw new ProductionGuardError('Missing or empty Location header on redirect', 'INVALID_REDIRECT');
+  }
+  let fromParsed;
+  try {
+    fromParsed = new URL(fromUrl);
+  } catch {
+    throw new ProductionGuardError(`Invalid redirect origin URL: ${fromUrl}`, 'INVALID_REDIRECT');
+  }
+
+  let resolved;
+  try {
+    resolved = new URL(locationHeader, fromParsed);
+  } catch {
+    throw new ProductionGuardError(`Invalid redirect location URL: ${locationHeader}`, 'INVALID_REDIRECT');
+  }
+
+  // Assert destination is safe and valid
+  assertNotProductionTarget({ url: resolved.toString() });
+
+  const isCrossOrigin = resolved.origin.toLowerCase() !== fromParsed.origin.toLowerCase();
+  return {
+    resolvedUrl: resolved.toString(),
+    isCrossOrigin,
+  };
 }
 
 /**

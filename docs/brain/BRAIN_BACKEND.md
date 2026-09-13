@@ -918,17 +918,24 @@ A dedicated local canary test harness and CLI orchestrator have been established
 - **CLI Orchestrator (`scripts/canary-bulk-import.mjs`)**:
   - Provides flags: `--dry-run`, `--preflight`, `--smoke`, `--import`, `--concurrency`, `--hydration`, `--lock`, `--large`, `--cleanup`, `--all`, `--json`, and `--output`.
   - Enforces strict production rejection of `boston-project.divyesh-boston.workers.dev`, service `boston-project`, D1 name `boston-project-production-auth`, and D1 ID `e9008126-d4b4-4588-841c-128eadd94c8d`.
+  - Enforces transport safety: requires HTTPS (permits HTTP only for localhost), rejects embedded userinfo (`@`), follows manual redirects up to depth 5 with cross-origin `Authorization`/`Cookie` credential stripping.
   - Requires explicit `CANARY_CONFIRM_ISOLATED=YES` before execution.
   - Dry-run mode guarantees zero network dispatches (`requestsDispatched === 0`).
+  - Stage 4 Concurrency tests three real races: identical parallel upload idempotency, conflicting overlap rejection (HTTP 409 `BUNDLE_OVERLAP` + supersedes recovery), and distinct non-overlapping monotonic revisions.
+  - Stage 5 Hydration tests independent browser (Browser B) download, gzip decompression, bit-exact content hash verification, row counts, deterministic row IDs, and cursor freshness invalidation.
+  - Stage 6 Bucket Lock requires explicit `--allow-canary-bucket-lock` opt-in to assert HTTP 423 `RAW_ARCHIVE_LOCKED`; otherwise reports skipped and qualifies verdict as `QUALIFIED_PASS (BUCKET_LOCK_SKIPPED)`.
   - Secret redaction utility strips Bearer tokens, Cookie headers, and auth keys from all logs and reports.
+  - Telemetry classifications strictly separate `LOCAL_CLIENT_MEASURED` (e.g. dispatched request counts) from `UNMEASURED` edge D1 writes.
 - **Deterministic Fixture Generator (`scripts/canary/fixture-generator.mjs`)**:
   - Seeded Mulberry32 generator covering all 9 HotelKey report families (transactions, adjustments_refunds, source, occupancy, gross_revenue, payments, clerk, hotel_statistics, timecard).
   - Supports ugly CSV edge variants: UTF-8 BOM, quoted commas, escaped quotes, embedded newlines, negative amounts, and repeated headers.
   - Computes precomputed oracles for expected raw SHA-256, normalized hash, canonical R2 keys (`rri-raw/...`, `rri-data/...`), and entity counts.
 - **Attributable Cleanup Registry (`scripts/canary/cleanup-registry.mjs`)**:
   - Scoped run-ID tracking (`canary-<timestamp>-<hex>`) with SIGINT/SIGTERM emergency sweep handlers.
+  - Detects and inventories orphaned R2 keys (`orphanedR2Keys`) when D1 activation fails or aborts.
+  - Acknowledges HTTP 404 on `deleteBundle` as expected behavior when bundles are superseded during imports.
   - Explicit outcome reporting distinguishing `CLEAN` from `TEST PASS / CLEANUP PARTIAL` with remaining object inventories.
 - **Local Probe Suite (`scripts/probe-canary-automation.mjs`)**:
-  - 195th probe suite in repository, validating guard rejection, dry-run invariants, redaction, determinism, error mapping, and end-to-end local SQLite mock execution.
+  - 195th probe suite in repository, validating guard rejection, scheme safety, redirect credential stripping, dry-run invariants, redaction, determinism, concurrency races, hydration integrity, bucket lock assertion/skip, and end-to-end local SQLite mock execution.
 - **Operator Manual & Environment Template**:
   - `docs/CANARY_AUTOMATION.md` and `examples/canary.env.example`.

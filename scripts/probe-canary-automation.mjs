@@ -11,6 +11,8 @@ import {
   assertNotProductionTarget,
   assertIsolationConfirmed,
   assertSafeCanaryEnvironment,
+  validateTargetUrl,
+  assertSafeRedirect,
   redactSecrets,
   ProductionGuardError,
 } from './canary/production-guard.mjs';
@@ -122,6 +124,48 @@ async function runTests() {
     'PRODUCTION_TARGET_FORBIDDEN',
     'rejects production D1 database ID'
   );
+
+  // ── 1B. Scheme & Userinfo Safety ───────────────────────────────────────────
+  console.log('1B. Scheme & Userinfo Safety');
+  assertThrows(
+    () => validateTargetUrl('ftp://ftp.example.com'),
+    'INVALID_CANARY_URL',
+    'rejects ftp scheme'
+  );
+  assertThrows(
+    () => validateTargetUrl('file:///etc/passwd'),
+    'INVALID_CANARY_URL',
+    'rejects file scheme'
+  );
+  assertThrows(
+    () => validateTargetUrl('http://canary.example.com'),
+    'INVALID_CANARY_URL',
+    'rejects insecure HTTP on non-localhost'
+  );
+  assertThrows(
+    () => validateTargetUrl('https://admin:secret@canary.test.local'),
+    'INVALID_CANARY_URL',
+    'rejects embedded userinfo/passwords in URL'
+  );
+  assertThrows(
+    () => validateTargetUrl('https://user@canary.test.local'),
+    'INVALID_CANARY_URL',
+    'rejects embedded username in URL'
+  );
+
+  // ── 1C. Redirect Inspection & Credential Stripping ─────────────────────────
+  console.log('1C. Redirect Inspection & Safe Resolution');
+  assertThrows(
+    () => assertSafeRedirect('https://canary.example.com/api', 'https://boston-project.divyesh-boston.workers.dev/p'),
+    'PRODUCTION_TARGET_FORBIDDEN',
+    'rejects redirect targeting production host'
+  );
+  const sameOriginRedir = assertSafeRedirect('https://canary.example.com/api/v1', '/api/v2');
+  assertEqual(sameOriginRedir.resolvedUrl, 'https://canary.example.com/api/v2', 'resolves relative redirect');
+  assertEqual(sameOriginRedir.isCrossOrigin, false, 'same-origin redirect is not cross-origin');
+
+  const crossOriginRedir = assertSafeRedirect('https://canary.example.com/api', 'https://other-canary.example.com/api');
+  assertEqual(crossOriginRedir.isCrossOrigin, true, 'detects cross-origin redirect');
 
   // ── 2. Isolation Confirmation Flag ─────────────────────────────────────────
   console.log('2. Isolation Confirmation Guard');
@@ -262,8 +306,8 @@ async function runTests() {
   console.log('8. Cleanup Registry');
   const reg = new CleanupRegistry('canary-test-run-1');
   assertEqual(reg.runId, 'canary-test-run-1', 'preserves runId');
-  reg.trackRawKey('rri-raw/a/p/hash1');
-  reg.trackBundleKey('rri-data/a/p/hash2');
+  reg.trackRawKey('rri-raw/a/p/hash1', true);
+  reg.trackBundleKey('rri-data/a/p/hash2', true);
   reg.trackBundleId('bundle-123');
   reg.trackArchiveId('archive-456');
 
@@ -285,10 +329,20 @@ async function runTests() {
   assertEqual(cleanRes.deleted, 2, 'swept both bundle and archive');
   assertEqual(cleanRes.remainingKeys.length, 0, 'zero remaining keys after full sweep');
 
+  // Unmapped Orphan R2 Tracking
+  const orphanReg = new CleanupRegistry('canary-test-orphan-1');
+  orphanReg.trackRawKey('rri-raw/a/p/orphan-raw'); // unmapped!
+  orphanReg.trackBundleKey('rri-data/a/p/orphan-bundle'); // unmapped!
+  const orphanClean = await orphanReg.runCleanup(mockCleanClient);
+  assertEqual(orphanClean.verdict, 'FAILED', 'unmapped R2 keys fail cleanup verdict');
+  assertEqual(orphanClean.orphanedR2Keys.length, 2, 'reports both unmapped keys in orphanedR2Keys');
+  assert(orphanClean.remainingKeys.some((k) => k.includes('unmapped-r2-orphan')), 'remainingKeys identifies unmapped orphans');
+
   // ── 9. Telemetry Classification Tags ──────────────────────────────────────
   console.log('9. Telemetry Classification Tags');
   const validTags = new Set([
     'REAL_CLOUDFLARE_MEASURED',
+    'LOCAL_CLIENT_MEASURED',
     'LOCAL_SQLITE_MEASURED',
     'MODELED',
     'ESTIMATED',
@@ -343,13 +397,76 @@ async function runTests() {
       fetchImpl: mockFetch,
     });
 
-    assertEqual(mockOrchestratorResult.verdict, 'PASS', 'end-to-end canary passes against local mock backend');
+    assertEqual(mockOrchestratorResult.verdict, 'QUALIFIED_PASS (BUCKET_LOCK_SKIPPED)', 'reports QUALIFIED_PASS when bucket lock omitted');
     assert(mockOrchestratorResult.stages.smoke?.ok === true, 'smoke stage passed locally');
     assert(mockOrchestratorResult.stages.import?.ok === true, 'import stage passed locally');
     assert(mockOrchestratorResult.stages.concurrency?.ok === true, 'concurrency stage passed locally');
     assert(mockOrchestratorResult.stages.hydration?.ok === true, 'hydration stage passed locally');
     assert(mockOrchestratorResult.stages.cleanup?.verdict === 'CLEAN', 'cleanup stage completed CLEAN locally');
+    assertEqual(mockOrchestratorResult.stages.cleanup?.remainingKeys?.length || 0, 0, 'zero remaining keys after full sweep');
+    assertEqual(mockOrchestratorResult.telemetry.requests_dispatched.classification, 'LOCAL_CLIENT_MEASURED', 'requests_dispatched classified LOCAL_CLIENT_MEASURED');
     assert(mockOrchestratorResult.telemetry.requests_dispatched.value > 0, 'dispatched real requests to mock backend');
+
+    // ── 11. Canary Client Redirect & Bucket Lock Opt-In Verification ─────────
+    console.log('11. Canary Client Redirect & Bucket Lock Verification');
+
+    // Cross-origin redirect credential stripping test
+    const capturedHeaders = [];
+    const redirectFetch = async (input, init) => {
+      const urlStr = String(input);
+      if (urlStr.includes('origin-a.com')) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: 'https://origin-b.com/target' },
+        });
+      }
+      capturedHeaders.push(new Headers(init?.headers || {}));
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+
+    const redirectClient = new CanaryClient({
+      baseUrl: 'https://origin-a.com',
+      authToken: 'probe-chain-secret',
+      authCookie: 'session=secret-cookie-67890',
+      fetchImpl: redirectFetch,
+    });
+
+    await redirectClient._request('/initial');
+    assert(capturedHeaders.length === 1, 'received redirected request at destination');
+    const destHeaders = capturedHeaders[0];
+    assert(!destHeaders.has('authorization'), 'cross-origin redirect stripped Authorization header');
+    assert(!destHeaders.has('cookie'), 'cross-origin redirect stripped Cookie header');
+
+    // Bucket lock opt-in test with HTTP 423 assertion
+    let lockTested = false;
+    const mockLockFetch = async (input, init) => {
+      const urlStr = String(input);
+      if (urlStr.includes('/raw-destroy') && !lockTested) {
+        lockTested = true;
+        return new Response(JSON.stringify({ error: 'raw archive is retention locked', code: 'RAW_ARCHIVE_LOCKED' }), {
+          status: 423,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return mockFetch(input, init);
+    };
+
+    const lockOptInResult = await runCanary({
+      dryRun: false,
+      all: true,
+      allowBucketLock: true,
+      target: 'http://localhost:8787',
+      property: 'canary-prop-1',
+      account: 'A_1',
+      fetchImpl: mockLockFetch,
+    });
+
+    assertEqual(lockOptInResult.verdict, 'PASS', 'unqualified PASS when bucket lock verified');
+    assertEqual(lockOptInResult.stages.lock?.ok, true, 'lock stage ok when HTTP 423 verified');
+    assertEqual(lockOptInResult.stages.lock?.verifiedLock, true, 'lock stage marked verifiedLock');
   } finally {
     db.close();
   }

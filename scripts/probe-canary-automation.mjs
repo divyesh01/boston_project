@@ -7,6 +7,7 @@ import './_loader-boot.mjs';
 import 'fake-indexeddb/auto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
+import zlib from 'node:zlib';
 import {
   assertNotProductionTarget,
   assertIsolationConfirmed,
@@ -153,12 +154,77 @@ async function runTests() {
     'rejects embedded username in URL'
   );
 
+  // Wire verification: assertSafeCanaryEnvironment enforces URL safety
+  assertThrows(
+    () => assertSafeCanaryEnvironment({ url: 'ftp://ftp.example.com' }, { CANARY_CONFIRM_ISOLATED: 'YES' }),
+    'INVALID_CANARY_URL',
+    'assertSafeCanaryEnvironment rejects ftp scheme'
+  );
+  assertThrows(
+    () => assertSafeCanaryEnvironment({ url: 'http://remote.example.com' }, { CANARY_CONFIRM_ISOLATED: 'YES' }),
+    'INVALID_CANARY_URL',
+    'assertSafeCanaryEnvironment rejects remote http scheme'
+  );
+  assertThrows(
+    () => assertSafeCanaryEnvironment({ url: 'https://admin:secret@canary.test.local' }, { CANARY_CONFIRM_ISOLATED: 'YES' }),
+    'INVALID_CANARY_URL',
+    'assertSafeCanaryEnvironment rejects embedded credentials'
+  );
+
+  // Wire verification: CanaryClient constructor enforces URL safety
+  assertThrows(
+    () => new CanaryClient({ baseUrl: 'ftp://ftp.example.com' }),
+    'INVALID_CANARY_URL',
+    'CanaryClient constructor rejects ftp scheme'
+  );
+  assertThrows(
+    () => new CanaryClient({ baseUrl: 'http://remote.example.com' }),
+    'INVALID_CANARY_URL',
+    'CanaryClient constructor rejects remote http scheme'
+  );
+  assertThrows(
+    () => new CanaryClient({ baseUrl: 'https://admin:secret@canary.test.local' }),
+    'INVALID_CANARY_URL',
+    'CanaryClient constructor rejects embedded credentials'
+  );
+
+  // Allowed HTTPS and local HTTP in assertSafeCanaryEnvironment
+  try {
+    assertSafeCanaryEnvironment({ url: 'https://rri-bulk-canary.workers.dev' }, { CANARY_CONFIRM_ISOLATED: 'YES' });
+    assertSafeCanaryEnvironment({ url: 'http://localhost:8787' }, { CANARY_CONFIRM_ISOLATED: 'YES' });
+    assertSafeCanaryEnvironment({ url: 'http://127.0.0.1:8787' }, { CANARY_CONFIRM_ISOLATED: 'YES' });
+    passed += 3;
+  } catch (err) {
+    failed++;
+    console.error('  FAIL: assertSafeCanaryEnvironment rejected valid canary targets:', err.message);
+  }
+
   // ── 1C. Redirect Inspection & Credential Stripping ─────────────────────────
   console.log('1C. Redirect Inspection & Safe Resolution');
   assertThrows(
     () => assertSafeRedirect('https://canary.example.com/api', 'https://boston-project.divyesh-boston.workers.dev/p'),
     'PRODUCTION_TARGET_FORBIDDEN',
     'rejects redirect targeting production host'
+  );
+  assertThrows(
+    () => assertSafeRedirect('https://canary.example.com/api', 'ftp://evil.com/leak'),
+    'INVALID_CANARY_URL',
+    'assertSafeRedirect rejects ftp redirect'
+  );
+  assertThrows(
+    () => assertSafeRedirect('https://canary.example.com/api', 'file:///etc/passwd'),
+    'INVALID_CANARY_URL',
+    'assertSafeRedirect rejects file redirect'
+  );
+  assertThrows(
+    () => assertSafeRedirect('https://canary.example.com/api', 'http://remote.example.com'),
+    'INVALID_CANARY_URL',
+    'assertSafeRedirect rejects remote http redirect'
+  );
+  assertThrows(
+    () => assertSafeRedirect('https://canary.example.com/api', 'https://admin:secret@canary.test.local'),
+    'INVALID_CANARY_URL',
+    'assertSafeRedirect rejects userinfo redirect'
   );
   const sameOriginRedir = assertSafeRedirect('https://canary.example.com/api/v1', '/api/v2');
   assertEqual(sameOriginRedir.resolvedUrl, 'https://canary.example.com/api/v2', 'resolves relative redirect');
@@ -467,6 +533,94 @@ async function runTests() {
     assertEqual(lockOptInResult.verdict, 'PASS', 'unqualified PASS when bucket lock verified');
     assertEqual(lockOptInResult.stages.lock?.ok, true, 'lock stage ok when HTTP 423 verified');
     assertEqual(lockOptInResult.stages.lock?.verifiedLock, true, 'lock stage marked verifiedLock');
+
+    // ── 12. Corrupted-Payload / Normalized Hash Mismatch Verification ─────────
+    console.log('12. Corrupted-Payload / Normalized Hash Mismatch Verification');
+
+    const tamperedItems = [
+      { entity: 'PaymentDay', row: { id: 201, property_id: 'canary-prop-1', amount: 999999 } }
+    ];
+    const tamperedGzip = zlib.gzipSync(tamperedItems.map((i) => JSON.stringify(i)).join('\n'));
+    const expectedHashValue = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+    const mockTamperedHydrationFetch = async (input) => {
+      const urlStr = String(input);
+      if (urlStr.includes('/api/bulk-import/manifest')) {
+        if (urlStr.includes('since_revision=1')) {
+          return new Response(JSON.stringify({ manifests: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({
+          manifests: [{
+            id: 'bundle-tampered-1',
+            status: 'active',
+            row_count: 1,
+            revision: 1,
+            normalized_hash: expectedHashValue,
+          }]
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (urlStr.includes('/api/bulk-import/bundle/')) {
+        return new Response(tamperedGzip, {
+          status: 200,
+          headers: {
+            'content-type': 'application/gzip',
+            'x-normalized-hash': expectedHashValue,
+          },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+
+    const tamperedHydrationResult = await runCanary({
+      hydration: true,
+      target: 'http://localhost:8787',
+      fetchImpl: mockTamperedHydrationFetch,
+    });
+
+    assertEqual(tamperedHydrationResult.verdict, 'FAIL', 'fails verdict when bundle payload is corrupted');
+    assertEqual(tamperedHydrationResult.stages.hydration?.ok, false, 'hydration stage fails on hash mismatch');
+    assert(
+      /normalized hash mismatch/i.test(tamperedHydrationResult.stages.hydration?.error || ''),
+      'hydration error describes normalized hash mismatch'
+    );
+
+    // ── 13. Injected Failure After R2 Upload & Failure Cleanup Verification ──
+    console.log('13. Injected Failure After R2 Upload & Failure Cleanup Verification');
+
+    let rawUploadDispatched = false;
+    const mockFailureFetch = async (input) => {
+      const urlStr = String(input);
+      if (urlStr.includes('/api/bulk-import/raw-upload')) {
+        rawUploadDispatched = true;
+        return new Response(JSON.stringify({ ok: true, raw_object_key: 'rri-raw/test-acc/test-prop/injected-orphan-key' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (urlStr.includes('/api/bulk-import/raw-archive')) {
+        throw new Error('SIMULATED_D1_ACTIVATION_CRASH');
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+
+    const failureRunResult = await runCanary({
+      smoke: true,
+      target: 'http://localhost:8787',
+      fetchImpl: mockFailureFetch,
+    });
+
+    assert(rawUploadDispatched, 'raw archive upload was dispatched before injected crash');
+    assertEqual(failureRunResult.verdict, 'FAIL', 'run reports FAIL on stage exception');
+    assert(failureRunResult.stages.cleanup !== undefined, 'cleanup executed in finally-equivalent path after failure');
+    assertEqual(failureRunResult.stages.cleanup?.verdict, 'FAILED', 'cleanup reports FAILED due to unmapped orphan');
+    assert(
+      failureRunResult.stages.cleanup?.orphanedR2Keys?.includes('rri-raw/test-acc/test-prop/injected-orphan-key'),
+      'cleanup tracked unmapped raw upload in orphanedR2Keys'
+    );
+    assert(
+      failureRunResult.stages.cleanup?.remainingKeys?.some((k) => k.includes('injected-orphan-key')),
+      'cleanup inventory includes exact orphaned R2 key'
+    );
   } finally {
     db.close();
   }

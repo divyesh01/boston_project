@@ -15,6 +15,7 @@ import {
 } from './canary/production-guard.mjs';
 import {
   generateFixtureWithOracle,
+  computeIndependentNormalizedHash,
   REPORT_TYPES,
 } from './canary/fixture-generator.mjs';
 import { CleanupRegistry } from './canary/cleanup-registry.mjs';
@@ -163,6 +164,7 @@ export async function runCanary(options = {}) {
   };
 
   const doAll = options.all;
+  let stageExecutionError = null;
 
   try {
     // ── STAGE 1: PREFLIGHT ───────────────────────────────────────────────────
@@ -740,15 +742,13 @@ export async function runCanary(options = {}) {
           // Decompress gzip payload
           const decompressed = zlib.gunzipSync(Buffer.from(bundleData.buffer));
 
-          // Verify content hash
-          const computedHash = crypto.createHash('sha256').update(decompressed).digest('hex');
-
           // Parse and verify row count and deterministic row IDs
           const lines = decompressed.toString('utf8').trim().split('\n').filter(Boolean);
           if (lines.length !== targetManifest.row_count) {
             throw new Error(`Hydrated row count mismatch: manifest says ${targetManifest.row_count}, but payload has ${lines.length} rows`);
           }
 
+          const items = [];
           for (let idx = 0; idx < lines.length; idx++) {
             const item = JSON.parse(lines[idx]);
             const row = item.row || item;
@@ -756,6 +756,25 @@ export async function runCanary(options = {}) {
             if (!hasId) {
               throw new Error(`Row ${idx} in hydrated bundle is missing a deterministic identifier`);
             }
+            items.push(item);
+          }
+
+          // Independently recompute canonical normalized content and hash
+          const { normalizedHash: computedNormalizedHash } = computeIndependentNormalizedHash(items);
+
+          const expectedNormalizedHash = targetManifest.normalized_hash;
+          const xNormalizedHash = bundleData.normalizedHash || '';
+
+          if (computedNormalizedHash !== expectedNormalizedHash) {
+            throw new Error(
+              `Hydration normalized hash mismatch: computed independent hash (${computedNormalizedHash}) !== manifest normalized_hash (${expectedNormalizedHash})`
+            );
+          }
+
+          if (xNormalizedHash && computedNormalizedHash !== xNormalizedHash) {
+            throw new Error(
+              `Hydration header hash mismatch: computed independent hash (${computedNormalizedHash}) !== x-normalized-hash header (${xNormalizedHash})`
+            );
           }
 
           // Verify stale cursor / pagination token: querying since latest cursor returns 0 new
@@ -790,7 +809,10 @@ export async function runCanary(options = {}) {
             decompressedBytes: decompressed.byteLength,
             rowCount: lines.length,
             rowIdsVerified: true,
-            contentHashMatched: Boolean(computedHash),
+            computedNormalizedHash,
+            expectedNormalizedHash,
+            headerNormalizedHash: xNormalizedHash,
+            contentHashMatched: computedNormalizedHash === expectedNormalizedHash && (!xNormalizedHash || computedNormalizedHash === xNormalizedHash),
             staleCursorVerified: true,
           };
         }
@@ -864,34 +886,58 @@ export async function runCanary(options = {}) {
       if (!stage.ok && !options.dryRun) throw new Error(`Large fixture stage failed: ${stage.error}`);
     }
 
+  } catch (err) {
+    stageExecutionError = err;
+  } finally {
     // ── STAGE 8: CLEANUP ────────────────────────────────────────────────────
-    if (doAll || options.cleanup) {
-      const cleanupRes = await registry.runCleanup(client);
-      results.stages.cleanup = cleanupRes;
+    // Executes in a finally-equivalent path after normal run OR after stage failure
+    if (doAll || options.cleanup || stageExecutionError) {
+      const stage = { name: 'cleanup', ok: true, details: {} };
+      try {
+        const cleanupRes = await registry.runCleanup(client);
+        stage.details = cleanupRes;
+        stage.verdict = cleanupRes.verdict;
+        stage.deleted = cleanupRes.deleted;
+        stage.locked = cleanupRes.locked;
+        stage.failed = cleanupRes.failed;
+        stage.orphanedR2Keys = cleanupRes.orphanedR2Keys;
+        stage.remainingKeys = cleanupRes.remainingKeys;
+        if (cleanupRes.verdict !== 'CLEAN' && cleanupRes.verdict !== 'SKIPPED') {
+          stage.ok = false;
+          stage.error = `Cleanup verdict was ${cleanupRes.verdict} (${cleanupRes.remainingKeys?.length || 0} remaining resources to sweep manually)`;
+        }
+      } catch (cleanupErr) {
+        stage.ok = false;
+        stage.verdict = 'FAILED';
+        stage.error = cleanupErr.message;
+        stage.orphanedR2Keys = [...registry.orphanedR2Keys];
+        stage.remainingKeys = [...registry.createdRawKeys, ...registry.createdBundleKeys];
+      }
+      results.stages.cleanup = stage;
     }
-
-    results.telemetry.requests_dispatched.value = client.requestsDispatched;
-
-    // Determine conservative final verdict
-    let verdict = options.dryRun ? 'PASS (DRY_RUN)' : 'PASS';
-    const failedStages = Object.entries(results.stages).filter(([_, s]) => s && s.ok === false);
-
-    if (failedStages.length > 0) {
-      verdict = 'FAIL';
-      results.failureReason = `Failed stages: ${failedStages.map(([n]) => n).join(', ')}`;
-    } else if (results.stages.cleanup && results.stages.cleanup.verdict !== 'CLEAN' && results.stages.cleanup.verdict !== 'SKIPPED') {
-      verdict = 'FAIL';
-      results.failureReason = `Cleanup verdict was ${results.stages.cleanup.verdict} (uncleaned resources: ${results.stages.cleanup.remainingKeys?.length || 0})`;
-    } else if (results.stages.lock?.skipped && !options.dryRun) {
-      verdict = 'QUALIFIED_PASS (BUCKET_LOCK_SKIPPED)';
-    }
-
-    results.verdict = verdict;
-  } catch (fatalError) {
-    results.verdict = 'FAIL';
-    results.fatalError = fatalError.message;
   }
 
+  results.telemetry.requests_dispatched.value = client.requestsDispatched;
+
+  // Determine conservative final verdict
+  let verdict = options.dryRun ? 'PASS (DRY_RUN)' : 'PASS';
+  const failedStages = Object.entries(results.stages).filter(([_, s]) => s && s.ok === false);
+
+  if (stageExecutionError) {
+    verdict = 'FAIL';
+    results.fatalError = stageExecutionError.message;
+    results.failureReason = `Stage execution failed: ${stageExecutionError.message}`;
+  } else if (failedStages.length > 0) {
+    verdict = 'FAIL';
+    results.failureReason = `Failed stages: ${failedStages.map(([n]) => n).join(', ')}`;
+  } else if (results.stages.cleanup && results.stages.cleanup.verdict !== 'CLEAN' && results.stages.cleanup.verdict !== 'SKIPPED') {
+    verdict = 'FAIL';
+    results.failureReason = `Cleanup verdict was ${results.stages.cleanup.verdict} (uncleaned resources: ${results.stages.cleanup.remainingKeys?.length || 0})`;
+  } else if (results.stages.lock?.skipped && !options.dryRun) {
+    verdict = 'QUALIFIED_PASS (BUCKET_LOCK_SKIPPED)';
+  }
+
+  results.verdict = verdict;
   return results;
 }
 

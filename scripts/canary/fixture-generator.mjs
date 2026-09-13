@@ -1,8 +1,70 @@
 // scripts/canary/fixture-generator.mjs
 // Deterministic synthetic HotelKey fixture generator with ugly variants and expected-result oracles.
 
+import crypto from 'node:crypto';
 import { sha256Hex, buildNormalizedBundle, compressPayloadGzip } from '../../src/lib/bulkImportPipeline.js';
 import { contentHash, normalizedContent, REPORT_ENTITY } from '../../worker/bulk-contract.js';
+
+/**
+ * Independent canary-side recomputation of canonical normalized content and hash.
+ * Does NOT call worker/bulk-contract.js or production oracle helpers.
+ * Adheres strictly to the canonical normalized content wire contract:
+ * 1. Filter out all provenance attributes from each item row:
+ *    id, import_id, bulk_import_id, created_date, updated_date,
+ *    source_file, property_name, file_hash, raw_archive_id.
+ * 2. Deep sort all object keys recursively.
+ * 3. Serialize each item as JSON.
+ * 4. Sort serialized NDJSON lines lexicographically.
+ * 5. Join lines with newline ('\n').
+ * 6. Compute SHA-256 hex digest.
+ *
+ * @param {Array<{ entity: string, row: Record<string, any> }>} items
+ * @returns {{ canonicalText: string, normalizedHash: string }}
+ */
+export function computeIndependentNormalizedHash(items) {
+  if (!Array.isArray(items)) {
+    throw new Error('computeIndependentNormalizedHash requires an array of items');
+  }
+
+  const PROVENANCE_KEYS = new Set([
+    'id', 'import_id', 'bulk_import_id', 'created_date', 'updated_date',
+    'source_file', 'property_name', 'file_hash', 'raw_archive_id'
+  ]);
+
+  function deepCanonicalize(val) {
+    if (Array.isArray(val)) {
+      return val.map(deepCanonicalize);
+    }
+    if (val !== null && typeof val === 'object') {
+      const sorted = {};
+      for (const k of Object.keys(val).sort()) {
+        sorted[k] = deepCanonicalize(val[k]);
+      }
+      return sorted;
+    }
+    return val;
+  }
+
+  const lines = items.map((item) => {
+    const rawRow = item?.row || {};
+    const filteredRow = {};
+    for (const [k, v] of Object.entries(rawRow)) {
+      if (!PROVENANCE_KEYS.has(k)) {
+        filteredRow[k] = v;
+      }
+    }
+    return JSON.stringify(deepCanonicalize({
+      entity: item?.entity,
+      row: filteredRow,
+    }));
+  });
+
+  lines.sort();
+  const canonicalText = lines.join('\n');
+  const normalizedHash = crypto.createHash('sha256').update(canonicalText, 'utf8').digest('hex');
+
+  return { canonicalText, normalizedHash };
+}
 
 /**
  * Fast deterministic pseudo-random number generator (Mulberry32).

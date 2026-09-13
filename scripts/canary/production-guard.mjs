@@ -119,8 +119,8 @@ export function assertSafeRedirect(fromUrl, locationHeader) {
     throw new ProductionGuardError(`Invalid redirect location URL: ${locationHeader}`, 'INVALID_REDIRECT');
   }
 
-  // Assert destination is safe and valid
-  assertNotProductionTarget({ url: resolved.toString() });
+  // Fully validate destination URL: scheme, userinfo, and forbidden production hosts
+  validateTargetUrl(resolved.toString());
 
   const isCrossOrigin = resolved.origin.toLowerCase() !== fromParsed.origin.toLowerCase();
   return {
@@ -144,15 +144,7 @@ export function assertNotProductionTarget(target = {}) {
   const { url, service, d1Name, d1Id, bucketName } = target;
 
   if (url) {
-    const host = extractHostname(url);
-    for (const forbidden of FORBIDDEN_HOSTNAMES) {
-      if (host === forbidden || host.endsWith(`.${forbidden}`)) {
-        throw new ProductionGuardError(
-          `Refusing to target production host: ${host}`,
-          'PRODUCTION_TARGET_FORBIDDEN'
-        );
-      }
-    }
+    validateTargetUrl(url);
   }
 
   if (service) {
@@ -230,6 +222,9 @@ export function assertIsolationConfirmed(env = process.env) {
  */
 export function assertSafeCanaryEnvironment(target = {}, env = process.env) {
   assertIsolationConfirmed(env);
+  if (target.url) {
+    validateTargetUrl(target.url);
+  }
   assertNotProductionTarget(target);
 }
 

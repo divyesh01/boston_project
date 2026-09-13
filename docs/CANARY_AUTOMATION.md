@@ -157,7 +157,8 @@ node scripts/canary-bulk-import.mjs --all --config=canary.env
    - Queries the manifest feed (`since_revision=0`).
    - Downloads the latest compressed bundle directly from R2.
    - Decompresses gzip content (`zlib.gunzipSync`).
-   - Verifies bit-for-bit SHA-256 content hash equality against manifest `content_hash`.
+   - Independently recomputes canonical normalized content and SHA-256 hash according to the wire contract (excluding provenance keys, deep sorting object keys, and sorting NDJSON lines).
+   - Asserts bit-for-bit equality: `computedNormalizedHash === targetManifest.normalized_hash === x-normalized-hash`.
    - Validates total row count and asserts deterministic row IDs (`row.id` / `row.row_id`).
    - Validates pagination cursor freshness (`since_revision` & `after_id`) confirming zero unread records at head.
 6. **Stage 6 (Bucket Lock)**:
@@ -166,7 +167,7 @@ node scripts/canary-bulk-import.mjs --all --config=canary.env
 7. **Stage 7 (Large Payload)**:
    Streams a large 1,000-row fixture validating chunked upload and memory bounds.
 8. **Stage 8 (Cleanup)**:
-   Sweeps all registered canary bundles and raw archives; verifies zero remaining orphaned keys.
+   Executes in a `finally`-equivalent path after successful completion or stage failure. Sweeps all registered canary bundles and raw archives; inventories and surfaces any unmapped R2 orphans (`orphanedR2Keys`), and never reports `CLEAN` unless 100% of tracked resources are accounted for and swept.
 
 ### Available CLI Flags
 

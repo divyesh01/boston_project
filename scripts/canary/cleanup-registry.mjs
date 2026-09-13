@@ -125,10 +125,6 @@ export class CleanupRegistry {
    * }>}
    */
   async runCleanup(client, options = {}) {
-    const attempted = this.createdBundleIds.size + this.createdArchiveIds.size;
-    let deleted = 0;
-    let locked = 0;
-    let failed = 0;
     const remainingKeys = [];
 
     // Identify unmapped R2 keys that were never committed to D1 manifests
@@ -142,17 +138,23 @@ export class CleanupRegistry {
       }
     }
 
+    const attempted = this.createdBundleIds.size + this.createdArchiveIds.size + unmappedRaw.length + unmappedBundles.length;
+    let deleted = 0;
+    let locked = 0;
+    let failed = unmappedRaw.length + unmappedBundles.length;
+
     if (!client || typeof client.deleteBundle !== 'function') {
+      const hasTracked = this.createdRawKeys.size > 0 || this.createdBundleKeys.size > 0 || this.createdBundleIds.size > 0 || this.createdArchiveIds.size > 0;
       return {
         runId: this.runId,
-        attempted: 0,
+        attempted,
         deleted: 0,
         locked: 0,
-        failed: 0,
+        failed: hasTracked ? attempted : 0,
         orphanedR2Keys: [...this.orphanedR2Keys],
         remainingKeys: [...remainingKeys, ...this.createdRawKeys, ...this.createdBundleKeys],
-        verdict: 'SKIPPED',
-        reportStatus: 'NO_CLIENT_FOR_CLEANUP',
+        verdict: hasTracked ? 'FAILED' : 'SKIPPED',
+        reportStatus: hasTracked ? 'NO_CLIENT_FOR_CLEANUP_FAILED' : 'NO_CLIENT_FOR_CLEANUP',
       };
     }
 
@@ -202,16 +204,19 @@ export class CleanupRegistry {
       }
     }
 
+    const totalCreated = this.createdRawKeys.size + this.createdBundleKeys.size + this.createdBundleIds.size + this.createdArchiveIds.size;
     let verdict = 'CLEAN';
-    if (this.orphanedR2Keys.size > 0 || failed > 0) {
+    if (this.orphanedR2Keys.size > 0 || failed > 0 || remainingKeys.length > 0) {
       verdict = (deleted > 0) ? 'PARTIAL' : 'FAILED';
     } else if (locked > 0) {
       verdict = 'PARTIAL';
+    } else if (totalCreated > 0 && deleted === 0 && !options.dryRun) {
+      verdict = 'FAILED';
     }
 
     const reportStatus = (verdict === 'CLEAN')
       ? 'CLEAN'
-      : `TEST PASS / CLEANUP ${verdict} (${remainingKeys.length} remaining resources to sweep manually)`;
+      : `CLEANUP ${verdict} (${remainingKeys.length} remaining resources to sweep manually)`;
 
     return {
       runId: this.runId,

@@ -712,7 +712,9 @@ Primary gates: `scripts/probe-d1-quota-auth-failure.mjs`, `scripts/probe-d1-quot
   - Cloudflare Free Tier (100k daily cap) supports > 4,000 bulk files/day under the index model instead of 1 file.
 - **Worker CPU & Timeout Protection**:
   - Browser compresses NDJSON bundles client-side using native `CompressionStream('gzip')`.
-  - Worker streams compressed body directly into R2 storage (`env.BULK_DATA.put`), using < 2 ms CPU time (far below the 10ms Free Tier cap) and completing in < 1.2 seconds.
+  - Worker streams compressed body directly into R2 storage (`env.BULK_DATA.put`) without full-payload RAM buffering.
+  - Local testing observed approximately < 2 ms CPU time for the streaming path and < 1.2 seconds elapsed timing in the local test harness.
+  - Real Cloudflare edge Worker CPU and memory remain UNMEASURED / UNPROVEN pending successful remote canary execution after error 10136 is resolved; compliance with the Cloudflare edge 10ms CPU limit has not yet been demonstrated on edge runtime.
 - **Deterministic ID Parity & Cold Hydration**:
   - Client generates deterministic 53-bit integer IDs from hash seeds, guaranteeing exact bit-for-bit row ID matching across all browsers (Browser A, Browser B, headless).
   - Browser B receives an `ImportBundle` change event via the business sync feed, downloads the bundle from `/api/bulk-import/bundle/:id`, decompresses via `DecompressionStream('gzip')`, and materializes directly into IndexedDB (`localDb`).
@@ -901,9 +903,10 @@ Pre-production operational readiness established before remote canary resumption
 - **Rollout & Rollback Runbooks**:
   - `docs/RUNBOOK_PRODUCTION_ROLLOUT.md` establishes 18 sequential gates (Gate 0 platform entitlement through Gate 17 sign-off) with explicit stop conditions and no unverified shortcuts.
   - `docs/RUNBOOK_ROLLBACK_INCIDENT.md` specifies non-destructive first-line responses, classification levels, and emergency code/traffic reversion playbooks.
-- **Documentation Truth on D1 Write Costs**:
+- **Documentation Truth on D1 Write Costs & Worker Performance**:
   - `11 physical D1 rows_written`: REAL CLOUDFLARE MEASURED on canary D1 `7e746318-2280-4907-931d-9c257b62ee78` for a 3-statement activation SQL fixture (`rows_written [6, 1, 4]`).
   - `3 SQL write statements`: LOCAL SQLITE MEASURED in test harness.
   - `20 metered rows_written/file`: ESTIMATED / MODELED by local index model (1+5 Stage 1, 9+1+4 Stage 2).
   - Full HotelKey report import on production Cloudflare D1: UNMEASURED until Cloudflare Worker R2 binding error 10136 is resolved and remote canary end-to-end import executes.
-
+  - `Streaming CPU < 2 ms & elapsed < 1.2s`: LOCAL MEASURED in test harness without full-payload RAM buffering.
+  - Real Cloudflare edge Worker CPU and memory: UNMEASURED / UNPROVEN until remote canary execution after Cloudflare error 10136 resolution.

@@ -910,3 +910,25 @@ Pre-production operational readiness established before remote canary resumption
   - Full HotelKey report import on production Cloudflare D1: UNMEASURED until Cloudflare Worker R2 binding error 10136 is resolved and remote canary end-to-end import executes.
   - `Streaming CPU < 2 ms & elapsed < 1.2s`: LOCAL MEASURED in test harness without full-payload RAM buffering.
   - Real Cloudflare edge Worker CPU and memory: UNMEASURED / UNPROVEN until remote canary execution after Cloudflare error 10136 resolution.
+
+## Canary automation harness & test tooling — 2026-09-13
+
+A dedicated local canary test harness and CLI orchestrator have been established to prepare for remote canary execution upon resolution of Cloudflare error 10136:
+
+- **CLI Orchestrator (`scripts/canary-bulk-import.mjs`)**:
+  - Provides flags: `--dry-run`, `--preflight`, `--smoke`, `--import`, `--concurrency`, `--hydration`, `--lock`, `--large`, `--cleanup`, `--all`, `--json`, and `--output`.
+  - Enforces strict production rejection of `boston-project.divyesh-boston.workers.dev`, service `boston-project`, D1 name `boston-project-production-auth`, and D1 ID `e9008126-d4b4-4588-841c-128eadd94c8d`.
+  - Requires explicit `CANARY_CONFIRM_ISOLATED=YES` before execution.
+  - Dry-run mode guarantees zero network dispatches (`requestsDispatched === 0`).
+  - Secret redaction utility strips Bearer tokens, Cookie headers, and auth keys from all logs and reports.
+- **Deterministic Fixture Generator (`scripts/canary/fixture-generator.mjs`)**:
+  - Seeded Mulberry32 generator covering all 9 HotelKey report families (transactions, adjustments_refunds, source, occupancy, gross_revenue, payments, clerk, hotel_statistics, timecard).
+  - Supports ugly CSV edge variants: UTF-8 BOM, quoted commas, escaped quotes, embedded newlines, negative amounts, and repeated headers.
+  - Computes precomputed oracles for expected raw SHA-256, normalized hash, canonical R2 keys (`rri-raw/...`, `rri-data/...`), and entity counts.
+- **Attributable Cleanup Registry (`scripts/canary/cleanup-registry.mjs`)**:
+  - Scoped run-ID tracking (`canary-<timestamp>-<hex>`) with SIGINT/SIGTERM emergency sweep handlers.
+  - Explicit outcome reporting distinguishing `CLEAN` from `TEST PASS / CLEANUP PARTIAL` with remaining object inventories.
+- **Local Probe Suite (`scripts/probe-canary-automation.mjs`)**:
+  - 195th probe suite in repository, validating guard rejection, dry-run invariants, redaction, determinism, error mapping, and end-to-end local SQLite mock execution.
+- **Operator Manual & Environment Template**:
+  - `docs/CANARY_AUTOMATION.md` and `examples/canary.env.example`.

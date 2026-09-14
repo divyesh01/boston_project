@@ -1,6 +1,7 @@
 import { parseBundle, normalizedContent, contentHash, REPORT_ENTITY } from './bulk-contract.js';
 import { assertPropertyInScope, ScopeError } from "./scope.js";
 import { queryAll, queryFirst } from "./db.js";
+import { isR2S3Enabled, resolveR2S3Stores } from "./r2-s3-adapter.js";
 
 class BulkImportError extends Error {
   constructor(message, status = 400, details = {}) {
@@ -103,6 +104,15 @@ function getR2DatePrefix(reportDate) {
 }
 
 function getStores(env) {
+  if (isR2S3Enabled(env)) {
+    try {
+      return resolveR2S3Stores(env);
+    } catch (error) {
+      throw new BulkImportError(error?.message || "R2 S3 storage unavailable", 503, {
+        code: "IMPORT_STORAGE_UNAVAILABLE",
+      });
+    }
+  }
   for (const name of ["RAW_ARCHIVE", "BULK_DATA"]) {
     if (!env[name] || ["head", "get", "put", "delete"].some((method) => typeof env[name][method] !== "function")) {
       throw new BulkImportError(`R2 binding ${name} is required`, 503, { code: "IMPORT_STORAGE_UNAVAILABLE" });
@@ -295,7 +305,7 @@ async function uploadRawArchive(request, env, scope) {
     // Direct streaming to R2 with native Cloudflare SHA-256 verification and bounded stream
     const bounded = createBoundedStream(request.body, MAX_RAW_FILE_SIZE_BYTES, "IMPORT_EMPTY_PAYLOAD");
     try {
-      await rawStore.put(rawObjectKey, bounded.stream, {
+      const created = await rawStore.put(rawObjectKey, bounded.stream, {
         customMetadata,
         httpMetadata: {
           contentType: mimeType,
@@ -303,6 +313,18 @@ async function uploadRawArchive(request, env, scope) {
         sha256: rawHash,
         onlyIf: { etagDoesNotMatch: "*" },
       });
+      if (created === null) {
+        const existing = await rawStore.head(rawObjectKey);
+        verifyObject(existing, scope, propertyId, rawHash, true);
+        return Response.json({
+          ok: true,
+          status: "already_archived",
+          raw_object_key: rawObjectKey,
+          raw_archive_id: rawArchiveId,
+          raw_hash: rawHash,
+          byte_length: existing.size,
+        }, { status: 200 });
+      }
     } catch (err) {
       if (err instanceof BulkImportError) throw err;
       if (err?.code === "PAYLOAD_TOO_LARGE" || String(err?.message || "").includes("PAYLOAD_TOO_LARGE")) {
@@ -670,7 +692,18 @@ async function uploadBundle(request, env, scope) {
     }
 
     try {
-      await bulkStore.put(objectKey, compressed, { ...r2Options, onlyIf: { etagDoesNotMatch: "*" } });
+      const created = await bulkStore.put(objectKey, compressed, { ...r2Options, onlyIf: { etagDoesNotMatch: "*" } });
+      if (created === null) {
+        const existing = await bulkStore.head(objectKey);
+        verifyObject(existing, scope, propertyId, normalizedHash);
+        return Response.json({
+          ok: true,
+          status: "already_uploaded",
+          object_key: objectKey,
+          normalized_hash: normalizedHash,
+          byte_length: existing.size,
+        }, { status: 200 });
+      }
     } catch (err) {
       if (err instanceof BulkImportError) throw err;
       if (err?.code === "PAYLOAD_TOO_LARGE" || String(err?.message || "").includes("PAYLOAD_TOO_LARGE")) {
@@ -719,7 +752,7 @@ async function activateBundle(request, env, scope) {
   const rawHash = String(body.raw_file_hash || '').toLowerCase();
   const key = canonicalKey(scope, propertyId, hash);
   if (body.object_key && body.object_key !== key) throw new BulkImportError('Noncanonical object key', 403, { code: 'IMPORT_OBJECT_SCOPE_MISMATCH' });
-  const { bulkStore } = getStores(env);
+  const { rawStore, bulkStore } = getStores(env);
   const head = await bulkStore.head(key);
   verifyObject(head, scope, propertyId, hash);
   const reportType = head.customMetadata.report_type || String(body.report_type || '');
@@ -747,7 +780,7 @@ async function activateBundle(request, env, scope) {
   if (identityVersion === 2 && (!source || (raw && raw.id !== body.id))) throw new BulkImportError('Original archive required', 409, { code: 'IMPORT_ARCHIVE_REQUIRED' });
   if (source) {
     const sourceKey = manifestKey(source, scope, true);
-    verifyObject(await env.RAW_ARCHIVE.head(sourceKey),scope,propertyId,rawHash,true);
+    verifyObject(await rawStore.head(sourceKey),scope,propertyId,rawHash,true);
   }
   const bundleId = raw?.id || String(body.id || crypto.randomUUID());
   const predecessorId = body.supersedes_bundle_id ? String(body.supersedes_bundle_id) : null;

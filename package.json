@@ -31,6 +31,7 @@
     "verify:v3": "node scripts/verify-divyesh-v3.mjs"
   },
   "dependencies": {
+    "aws4fetch": "^1.0.20",
     "@base44/sdk": "^0.8.41",
     "@base44/vite-plugin": "^1.0.30",
     "@hello-pangea/dnd": "^17.0.0",

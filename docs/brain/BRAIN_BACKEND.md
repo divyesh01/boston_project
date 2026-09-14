@@ -942,3 +942,29 @@ A dedicated local canary test harness and CLI orchestrator have been established
   - 195th probe suite in repository, validating guard rejection, scheme safety, redirect credential stripping, dry-run invariants, redaction, determinism, concurrency races, hydration integrity and hash mismatch rejection, row ID golden vector parity and valid-looking mutated row ID rejection, missing and incorrect `x-normalized-hash` header rejection, failure cleanup in finally, bucket lock assertion/skip, and end-to-end local SQLite mock execution.
 - **Operator Manual & Environment Template**:
   - `docs/CANARY_AUTOMATION.md` and `examples/canary.env.example`.
+
+## Canary R2 S3 transport fallback — 2026-09-14
+
+`worker/r2-s3-adapter.js` provides an explicit fallback for isolated canary Workers
+when Cloudflare rejects native Worker-to-R2 bindings with error 10136. Native
+`RAW_ARCHIVE` and `BULK_DATA` bindings remain the default. The fallback activates
+only when `R2_S3_ENABLED` is exactly `true`, validates a 32-character Cloudflare
+account ID and both bucket names, and derives the fixed standard R2 endpoint without
+accepting a caller-controlled host.
+
+The adapter signs S3-compatible `HEAD`, `GET`, `PUT`, and `DELETE` requests with
+`aws4fetch`. Access keys are Worker secrets; code and error messages never contain
+their values. Custom metadata maps through `x-amz-meta-*`, including RFC 2047 UTF-8
+encoding. Raw streaming uploads preserve the expected SHA-256 through
+`x-amz-content-sha256`. Write-once uploads use `If-None-Match: *`; HTTP 412 maps to
+the native R2 `null` result, after which the import pipeline HEADs and verifies the
+winning canonical object before returning an idempotent 200 response.
+
+All storage access, including the raw-source verification during activation, now
+passes through `getStores()`. `scripts/probe-r2-s3-adapter.mjs` proves signing,
+stream handling, endpoint/key construction, metadata fidelity, 404 and 412 mapping,
+safe failures, native fallback, and removal of the direct-binding bypass without
+network access. Real Cloudflare S3 transport behavior remains UNPROVEN until the
+isolated canary runs. Rollback is to disable `R2_S3_ENABLED`, remove the canary
+Worker secrets, and restore the previous harmless canary Worker version; production
+configuration is unchanged.

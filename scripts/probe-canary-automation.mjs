@@ -33,6 +33,7 @@ import { runCanary } from './canary-bulk-import.mjs';
 import { makeInstrumentedEnv, scopeAll } from './_worker-testkit.mjs';
 import { clearMockStore, testR2Binding } from './_r2-testkit.mjs';
 import { handleBulkImportRequest } from '../worker/bulk-import.js';
+import { sameOriginMutation } from '../worker/app-auth.js';
 
 let passed = 0;
 let failed = 0;
@@ -565,6 +566,194 @@ async function runTests() {
     assertEqual(lockOptInResult.verdict, 'PASS', 'unqualified PASS when bucket lock verified');
     assertEqual(lockOptInResult.stages.lock?.ok, true, 'lock stage ok when HTTP 423 verified');
     assertEqual(lockOptInResult.stages.lock?.verifiedLock, true, 'lock stage marked verifiedLock');
+
+    // ── 11B. Canary Mutation Headers & Redirect Hygiene Verification ─────────
+    console.log('11B. Canary Mutation Headers & Redirect Hygiene Verification');
+
+    let mutationTestHeaders = null;
+    let mutationTestRequest = null;
+    const captureFetch = async (input, init) => {
+      mutationTestHeaders = new Headers(init?.headers || {});
+      mutationTestRequest = new Request(input, init);
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+
+    const mutClient = new CanaryClient({
+      baseUrl: 'http://localhost:8787',
+      fetchImpl: captureFetch,
+    });
+
+    // 1. PUT gets the required header and passes Worker sameOriginMutation()
+    await mutClient.uploadRawArchive({
+      serverPropertyId: 'canary-prop-1',
+      reportType: 'payments',
+      rawFileHash: 'a'.repeat(64),
+      rawBytes: new Uint8Array([1, 2, 3]),
+    });
+    assertEqual(mutationTestHeaders.get('X-Requested-With'), 'XMLHttpRequest', 'PUT auto-attaches X-Requested-With: XMLHttpRequest');
+    assert(sameOriginMutation(mutationTestRequest), 'PUT passes Worker sameOriginMutation()');
+
+    // 2. POST / PATCH / DELETE get it and pass Worker sameOriginMutation()
+    for (const method of ['POST', 'PATCH', 'DELETE']) {
+      await mutClient._request('/api/bulk-import/mutation-probe', { method });
+      assertEqual(mutationTestHeaders.get('X-Requested-With'), 'XMLHttpRequest', `${method} auto-attaches X-Requested-With: XMLHttpRequest`);
+      assert(sameOriginMutation(mutationTestRequest), `${method} passes Worker sameOriginMutation()`);
+    }
+
+    // 3. GET / HEAD do not receive it automatically
+    for (const method of ['GET', 'HEAD']) {
+      await mutClient._request('/api/bulk-import/read-probe', { method });
+      assertEqual(mutationTestHeaders.has('X-Requested-With'), false, `${method} does not receive X-Requested-With automatically`);
+    }
+
+    // 4. Caller-provided header behavior is deterministic
+    await mutClient._request('/api/bulk-import/custom-mutation', {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'CustomCanaryAgent' },
+    });
+    assertEqual(mutationTestHeaders.get('X-Requested-With'), 'CustomCanaryAgent', 'POST preserves custom X-Requested-With without overwrite');
+
+    await mutClient._request('/api/bulk-import/custom-read', {
+      method: 'GET',
+      headers: { 'X-Requested-With': 'CustomCanaryAgent' },
+    });
+    assertEqual(mutationTestHeaders.get('X-Requested-With'), 'CustomCanaryAgent', 'GET preserves caller-provided X-Requested-With');
+
+    // 5. Cross-origin redirect does not retain mutation assertion headers
+    const redirAssertionHeaders = [];
+    const redirAssertionFetch = async (input, init) => {
+      const urlStr = String(input);
+      if (urlStr.includes('origin-alpha.com')) {
+        return new Response(null, {
+          status: 307,
+          headers: { Location: 'https://origin-beta.com/api/dest' },
+        });
+      }
+      redirAssertionHeaders.push(new Headers(init?.headers || {}));
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+
+    const crossOriginClient = new CanaryClient({
+      baseUrl: 'https://origin-alpha.com',
+      fetchImpl: redirAssertionFetch,
+    });
+
+    await crossOriginClient._request('/api/src', {
+      method: 'POST',
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest',
+        'Origin': 'https://origin-alpha.com',
+      },
+    });
+    assert(redirAssertionHeaders.length === 1, 'received request at cross-origin destination');
+    assertEqual(redirAssertionHeaders[0].has('X-Requested-With'), false, 'cross-origin redirect strips X-Requested-With');
+    assertEqual(redirAssertionHeaders[0].has('Origin'), false, 'cross-origin redirect strips Origin');
+
+    // 6. 303 / POST->GET redirect removes mutation-only headers
+    const postGetHeaders = [];
+    let postGetDispatchedMethod = null;
+    const postGetFetch = async (input, init) => {
+      const urlStr = String(input);
+      if (urlStr.includes('/api/post-start')) {
+        return new Response(null, {
+          status: 303,
+          headers: { Location: 'http://localhost:8787/api/get-finish' },
+        });
+      }
+      postGetDispatchedMethod = init?.method;
+      postGetHeaders.push(new Headers(init?.headers || {}));
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+
+    const postGetClient = new CanaryClient({
+      baseUrl: 'http://localhost:8787',
+      fetchImpl: postGetFetch,
+    });
+
+    await postGetClient._request('/api/post-start', {
+      method: 'POST',
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest',
+        'Content-Type': 'application/json',
+        'Content-Length': '14',
+      },
+      body: '{"test":"val"}',
+    });
+    assertEqual(postGetDispatchedMethod, 'GET', '303 converted POST to GET');
+    assertEqual(postGetHeaders[0].has('X-Requested-With'), false, '303 redirect removed X-Requested-With');
+    assertEqual(postGetHeaders[0].has('Content-Type'), false, '303 redirect removed Content-Type');
+    assertEqual(postGetHeaders[0].has('Content-Length'), false, '303 redirect removed Content-Length');
+
+    // 7. Existing credential stripping still works
+    const existingCredHeaders = [];
+    const existingCredFetch = async (input, init) => {
+      const urlStr = String(input);
+      if (urlStr.includes('origin-cred-a.com')) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: 'https://origin-cred-b.com/target' },
+        });
+      }
+      existingCredHeaders.push(new Headers(init?.headers || {}));
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+
+    const existingCredClient = new CanaryClient({
+      baseUrl: 'https://origin-cred-a.com',
+      authToken: 'probe-chain-secret',
+      authCookie: '__Host-rri_session=canary-session-token',
+      fetchImpl: existingCredFetch,
+    });
+
+    await existingCredClient._request('/entry');
+    assertEqual(existingCredHeaders[0].has('Authorization'), false, 'cross-origin redirect stripped Authorization');
+    assertEqual(existingCredHeaders[0].has('Cookie'), false, 'cross-origin redirect stripped Cookie');
+
+    // 8. Dry-run remains zero-network
+    let dryRunNetworkCalls = 0;
+    const noNetworkFetch = async () => {
+      dryRunNetworkCalls++;
+      throw new Error('NETWORK_CALL_FORBIDDEN_IN_DRY_RUN');
+    };
+
+    const dryClientCheck = new CanaryClient({
+      baseUrl: 'http://localhost:8787',
+      dryRun: true,
+      fetchImpl: noNetworkFetch,
+    });
+
+    await dryClientCheck.uploadRawArchive({
+      serverPropertyId: 'canary-prop-1',
+      reportType: 'payments',
+      rawFileHash: 'c'.repeat(64),
+      rawBytes: new Uint8Array([1]),
+    });
+    await dryClientCheck.recordRawArchive({
+      serverPropertyId: 'canary-prop-1',
+      reportType: 'payments',
+      rawFileHash: 'c'.repeat(64),
+      rawArchiveId: 'arch-dry-1',
+    });
+    await dryClientCheck._request('/api/bulk-import/read-dry', { method: 'GET' });
+
+    assertEqual(dryRunNetworkCalls, 0, 'dry-run made 0 network fetch calls');
+    assertEqual(dryClientCheck.requestsDispatched, 0, 'dry-run client requestsDispatched is strictly 0');
+    assertEqual(dryClientCheck.plannedRequests.length, 3, 'dry-run client recorded 3 planned requests');
+    assertEqual(dryClientCheck.plannedRequests[0].headers['x-requested-with'], 'XMLHttpRequest', 'PUT planned request recorded x-requested-with');
+    assertEqual(dryClientCheck.plannedRequests[1].headers['x-requested-with'], 'XMLHttpRequest', 'POST planned request recorded x-requested-with');
+    assertEqual(dryClientCheck.plannedRequests[2].headers['x-requested-with'], undefined, 'GET planned request did NOT record x-requested-with');
 
     // ── 12. Corrupted-Payload / Normalized Hash Mismatch Verification ─────────
     console.log('12. Corrupted-Payload / Normalized Hash Mismatch Verification');

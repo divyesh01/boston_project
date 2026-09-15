@@ -69,6 +69,11 @@ export class CanaryClient {
       currentHeaders.set('Cookie', this.authCookie);
     }
 
+    const MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+    if (MUTATION_METHODS.has(currentMethod) && !currentHeaders.has('X-Requested-With')) {
+      currentHeaders.set('X-Requested-With', 'XMLHttpRequest');
+    }
+
     let currentBody = options.body;
     if (options.json !== undefined) {
       currentHeaders.set('Content-Type', 'application/json');
@@ -131,18 +136,21 @@ export class CanaryClient {
           const { resolvedUrl, isCrossOrigin } = assertSafeRedirect(currentUrl, locationHeader);
           currentUrl = resolvedUrl;
 
-          // Strip credentials across origins to prevent token/cookie leakage
+          // Strip credentials and mutation-origin assertions across origins to prevent token/cookie leakage and false same-origin claims
           if (isCrossOrigin) {
             currentHeaders.delete('Authorization');
             currentHeaders.delete('Cookie');
+            currentHeaders.delete('X-Requested-With');
+            currentHeaders.delete('Origin');
           }
 
-          // Adjust method/body for 303 or standard POST->GET redirect semantics
+          // Adjust method/body for 303 or standard POST->GET redirect semantics and remove mutation-only headers
           if (response.status === 303 || ((response.status === 301 || response.status === 302) && currentMethod !== 'GET' && currentMethod !== 'HEAD')) {
             currentMethod = 'GET';
             currentBody = undefined;
             currentHeaders.delete('Content-Type');
             currentHeaders.delete('Content-Length');
+            currentHeaders.delete('X-Requested-With');
           }
           continue;
         }

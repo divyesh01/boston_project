@@ -28,7 +28,9 @@ The harness strictly enforces transport and credential hygiene:
 - **HTTPS Enforcement**: Requires `https://` schemes for all remote endpoints. Plain `http://` is strictly rejected unless targeting `localhost` or `127.0.0.1`.
 - **Embedded Userinfo Rejection**: Rejects any URL containing embedded credentials or userinfo (e.g. `https://user:pass@host/`) with code `PRODUCTION_TARGET_USERINFO_FORBIDDEN`.
 - **Manual Redirect Resolution**: Fetch requests enforce `redirect: 'manual'`. The client follows redirects manually up to a maximum depth of 5, re-validating each intermediate target through `assertSafeRedirect()`.
-- **Cross-Origin Credential Stripping**: When a redirect crosses origins (different protocol, host, or port), sensitive `Authorization` and `Cookie` headers are unconditionally stripped before dispatching the next request.
+- **Mutation Header Auto-Attachment**: For mutation requests (`POST`, `PUT`, `PATCH`, `DELETE`), `CanaryClient` automatically sets `X-Requested-With: XMLHttpRequest` when not explicitly supplied, satisfying Worker `sameOriginMutation()` requirements without modifying worker auth code. `GET` and `HEAD` requests do not receive it automatically. Caller-provided values are preserved deterministically.
+- **Cross-Origin Credential & Mutation Header Stripping**: When a redirect crosses origins (different protocol, host, or port), sensitive `Authorization` and `Cookie` credentials as well as mutation-origin assertion headers (`X-Requested-With`, `Origin`) are unconditionally stripped before dispatching the next request so the client cannot falsely claim same-origin semantics.
+- **Mutation-to-GET Header Hygiene**: When a redirect converts a mutation into a `GET` request (such as status `303` or standard POST/PUT -> GET redirects), mutation-only headers (`X-Requested-With`, `Content-Type`, `Content-Length`) are stripped.
 
 ### 2.3 Mandatory Isolation Confirmation
 The harness requires explicit confirmation that the target environment is isolated:

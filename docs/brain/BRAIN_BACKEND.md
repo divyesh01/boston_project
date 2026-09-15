@@ -968,3 +968,15 @@ network access. Real Cloudflare S3 transport behavior remains UNPROVEN until the
 isolated canary runs. Rollback is to disable `R2_S3_ENABLED`, remove the canary
 Worker secrets, and restore the previous harmless canary Worker version; production
 configuration is unchanged.
+
+## Canary Client Mutation Header & Redirect Hygiene — 2026-09-15
+
+`scripts/canary/canary-client.mjs` automatically sets `X-Requested-With: XMLHttpRequest` on mutation requests (`POST`, `PUT`, `PATCH`, `DELETE`) when not explicitly supplied by callers, satisfying Worker `sameOriginMutation()` requirements without mutating production worker auth logic. `GET` and `HEAD` requests do not receive this header automatically, and caller-provided values are preserved deterministically.
+
+Redirect handling enforces strict origin boundary isolation:
+- On cross-origin redirects, `Authorization`, `Cookie`, `X-Requested-With`, and `Origin` headers are stripped to prevent credential leaks and false same-origin claims.
+- When redirects convert mutations to `GET` (303 or standard POST/PUT -> GET redirects), mutation-only headers (`X-Requested-With`, `Content-Type`, `Content-Length`) are deleted.
+- Dry-run mode (`--dry-run`) remains strictly zero-network (`requestsDispatched === 0`), recording expected headers in planned requests without network dispatch.
+
+Validated locally in `scripts/probe-canary-automation.mjs` (Section 11B) across all 8 required behaviors with zero edge network dispatches.
+

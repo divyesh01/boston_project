@@ -4,9 +4,29 @@ const ACCOUNT_ID_PATTERN = /^[a-f0-9]{32}$/i;
 const BUCKET_PATTERN = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
 const RFC2047_PATTERN = /^=\?UTF-8\?B\?([A-Za-z0-9+/=]+)\?=$/i;
+const B2_ENDPOINT_PATTERN = /^https:\/\/s3\.([a-z0-9]+(?:-[a-z0-9]+)*)\.backblazeb2\.com\/?$/;
+const REGION_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const B2_BUCKET_PATTERN = /^[a-z0-9][a-z0-9.-]{4,61}[a-z0-9]$/;
+const IPV4_PATTERN = /^\d+\.\d+\.\d+\.\d+$/;
+const B2_FORBIDDEN_PREFIXES = ["b2-", "xn--", "sthree-", "amzn-s3-demo-"];
+const B2_FORBIDDEN_SUFFIXES = ["-s3alias", "--ol-s3", ".mrap", "--x-s3", "--table-s3"];
+
+function isValidB2Bucket(name) {
+  if (typeof name !== "string") return false;
+  if (!B2_BUCKET_PATTERN.test(name)) return false;
+  if (name.includes("..")) return false;
+  if (IPV4_PATTERN.test(name)) return false;
+  if (B2_FORBIDDEN_PREFIXES.some((prefix) => name.startsWith(prefix))) return false;
+  if (B2_FORBIDDEN_SUFFIXES.some((suffix) => name.endsWith(suffix))) return false;
+  return true;
+}
+
+function isGenericS3Enabled(env) {
+  return env?.S3_ENABLED === true || env?.S3_ENABLED === "true";
+}
 
 export function isR2S3Enabled(env) {
-  return env?.R2_S3_ENABLED === true || env?.R2_S3_ENABLED === "true";
+  return isGenericS3Enabled(env) || env?.R2_S3_ENABLED === true || env?.R2_S3_ENABLED === "true";
 }
 
 function requiredString(env, name) {
@@ -15,6 +35,38 @@ function requiredString(env, name) {
 }
 
 function readConfig(env) {
+  if (isGenericS3Enabled(env)) {
+    const names = [
+      "S3_ENDPOINT",
+      "S3_RAW_BUCKET",
+      "S3_DATA_BUCKET",
+      "S3_ACCESS_KEY_ID",
+      "S3_SECRET_ACCESS_KEY",
+    ];
+    const values = Object.fromEntries(names.map((name) => [name, requiredString(env, name)]));
+    const missing = names.filter((name) => !values[name]);
+    if (missing.length) throw configError(`missing ${missing.join(", ")}`);
+    for (const name of ["S3_RAW_BUCKET", "S3_DATA_BUCKET"]) {
+      if (!isValidB2Bucket(values[name])) throw configError(`invalid ${name}`);
+    }
+    const match = values.S3_ENDPOINT.match(B2_ENDPOINT_PATTERN);
+    if (!match) throw configError("invalid S3_ENDPOINT");
+    const inferredRegion = match[1];
+    const regionValue = requiredString(env, "S3_REGION");
+    if (regionValue) {
+      if (!REGION_PATTERN.test(regionValue)) throw configError("invalid S3_REGION");
+      if (regionValue !== inferredRegion) throw configError("invalid S3_REGION mismatch");
+    }
+    return {
+      rawBucket: values.S3_RAW_BUCKET,
+      dataBucket: values.S3_DATA_BUCKET,
+      accessKeyId: values.S3_ACCESS_KEY_ID,
+      secretAccessKey: values.S3_SECRET_ACCESS_KEY,
+      endpoint: `https://s3.${inferredRegion}.backblazeb2.com`,
+      region: regionValue || inferredRegion,
+    };
+  }
+
   const names = [
     "R2_S3_ACCOUNT_ID",
     "R2_S3_RAW_BUCKET",
@@ -35,6 +87,8 @@ function readConfig(env) {
     dataBucket: values.R2_S3_DATA_BUCKET,
     accessKeyId: values.R2_S3_ACCESS_KEY_ID,
     secretAccessKey: values.R2_S3_SECRET_ACCESS_KEY,
+    endpoint: `https://${values.R2_S3_ACCOUNT_ID.toLowerCase()}.r2.cloudflarestorage.com`,
+    region: "auto",
   };
 }
 
@@ -248,10 +302,10 @@ export function resolveR2S3Stores(env, dependencies = {}) {
     accessKeyId: config.accessKeyId,
     secretAccessKey: config.secretAccessKey,
     service: "s3",
-    region: "auto",
+    region: config.region,
   });
   if (!client || typeof client.fetch !== "function") throw configError("invalid S3 client");
-  const endpoint = `https://${config.accountId}.r2.cloudflarestorage.com`;
+  const endpoint = config.endpoint;
   return {
     rawStore: createStore({ client, endpoint, bucket: config.rawBucket }),
     bulkStore: createStore({ client, endpoint, bucket: config.dataBucket }),

@@ -943,31 +943,48 @@ A dedicated local canary test harness and CLI orchestrator have been established
 - **Operator Manual & Environment Template**:
   - `docs/CANARY_AUTOMATION.md` and `examples/canary.env.example`.
 
-## Canary R2 S3 transport fallback — 2026-09-14
+## Configurable S3-compatible object transport — 2026-09-16
 
-`worker/r2-s3-adapter.js` provides an explicit fallback for isolated canary Workers
-when Cloudflare rejects native Worker-to-R2 bindings with error 10136. Native
-`RAW_ARCHIVE` and `BULK_DATA` bindings remain the default. The fallback activates
-only when `R2_S3_ENABLED` is exactly `true`, validates a 32-character Cloudflare
-account ID and both bucket names, and derives the fixed standard R2 endpoint without
-accepting a caller-controlled host.
+`worker/r2-s3-adapter.js` provides an explicit S3-compatible transport for isolated
+canary Workers while Cloudflare Worker execution and D1 remain unchanged. Native
+`RAW_ARCHIVE` and `BULK_DATA` bindings remain the default. Generic mode activates
+only when `S3_ENABLED` is exactly `true` and atomically requires `S3_ENDPOINT`,
+`S3_RAW_BUCKET`, `S3_DATA_BUCKET`, `S3_ACCESS_KEY_ID`, and
+`S3_SECRET_ACCESS_KEY`. `S3_ENDPOINT` is restricted to the HTTPS Backblaze form
+`https://s3.<region>.backblazeb2.com`; the signing region is inferred from that
+endpoint. Optional `S3_REGION`, when present, must exactly match the inferred region.
+Backblaze bucket names are validated before a client is constructed.
+
+The existing Cloudflare R2 configuration remains backward-compatible. When generic
+mode is disabled, `R2_S3_ENABLED`, `R2_S3_ACCOUNT_ID`, `R2_S3_RAW_BUCKET`,
+`R2_S3_DATA_BUCKET`, `R2_S3_ACCESS_KEY_ID`, and `R2_S3_SECRET_ACCESS_KEY` retain the
+account-derived R2 endpoint and the `auto` signing region. Generic mode never falls
+back to legacy credentials when its configuration is incomplete.
 
 The adapter signs S3-compatible `HEAD`, `GET`, `PUT`, and `DELETE` requests with
 `aws4fetch`. Access keys are Worker secrets; code and error messages never contain
-their values. Custom metadata maps through `x-amz-meta-*`, including RFC 2047 UTF-8
-encoding. Raw streaming uploads preserve the expected SHA-256 through
-`x-amz-content-sha256`. Write-once uploads use `If-None-Match: *`; HTTP 412 maps to
-the native R2 `null` result, after which the import pipeline HEADs and verifies the
-winning canonical object before returning an idempotent 200 response.
+their values or request signatures. Custom metadata maps through `x-amz-meta-*`,
+including RFC 2047 UTF-8 encoding. Raw streaming uploads preserve the expected
+SHA-256 through `x-amz-content-sha256`. Write-once uploads use `If-None-Match: *`;
+HTTP 412 maps to the native R2 `null` result, after which the import pipeline HEADs
+and verifies the winning canonical object before returning an idempotent 200 response.
 
-All storage access, including the raw-source verification during activation, now
-passes through `getStores()`. `scripts/probe-r2-s3-adapter.mjs` proves signing,
-stream handling, endpoint/key construction, metadata fidelity, 404 and 412 mapping,
-safe failures, native fallback, and removal of the direct-binding bypass without
-network access. Real Cloudflare S3 transport behavior remains UNPROVEN until the
-isolated canary runs. Rollback is to disable `R2_S3_ENABLED`, remove the canary
-Worker secrets, and restore the previous harmless canary Worker version; production
-configuration is unchanged.
+All storage access, including raw-source verification during activation, passes
+through `getStores()`. `scripts/probe-r2-s3-adapter.mjs` proves both legacy R2 and
+Backblaze configuration, SigV4 region/service scope, stream handling, path-style
+endpoint/key construction, metadata and Unicode fidelity, checksum forwarding, 404
+and 412 mapping, safe failures, native fallback, and removal of the direct-binding
+bypass without network access.
+
+The first remote Backblaze canary remains blocked until operators provide the RAW
+bucket, DATA bucket, bucket region and endpoint, plus a dedicated canary application
+`keyID` and `applicationKey` with Read/Write access restricted to those two buckets.
+The Backblaze master application key must not be used. Backblaze's public `PutObject`
+documentation does not document `If-None-Match: *`; therefore remote write-once
+behavior remains UNPROVEN until a credentialed canary confirms create and conflict
+behavior. No production configuration changes are part of this migration. Rollback
+is to disable `S3_ENABLED` (or legacy `R2_S3_ENABLED`) and remove the corresponding
+canary Worker secrets.
 
 ## Canary Client Mutation Header & Redirect Hygiene — 2026-09-15
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { AwsClient } from "aws4fetch";
 import { isR2S3Enabled, resolveR2S3Stores } from "../worker/r2-s3-adapter.js";
@@ -23,6 +24,17 @@ const B2_ENV = {
   S3_SECRET_ACCESS_KEY: redactionFixture,
 };
 
+const GCS_ENV = {
+  S3_ENABLED: "true",
+  S3_PROVIDER: "gcs",
+  S3_ENDPOINT: "https://storage.googleapis.com",
+  S3_REGION: "us-east1",
+  S3_RAW_BUCKET: "rri-raw-canary-gcs",
+  S3_DATA_BUCKET: "rri-data-canary-gcs",
+  S3_ACCESS_KEY_ID: "synthetic-gcs-key-id",
+  S3_SECRET_ACCESS_KEY: redactionFixture,
+};
+
 let assertions = 0;
 const check = (condition, message) => {
   assert.ok(condition, message);
@@ -38,6 +50,18 @@ function fakeClientFactory(responder, calls = [], optionsSeen = []) {
         return responder(String(url), init, calls.length - 1);
       },
     };
+  };
+}
+
+function nodeDigestFactory() {
+  const hash = createHash("sha256");
+  return {
+    update(chunk) {
+      hash.update(chunk);
+    },
+    finish() {
+      return hash.digest("hex");
+    },
   };
 }
 
@@ -497,5 +521,315 @@ for (const operation of ["head", "get"]) {
   check(!authorization.includes("synthetic-b2-secret-key"), "Backblaze authorization never contains the secret key");
 }
 
-console.log(`PASSED: R2 and Backblaze B2 S3 adapter probe (${assertions} assertions)`);
+for (const missingName of [
+  "S3_ENDPOINT",
+  "S3_REGION",
+  "S3_RAW_BUCKET",
+  "S3_DATA_BUCKET",
+  "S3_ACCESS_KEY_ID",
+  "S3_SECRET_ACCESS_KEY",
+]) {
+  const env = { ...GCS_ENV };
+  delete env[missingName];
+  let error;
+  try {
+    resolveR2S3Stores(env);
+  } catch (caught) {
+    error = caught;
+  }
+  check(error?.code === "R2_S3_CONFIG_MISSING", `GCS missing ${missingName} fails closed`);
+  check(!String(error?.message).includes(redactionFixture), `GCS missing ${missingName} error redacts credentials`);
+}
+
+for (const endpoint of [
+  "http://storage.googleapis.com",
+  "https://storage.googleapis.com:443",
+  "https://storage.googleapis.com/path",
+  ["https://user", "storage.googleapis.com"].join("@"),
+  "https://storage.googleapis.com?query=1",
+  "https://storage.googleapis.example.com",
+]) {
+  let error;
+  try {
+    resolveR2S3Stores({ ...GCS_ENV, S3_ENDPOINT: endpoint });
+  } catch (caught) {
+    error = caught;
+  }
+  check(error?.code === "R2_S3_CONFIG_MISSING", `invalid GCS endpoint ${endpoint} fails closed`);
+}
+
+{
+  const signedCalls = [];
+  const sessionCalls = [];
+  const optionsSeen = [];
+  const sessionUri = "https://storage.googleapis.com/upload/session?upload_id=synthetic-sensitive-session";
+  const payload = new Uint8Array((256 * 1024 * 2) + 3);
+  payload.fill(97);
+  const expectedSha256 = createHash("sha256").update(payload).digest("hex");
+  let persistedEnd = -1;
+  const fetchImpl = async (url, init = {}) => {
+    sessionCalls.push({ url: String(url), init });
+    const headers = new Headers(init.headers);
+    if (init.method === "DELETE") return new Response(null, { status: 204 });
+    const range = headers.get("content-range");
+    if (range?.endsWith("/*")) {
+      const match = range.match(/^bytes (\d+)-(\d+)\/\*$/);
+      persistedEnd = Number(match?.[2]);
+      return new Response(null, { status: 308, headers: { range: `bytes=0-${persistedEnd}` } });
+    }
+    return new Response(null, { status: 201, headers: { etag: '"gcs-created"' } });
+  };
+  const factory = fakeClientFactory((_url, init) => {
+    signedCalls.push(init);
+    return new Response(null, { status: 201, headers: { location: sessionUri } });
+  }, [], optionsSeen);
+  const { rawStore } = resolveR2S3Stores(GCS_ENV, {
+    clientFactory: factory,
+    fetch: fetchImpl,
+    digestFactory: nodeDigestFactory,
+  });
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(payload);
+      controller.close();
+    },
+  });
+  const result = await rawStore.put("rri-raw/account/property/Café report.csv", stream, {
+    customMetadata: { original_file_name: "Café ✓.csv", account_id: "account" },
+    httpMetadata: { contentType: "text/csv" },
+    sha256: expectedSha256,
+    onlyIf: { etagDoesNotMatch: "*" },
+  });
+  const initiation = signedCalls[0];
+  const initiationHeaders = new Headers(initiation.headers);
+  check(initiation.method === "POST", "GCS resumable upload uses a signed POST initiation");
+  check(initiationHeaders.get("x-goog-resumable") === "start", "GCS initiation requests a resumable session");
+  check(initiationHeaders.get("x-goog-if-generation-match") === "0", "GCS initiation atomically requires object absence");
+  check(initiationHeaders.get("x-goog-meta-original_file_name")?.startsWith("=?UTF-8?B?"), "GCS Unicode metadata uses RFC 2047");
+  check(initiationHeaders.get("content-type") === "text/csv", "GCS initiation preserves HTTP metadata");
+  check(optionsSeen[0].region === "us-east1" && optionsSeen[0].service === "s3", "GCS HMAC signing uses the configured region and S3 service");
+  check(sessionCalls.length === 3, "GCS bounded upload uses two complete chunks and one final chunk");
+  check(new Headers(sessionCalls[0].init.headers).get("content-range") === "bytes 0-262143/*", "GCS first intermediate range is exact");
+  check(new Headers(sessionCalls[1].init.headers).get("content-range") === "bytes 262144-524287/*", "GCS second intermediate range is exact");
+  check(new Headers(sessionCalls[2].init.headers).get("content-range") === "bytes 524288-524290/524291", "GCS final range declares the complete size");
+  check(new Headers(sessionCalls[2].init.headers).get("x-goog-hash")?.startsWith("crc32c="), "GCS final commit requests server-side CRC32C validation");
+  check(sessionCalls.every((call) => !new Headers(call.init.headers).has("authorization")), "GCS session requests remain unsigned");
+  check(sessionCalls.every((call) => call.url === sessionUri), "GCS session requests use only the returned session URI");
+  check(result.etag === "gcs-created", "GCS PUT normalizes the final ETag");
+}
+
+{
+  const sessionCalls = [];
+  const sessionUri = "https://storage.googleapis.com/upload/session?upload_id=crc-vector";
+  const payload = new TextEncoder().encode("123456789");
+  const expectedSha256 = createHash("sha256").update(payload).digest("hex");
+  const factory = fakeClientFactory(() => new Response(null, {
+    status: 201,
+    headers: { location: sessionUri },
+  }));
+  const fetchImpl = async (url, init = {}) => {
+    sessionCalls.push({ url: String(url), init });
+    return new Response(null, { status: 201 });
+  };
+  const store = resolveR2S3Stores(GCS_ENV, {
+    clientFactory: factory,
+    fetch: fetchImpl,
+    digestFactory: nodeDigestFactory,
+  }).rawStore;
+  await store.put("crc-vector", payload, {
+    sha256: expectedSha256,
+    onlyIf: { etagDoesNotMatch: "*" },
+  });
+  check(new Headers(sessionCalls[0].init.headers).get("x-goog-hash") === "crc32c=4waSgw==", "GCS CRC32C matches the standard test vector");
+}
+
+{
+  const signedCalls = [];
+  const unicode = "Café ✓.csv";
+  const encoded = Buffer.from(unicode, "utf8").toString("base64");
+  const factory = fakeClientFactory((_url, init) => {
+    signedCalls.push(init);
+    if (init.method === "HEAD") {
+      return new Response(null, {
+        status: 200,
+        headers: {
+          etag: '"gcs-head"',
+          "content-length": "7",
+          "content-type": "text/csv",
+          "x-goog-meta-original_file_name": `=?UTF-8?B?${encoded}?=`,
+        },
+      });
+    }
+    if (init.method === "GET") return new Response("payload", { status: 200, headers: { "content-length": "7" } });
+    return new Response(null, { status: 204 });
+  });
+  const store = resolveR2S3Stores(GCS_ENV, { clientFactory: factory }).rawStore;
+  const head = await store.head("Café report.csv");
+  check(head.etag === "gcs-head" && head.customMetadata.original_file_name === unicode, "GCS HEAD parses identity and Unicode metadata");
+  const object = await store.get("Café report.csv");
+  check(await object.text() === "payload", "GCS GET streams the object body");
+  await store.delete("Café report.csv");
+  check(signedCalls.map((call) => call.method).join(",") === "HEAD,GET,DELETE", "GCS HEAD, GET, and DELETE use signed object requests");
+}
+
+for (const operation of ["head", "get"]) {
+  const calls = [];
+  const factory = fakeClientFactory(() => new Response(null, { status: 404 }), calls);
+  const store = resolveR2S3Stores(GCS_ENV, { clientFactory: factory }).rawStore;
+  check(await store[operation]("guaranteed-nonexistent-key") === null, `GCS nonexistent ${operation.toUpperCase()} returns null`);
+  check(calls[0].init.method === operation.toUpperCase(), `GCS nonexistent ${operation.toUpperCase()} sends the expected method`);
+}
+
+{
+  const sessionCalls = [];
+  const sessionUri = "https://storage.googleapis.com/upload/session?upload_id=conflict-secret";
+  const factory = fakeClientFactory(() => new Response(null, { status: 201, headers: { location: sessionUri } }));
+  const fetchImpl = async (url, init = {}) => {
+    sessionCalls.push({ url: String(url), init });
+    if (init.method === "DELETE") return new Response(null, { status: 204 });
+    return new Response(null, { status: 412 });
+  };
+  const payload = new TextEncoder().encode("conflict");
+  const result = await resolveR2S3Stores(GCS_ENV, {
+    clientFactory: factory,
+    fetch: fetchImpl,
+    digestFactory: nodeDigestFactory,
+  }).rawStore.put("existing-key", payload, {
+    sha256: createHash("sha256").update(payload).digest("hex"),
+    onlyIf: { etagDoesNotMatch: "*" },
+  });
+  check(result === null, "GCS final 412 preserves write-once null semantics");
+  check(new Headers(sessionCalls[0].init.headers).get("x-goog-hash")?.startsWith("crc32c="), "GCS conflict occurs on the checksum-protected final commit");
+}
+
+{
+  let sessionFetches = 0;
+  const factory = fakeClientFactory(() => new Response(null, { status: 412 }));
+  const result = await resolveR2S3Stores(GCS_ENV, {
+    clientFactory: factory,
+    fetch: async () => {
+      sessionFetches += 1;
+      return new Response(null, { status: 500 });
+    },
+    digestFactory: nodeDigestFactory,
+  }).rawStore.put("already-present", new Uint8Array([1]), {
+    sha256: createHash("sha256").update(new Uint8Array([1])).digest("hex"),
+    onlyIf: { etagDoesNotMatch: "*" },
+  });
+  check(result === null, "GCS initiation 412 preserves write-once null semantics");
+  check(sessionFetches === 0, "GCS initiation conflict never uploads object bytes");
+}
+
+{
+  const sessionCalls = [];
+  const sessionUri = "https://storage.googleapis.com/upload/session?upload_id=sha-mismatch-secret";
+  const factory = fakeClientFactory(() => new Response(null, { status: 201, headers: { location: sessionUri } }));
+  const fetchImpl = async (url, init = {}) => {
+    sessionCalls.push({ url: String(url), init });
+    return new Response(null, { status: init.method === "DELETE" ? 204 : 201 });
+  };
+  let error;
+  try {
+    await resolveR2S3Stores(GCS_ENV, {
+      clientFactory: factory,
+      fetch: fetchImpl,
+      digestFactory: nodeDigestFactory,
+    }).rawStore.put("mismatch", new TextEncoder().encode("payload"), {
+      sha256: "0".repeat(64),
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+  } catch (caught) {
+    error = caught;
+  }
+  check(error?.code === "CHECKSUM_MISMATCH", "GCS SHA-256 mismatch fails before object commit");
+  check(sessionCalls.length === 1 && sessionCalls[0].init.method === "DELETE", "GCS SHA-256 mismatch cancels the incomplete session");
+  check(!String(error?.message).includes(sessionUri), "GCS checksum errors never expose session URIs");
+}
+
+{
+  const sessionUri = "https://storage.googleapis.com/upload/session?upload_id=never-log-this";
+  const factory = fakeClientFactory(() => new Response(null, { status: 201, headers: { location: sessionUri } }));
+  const fetchImpl = async (_url, init = {}) => new Response(null, { status: init.method === "DELETE" ? 204 : 500 });
+  let error;
+  try {
+    const payload = new TextEncoder().encode("payload");
+    await resolveR2S3Stores(GCS_ENV, {
+      clientFactory: factory,
+      fetch: fetchImpl,
+      digestFactory: nodeDigestFactory,
+    }).rawStore.put("safe-error-key", payload, {
+      sha256: createHash("sha256").update(payload).digest("hex"),
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+  } catch (caught) {
+    error = caught;
+  }
+  check(error?.code === "R2_S3_PUT_FAILED" && error?.status === 500, "GCS session failure uses a stable safe error");
+  check(!String(error?.message).includes("upload_id") && !String(error?.message).includes(redactionFixture), "GCS session failure redacts session and credential material");
+}
+
+{
+  const factory = () => ({ fetch: async () => { throw new Error(`Authorization ${redactionFixture}`); } });
+  let error;
+  try {
+    await resolveR2S3Stores(GCS_ENV, {
+      clientFactory: factory,
+      fetch: async () => new Response(null, { status: 500 }),
+      digestFactory: nodeDigestFactory,
+    }).rawStore.put("key", new Uint8Array([1]), { onlyIf: { etagDoesNotMatch: "*" } });
+  } catch (caught) {
+    error = caught;
+  }
+  check(error?.code === "R2_S3_PUT_FAILED" && error?.status === 503, "GCS initiation network failure uses a stable safe error");
+  check(!String(error?.message).includes(redactionFixture) && !String(error?.message).includes("Authorization"), "GCS initiation network failure redacts credentials");
+}
+
+{
+  let sessionFetches = 0;
+  const factory = fakeClientFactory(() => new Response(null, {
+    status: 201,
+    headers: { location: "https://example.invalid/upload?upload_id=ssrf" },
+  }));
+  let error;
+  try {
+    await resolveR2S3Stores(GCS_ENV, {
+      clientFactory: factory,
+      fetch: async () => {
+        sessionFetches += 1;
+        return new Response(null, { status: 500 });
+      },
+      digestFactory: nodeDigestFactory,
+    }).rawStore.put("key", new Uint8Array([1]), { onlyIf: { etagDoesNotMatch: "*" } });
+  } catch (caught) {
+    error = caught;
+  }
+  check(error?.code === "R2_S3_CONFIG_MISSING", "GCS rejects an untrusted resumable session origin");
+  check(sessionFetches === 0 && !String(error?.message).includes("upload_id"), "GCS session-origin rejection prevents SSRF and redacts the URI");
+}
+
+{
+  const digest = createHash("sha256").update("").digest("hex");
+  const client = new AwsClient({
+    accessKeyId: "synthetic-gcs-key-id",
+    secretAccessKey: "synthetic-gcs-secret-key",
+    service: "s3",
+    region: "us-east1",
+  });
+  const signed = await client.sign("https://storage.googleapis.com/rri-raw-canary-gcs/folder/Caf%C3%A9%20report.csv", {
+    method: "POST",
+    headers: {
+      "x-amz-content-sha256": digest,
+      "x-goog-if-generation-match": "0",
+      "x-goog-resumable": "start",
+    },
+    body: "",
+  });
+  const authorization = signed.headers.get("authorization") || "";
+  check(authorization.startsWith("AWS4-HMAC-SHA256 Credential=synthetic-gcs-key-id/"), "GCS initiation uses HMAC SigV4 authorization");
+  check(authorization.includes("/us-east1/s3/aws4_request"), "GCS SigV4 scope contains the configured region and S3 service");
+  check(authorization.includes("x-goog-if-generation-match") && authorization.includes("x-goog-resumable"), "GCS atomicity and resumable headers are signed");
+  check(!authorization.includes("synthetic-gcs-secret-key"), "GCS authorization never contains the secret key");
+}
+
+console.log(`PASSED: R2, Backblaze B2, and GCS object-storage adapter probe (${assertions} assertions)`);
 process.exitCode = assertions > 0 ? 0 : 1;

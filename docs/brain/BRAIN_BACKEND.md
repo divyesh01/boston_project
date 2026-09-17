@@ -943,17 +943,25 @@ A dedicated local canary test harness and CLI orchestrator have been established
 - **Operator Manual & Environment Template**:
   - `docs/CANARY_AUTOMATION.md` and `examples/canary.env.example`.
 
-## Configurable S3-compatible object transport — 2026-09-16
+## Configurable S3-compatible object transport — 2026-09-17
 
 `worker/r2-s3-adapter.js` provides an explicit S3-compatible transport for isolated
 canary Workers while Cloudflare Worker execution and D1 remain unchanged. Native
 `RAW_ARCHIVE` and `BULK_DATA` bindings remain the default. Generic mode activates
 only when `S3_ENABLED` is exactly `true` and atomically requires `S3_ENDPOINT`,
 `S3_RAW_BUCKET`, `S3_DATA_BUCKET`, `S3_ACCESS_KEY_ID`, and
-`S3_SECRET_ACCESS_KEY`. `S3_ENDPOINT` is restricted to the HTTPS Backblaze form
-`https://s3.<region>.backblazeb2.com`; the signing region is inferred from that
-endpoint. Optional `S3_REGION`, when present, must exactly match the inferred region.
-Backblaze bucket names are validated before a client is constructed.
+`S3_SECRET_ACCESS_KEY`. With no `S3_PROVIDER`, `S3_ENDPOINT` is restricted to the
+HTTPS Backblaze form `https://s3.<region>.backblazeb2.com`; the signing region is
+inferred from that endpoint. Optional `S3_REGION`, when present, must exactly match
+the inferred region. Backblaze bucket names are validated before a client is
+constructed.
+
+`S3_PROVIDER=gcs` selects Google Cloud Storage's XML API at the exact endpoint
+`https://storage.googleapis.com`. This mode requires an explicit `S3_REGION` signing
+scope and GCS HMAC access ID/secret associated with a bucket-scoped service account.
+The free-tier canary location is `us-east1`, so both canary buckets and the signing
+region use `us-east1`. GCS bucket names and the endpoint are validated before a
+client is constructed.
 
 The existing Cloudflare R2 configuration remains backward-compatible. When generic
 mode is disabled, `R2_S3_ENABLED`, `R2_S3_ACCOUNT_ID`, `R2_S3_RAW_BUCKET`,
@@ -963,18 +971,30 @@ back to legacy credentials when its configuration is incomplete.
 
 The adapter signs S3-compatible `HEAD`, `GET`, `PUT`, and `DELETE` requests with
 `aws4fetch`. Access keys are Worker secrets; code and error messages never contain
-their values or request signatures. Custom metadata maps through `x-amz-meta-*`,
-including RFC 2047 UTF-8 encoding. Raw streaming uploads preserve the expected
-SHA-256 through `x-amz-content-sha256`. Write-once uploads use `If-None-Match: *`;
-HTTP 412 maps to the native R2 `null` result, after which the import pipeline HEADs
-and verifies the winning canonical object before returning an idempotent 200 response.
+their values or request signatures. Backblaze and R2 custom metadata maps through
+`x-amz-meta-*`, including RFC 2047 UTF-8 encoding. Their raw streaming uploads
+preserve the expected SHA-256 through `x-amz-content-sha256`, and write-once uploads
+use `If-None-Match: *`.
+
+GCS `HEAD`, `GET`, and `DELETE` remain signed XML API object requests. GCS writes use
+a signed resumable-session POST carrying `x-goog-if-generation-match: 0`; all session
+PUT/DELETE requests are intentionally unsigned because the HTTPS session URI is a
+capability token. The adapter accepts session URIs only from
+`storage.googleapis.com` and never exposes their query strings. It streams in 256
+KiB chunks with at most two chunks buffered, verifies the expected SHA-256 with the
+Workers `crypto.DigestStream` before the final commit, and sends a whole-object
+CRC32C in the final `x-goog-hash` header for server validation. GCS metadata uses
+`x-goog-meta-*` with the same Unicode encoding. HTTP 412 at session initiation or
+final commit maps to the native R2 `null` result. The import pipeline then HEADs and
+verifies the winning canonical object before returning an idempotent 200 response.
 
 All storage access, including raw-source verification during activation, passes
-through `getStores()`. `scripts/probe-r2-s3-adapter.mjs` proves both legacy R2 and
-Backblaze configuration, SigV4 region/service scope, stream handling, path-style
-endpoint/key construction, metadata and Unicode fidelity, checksum forwarding, 404
-and 412 mapping, safe failures, native fallback, and removal of the direct-binding
-bypass without network access.
+through `getStores()`. `scripts/probe-r2-s3-adapter.mjs` proves legacy R2, Backblaze,
+and GCS configuration; SigV4 region/service scope; URL encoding; bounded resumable
+chunk ranges; unsigned GCS session requests; atomic generation-zero creation;
+metadata and Unicode fidelity; SHA-256 and CRC32C handling; 404 and 412 mapping;
+session-URI and credential redaction; native fallback; and removal of the
+direct-binding bypass without network access.
 
 The first remote Backblaze canary remains blocked until operators provide the RAW
 bucket, DATA bucket, bucket region and endpoint, plus a dedicated canary application
@@ -982,9 +1002,16 @@ bucket, DATA bucket, bucket region and endpoint, plus a dedicated canary applica
 The Backblaze master application key must not be used. Backblaze's public `PutObject`
 documentation does not document `If-None-Match: *`; therefore remote write-once
 behavior remains UNPROVEN until a credentialed canary confirms create and conflict
-behavior. No production configuration changes are part of this migration. Rollback
-is to disable `S3_ENABLED` (or legacy `R2_S3_ENABLED`) and remove the corresponding
-canary Worker secrets.
+behavior.
+
+The first remote GCS canary remains blocked until an operator links a billing account
+eligible for the Always Free tier, creates two private Standard buckets in `us-east1`,
+creates a dedicated service account restricted to object read/create/delete/list on
+only those buckets, creates an HMAC key for that service account, and supplies the two
+bucket names plus the HMAC access ID and secret as canary Worker secrets. No bucket,
+HMAC key, Worker secret, deployment, or production configuration was created by this
+change. Rollback is to disable `S3_ENABLED` (or legacy `R2_S3_ENABLED`) and remove the
+corresponding canary Worker secrets.
 
 ## Canary Client Mutation Header & Redirect Hygiene — 2026-09-15
 

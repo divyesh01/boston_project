@@ -1024,3 +1024,6 @@ Redirect handling enforces strict origin boundary isolation:
 
 Validated locally in `scripts/probe-canary-automation.mjs` (Section 11B) across all 8 required behaviors with zero edge network dispatches.
 
+# Canary cleanup ownership
+
+The canary harness registers a bundle identity and its exact object key immediately after upload. If activation fails afterward, cleanup still deletes the pending bundle through that identity instead of classifying the object as an unmapped orphan. The automation probe covers the upload-success/activation-failure path.

@@ -437,6 +437,14 @@ async function runTests() {
   assertEqual(orphanClean.orphanedR2Keys.length, 2, 'reports both unmapped keys in orphanedR2Keys');
   assert(orphanClean.remainingKeys.some((k) => k.includes('unmapped-r2-orphan')), 'remainingKeys identifies unmapped orphans');
 
+  // An uploaded object must remain deletable even when activation never maps it.
+  const failedActivationReg = new CleanupRegistry('canary-test-failed-activation-1');
+  failedActivationReg.trackBundleKey('rri-data/a/p/uploaded-before-activation');
+  failedActivationReg.trackBundleId('raw_canary-test-failed-activation-1', 'rri-data/a/p/uploaded-before-activation');
+  const failedActivationClean = await failedActivationReg.runCleanup(mockCleanClient);
+  assertEqual(failedActivationClean.verdict, 'CLEAN', 'failed activation cleanup stays clean when exact bundle ID was registered');
+  assert(mockCleanClient.deletedBundles.includes('raw_canary-test-failed-activation-1'), 'failed activation still attempts exact bundle deletion');
+
   // ── 9. Telemetry Classification Tags ──────────────────────────────────────
   console.log('9. Telemetry Classification Tags');
   const validTags = new Set([

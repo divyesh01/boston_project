@@ -10,6 +10,7 @@ export class CleanupRegistry {
     this.createdRawKeys = new Set();
     this.createdBundleKeys = new Set();
     this.createdBundleIds = new Set();
+    this.bundleKeyIds = new Map();
     this.createdArchiveIds = new Set();
     this.mappedRawKeys = new Set();
     this.mappedBundleKeys = new Set();
@@ -71,8 +72,12 @@ export class CleanupRegistry {
    * Record a created bundle ID.
    * @param {string} id
    */
-  trackBundleId(id) {
-    if (id) this.createdBundleIds.add(String(id));
+  trackBundleId(id, key = null) {
+    if (id) {
+      const bundleId = String(id);
+      this.createdBundleIds.add(bundleId);
+      if (key) this.bundleKeyIds.set(String(key), bundleId);
+    }
   }
 
   /**
@@ -127,9 +132,13 @@ export class CleanupRegistry {
   async runCleanup(client, options = {}) {
     const remainingKeys = [];
 
+    for (const [key, bundleId] of this.bundleKeyIds) {
+      if (this.createdBundleIds.has(bundleId)) this.mappedBundleKeys.add(key);
+    }
+
     // Identify unmapped R2 keys that were never committed to D1 manifests
     const unmappedRaw = [...this.createdRawKeys].filter((k) => !this.mappedRawKeys.has(k));
-    const unmappedBundles = [...this.createdBundleKeys].filter((k) => !this.mappedBundleKeys.has(k));
+    const unmappedBundles = [...this.createdBundleKeys].filter((k) => !this.mappedBundleKeys.has(k) && !this.bundleKeyIds.has(k));
     for (const key of [...unmappedRaw, ...unmappedBundles, ...this.orphanedR2Keys]) {
       this.orphanedR2Keys.add(key);
       const tag = `${key} (unmapped-r2-orphan)`;
@@ -178,6 +187,7 @@ export class CleanupRegistry {
         }
       }
     }
+
 
     // 2. Destroy raw archives if supported
     for (const archiveId of this.createdArchiveIds) {

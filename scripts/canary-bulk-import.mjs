@@ -220,6 +220,9 @@ export async function runCanary(options = {}) {
         });
         registry.markRawKeyMapped(rawKey);
         registry.trackArchiveId(recRes.raw_archive_id || `raw_${registry.runId}_smoke`);
+        // Register the bundle identity before upload/activation. If activation
+        // fails after the object is created, cleanup can still delete it.
+        const pendingBundleId = recRes.bundle_id || `bundle_${registry.runId}_smoke`;
 
         // 3. Upload bundle
         const bRes = await client.uploadBundle({
@@ -233,6 +236,7 @@ export async function runCanary(options = {}) {
         });
         const bundleKey = bRes.object_key || fixture.bundleCanonicalKey;
         registry.trackBundleKey(bundleKey);
+        registry.trackBundleId(pendingBundleId, bundleKey);
 
         // 4. Activate bundle
         const actRes = await client.activateBundle({
@@ -306,6 +310,7 @@ export async function runCanary(options = {}) {
           });
           registry.markRawKeyMapped(rawKey);
           registry.trackArchiveId(recRes.raw_archive_id || `raw_${registry.runId}_${tc.type}`);
+          const pendingBundleId = recRes.bundle_id || `raw_${registry.runId}_${tc.type}`;
 
           const bRes = await client.uploadBundle({
             serverPropertyId: propertyId,
@@ -318,6 +323,7 @@ export async function runCanary(options = {}) {
           });
           const bundleKey = bRes.object_key || fixture.bundleCanonicalKey;
           registry.trackBundleKey(bundleKey);
+          registry.trackBundleId(pendingBundleId, bundleKey);
 
           const bundleId = recRes.bundle_id || `raw_${registry.runId}_${tc.type}`;
           const actRes = await client.activateBundle({

@@ -76,11 +76,16 @@ async function sweepRawArchives(f, result) {
   if (!remaining.length) return { attempted: 0, deleted: 0 };
   d1(`UPDATE user SET role='owner' WHERE id=${q(f.user)};`);
   try {
-    const ownerCookie = await login(f.email, f.password);
+    let ownerCookie;
+    for (let attempt = 0; attempt < 3 && !ownerCookie; attempt++) {
+      try { ownerCookie = await login(f.email, f.password); } catch (error) { if (attempt === 2) throw error; await new Promise((r) => setTimeout(r, 750 * (attempt + 1))); }
+    }
     const client = new CanaryClient({ baseUrl: TARGET, accountId: f.account, propertyId: f.property, authCookie: ownerCookie });
     let deleted = 0;
     for (const archiveId of remaining) {
-      try { const response = await client.destroyRawArchive({ archiveId }); if (response?.ok !== false) deleted++; } catch {}
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try { const response = await client.destroyRawArchive({ archiveId }); if (response?.ok !== false) deleted++; break; } catch (error) { if (attempt === 2) break; await new Promise((r) => setTimeout(r, 500 * (attempt + 1))); }
+      }
     }
     return { attempted: remaining.length, deleted };
   } catch (error) {

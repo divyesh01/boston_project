@@ -357,7 +357,9 @@ export async function runCanary(options = {}) {
       try {
         // 4A. Simultaneous Identical Upload & Activation Race (Idempotency)
         const fixtureIdentical = await generateFixtureWithOracle({
-          reportType: 'payments',
+          // Keep the idempotency race on a report family distinct from the
+          // smoke import that already activated `payments` in --all runs.
+          reportType: 'hotel_statistics',
           rowCount: 3,
           accountId,
           propertyId,
@@ -399,6 +401,7 @@ export async function runCanary(options = {}) {
         registry.trackBundleKey(bundleIdentKey);
 
         const identBundleId = recIdentRes.bundle_id || `bundle_${registry.runId}_conc_ident`;
+        registry.trackBundleId(identBundleId, bundleIdentKey);
         const identPayload = {
           id: identBundleId,
           source_archive_id: identBundleId,
@@ -477,6 +480,7 @@ export async function runCanary(options = {}) {
         });
         const bO1Key = bO1.object_key || fixtureOverlap1.bundleCanonicalKey;
         registry.trackBundleKey(bO1Key);
+        registry.trackBundleId(recO1.bundle_id || `bundle_${registry.runId}_ov1`, bO1Key);
 
         const rawO2 = await client.uploadRawArchive({
           serverPropertyId: propertyId,
@@ -510,6 +514,7 @@ export async function runCanary(options = {}) {
         });
         const bO2Key = bO2.object_key || fixtureOverlap2.bundleCanonicalKey;
         registry.trackBundleKey(bO2Key);
+        registry.trackBundleId(recO2.bundle_id || `bundle_${registry.runId}_ov2`, bO2Key);
 
         const idO1 = recO1.bundle_id || `bundle_${registry.runId}_ov1`;
         const idO2 = recO2.bundle_id || `bundle_${registry.runId}_ov2`;
@@ -582,14 +587,14 @@ export async function runCanary(options = {}) {
 
         // 4C. Distinct Non-Overlapping Race (Disjoint report types / scopes)
         const fixtureDistinct1 = await generateFixtureWithOracle({
-          reportType: 'clerk',
+            reportType: 'source',
           rowCount: 3,
           accountId,
           propertyId,
           options: { seed: `${registry.runId}-distinct-1`, baseYear: 2027, baseMonth: 1 },
         });
         const fixtureDistinct2 = await generateFixtureWithOracle({
-          reportType: 'occupancy',
+            reportType: 'timecard',
           rowCount: 3,
           accountId,
           propertyId,
@@ -626,6 +631,7 @@ export async function runCanary(options = {}) {
         });
         const bD1Key = bD1.object_key || fixtureDistinct1.bundleCanonicalKey;
         registry.trackBundleKey(bD1Key);
+        registry.trackBundleId(recD1.bundle_id || `bundle_${registry.runId}_dist1`, bD1Key);
 
         const rawD2 = await client.uploadRawArchive({
           serverPropertyId: propertyId,
@@ -657,6 +663,7 @@ export async function runCanary(options = {}) {
         });
         const bD2Key = bD2.object_key || fixtureDistinct2.bundleCanonicalKey;
         registry.trackBundleKey(bD2Key);
+        registry.trackBundleId(recD2.bundle_id || `bundle_${registry.runId}_dist2`, bD2Key);
 
         const idD1 = recD1.bundle_id || `bundle_${registry.runId}_dist1`;
         const idD2 = recD2.bundle_id || `bundle_${registry.runId}_dist2`;
@@ -749,7 +756,14 @@ export async function runCanary(options = {}) {
           const bundleData = await browserB.downloadBundle(targetManifest.id);
 
           // Decompress gzip payload
-          const decompressed = zlib.gunzipSync(Buffer.from(bundleData.buffer));
+          const payload = Buffer.from(bundleData.buffer);
+          // Fetch implementations may transparently decode Content-Encoding:
+          // gzip. The Worker still returns the canonical gzip bytes when the
+          // runtime preserves them, so accept either representation while
+          // keeping strict NDJSON parsing below.
+          const decompressed = payload[0] === 0x1f && payload[1] === 0x8b
+            ? zlib.gunzipSync(payload)
+            : payload;
 
           // Parse and verify row count
           const lines = decompressed.toString('utf8').trim().split('\n').filter(Boolean);

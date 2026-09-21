@@ -1027,3 +1027,9 @@ Validated locally in `scripts/probe-canary-automation.mjs` (Section 11B) across 
 # Canary cleanup ownership
 
 The canary harness registers a bundle identity and its exact object key immediately after upload. If activation fails afterward, cleanup still deletes the pending bundle through that identity instead of classifying the object as an unmapped orphan. The automation probe covers the upload-success/activation-failure path.
+### Canary harness run isolation
+
+The live canary harness keeps smoke, import, and concurrency fixtures on
+distinct report families so a single `--all` run does not self-trigger the
+business overlap guard. Uploaded bundle keys are registered before activation,
+and hydration accepts runtimes that transparently decode gzip responses.

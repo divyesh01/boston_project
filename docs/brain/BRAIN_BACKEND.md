@@ -1033,3 +1033,15 @@ The live canary harness keeps smoke, import, and concurrency fixtures on
 distinct report families so a single `--all` run does not self-trigger the
 business overlap guard. Uploaded bundle keys are registered before activation,
 and hydration accepts runtimes that transparently decode gzip responses.
+
+### Self-contained live GCS benchmark runner
+
+`scripts/benchmark-live-gcs-canary.mjs` creates a fresh canary-only D1 fixture,
+starts a temporary Wrangler remote-D1 preview for real login, captures session
+cookies in memory, and drives non-overlapping smoke/import/hydration workflows
+at concurrency 2/5/10/20 plus a bounded manifest-read soak. It never targets
+the production Worker or production D1. Raw archive cleanup is retried with a
+temporary owner role after each child run, then the fixture and preview process
+are removed in `finally`; passwords, pepper, cookies, and storage credentials
+are never printed. `BENCHMARK_SOAK_MS` may shorten a rerun only when a prior
+full-duration soak remains the authoritative evidence.

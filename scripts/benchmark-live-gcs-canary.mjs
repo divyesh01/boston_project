@@ -41,7 +41,7 @@ function runCanary(account, property, cookie) {
     // harness's separate concurrency stage intentionally creates overlap
     // control cases, so it is measured independently rather than mixed into
     // this workflow-latency matrix.
-    const child = spawn('node', ['scripts/canary-bulk-import.mjs','--smoke','--import','--hydration','--large','--json',`--output=${reportFile}`], { cwd:ROOT, env:{...process.env,CANARY_CONFIRM_ISOLATED:'YES',CANARY_ACCOUNT_ID:account,CANARY_PROPERTY_ID:property,CANARY_AUTH_COOKIE:cookie}, stdio:['ignore','pipe','pipe'] });
+    const child = spawn('node', ['scripts/canary-bulk-import.mjs','--smoke','--import','--hydration','--large','--cleanup','--json',`--output=${reportFile}`], { cwd:ROOT, env:{...process.env,CANARY_CONFIRM_ISOLATED:'YES',CANARY_ACCOUNT_ID:account,CANARY_PROPERTY_ID:property,CANARY_AUTH_COOKIE:cookie}, stdio:['ignore','pipe','pipe'] });
     let out=''; child.stdout.on('data', b => { out += b; }); child.stderr.on('data', b => { out += b; });
     const timer = setTimeout(() => child.kill(), 300000);
     child.on('close', code => { clearTimeout(timer); let report = null; try { report = JSON.parse(fs.readFileSync(reportFile, 'utf8')); } catch {} resolve({ account, code, ms:performance.now()-started, report, output:out.slice(-30000) }); });

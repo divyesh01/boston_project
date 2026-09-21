@@ -1047,3 +1047,5 @@ are never printed. `BENCHMARK_SOAK_MS` may shorten a rerun only when a prior
 full-duration soak remains the authoritative evidence.
 Raw cleanup retries transient login, transport, and destroy failures before the
 fixture account is removed, preserving exact-object cleanup ownership.
+Each matrix child includes the harness cleanup stage before the owner-role raw
+archive sweep, so successful uploads are never left solely to account deletion.

@@ -251,7 +251,9 @@ function putHeaders(options, provider = "s3") {
   }
   if (options?.sha256 != null) {
     if (!SHA256_PATTERN.test(String(options.sha256))) throw configError("invalid sha256 option");
-    headers.set("x-amz-content-sha256", String(options.sha256).toLowerCase());
+    if (provider !== "gcs") {
+      headers.set("x-amz-content-sha256", String(options.sha256).toLowerCase());
+    }
   }
   return headers;
 }
@@ -331,7 +333,10 @@ function createGcsPutStore({ client, endpoint, bucket, fetchImpl, digestFactory 
     const url = objectUrl(endpoint, bucket, key);
     let response;
     try {
-      response = await client.fetch(url, init);
+      response = await client.fetch(url, {
+        ...init,
+        aws: { ...init?.aws, signQuery: true },
+      });
     } catch {
       throw safeError(operation, url);
     }
@@ -364,6 +369,7 @@ function createGcsPutStore({ client, endpoint, bucket, fetchImpl, digestFactory 
           method: "POST",
           headers: initHeaders,
           body: "",
+          aws: { signQuery: true },
         });
       } catch {
         throw safeError("put", initUrl);
@@ -561,7 +567,10 @@ function createStore({ client, endpoint, bucket, provider = "s3" }) {
     const url = objectUrl(endpoint, bucket, key);
     let response;
     try {
-      response = await client.fetch(url, init);
+      const fetchInit = provider === "gcs"
+        ? { ...init, aws: { ...init?.aws, signQuery: true } }
+        : init;
+      response = await client.fetch(url, fetchInit);
     } catch {
       throw safeError(operation, url);
     }

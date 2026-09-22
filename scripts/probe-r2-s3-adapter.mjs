@@ -119,6 +119,7 @@ check(resolveR2S3Stores({}) === null, "disabled S3 mode does not require configu
   check(request.init.headers.get("x-amz-content-sha256") === digest, "expected payload digest is sent to R2");
   check(request.init.headers.get("x-amz-meta-original_file_name").startsWith("=?UTF-8?B?"), "Unicode metadata uses RFC 2047");
   check(request.init.headers.get("content-type") === "text/csv", "HTTP metadata is forwarded");
+  check(!request.init.aws?.signQuery, "R2 does not use query signing");
   check(result.etag === "created", "PUT response exposes the normalized ETag");
   check(optionsSeen[0].service === "s3" && optionsSeen[0].region === "auto", "client uses the documented R2 signing scope");
   check(!("fetch" in optionsSeen[0]), "AwsClient receives only documented constructor options");
@@ -407,6 +408,7 @@ for (const bucket of [
   check(request.init.headers.get("x-amz-content-sha256") === digest, "Backblaze PUT carries the expected checksum");
   check(request.init.headers.get("x-amz-meta-original_file_name").startsWith("=?UTF-8?B?"), "Backblaze Unicode metadata uses RFC 2047");
   check(request.init.headers.get("content-type") === "text/csv", "Backblaze HTTP metadata is forwarded");
+  check(!request.init.aws?.signQuery, "Backblaze does not use query signing");
   check(result.etag === "b2-created", "Backblaze PUT normalizes the ETag");
   check(optionsSeen[0].region === "us-west-004" && optionsSeen[0].service === "s3", "Backblaze client receives the exact signing scope");
   check(!("fetch" in optionsSeen[0]), "Backblaze AwsClient receives only documented constructor options");
@@ -603,6 +605,8 @@ for (const endpoint of [
   const initiation = signedCalls[0];
   const initiationHeaders = new Headers(initiation.headers);
   check(initiation.method === "POST", "GCS resumable upload uses a signed POST initiation");
+  check(initiation.aws?.signQuery === true, "GCS resumable upload initiation requests query signing");
+  check(!initiationHeaders.has("x-amz-content-sha256"), "GCS initiation carries no x-amz-content-sha256 header");
   check(initiationHeaders.get("x-goog-resumable") === "start", "GCS initiation requests a resumable session");
   check(initiationHeaders.get("x-goog-if-generation-match") === "0", "GCS initiation atomically requires object absence");
   check(initiationHeaders.get("x-goog-meta-original_file_name")?.startsWith("=?UTF-8?B?"), "GCS Unicode metadata uses RFC 2047");
@@ -670,6 +674,7 @@ for (const endpoint of [
   check(await object.text() === "payload", "GCS GET streams the object body");
   await store.delete("Café report.csv");
   check(signedCalls.map((call) => call.method).join(",") === "HEAD,GET,DELETE", "GCS HEAD, GET, and DELETE use signed object requests");
+  check(signedCalls.every((call) => call.aws?.signQuery === true), "GCS HEAD, GET, and DELETE specify query signing");
 }
 
 for (const operation of ["head", "get"]) {
@@ -808,7 +813,6 @@ for (const operation of ["head", "get"]) {
 }
 
 {
-  const digest = createHash("sha256").update("").digest("hex");
   const client = new AwsClient({
     accessKeyId: "synthetic-gcs-key-id",
     secretAccessKey: "synthetic-gcs-secret-key",
@@ -818,17 +822,89 @@ for (const operation of ["head", "get"]) {
   const signed = await client.sign("https://storage.googleapis.com/rri-raw-canary-gcs/folder/Caf%C3%A9%20report.csv", {
     method: "POST",
     headers: {
-      "x-amz-content-sha256": digest,
       "x-goog-if-generation-match": "0",
       "x-goog-resumable": "start",
     },
     body: "",
+    aws: { signQuery: true },
   });
-  const authorization = signed.headers.get("authorization") || "";
-  check(authorization.startsWith("AWS4-HMAC-SHA256 Credential=synthetic-gcs-key-id/"), "GCS initiation uses HMAC SigV4 authorization");
-  check(authorization.includes("/us-east1/s3/aws4_request"), "GCS SigV4 scope contains the configured region and S3 service");
-  check(authorization.includes("x-goog-if-generation-match") && authorization.includes("x-goog-resumable"), "GCS atomicity and resumable headers are signed");
-  check(!authorization.includes("synthetic-gcs-secret-key"), "GCS authorization never contains the secret key");
+  const signedUrl = new URL(signed.url);
+  const params = signedUrl.searchParams;
+  check(params.get("X-Amz-Algorithm") === "AWS4-HMAC-SHA256", "GCS initiation query signing uses AWS4-HMAC-SHA256");
+  const credential = params.get("X-Amz-Credential") || "";
+  check(credential.startsWith("synthetic-gcs-key-id/"), "GCS query signing credential begins with HMAC access key ID");
+  check(credential.includes("/us-east1/s3/aws4_request"), "GCS SigV4 query signing scope contains configured region and S3 service");
+  const signedHeaders = params.get("X-Amz-SignedHeaders") || "";
+  check(signedHeaders.includes("x-goog-if-generation-match") && signedHeaders.includes("x-goog-resumable"), "GCS atomicity and resumable headers are included in signed query headers");
+  check(params.has("X-Amz-Signature"), "GCS query signing includes signature parameter");
+  check(!signed.headers.has("authorization"), "GCS query signing emits no authorization header");
+  check(!signed.headers.has("x-amz-date"), "GCS query signing emits no x-amz-date header");
+  check(!signed.headers.has("x-amz-content-sha256"), "GCS query signing emits no x-amz-content-sha256 header to prevent ExcessHeaderValues");
+  check(signed.headers.get("x-goog-if-generation-match") === "0", "GCS query signing preserves atomic absence precondition header");
+  check(signed.headers.get("x-goog-resumable") === "start", "GCS query signing preserves resumable start header");
+  check(!signed.url.includes("synthetic-gcs-secret-key"), "GCS query-signed URL never contains the secret key");
+
+  for (const method of ["HEAD", "GET", "DELETE"]) {
+    const signedOp = await client.sign("https://storage.googleapis.com/rri-raw-canary-gcs/folder/Caf%C3%A9%20report.csv", {
+      method,
+      aws: { signQuery: true },
+    });
+    const opUrl = new URL(signedOp.url);
+    check(opUrl.searchParams.get("X-Amz-Algorithm") === "AWS4-HMAC-SHA256", `GCS ${method} query signing uses AWS4-HMAC-SHA256`);
+    check(opUrl.searchParams.has("X-Amz-Signature"), `GCS ${method} query signing includes signature`);
+    check(!signedOp.headers.has("authorization"), `GCS ${method} query signing emits no authorization header`);
+    check(!signedOp.headers.has("x-amz-date"), `GCS ${method} query signing emits no x-amz-date header`);
+    check(!signedOp.headers.has("x-amz-content-sha256"), `GCS ${method} query signing emits no x-amz-content-sha256 header`);
+  }
+}
+
+{
+  const intercepted = [];
+  const client = new AwsClient({
+    accessKeyId: "synthetic-gcs-key-id",
+    secretAccessKey: "synthetic-gcs-secret-key",
+    service: "s3",
+    region: "us-east1",
+  });
+  client.fetch = async (url, init) => {
+    const signedRequest = await client.sign(url, init);
+    intercepted.push(signedRequest);
+    if (init?.method === "HEAD") {
+      return new Response(null, {
+        status: 200,
+        headers: { "content-length": "0", etag: '"test"' },
+      });
+    }
+    return new Response(null, {
+      status: 201,
+      headers: { location: "https://storage.googleapis.com/upload/session?upload_id=e2e-session" },
+    });
+  };
+  const store = resolveR2S3Stores(GCS_ENV, {
+    clientFactory: () => client,
+    fetch: async () => new Response(null, { status: 201 }),
+    digestFactory: nodeDigestFactory,
+  }).rawStore;
+
+  await store.head("probe-key");
+  check(intercepted.length === 1, "adapter HEAD invokes client fetch");
+  const headSigned = intercepted[0];
+  check(new URL(headSigned.url).searchParams.has("X-Amz-Signature"), "adapter HEAD request contains SigV4 query signature");
+  check(!headSigned.headers.has("authorization"), "adapter HEAD request omits authorization header");
+  check(!headSigned.headers.has("x-amz-date"), "adapter HEAD request omits x-amz-date header");
+  check(!headSigned.headers.has("x-amz-content-sha256"), "adapter HEAD request omits x-amz-content-sha256 header");
+
+  await store.put("probe-put", new Uint8Array([1, 2, 3]), { onlyIf: { etagDoesNotMatch: "*" } });
+  check(intercepted.length === 2, "adapter PUT initiation invokes client fetch");
+  const putSigned = intercepted[1];
+  const putUrl = new URL(putSigned.url);
+  check(putUrl.searchParams.has("X-Amz-Signature"), "adapter PUT initiation contains SigV4 query signature");
+  check(putUrl.searchParams.get("X-Amz-SignedHeaders")?.includes("x-goog-if-generation-match"), "adapter PUT query signed headers include generation match");
+  check(!putSigned.headers.has("authorization"), "adapter PUT initiation omits authorization header");
+  check(!putSigned.headers.has("x-amz-date"), "adapter PUT initiation omits x-amz-date header");
+  check(!putSigned.headers.has("x-amz-content-sha256"), "adapter PUT initiation omits x-amz-content-sha256 header to eliminate ExcessHeaderValues");
+  check(putSigned.headers.get("x-goog-if-generation-match") === "0", "adapter PUT preserves x-goog-if-generation-match header");
+  check(putSigned.headers.get("x-goog-resumable") === "start", "adapter PUT preserves x-goog-resumable header");
 }
 
 console.log(`PASSED: R2, Backblaze B2, and GCS object-storage adapter probe (${assertions} assertions)`);

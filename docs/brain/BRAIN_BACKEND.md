@@ -976,6 +976,11 @@ their values or request signatures. Backblaze and R2 custom metadata maps throug
 preserve the expected SHA-256 through `x-amz-content-sha256`, and write-once uploads
 use `If-None-Match: *`.
 
+GCS XML API requests use SigV4 query signing (`aws: { signQuery: true }`) rather
+than header signing. Google rejects requests that combine the library's automatic
+`x-amz-*` signature headers with `x-goog-*` XML API headers (`ExcessHeaderValues`,
+HTTP 400). R2 and Backblaze continue to use their existing header-signing paths.
+
 GCS `HEAD`, `GET`, and `DELETE` remain signed XML API object requests. GCS writes use
 a signed resumable-session POST carrying `x-goog-if-generation-match: 0`; all session
 PUT/DELETE requests are intentionally unsigned because the HTTPS session URI is a

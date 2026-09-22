@@ -1,3 +1,4 @@
+import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -97,7 +98,7 @@ async function main() {
   const pepper = crypto.randomBytes(48).toString('base64url');
   fixture = [];
   const sql = [];
-  for (let i=0;i<20;i++) {
+  for (let i=0;i<40;i++) {
     const run = `bench-${Date.now()}-${i}-${crypto.randomBytes(5).toString('hex')}`;
     const account = `acct-${run}`, user = `user-${run}`, email = `bench-${run}@example.com`, password = crypto.randomBytes(24).toString('base64url')+'Aa9!';
     const c = await createCredential(password, pepper); const t=now();
@@ -116,8 +117,18 @@ async function main() {
   const loggedIn = await Promise.all(fixture.map(async (f) => [f.account, await login(f.email, f.password)]));
   cookies = new Map(loggedIn);
   console.error(`AUTH_FIXTURE_PASS accounts=${cookies.size}`);
-  const levels=[2,5,10,20], matrix={};
-  for (const n of levels) { console.error(`WORKFLOW_MATRIX_START concurrency=${n}`); const results=await Promise.all(fixture.slice(0,n).map(f=>runCanary(f.account,f.property,cookies.get(f.account)))); for (const result of results) { const f = fixture.find((x) => x.account === result.account); if (f) result.rawSweep = await sweepRawArchives(f, result); } const durations=results.map(x=>x.ms).sort((a,b)=>a-b); matrix[n]={attempts:n,successes:results.filter(x=>x.code===0).length,failures:results.filter(x=>x.code!==0).length,p50:durations[Math.floor(durations.length*.5)],p95:durations[Math.floor(durations.length*.95)],max:durations.at(-1),results}; console.error(`WORKFLOW_MATRIX_DONE concurrency=${n} successes=${matrix[n].successes} failures=${matrix[n].failures}`); }
+  const levels=[2,5,10,20], starts=[0,2,7,17], matrix={};
+  for (let i=0;i<levels.length;i++) {
+    const n = levels[i], cohort = fixture.slice(starts[i], starts[i]+n);
+    const sync = JSON.parse(d1(`SELECT account_id, revision FROM business_sync_state WHERE account_id IN (${cohort.map(f=>q(f.account)).join(',')});`))?.[0]?.results || [];
+    assert(sync.length === cohort.length && sync.every(r => Number(r.revision) === 0), `business_sync_state revision 0 assertion failed for cohort ${n}`);
+    console.error(`WORKFLOW_MATRIX_START concurrency=${n}`);
+    const results=await Promise.all(cohort.map(f=>runCanary(f.account,f.property,cookies.get(f.account))));
+    for (const result of results) { const f = fixture.find((x) => x.account === result.account); if (f) result.rawSweep = await sweepRawArchives(f, result); }
+    const durations=results.map(x=>x.ms).sort((a,b)=>a-b);
+    matrix[n]={attempts:n,successes:results.filter(x=>x.code===0).length,failures:results.filter(x=>x.code!==0).length,p50:durations[Math.floor(durations.length*.5)],p95:durations[Math.floor(durations.length*.95)],max:durations.at(-1),results};
+    console.error(`WORKFLOW_MATRIX_DONE concurrency=${n} successes=${matrix[n].successes} failures=${matrix[n].failures}`);
+  }
   const soakDuration = Number(process.env.BENCHMARK_SOAK_MS ?? 600000);
   const soakStart=Date.now(); const soak=[]; while(Date.now()-soakStart<soakDuration){ const f=fixture[0], t=Date.now(); const r=await fetch(`${TARGET}/api/bulk-import/manifest?server_property_id=${encodeURIComponent(f.property)}`,{headers:{cookie:cookies.get(f.account)}}); soak.push({status:r.status,ms:Date.now()-t}); await new Promise(x=>setTimeout(x,1000)); }
   console.log(JSON.stringify({target:TARGET,d1:DB_ID,matrix,soak:{durationMs:Date.now()-soakStart,requests:soak.length,statuses:Object.fromEntries([...new Set(soak.map(x=>x.status))].map(s=>[s,soak.filter(x=>x.status===s).length]))}},null,2));

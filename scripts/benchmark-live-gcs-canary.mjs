@@ -18,7 +18,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rri-gcs-bench-'));
 const q = (v) => `'${String(v).replaceAll("'", "''")}'`;
 const now = () => new Date().toISOString();
 const sha = (v) => crypto.createHash('sha256').update(v).digest('hex');
-const wrangler = (args, input = '') => execFileSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['wrangler', ...args], { cwd: ROOT, input, encoding: 'utf8', shell: process.platform === 'win32', stdio: 'pipe' });
+const wrangler = (args, input = '') => execFileSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['wrangler', ...args], { cwd: ROOT, input, encoding: 'utf8', shell: process.platform === 'win32', env: { ...process.env, CI: '1' }, stdio: 'pipe' });
 function d1(sql) { const f = path.join(tmp, `${crypto.randomBytes(5).toString('hex')}.sql`); fs.writeFileSync(f, sql); return wrangler(['d1','execute',DB,'--remote',`--file=${f}`,'--json']); }
 function parseWranglerJson(output) {
   const start = output.indexOf('[');

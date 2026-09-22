@@ -1054,3 +1054,4 @@ archive sweep, so successful uploads are never left solely to account deletion.
 The live GCS benchmark uses disjoint fixture cohorts for the 2/5/10/20 workflow matrix. Each cohort is checked immediately before execution for `business_sync_state.revision = 0` and zero existing manifests. Cumulative fixture slices are prohibited because they reuse activated accounts and create false capacity failures.
 
 The benchmark parser accepts Wrangler's progress-prefixed JSON output so cohort state checks remain deterministic in interactive CLI environments.
+The runner also sets `CI=1` for Wrangler child processes to prevent progress UI from blocking machine-readable canary evidence.

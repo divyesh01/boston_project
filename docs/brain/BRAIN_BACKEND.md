@@ -1057,3 +1057,4 @@ The benchmark parser accepts Wrangler's progress-prefixed JSON output so cohort 
 The runner also sets `CI=1` for Wrangler child processes to prevent progress UI from blocking machine-readable canary evidence.
 Fresh-cohort state reads use direct Wrangler `--command` queries rather than temporary SQL files.
 The matrix also performs an in-memory fixture invariant check before dispatch; the authoritative D1 fixture insert remains the preceding remote mutation gate.
+Workflow success is classified from smoke/import/hydration/large stages; cleanup is reported separately so a cleanup-registry failure cannot masquerade as a workflow-capacity failure. Fixture deletion is batched into one account cascade.

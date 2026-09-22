@@ -72,10 +72,9 @@ async function startPreview(configFile, secretsFile) {
   throw new Error(`temporary preview did not become ready: ${output.replace(/\s+/g, ' ').slice(-500)}`);
 }
 async function cleanupFixtures() {
-  for (const f of fixture) {
-    try { d1(`DELETE FROM account WHERE id=${q(f.account)};`); }
-    catch (e) { console.error(`fixture cleanup failed for synthetic account ${f.account}: ${String(e.message || e).replace(/\s+/g, ' ').slice(0, 240)}`); }
-  }
+  if (!fixture.length) return;
+  try { d1(`DELETE FROM account WHERE id IN (${fixture.map((f) => q(f.account)).join(',')});`); }
+  catch (e) { console.error(`fixture cleanup failed: ${String(e.message || e).replace(/\s+/g, ' ').slice(0, 240)}`); }
 }
 async function sweepRawArchives(f, result) {
   const remaining = result.report?.stages?.cleanup?.details?.remainingKeys || [];
@@ -130,7 +129,8 @@ async function main() {
     const results=await Promise.all(cohort.map(f=>runCanary(f.account,f.property,cookies.get(f.account))));
     for (const result of results) { const f = fixture.find((x) => x.account === result.account); if (f) result.rawSweep = await sweepRawArchives(f, result); }
     const durations=results.map(x=>x.ms).sort((a,b)=>a-b);
-    matrix[n]={attempts:n,successes:results.filter(x=>x.code===0).length,failures:results.filter(x=>x.code!==0).length,p50:durations[Math.floor(durations.length*.5)],p95:durations[Math.floor(durations.length*.95)],max:durations.at(-1),results};
+    const corePass = (result) => ['smoke','import','hydration','large'].every((stage) => result.report?.stages?.[stage]?.ok === true);
+    matrix[n]={attempts:n,successes:results.filter(corePass).length,failures:results.filter((x)=>!corePass(x)).length,cleanupPartial:results.filter((x)=>x.report?.stages?.cleanup?.ok === false).length,p50:durations[Math.floor(durations.length*.5)],p95:durations[Math.floor(durations.length*.95)],max:durations.at(-1),results};
     console.error(`WORKFLOW_MATRIX_DONE concurrency=${n} successes=${matrix[n].successes} failures=${matrix[n].failures}`);
   }
   const soakDuration = Number(process.env.BENCHMARK_SOAK_MS ?? 600000);

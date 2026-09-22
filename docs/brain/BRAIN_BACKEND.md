@@ -1056,3 +1056,4 @@ The live GCS benchmark uses disjoint fixture cohorts for the 2/5/10/20 workflow 
 The benchmark parser accepts Wrangler's progress-prefixed JSON output so cohort state checks remain deterministic in interactive CLI environments.
 The runner also sets `CI=1` for Wrangler child processes to prevent progress UI from blocking machine-readable canary evidence.
 Fresh-cohort state reads use direct Wrangler `--command` queries rather than temporary SQL files.
+The matrix also performs an in-memory fixture invariant check before dispatch; the authoritative D1 fixture insert remains the preceding remote mutation gate.

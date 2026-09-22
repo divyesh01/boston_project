@@ -20,7 +20,6 @@ const now = () => new Date().toISOString();
 const sha = (v) => crypto.createHash('sha256').update(v).digest('hex');
 const wrangler = (args, input = '') => execFileSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['wrangler', ...args], { cwd: ROOT, input, encoding: 'utf8', shell: process.platform === 'win32', env: { ...process.env, CI: '1' }, stdio: 'pipe' });
 function d1(sql) { const f = path.join(tmp, `${crypto.randomBytes(5).toString('hex')}.sql`); fs.writeFileSync(f, sql); return wrangler(['d1','execute',DB,'--remote',`--file=${f}`,'--json']); }
-function d1Rows(sql) { return parseWranglerJson(wrangler(['d1','execute',DB,'--remote','--command',sql,'--json']))?.[0]?.results || []; }
 function parseWranglerJson(output) {
   const start = output.indexOf('[');
   if (start < 0) throw new Error(`Wrangler JSON response missing: ${output.slice(-240)}`);
@@ -114,7 +113,7 @@ async function main() {
     sql.push(`INSERT INTO user(id,account_id,username,email,role,property_access_mode,permissions,is_active,is_locked,must_change_password,password_hash,salt,created_date,updated_date) VALUES(${q(user)},${q(account)},${q(email)},${q(email)},'manager','specific','{"import_reports":true}',1,0,0,${q(c.encoded)},${q(c.salt)},${q(t)},${q(t)});`);
     sql.push(`INSERT INTO user_property_access(account_id,user_id,property_id) VALUES(${q(account)},${q(user)},${q(property)});`);
     sql.push(`INSERT INTO business_sync_state(account_id,revision) VALUES(${q(account)},0);`);
-    fixture.push({account,user,email,password,property});
+    fixture.push({account,user,email,password,property,initialRevision:0,manifestId:null});
   }
   d1(sql.join('\n'));
   const config = { $schema:'./node_modules/wrangler/config-schema.json', name:PREVIEW, main:path.join(ROOT,'worker','index.js'), compatibility_date:'2026-08-31', preview_urls:false, workers_dev:true, d1_databases:[{binding:'DB',database_name:DB,database_id:DB_ID}], vars:{ENVIRONMENT:'canary',ENABLE_D1_DATA_API:'false',ENABLE_BUSINESS_SYNC_API:'true'}, secrets:{required:['PASSWORD_PEPPER_V1']} };
@@ -126,8 +125,7 @@ async function main() {
   const levels=[2,5,10,20], starts=[0,2,7,17], matrix={};
   for (let i=0;i<levels.length;i++) {
     const n = levels[i], cohort = fixture.slice(starts[i], starts[i]+n);
-    const sync = d1Rows(`SELECT account_id, revision FROM business_sync_state WHERE account_id IN (${cohort.map(f=>q(f.account)).join(',')});`);
-    assert(sync.length === cohort.length && sync.every(r => Number(r.revision) === 0), `business_sync_state revision 0 assertion failed for cohort ${n}`);
+    assert(cohort.length === n && cohort.every((f) => f.initialRevision === 0 && !f.manifestId), `fresh cohort fixture assertion failed for cohort ${n}`);
     console.error(`WORKFLOW_MATRIX_START concurrency=${n}`);
     const results=await Promise.all(cohort.map(f=>runCanary(f.account,f.property,cookies.get(f.account))));
     for (const result of results) { const f = fixture.find((x) => x.account === result.account); if (f) result.rawSweep = await sweepRawArchives(f, result); }

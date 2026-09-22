@@ -20,6 +20,11 @@ const now = () => new Date().toISOString();
 const sha = (v) => crypto.createHash('sha256').update(v).digest('hex');
 const wrangler = (args, input = '') => execFileSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['wrangler', ...args], { cwd: ROOT, input, encoding: 'utf8', shell: process.platform === 'win32', stdio: 'pipe' });
 function d1(sql) { const f = path.join(tmp, `${crypto.randomBytes(5).toString('hex')}.sql`); fs.writeFileSync(f, sql); return wrangler(['d1','execute',DB,'--remote',`--file=${f}`,'--json']); }
+function parseWranglerJson(output) {
+  const start = output.indexOf('[');
+  if (start < 0) throw new Error(`Wrangler JSON response missing: ${output.slice(-240)}`);
+  return JSON.parse(output.slice(start));
+}
 function assertCanary() {
   if (!TARGET.includes('rri-bulk-canary-a61a110') || TARGET.includes('boston-project.divyesh') || DB_ID === PROD_DB || WORKER !== 'rri-bulk-canary-a61a110') throw new Error('CANARY GUARD FAILED');
 }
@@ -120,7 +125,7 @@ async function main() {
   const levels=[2,5,10,20], starts=[0,2,7,17], matrix={};
   for (let i=0;i<levels.length;i++) {
     const n = levels[i], cohort = fixture.slice(starts[i], starts[i]+n);
-    const sync = JSON.parse(d1(`SELECT account_id, revision FROM business_sync_state WHERE account_id IN (${cohort.map(f=>q(f.account)).join(',')});`))?.[0]?.results || [];
+    const sync = parseWranglerJson(d1(`SELECT account_id, revision FROM business_sync_state WHERE account_id IN (${cohort.map(f=>q(f.account)).join(',')});`))?.[0]?.results || [];
     assert(sync.length === cohort.length && sync.every(r => Number(r.revision) === 0), `business_sync_state revision 0 assertion failed for cohort ${n}`);
     console.error(`WORKFLOW_MATRIX_START concurrency=${n}`);
     const results=await Promise.all(cohort.map(f=>runCanary(f.account,f.property,cookies.get(f.account))));

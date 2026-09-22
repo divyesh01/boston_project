@@ -1,11 +1,22 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { AwsClient } from "aws4fetch";
-import { isR2S3Enabled, resolveR2S3Stores } from "../worker/r2-s3-adapter.js";
+import {
+  isR2S3Enabled,
+  resolveR2S3Stores,
+  GcsJsonClient,
+  createGoogleServiceAccountJwt,
+} from "../worker/r2-s3-adapter.js";
 
 // Synthetic redaction fixture assembled at runtime; it is not an account credential.
 const redactionFixture = ["redaction", "fixture", "value"].join(":");
+const oauthAccessTokenFixture = ["probe", "oauth", "bearer", "fixture"].join("-");
+const { privateKey: syntheticRsaPrivateKeyPem } = generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+  publicKeyEncoding: { type: "spki", format: "pem" },
+  privateKeyEncoding: { type: "pkcs8", format: "pem" },
+});
 const ENV = {
   R2_S3_ENABLED: "true",
   R2_S3_ACCOUNT_ID: "a".repeat(32),
@@ -31,8 +42,10 @@ const GCS_ENV = {
   S3_REGION: "us-east1",
   S3_RAW_BUCKET: "rri-raw-canary-gcs",
   S3_DATA_BUCKET: "rri-data-canary-gcs",
-  S3_ACCESS_KEY_ID: "synthetic-gcs-key-id",
-  S3_SECRET_ACCESS_KEY: redactionFixture,
+  GCS_SERVICE_ACCOUNT_JSON: JSON.stringify({
+    client_email: "synthetic-gcs@synthetic.test",
+    private_key: syntheticRsaPrivateKeyPem,
+  }),
 };
 
 let assertions = 0;
@@ -528,8 +541,7 @@ for (const missingName of [
   "S3_REGION",
   "S3_RAW_BUCKET",
   "S3_DATA_BUCKET",
-  "S3_ACCESS_KEY_ID",
-  "S3_SECRET_ACCESS_KEY",
+  "GCS_SERVICE_ACCOUNT_JSON",
 ]) {
   const env = { ...GCS_ENV };
   delete env[missingName];
@@ -605,13 +617,13 @@ for (const endpoint of [
   const initiation = signedCalls[0];
   const initiationHeaders = new Headers(initiation.headers);
   check(initiation.method === "POST", "GCS resumable upload uses a signed POST initiation");
-  check(initiation.aws?.signQuery === true, "GCS resumable upload initiation requests query signing");
+  check(!initiation.aws?.signQuery, "GCS resumable upload initiation does not use AWS query signing");
   check(!initiationHeaders.has("x-amz-content-sha256"), "GCS initiation carries no x-amz-content-sha256 header");
   check(initiationHeaders.get("x-goog-resumable") === "start", "GCS initiation requests a resumable session");
   check(initiationHeaders.get("x-goog-if-generation-match") === "0", "GCS initiation atomically requires object absence");
   check(initiationHeaders.get("x-goog-meta-original_file_name")?.startsWith("=?UTF-8?B?"), "GCS Unicode metadata uses RFC 2047");
   check(initiationHeaders.get("content-type") === "text/csv", "GCS initiation preserves HTTP metadata");
-  check(optionsSeen[0].region === "us-east1" && optionsSeen[0].service === "s3", "GCS HMAC signing uses the configured region and S3 service");
+  check(optionsSeen[0].region === "us-east1" && typeof optionsSeen[0].serviceAccountJson === "string", "GCS client receives OAuth configuration");
   check(sessionCalls.length === 3, "GCS bounded upload uses two complete chunks and one final chunk");
   check(new Headers(sessionCalls[0].init.headers).get("content-range") === "bytes 0-262143/*", "GCS first intermediate range is exact");
   check(new Headers(sessionCalls[1].init.headers).get("content-range") === "bytes 262144-524287/*", "GCS second intermediate range is exact");
@@ -673,8 +685,8 @@ for (const endpoint of [
   const object = await store.get("Café report.csv");
   check(await object.text() === "payload", "GCS GET streams the object body");
   await store.delete("Café report.csv");
-  check(signedCalls.map((call) => call.method).join(",") === "HEAD,GET,DELETE", "GCS HEAD, GET, and DELETE use signed object requests");
-  check(signedCalls.every((call) => call.aws?.signQuery === true), "GCS HEAD, GET, and DELETE specify query signing");
+  check(signedCalls.map((call) => call.method).join(",") === "HEAD,GET,DELETE", "GCS HEAD, GET, and DELETE use object requests");
+  check(signedCalls.every((call) => !call.aws?.signQuery), "GCS HEAD, GET, and DELETE do not use AWS query signing");
 }
 
 for (const operation of ["head", "get"]) {
@@ -813,98 +825,152 @@ for (const operation of ["head", "get"]) {
 }
 
 {
-  const client = new AwsClient({
-    accessKeyId: "synthetic-gcs-key-id",
-    secretAccessKey: "synthetic-gcs-secret-key",
-    service: "s3",
-    region: "us-east1",
-  });
-  const signed = await client.sign("https://storage.googleapis.com/rri-raw-canary-gcs/folder/Caf%C3%A9%20report.csv", {
-    method: "POST",
-    headers: {
-      "x-goog-if-generation-match": "0",
-      "x-goog-resumable": "start",
-    },
-    body: "",
-    aws: { signQuery: true },
-  });
-  const signedUrl = new URL(signed.url);
-  const params = signedUrl.searchParams;
-  check(params.get("X-Amz-Algorithm") === "AWS4-HMAC-SHA256", "GCS initiation query signing uses AWS4-HMAC-SHA256");
-  const credential = params.get("X-Amz-Credential") || "";
-  check(credential.startsWith("synthetic-gcs-key-id/"), "GCS query signing credential begins with HMAC access key ID");
-  check(credential.includes("/us-east1/s3/aws4_request"), "GCS SigV4 query signing scope contains configured region and S3 service");
-  const signedHeaders = params.get("X-Amz-SignedHeaders") || "";
-  check(signedHeaders.includes("x-goog-if-generation-match") && signedHeaders.includes("x-goog-resumable"), "GCS atomicity and resumable headers are included in signed query headers");
-  check(params.has("X-Amz-Signature"), "GCS query signing includes signature parameter");
-  check(!signed.headers.has("authorization"), "GCS query signing emits no authorization header");
-  check(!signed.headers.has("x-amz-date"), "GCS query signing emits no x-amz-date header");
-  check(!signed.headers.has("x-amz-content-sha256"), "GCS query signing emits no x-amz-content-sha256 header to prevent ExcessHeaderValues");
-  check(signed.headers.get("x-goog-if-generation-match") === "0", "GCS query signing preserves atomic absence precondition header");
-  check(signed.headers.get("x-goog-resumable") === "start", "GCS query signing preserves resumable start header");
-  check(!signed.url.includes("synthetic-gcs-secret-key"), "GCS query-signed URL never contains the secret key");
+  const fixedDate = new Date("2026-09-22T13:30:33.000Z");
+  const jwt = await createGoogleServiceAccountJwt(GCS_ENV.GCS_SERVICE_ACCOUNT_JSON, fixedDate);
+  const parts = jwt.split(".");
+  check(parts.length === 3, "Google service account JWT has 3 dot-separated parts");
+  const header = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
+  const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+  check(header.alg === "RS256" && header.typ === "JWT", "JWT header specifies RS256 algorithm and JWT type");
+  check(payload.iss === "synthetic-gcs@synthetic.test", "JWT payload contains service account email");
+  check(payload.scope === "https://www.googleapis.com/auth/devstorage.read_write", "JWT payload contains devstorage.read_write scope");
+  check(payload.aud === "https://oauth2.googleapis.com/token", "JWT payload audience is googleapis token endpoint");
+  check(payload.iat === 1790083833, "JWT issued-at timestamp matches test date");
+  check(payload.exp === 1790083833 + 3600, "JWT expiration is 1 hour after issuance");
+  check(!jwt.includes("PRIVATE KEY"), "JWT never contains the private key");
 
-  for (const method of ["HEAD", "GET", "DELETE"]) {
-    const signedOp = await client.sign("https://storage.googleapis.com/rri-raw-canary-gcs/folder/Caf%C3%A9%20report.csv", {
-      method,
-      aws: { signQuery: true },
+  let error;
+  try {
+    await createGoogleServiceAccountJwt({
+      client_email: "test@project.test",
+      private_key: redactionFixture,
     });
-    const opUrl = new URL(signedOp.url);
-    check(opUrl.searchParams.get("X-Amz-Algorithm") === "AWS4-HMAC-SHA256", `GCS ${method} query signing uses AWS4-HMAC-SHA256`);
-    check(opUrl.searchParams.has("X-Amz-Signature"), `GCS ${method} query signing includes signature`);
-    check(!signedOp.headers.has("authorization"), `GCS ${method} query signing emits no authorization header`);
-    check(!signedOp.headers.has("x-amz-date"), `GCS ${method} query signing emits no x-amz-date header`);
-    check(!signedOp.headers.has("x-amz-content-sha256"), `GCS ${method} query signing emits no x-amz-content-sha256 header`);
+  } catch (caught) {
+    error = caught;
   }
+  check(error?.code === "R2_S3_CONFIG_MISSING", "invalid GCS service account private key fails closed");
+  check(!String(error?.message).includes(redactionFixture), "invalid GCS service account private key error redacts key");
 }
 
 {
-  const intercepted = [];
-  const client = new AwsClient({
-    accessKeyId: "synthetic-gcs-key-id",
-    secretAccessKey: "synthetic-gcs-secret-key",
-    service: "s3",
-    region: "us-east1",
-  });
-  client.fetch = async (url, init) => {
-    const signedRequest = await client.sign(url, init);
-    intercepted.push(signedRequest);
-    if (init?.method === "HEAD") {
-      return new Response(null, {
+  let tokenRequests = 0;
+  let now = new Date("2026-09-22T13:30:33.000Z");
+  const calls = [];
+  const tokenFetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url) === "https://oauth2.googleapis.com/token") {
+      tokenRequests += 1;
+      const body = String(init?.body || "");
+      check(init?.method === "POST", "OAuth token exchange uses POST");
+      check(body.includes("grant_type="), "OAuth token exchange carries grant_type");
+      check(body.includes("assertion="), "OAuth token exchange carries assertion JWT");
+      return new Response(JSON.stringify({ access_token: oauthAccessTokenFixture, expires_in: 3600 }), {
         status: 200,
-        headers: { "content-length": "0", etag: '"test"' },
+        headers: { "content-type": "application/json" },
       });
     }
-    return new Response(null, {
-      status: 201,
-      headers: { location: "https://storage.googleapis.com/upload/session?upload_id=e2e-session" },
-    });
+    const parsed = new URL(url);
+    if (parsed.pathname.includes("/upload/storage/v1/")) {
+      return new Response(null, { status: 200, headers: { location: "https://storage.googleapis.com/upload/session?upload_id=e2e-session" } });
+    }
+    if (parsed.searchParams.get("alt") === "media") {
+      return new Response("payload", { status: 200 });
+    }
+    if (init.method === "DELETE") {
+      return new Response(null, { status: 204 });
+    }
+    return new Response(JSON.stringify({
+      name: "folder/Café report.csv",
+      size: "7",
+      etag: "test-etag",
+      updated: "2026-09-22T13:30:33.000Z",
+      contentType: "text/plain",
+      metadata: {
+        account_id: "account",
+        server_property_id: "property",
+        raw_hash: "a".repeat(64),
+        report_type: "Revenue",
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } });
   };
+
+  const client = new GcsJsonClient({
+    serviceAccountJson: GCS_ENV.GCS_SERVICE_ACCOUNT_JSON,
+    tokenFetch,
+    now: () => now,
+  });
+
+  const initiationResponse = await client.fetch("https://storage.googleapis.com/rri-data-canary-gcs/folder/Caf%C3%A9%20report.csv", {
+    method: "POST",
+    headers: {
+      "x-goog-resumable": "start",
+      "x-goog-if-generation-match": "0",
+      "x-goog-meta-account_id": "account",
+      "x-goog-meta-server_property_id": "property",
+      "x-goog-meta-raw_hash": "a".repeat(64),
+      "x-goog-meta-report_type": "Revenue",
+      "content-type": "text/csv",
+    },
+    body: "",
+  });
+  check(initiationResponse?.ok, "GCS JSON client initiates resumable upload");
+  check(initiationResponse?.headers.get("location")?.includes("e2e-session"), "Resumable initiation returns session URI");
+
+  const initiation = calls.find((call) => call.init.method === "POST" && String(call.url).includes("upload/storage/v1"));
+  check(initiation?.url.includes("ifGenerationMatch=0"), "GCS JSON initiation carries generation-match 0");
+  check(new Headers(initiation?.init.headers).get("authorization") === `Bearer ${oauthAccessTokenFixture}`, "GCS JSON initiation uses OAuth bearer authorization");
+  const initBody = JSON.parse(initiation?.init.body || "{}");
+  check(initBody.name === "folder/Café report.csv", "GCS JSON initiation persists object name in request body");
+  check(initBody.metadata.account_id === "account" && initBody.metadata.server_property_id === "property" && initBody.metadata.raw_hash === "a".repeat(64), "GCS JSON initiation persists object metadata in request body");
+
+  const head = await client.fetch("https://storage.googleapis.com/rri-data-canary-gcs/folder/Caf%C3%A9%20report.csv", { method: "HEAD" });
+  check(head.headers.get("x-goog-meta-account_id") === "account" && head.headers.get("x-goog-meta-server_property_id") === "property", "GCS JSON metadata GET exposes exact custom metadata");
+
+  const media = await client.fetch("https://storage.googleapis.com/rri-data-canary-gcs/folder/Caf%C3%A9%20report.csv", { method: "GET" });
+  check(await media.text() === "payload" && media.headers.get("etag") === "test-etag", "GCS JSON media GET preserves bytes and metadata");
+
+  await client.fetch("https://storage.googleapis.com/rri-data-canary-gcs/folder/Caf%C3%A9%20report.csv", { method: "DELETE" });
+  check(calls.some((call) => call.init.method === "DELETE" && String(call.url).includes("/storage/v1/b/")), "GCS JSON DELETE uses the object metadata endpoint");
+
+  check(tokenRequests === 1, "GCS OAuth access token is cached across requests");
+
+  now = new Date(now.getTime() + 3600 * 1000);
+  await client.fetch("https://storage.googleapis.com/rri-data-canary-gcs/folder/Caf%C3%A9%20report.csv", { method: "HEAD" });
+  check(tokenRequests === 2, "GCS OAuth access token refreshes when expired");
+}
+
+{
+  let tokenRequests = 0;
+  const tokenFetch = async (url) => {
+    if (String(url) === "https://oauth2.googleapis.com/token") {
+      tokenRequests += 1;
+      return new Response(JSON.stringify({ access_token: oauthAccessTokenFixture, expires_in: 3600 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({
+      name: "probe-key",
+      size: "7",
+      etag: "probe-etag",
+      updated: "2026-09-22T13:30:33.000Z",
+      contentType: "text/plain",
+      metadata: { key: "value" },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
   const store = resolveR2S3Stores(GCS_ENV, {
-    clientFactory: () => client,
-    fetch: async () => new Response(null, { status: 201 }),
+    tokenFetch,
+    fetch: async () => new Response(null, {
+      status: 201,
+      headers: { etag: '"created-etag"', location: "https://storage.googleapis.com/upload/session?upload_id=probe" },
+    }),
     digestFactory: nodeDigestFactory,
   }).rawStore;
 
-  await store.head("probe-key");
-  check(intercepted.length === 1, "adapter HEAD invokes client fetch");
-  const headSigned = intercepted[0];
-  check(new URL(headSigned.url).searchParams.has("X-Amz-Signature"), "adapter HEAD request contains SigV4 query signature");
-  check(!headSigned.headers.has("authorization"), "adapter HEAD request omits authorization header");
-  check(!headSigned.headers.has("x-amz-date"), "adapter HEAD request omits x-amz-date header");
-  check(!headSigned.headers.has("x-amz-content-sha256"), "adapter HEAD request omits x-amz-content-sha256 header");
-
-  await store.put("probe-put", new Uint8Array([1, 2, 3]), { onlyIf: { etagDoesNotMatch: "*" } });
-  check(intercepted.length === 2, "adapter PUT initiation invokes client fetch");
-  const putSigned = intercepted[1];
-  const putUrl = new URL(putSigned.url);
-  check(putUrl.searchParams.has("X-Amz-Signature"), "adapter PUT initiation contains SigV4 query signature");
-  check(putUrl.searchParams.get("X-Amz-SignedHeaders")?.includes("x-goog-if-generation-match"), "adapter PUT query signed headers include generation match");
-  check(!putSigned.headers.has("authorization"), "adapter PUT initiation omits authorization header");
-  check(!putSigned.headers.has("x-amz-date"), "adapter PUT initiation omits x-amz-date header");
-  check(!putSigned.headers.has("x-amz-content-sha256"), "adapter PUT initiation omits x-amz-content-sha256 header to eliminate ExcessHeaderValues");
-  check(putSigned.headers.get("x-goog-if-generation-match") === "0", "adapter PUT preserves x-goog-if-generation-match header");
-  check(putSigned.headers.get("x-goog-resumable") === "start", "adapter PUT preserves x-goog-resumable header");
+  const headObj = await store.head("probe-key");
+  check(headObj?.etag === "probe-etag" && headObj?.customMetadata?.key === "value", "adapter HEAD parses GCS JSON object and metadata");
+  check(tokenRequests === 1, "adapter uses the cached OAuth token");
 }
 
 console.log(`PASSED: R2, Backblaze B2, and GCS object-storage adapter probe (${assertions} assertions)`);

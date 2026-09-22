@@ -51,6 +51,36 @@ function requiredString(env, name) {
 function readConfig(env) {
   if (isGenericS3Enabled(env)) {
     const provider = (env?.S3_PROVIDER || "").toLowerCase();
+    if (provider === "gcs") {
+      const names = ["S3_ENDPOINT", "S3_RAW_BUCKET", "S3_DATA_BUCKET"];
+      const values = Object.fromEntries(names.map((name) => [name, requiredString(env, name)]));
+      values.GCS_SERVICE_ACCOUNT_JSON = requiredString(env, "GCS_SERVICE_ACCOUNT_JSON");
+      const allNames = [...names, "GCS_SERVICE_ACCOUNT_JSON"];
+      const missing = allNames.filter((name) => !values[name]);
+      if (missing.length) throw configError(`missing ${missing.join(", ")}`);
+      if (!GCS_ENDPOINT_PATTERN.test(values.S3_ENDPOINT)) throw configError("invalid S3_ENDPOINT for GCS");
+      if (!GCS_REGION_PATTERN.test(requiredString(env, "S3_REGION") || "")) throw configError("invalid S3_REGION for GCS");
+      for (const name of ["S3_RAW_BUCKET", "S3_DATA_BUCKET"]) {
+        if (!isValidGcsBucket(values[name])) throw configError(`invalid ${name} for GCS`);
+      }
+      let serviceAccount;
+      try {
+        serviceAccount = JSON.parse(values.GCS_SERVICE_ACCOUNT_JSON);
+      } catch {
+        throw configError("invalid GCS_SERVICE_ACCOUNT_JSON");
+      }
+      if (!serviceAccount || typeof serviceAccount.client_email !== "string" || typeof serviceAccount.private_key !== "string") {
+        throw configError("invalid GCS service account credentials");
+      }
+      return {
+        rawBucket: values.S3_RAW_BUCKET,
+        dataBucket: values.S3_DATA_BUCKET,
+        serviceAccountJson: values.GCS_SERVICE_ACCOUNT_JSON,
+        endpoint: GCS_ENDPOINT,
+        region: requiredString(env, "S3_REGION"),
+        provider: "gcs",
+      };
+    }
     const names = [
       "S3_ENDPOINT",
       "S3_RAW_BUCKET",
@@ -61,23 +91,6 @@ function readConfig(env) {
     const values = Object.fromEntries(names.map((name) => [name, requiredString(env, name)]));
     const missing = names.filter((name) => !values[name]);
     if (missing.length) throw configError(`missing ${missing.join(", ")}`);
-
-    if (provider === "gcs") {
-      if (!GCS_ENDPOINT_PATTERN.test(values.S3_ENDPOINT)) throw configError("invalid S3_ENDPOINT for GCS");
-      if (!GCS_REGION_PATTERN.test(requiredString(env, "S3_REGION") || "")) throw configError("invalid S3_REGION for GCS");
-      for (const name of ["S3_RAW_BUCKET", "S3_DATA_BUCKET"]) {
-        if (!isValidGcsBucket(values[name])) throw configError(`invalid ${name} for GCS`);
-      }
-      return {
-        rawBucket: values.S3_RAW_BUCKET,
-        dataBucket: values.S3_DATA_BUCKET,
-        accessKeyId: values.S3_ACCESS_KEY_ID,
-        secretAccessKey: values.S3_SECRET_ACCESS_KEY,
-        endpoint: GCS_ENDPOINT,
-        region: requiredString(env, "S3_REGION"),
-        provider: "gcs",
-      };
-    }
 
     for (const name of ["S3_RAW_BUCKET", "S3_DATA_BUCKET"]) {
       if (!isValidB2Bucket(values[name])) throw configError(`invalid ${name}`);
@@ -328,15 +341,191 @@ function validateSessionUri(value) {
   }
 }
 
+function base64UrlEncode(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function base64UrlEncodeText(value) {
+  return base64UrlEncode(new TextEncoder().encode(value));
+}
+
+function pemToDer(value) {
+  const body = String(value)
+    .replace(/\\n/g, "\n")
+    .replace(/-----BEGIN PRIVATE KEY-----/g, "")
+    .replace(/-----END PRIVATE KEY-----/g, "")
+    .replace(/\s+/g, "");
+  try {
+    const binary = atob(body);
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  } catch {
+    throw configError("invalid GCS service account private key");
+  }
+}
+
+export async function createGoogleServiceAccountJwt(serviceAccountJson, now = new Date()) {
+  let credentials;
+  try {
+    credentials = typeof serviceAccountJson === "string" ? JSON.parse(serviceAccountJson) : serviceAccountJson;
+  } catch {
+    throw configError("invalid GCS_SERVICE_ACCOUNT_JSON");
+  }
+  if (!credentials || typeof credentials.client_email !== "string" || typeof credentials.private_key !== "string") {
+    throw configError("invalid GCS service account credentials");
+  }
+  const issuedAt = Math.floor(now.getTime() / 1000);
+  const header = base64UrlEncodeText(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const claim = base64UrlEncodeText(JSON.stringify({
+    iss: credentials.client_email,
+    scope: "https://www.googleapis.com/auth/devstorage.read_write",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: issuedAt,
+    exp: issuedAt + 3600,
+  }));
+  const unsigned = `${header}.${claim}`;
+  let key;
+  try {
+    key = await crypto.subtle.importKey(
+      "pkcs8",
+      pemToDer(credentials.private_key),
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+  } catch {
+    throw configError("invalid GCS service account private key");
+  }
+  const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(unsigned));
+  return `${unsigned}.${base64UrlEncode(new Uint8Array(signature))}`;
+}
+
+function gcsObjectParts(endpoint, url) {
+  const parsed = new URL(url);
+  const expected = new URL(endpoint);
+  if (parsed.origin !== expected.origin) throw configError("invalid GCS object URL");
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  if (segments.length < 2) throw configError("invalid GCS object URL");
+  const bucket = decodeURIComponent(segments.shift());
+  const key = segments.map((segment) => decodeURIComponent(segment)).join("/");
+  return { bucket, key };
+}
+
+function gcsMetadataHeaders(object, bodyHeaders = {}) {
+  const headers = new Headers(bodyHeaders);
+  if (object?.size != null) headers.set("content-length", String(object.size));
+  if (object?.etag) headers.set("etag", object.etag);
+  if (object?.updated) headers.set("last-modified", new Date(object.updated).toUTCString());
+  if (object?.contentType) headers.set("content-type", object.contentType);
+  if (object?.contentEncoding) headers.set("content-encoding", object.contentEncoding);
+  for (const [name, value] of Object.entries(object?.metadata || {})) {
+    headers.set(`x-goog-meta-${name}`, encodeMetadataValue(value));
+  }
+  return headers;
+}
+
+export class GcsJsonClient {
+  constructor({ serviceAccountJson, endpoint = GCS_ENDPOINT, tokenFetch, now }) {
+    this.serviceAccountJson = serviceAccountJson;
+    this.endpoint = endpoint;
+    this.tokenFetch = tokenFetch || globalThis.fetch;
+    this.now = now || (() => new Date());
+    this.cachedToken = null;
+    this.tokenPromise = null;
+  }
+
+  async accessToken() {
+    const nowSeconds = Math.floor(this.now().getTime() / 1000);
+    if (this.cachedToken && this.cachedToken.expiresAt > nowSeconds + 60) return this.cachedToken.value;
+    if (this.tokenPromise) return this.tokenPromise;
+    this.tokenPromise = (async () => {
+      const assertion = await createGoogleServiceAccountJwt(this.serviceAccountJson, this.now());
+      const response = await this.tokenFetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: `grant_type=${encodeURIComponent("urn:ietf:params:oauth:grant-type:jwt-bearer")}&assertion=${encodeURIComponent(assertion)}`,
+      });
+      if (!response.ok) throw configError("GCS OAuth token exchange failed");
+      const token = await response.json();
+      if (typeof token?.access_token !== "string" || !Number.isFinite(Number(token.expires_in))) {
+        throw configError("invalid GCS OAuth token response");
+      }
+      this.cachedToken = { value: token.access_token, expiresAt: nowSeconds + Number(token.expires_in) };
+      return token.access_token;
+    })();
+    try {
+      return await this.tokenPromise;
+    } finally {
+      this.tokenPromise = null;
+    }
+  }
+
+  async authorized(url, init = {}) {
+    const headers = new Headers(init.headers || {});
+    headers.set("authorization", `Bearer ${await this.accessToken()}`);
+    return this.tokenFetch(url, { ...init, headers });
+  }
+
+  async fetch(url, init = {}) {
+    const method = String(init.method || "GET").toUpperCase();
+    const headers = new Headers(init.headers || {});
+    const { bucket, key } = gcsObjectParts(this.endpoint, url);
+    const encodedBucket = encodePathPart(bucket);
+    const encodedKey = encodeURIComponent(key);
+    const metadataUrl = `${this.endpoint}/storage/v1/b/${encodedBucket}/o/${encodedKey}`;
+    if (method === "POST" && headers.get("x-goog-resumable") === "start") {
+      const metadata = {};
+      for (const [name, value] of headers.entries()) {
+        if (name.toLowerCase().startsWith("x-goog-meta-")) metadata[name.slice("x-goog-meta-".length)] = decodeMetadataValue(value);
+      }
+      const body = { name: key, metadata };
+      if (headers.get("content-type")) body.contentType = headers.get("content-type");
+      if (headers.get("content-encoding")) body.contentEncoding = headers.get("content-encoding");
+      const query = new URLSearchParams({ uploadType: "resumable", name: key });
+      if (headers.get("x-goog-if-generation-match") === "0") query.set("ifGenerationMatch", "0");
+      const initiationUrl = `${this.endpoint}/upload/storage/v1/b/${encodedBucket}/o?${query.toString()}`;
+      return this.authorized(initiationUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
+    if (method === "HEAD") {
+      const response = await this.authorized(metadataUrl, { method: "GET" });
+      if (!response.ok) return response;
+      const object = await response.json();
+      return new Response(null, { status: response.status, headers: gcsMetadataHeaders(object) });
+    }
+    if (method === "GET") {
+      const metadataResponse = await this.authorized(metadataUrl, { method: "GET" });
+      if (!metadataResponse.ok) return metadataResponse;
+      const object = await metadataResponse.json();
+      const mediaResponse = await this.authorized(`${metadataUrl}?alt=media`, { method: "GET" });
+      if (!mediaResponse.ok) return mediaResponse;
+      return new Response(mediaResponse.body, {
+        status: mediaResponse.status,
+        statusText: mediaResponse.statusText,
+        headers: gcsMetadataHeaders(object, mediaResponse.headers),
+      });
+    }
+    if (method === "DELETE") {
+      const response = await this.authorized(metadataUrl, { method: "DELETE" });
+      if (response.status === 404 || response.status === 204 || response.status === 200) {
+        return new Response(null, { status: 204 });
+      }
+      return response;
+    }
+    return this.authorized(url, init);
+  }
+}
+
 function createGcsPutStore({ client, endpoint, bucket, fetchImpl, digestFactory }) {
   async function request(operation, key, init) {
     const url = objectUrl(endpoint, bucket, key);
     let response;
     try {
-      response = await client.fetch(url, {
-        ...init,
-        aws: { ...init?.aws, signQuery: true },
-      });
+      response = await client.fetch(url, init);
     } catch {
       throw safeError(operation, url);
     }
@@ -369,7 +558,6 @@ function createGcsPutStore({ client, endpoint, bucket, fetchImpl, digestFactory 
           method: "POST",
           headers: initHeaders,
           body: "",
-          aws: { signQuery: true },
         });
       } catch {
         throw safeError("put", initUrl);
@@ -567,10 +755,7 @@ function createStore({ client, endpoint, bucket, provider = "s3" }) {
     const url = objectUrl(endpoint, bucket, key);
     let response;
     try {
-      const fetchInit = provider === "gcs"
-        ? { ...init, aws: { ...init?.aws, signQuery: true } }
-        : init;
-      response = await client.fetch(url, fetchInit);
+      response = await client.fetch(url, init);
     } catch {
       throw safeError(operation, url);
     }
@@ -647,8 +832,14 @@ function createStore({ client, endpoint, bucket, provider = "s3" }) {
 export function resolveR2S3Stores(env, dependencies = {}) {
   if (!isR2S3Enabled(env)) return null;
   const config = readConfig(env);
-  const createClient = dependencies.clientFactory || ((options) => new AwsClient(options));
-  const client = createClient({
+  const createClient = dependencies.clientFactory || ((options) => config.provider === "gcs"
+    ? new GcsJsonClient({ ...options, tokenFetch: dependencies.tokenFetch || dependencies.fetch })
+    : new AwsClient(options));
+  const client = createClient(config.provider === "gcs" ? {
+    serviceAccountJson: config.serviceAccountJson,
+    endpoint: config.endpoint,
+    region: config.region,
+  } : {
     accessKeyId: config.accessKeyId,
     secretAccessKey: config.secretAccessKey,
     service: "s3",

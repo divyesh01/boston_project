@@ -956,10 +956,11 @@ inferred from that endpoint. Optional `S3_REGION`, when present, must exactly ma
 the inferred region. Backblaze bucket names are validated before a client is
 constructed.
 
-`S3_PROVIDER=gcs` selects Google Cloud Storage's XML API at the exact endpoint
-`https://storage.googleapis.com`. This mode requires an explicit `S3_REGION` signing
-scope and GCS HMAC access ID/secret associated with a bucket-scoped service account.
-The free-tier canary location is `us-east1`, so both canary buckets and the signing
+`S3_PROVIDER=gcs` selects Google Cloud Storage's JSON API at the exact endpoint
+`https://storage.googleapis.com`. This mode requires an explicit `S3_REGION` and
+`GCS_SERVICE_ACCOUNT_JSON`, containing the service account email and PKCS#8 private
+key. The JSON credential is a Worker secret and is never logged or committed. The
+free-tier canary location is `us-east1`, so both canary buckets and the configured
 region use `us-east1`. GCS bucket names and the endpoint are validated before a
 client is constructed.
 
@@ -976,30 +977,27 @@ their values or request signatures. Backblaze and R2 custom metadata maps throug
 preserve the expected SHA-256 through `x-amz-content-sha256`, and write-once uploads
 use `If-None-Match: *`.
 
-GCS XML API requests use SigV4 query signing (`aws: { signQuery: true }`) rather
-than header signing. Google rejects requests that combine the library's automatic
-`x-amz-*` signature headers with `x-goog-*` XML API headers (`ExcessHeaderValues`,
-HTTP 400). R2 and Backblaze continue to use their existing header-signing paths.
-
-GCS `HEAD`, `GET`, and `DELETE` remain signed XML API object requests. GCS writes use
-a signed resumable-session POST carrying `x-goog-if-generation-match: 0`; all session
-PUT/DELETE requests are intentionally unsigned because the HTTPS session URI is a
-capability token. The adapter accepts session URIs only from
-`storage.googleapis.com` and never exposes their query strings. It streams in 256
-KiB chunks with at most two chunks buffered, verifies the expected SHA-256 with the
-Workers `crypto.DigestStream` before the final commit, and sends a whole-object
-CRC32C in the final `x-goog-hash` header for server validation. GCS metadata uses
-`x-goog-meta-*` with the same Unicode encoding. HTTP 412 at session initiation or
-final commit maps to the native R2 `null` result. The import pipeline then HEADs and
-verifies the winning canonical object before returning an idempotent 200 response.
+GCS uses the JSON API with a short-lived OAuth bearer token minted from the service
+account JWT using Web Crypto RSASSA-PKCS1-v1_5/SHA-256. Resumable initiation is a
+JSON `POST` with `ifGenerationMatch=0` and an explicit metadata object; the returned
+HTTPS session URI is the only capability used for subsequent unsigned chunk PUTs and
+the cancellation DELETE. Metadata reads use the JSON object endpoint and media reads
+use `alt=media`, while deletes use the same JSON object endpoint. The adapter accepts
+session URIs only from `storage.googleapis.com` and never exposes their query
+strings. It streams in 256 KiB chunks with at most two chunks buffered, verifies the
+expected SHA-256 with the Workers `crypto.DigestStream` before the final commit, and
+sends a whole-object CRC32C in the final `x-goog-hash` header for server validation.
+HTTP 412 at initiation or final commit maps to the native R2 `null` result. The
+import pipeline then HEADs and verifies the winning canonical object before returning
+an idempotent 200 response.
 
 All storage access, including raw-source verification during activation, passes
 through `getStores()`. `scripts/probe-r2-s3-adapter.mjs` proves legacy R2, Backblaze,
-and GCS configuration; SigV4 region/service scope; URL encoding; bounded resumable
-chunk ranges; unsigned GCS session requests; atomic generation-zero creation;
-metadata and Unicode fidelity; SHA-256 and CRC32C handling; 404 and 412 mapping;
-session-URI and credential redaction; native fallback; and removal of the
-direct-binding bypass without network access.
+and GCS configuration; OAuth JWT/token caching; JSON resumable initiation; URL
+encoding; bounded resumable chunk ranges; unsigned GCS session requests; atomic
+generation-zero creation; metadata and Unicode fidelity; SHA-256 and CRC32C
+handling; 404 and 412 mapping; session-URI and credential redaction; native
+fallback; and removal of the direct-binding bypass without network access.
 
 The first remote Backblaze canary remains blocked until operators provide the RAW
 bucket, DATA bucket, bucket region and endpoint, plus a dedicated canary application
@@ -1009,14 +1007,12 @@ documentation does not document `If-None-Match: *`; therefore remote write-once
 behavior remains UNPROVEN until a credentialed canary confirms create and conflict
 behavior.
 
-The first remote GCS canary remains blocked until an operator links a billing account
-eligible for the Always Free tier, creates two private Standard buckets in `us-east1`,
-creates a dedicated service account restricted to object read/create/delete/list on
-only those buckets, creates an HMAC key for that service account, and supplies the two
-bucket names plus the HMAC access ID and secret as canary Worker secrets. No bucket,
-HMAC key, Worker secret, deployment, or production configuration was created by this
-change. Rollback is to disable `S3_ENABLED` (or legacy `R2_S3_ENABLED`) and remove the
-corresponding canary Worker secrets.
+The first remote GCS canary requires two private Standard buckets in `us-east1`, a
+dedicated service account restricted to object read/create/delete/list on only those
+buckets, and one service-account JSON credential installed as the canary
+`GCS_SERVICE_ACCOUNT_JSON` Worker secret. The private key is never stored in the
+repository. Rollback is to disable `S3_ENABLED` (or legacy `R2_S3_ENABLED`) and
+remove the corresponding canary Worker secret.
 
 ## Canary Client Mutation Header & Redirect Hygiene — 2026-09-15
 

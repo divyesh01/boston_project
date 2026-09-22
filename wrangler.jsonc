@@ -46,7 +46,7 @@
     "S3_DATA_BUCKET": "rri-data-production-divyesh-2026-0918"
   },
   "secrets": {
-    "required": ["PASSWORD_PEPPER_V1", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"]
+    "required": ["PASSWORD_PEPPER_V1", "GCS_SERVICE_ACCOUNT_JSON"]
   },
   "observability": {
     "enabled": true,

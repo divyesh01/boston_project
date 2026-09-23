@@ -989,7 +989,10 @@ expected SHA-256 with the Workers `crypto.DigestStream` before the final commit,
 sends a whole-object CRC32C in the final `x-goog-hash` header for server validation.
 HTTP 412 at initiation or final commit maps to the native R2 `null` result. The
 import pipeline then HEADs and verifies the winning canonical object before returning
-an idempotent 200 response.
+an idempotent 200 response. The default OAuth fetch callback wraps `globalThis.fetch`
+so workerd invokes it with the required global receiver; explicitly injected fetch
+callbacks remain unchanged. The adapter probe covers both paths after a live canary
+diagnostic reproduced workerd's `Illegal invocation` for the unbound default.
 
 All storage access, including raw-source verification during activation, passes
 through `getStores()`. `scripts/probe-r2-s3-adapter.mjs` proves legacy R2, Backblaze,
@@ -997,7 +1000,8 @@ and GCS configuration; OAuth JWT/token caching; JSON resumable initiation; URL
 encoding; bounded resumable chunk ranges; unsigned GCS session requests; atomic
 generation-zero creation; metadata and Unicode fidelity; SHA-256 and CRC32C
 handling; 404 and 412 mapping; session-URI and credential redaction; native
-fallback; and removal of the direct-binding bypass without network access.
+fallback; default-fetch receiver safety; injected-fetch preservation; and removal of
+the direct-binding bypass without network access.
 
 The first remote Backblaze canary remains blocked until operators provide the RAW
 bucket, DATA bucket, bucket region and endpoint, plus a dedicated canary application

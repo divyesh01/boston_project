@@ -973,5 +973,79 @@ for (const operation of ["head", "get"]) {
   check(tokenRequests === 1, "adapter uses the cached OAuth token");
 }
 
+{
+  const originalFetch = globalThis.fetch;
+  let receiverCalls = 0;
+  let receivedThis = null;
+
+  globalThis.fetch = function receiverSensitiveFetch(url, init = {}) {
+    receiverCalls += 1;
+    receivedThis = this;
+    if (this !== globalThis) {
+      throw new TypeError("Illegal invocation");
+    }
+    if (String(url) === "https://oauth2.googleapis.com/token") {
+      return new Response(JSON.stringify({ access_token: oauthAccessTokenFixture, expires_in: 3600 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({
+      name: "default-receiver-key",
+      size: "12",
+      etag: "receiver-safe-etag",
+      updated: "2026-09-22T13:30:33.000Z",
+      contentType: "text/plain",
+      metadata: { receiver: "safe" },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  try {
+    const defaultClient = new GcsJsonClient({
+      serviceAccountJson: GCS_ENV.GCS_SERVICE_ACCOUNT_JSON,
+      now: () => new Date("2026-09-22T13:30:33.000Z"),
+    });
+
+    const token = await defaultClient.accessToken();
+    check(token === oauthAccessTokenFixture, "default-fetch path acquires OAuth token without illegal invocation");
+    check(receivedThis === globalThis, "default-fetch path preserves globalThis as receiver");
+
+    const headResponse = await defaultClient.fetch("https://storage.googleapis.com/rri-data-canary-gcs/default-receiver-key", { method: "HEAD" });
+    check(headResponse.ok, "default-fetch path HEAD succeeds with receiver-safe fetch");
+    check(headResponse.headers.get("x-goog-meta-receiver") === "safe", "default-fetch path exposes metadata");
+
+    const store = resolveR2S3Stores(GCS_ENV, {
+      digestFactory: nodeDigestFactory,
+    }).rawStore;
+    const headObj = await store.head("default-receiver-key");
+    check(headObj?.etag === "receiver-safe-etag" && headObj?.customMetadata?.receiver === "safe", "resolveR2S3Stores default-fetch path is receiver-safe");
+
+    let injectedCalls = 0;
+    const injectedTokenFetch = async (url) => {
+      injectedCalls += 1;
+      if (String(url) === "https://oauth2.googleapis.com/token") {
+        return new Response(JSON.stringify({ access_token: "probe-chain-secret", expires_in: 3600 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    };
+
+    const injectedClient = new GcsJsonClient({
+      serviceAccountJson: GCS_ENV.GCS_SERVICE_ACCOUNT_JSON,
+      tokenFetch: injectedTokenFetch,
+      now: () => new Date("2026-09-22T13:30:33.000Z"),
+    });
+    const priorReceiverCalls = receiverCalls;
+    const injectedToken = await injectedClient.accessToken();
+    check(injectedToken === "probe-chain-secret", "explicit injected tokenFetch behavior remains intact");
+    check(injectedCalls === 1, "explicit injected tokenFetch is called directly");
+    check(receiverCalls === priorReceiverCalls, "explicit injected tokenFetch does not call default fetch");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 console.log(`PASSED: R2, Backblaze B2, and GCS object-storage adapter probe (${assertions} assertions)`);
 process.exitCode = assertions > 0 ? 0 : 1;

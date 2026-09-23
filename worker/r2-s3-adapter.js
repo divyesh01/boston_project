@@ -429,7 +429,7 @@ export class GcsJsonClient {
   constructor({ serviceAccountJson, endpoint = GCS_ENDPOINT, tokenFetch, now }) {
     this.serviceAccountJson = serviceAccountJson;
     this.endpoint = endpoint;
-    this.tokenFetch = tokenFetch || globalThis.fetch;
+    this.tokenFetch = tokenFetch || ((url, init) => globalThis.fetch(url, init));
     this.now = now || (() => new Date());
     this.cachedToken = null;
     this.tokenPromise = null;

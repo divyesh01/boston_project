@@ -426,6 +426,10 @@ committed — the exact transient-file failure it exists to remove. There is now
 negation, `!src/lib/__fixtures__/**/*.csv`; `scripts/data/*.csv` and every other CSV in the
 tree stay ignored. Verify with `git check-ignore -v <path>`.
 
+`fixtureText()` normalizes fixture line endings to LF when reading. This makes its generated
+CRLF cases independent of Git's Windows checkout conversion and prevents CRCRLF input while
+keeping the CRLF file-hash variation explicit in the tests.
+
 ### What the mutation harness proves
 
 A suite that cannot tell the correct parser from a plausibly broken one is decoration.

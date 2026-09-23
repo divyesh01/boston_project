@@ -104,7 +104,7 @@ const FIXTURE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "__f
 
 /** @param {string} name */
 function fixtureText(name) {
-  return readFileSync(path.join(FIXTURE_DIR, name), "utf8");
+  return readFileSync(path.join(FIXTURE_DIR, name), "utf8").replace(/\r\n/g, "\n");
 }
 
 /**

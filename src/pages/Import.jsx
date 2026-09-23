@@ -14,7 +14,7 @@ import { withActionTimeout } from "@/lib/actionTimeout";
 import ResponsiveSelect from "@/components/ui/ResponsiveSelect";
 import { useAuth } from "@/lib/AuthContext";
 import { getCsrfToken, validateCsrfToken, rotateCsrfToken, sha256File } from "@/lib/securityUtils";
-import { importRateLimiter, destructiveActionRateLimiter } from "@/lib/rateLimiters";
+import { destructiveActionRateLimiter } from "@/lib/rateLimiters";
 import {
   getQueueMetrics,
   confirmForceImportToggle,
@@ -41,6 +41,7 @@ import {
   fetchPendingRawArchives,
   downloadOriginalFile,
   downloadRawArchiveFromServer,
+  deleteBundleOnServer,
 } from "@/lib/bulkImportPipeline";
 
 // Per-import undo. Deletes exactly the rows one import created, via the
@@ -113,16 +114,13 @@ function UndoImportButton({ upload: u, disabled, onDone }) {
     setError("");
     try {
       const res = u.bulk_import_id
-        ? await fetch('/api/bulk-import/delete', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ bundle_id: u.bulk_import_id, server_property_id: u.property_id }),
-        }).then(async response => {
-          if (!response.ok) throw new Error('Bundle removal failed; retry Undo');
-          const { syncBulkBundles } = await import('@/lib/bulkHydrationService');
-          await syncBulkBundles({ force: true, propertyId: u.property_id });
-          return { success: true, error: null };
-        })
+        ? await deleteBundleOnServer({ bundleId: u.bulk_import_id, serverPropertyId: u.property_id })
+          .then(async () => {
+            const { syncBulkBundles } = await import('@/lib/bulkHydrationService');
+            await syncBulkBundles({ force: true, propertyId: u.property_id });
+            return { success: true, error: null };
+          })
+          .catch((err) => ({ success: false, error: err.message || 'Bundle removal failed; retry Undo' }))
         : await rollbackImportSession(u.import_id);
       if (!res.success) {
         setError(res.error || "Undo failed");
@@ -587,7 +585,7 @@ export default function Import() {
           originalPropertyId: scanPid,
           originalPropertyName: scanPname,
           projectedWrites: admission.projectedWrites,
-          isBudgetBlocked: !admission.admitted,
+          isBudgetBlocked: isBulk ? false : !admission.admitted,
           budgetReason: admission.rejectionReason,
         } : q)));
       } catch (e) {
@@ -636,7 +634,7 @@ export default function Import() {
         originalPropertyId: q.originalPropertyId || q.propertyId,
         originalPropertyName: q.originalPropertyName || q.propertyName,
         projectedWrites: admission.projectedWrites,
-        isBudgetBlocked: !admission.admitted,
+        isBudgetBlocked: isBulk ? false : !admission.admitted,
         budgetReason: admission.rejectionReason,
       } : q)));
     } catch (e) {
@@ -646,7 +644,8 @@ export default function Import() {
 
   const importSingle = async (item, { isBatch = false } = {}) => {
     if (!item.scan || item.status === "done") return null;
-    if (item.isBudgetBlocked) {
+    const isBulk = isBulkImportEligible(item.scan?.type || type);
+    if (item.isBudgetBlocked && !isBulk) {
       const msg = item.budgetReason || "File exceeds safe database write allowance for Free plan (~80k writes/day).";
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: msg } : q)));
       return { name: item.name, ok: false, error: msg };
@@ -761,16 +760,6 @@ export default function Import() {
     }
     const effPropertyId = eff.id;
     const effPropertyName = eff.name;
-    // Rate limiting for imports (single import checks; batch import checks once
-    // at batch level). Uses the IMPORT domain limiter — never the shared
-    // security limiter, which caused false 58-minute lockouts on routine work.
-    if (!isBatch) {
-      const rateLimit = importRateLimiter.check();
-      if (!rateLimit.allowed) {
-        setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: `Rate limited. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` } : q)));
-        return null;
-      }
-    }
     // CSRF validation
     const csrfToken = getCsrfToken();
     if (!validateCsrfToken(csrfToken)) {
@@ -944,11 +933,12 @@ export default function Import() {
     // Include retryable failures: files that scanned fine but failed to import
     // (e.g. the old "propertyId is required" queue) carry scan data and can be
     // retried now that a property resolves — without forcing a re-upload.
-    const blocked = queue.filter((q) => (q.status === "ready" || q.status === "error") && q.scan && q.isBudgetBlocked);
+    const isCloudBulk = (q) => isBulkImportEligible(q.scan?.type || type);
+    const blocked = queue.filter((q) => (q.status === "ready" || q.status === "error") && q.scan && q.isBudgetBlocked && !isCloudBulk(q));
     if (blocked.length > 0 && !importingRef.current && !importing) {
       alert(`Cannot import: ${blocked.length} file(s) exceed the safe Free plan database write allowance (~80,000 writes/day).`);
     }
-    const pending = queue.filter((q) => (q.status === "ready" || q.status === "error") && q.scan && !q.isBudgetBlocked);
+    const pending = queue.filter((q) => (q.status === "ready" || q.status === "error") && q.scan && (!q.isBudgetBlocked || isCloudBulk(q)));
     if (!pending.length || importingRef.current || importing) return;
 
     // Check if any pending items require explicit reassignment
@@ -1035,12 +1025,6 @@ export default function Import() {
       return;
     }
 
-    // Rate limiting - UI batch action level
-    const rateLimit = importRateLimiter.check();
-    if (!rateLimit.allowed) {
-      alert(`Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`);
-      return;
-    }
     // CSRF validation
     const csrfToken = getCsrfToken();
     if (!validateCsrfToken(csrfToken)) {
@@ -1163,9 +1147,10 @@ export default function Import() {
     batchImported,
     batchExcluded,
   } = getQueueMetrics(queue);
-  const retryableCount = queue.filter((q) => q.status === "error" && q.scan && !q.isBudgetBlocked).length;
-  const readyCount = queue.filter((q) => q.status === "ready" && q.scan && !q.isBudgetBlocked).length + retryableCount;
-  const budgetBlockedCount = queue.filter((q) => q.isBudgetBlocked).length;
+  const isCloudBulk = (q) => isBulkImportEligible(q.scan?.type || type);
+  const retryableCount = queue.filter((q) => q.status === "error" && q.scan && (!q.isBudgetBlocked || isCloudBulk(q))).length;
+  const readyCount = queue.filter((q) => q.status === "ready" && q.scan && (!q.isBudgetBlocked || isCloudBulk(q))).length + retryableCount;
+  const budgetBlockedCount = queue.filter((q) => q.isBudgetBlocked && !isCloudBulk(q)).length;
 
   const handleRetrySingle = async (item) => {
     let targetItem = item;
@@ -1595,12 +1580,20 @@ export default function Import() {
                       <span className="truncate">{q.name}</span>
                     </span>
                     <span className="flex shrink-0 items-center gap-2">
-                      {q.isBudgetBlocked && (
+                      {q.isBudgetBlocked && !isBulkImportEligible(q.scan?.type || type) && (
                         <span
                           className="rounded-full bg-[#FF6B6B]/15 px-2.5 py-0.5 text-xs text-[#FF6B6B]"
                           title={q.budgetReason}
                         >
                           ⚠ Exceeds write budget (~{q.projectedWrites?.toLocaleString()} writes)
+                        </span>
+                      )}
+                      {(!q.isBudgetBlocked || isBulkImportEligible(q.scan?.type || type)) && q.budgetReason && (
+                        <span
+                          className="rounded-full bg-amber-500/15 px-2.5 py-0.5 text-xs text-amber-400"
+                          title={q.budgetReason}
+                        >
+                          ⚠ Estimated writes (~{q.projectedWrites?.toLocaleString()} writes)
                         </span>
                       )}
                       <span
@@ -1635,10 +1628,10 @@ export default function Import() {
                             const r = await runSingleItem(q);
                             if (r) { setResults((prev) => [...prev, r]); refetch(); }
                           }}
-                          disabled={importing || q.isBudgetBlocked}
-                          title={q.isBudgetBlocked ? q.budgetReason : "Import"}
+                          disabled={importing || (q.isBudgetBlocked && !isBulkImportEligible(q.scan?.type || type))}
+                          title={(q.isBudgetBlocked && !isBulkImportEligible(q.scan?.type || type)) ? q.budgetReason : "Import"}
                           className={`rounded-lg px-3 py-1 text-xs transition-colors disabled:opacity-40 ${
-                            q.isBudgetBlocked
+                            (q.isBudgetBlocked && !isBulkImportEligible(q.scan?.type || type))
                               ? "bg-slate-700 text-slate-400 cursor-not-allowed"
                               : "bg-[#6C63FF]/20 text-[#6C63FF] hover:bg-[#6C63FF]/35"
                           }`}

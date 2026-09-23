@@ -64,15 +64,16 @@ export async function compressPayloadGzip(payloadString) {
     const writing = (async () => { await writer.write(bytes); await writer.close(); })();
     void writing.catch(() => {});
     const chunks = [];
+    let totalLen = 0;
     const reader = cs.readable.getReader();
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       chunks.push(value);
-      if (chunks.reduce((n, c) => n + c.byteLength, 0) > 64 * 1024 * 1024) throw new Error("Decoded bundle too large");
+      totalLen += value.byteLength;
+      if (totalLen > 64 * 1024 * 1024) throw new Error("Decoded bundle too large");
     }
     await writing;
-    const totalLen = chunks.reduce((acc, c) => acc + c.byteLength, 0);
     const result = new Uint8Array(totalLen);
     let offset = 0;
     for (const chunk of chunks) {
@@ -95,15 +96,16 @@ export async function decompressPayloadGzip(buffer) {
     const writing = (async () => { await writer.write(bytes); await writer.close(); })();
     void writing.catch(() => {});
     const chunks = [];
+    let totalLen = 0;
     const reader = ds.readable.getReader();
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       chunks.push(value);
-      if (chunks.reduce((n, c) => n + c.byteLength, 0) > 64 * 1024 * 1024) throw new Error("Decoded bundle too large");
+      totalLen += value.byteLength;
+      if (totalLen > 64 * 1024 * 1024) throw new Error("Decoded bundle too large");
     }
     await writing;
-    const totalLen = chunks.reduce((acc, c) => acc + c.byteLength, 0);
     const result = new Uint8Array(totalLen);
     let offset = 0;
     for (const chunk of chunks) {
@@ -263,6 +265,11 @@ export function buildNormalizedBundle(scanResult, meta, bundleId) {
   };
 }
 
+export const JSON_MUTATION_HEADERS = Object.freeze({
+  'Content-Type': 'application/json',
+  'X-Requested-With': 'XMLHttpRequest',
+});
+
 /**
  * Check if file or normalized content is duplicate with server D1 manifest.
  * @param {{ serverPropertyId?: string, rawFileHash?: string | null, normalizedHash?: string | null }} [params]
@@ -271,7 +278,7 @@ export async function checkDuplicateServer({ serverPropertyId = '', rawFileHash 
   try {
     const res = await fetch('/api/bulk-import/check-duplicate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_MUTATION_HEADERS,
       body: JSON.stringify({
         server_property_id: serverPropertyId,
         raw_file_hash: rawFileHash,
@@ -292,7 +299,7 @@ export async function checkRawDuplicateServer({ serverPropertyId = '', rawFileHa
   try {
     const res = await fetch('/api/bulk-import/raw-check', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_MUTATION_HEADERS,
       body: JSON.stringify({
         server_property_id: serverPropertyId,
         raw_file_hash: rawFileHash,
@@ -320,6 +327,7 @@ export async function uploadRawArchiveToServer({
 }) {
   const headers = {
     'Content-Type': mimeType,
+    'X-Requested-With': 'XMLHttpRequest',
     'x-server-property-id': serverPropertyId,
     'x-report-type': reportType,
     'x-raw-hash': rawFileHash,
@@ -349,7 +357,7 @@ export async function uploadRawArchiveToServer({
 export async function recordRawArchiveOnServer(metadata) {
   const res = await fetch('/api/bulk-import/raw-archive', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_MUTATION_HEADERS,
     body: JSON.stringify(metadata),
   });
 
@@ -420,7 +428,7 @@ export async function downloadOriginalFile(archiveId, suggestedFileName) {
 export async function supersedeBundleOnServer({ oldBundleId, newBundleId }) {
   const res = await fetch('/api/bulk-import/supersede', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_MUTATION_HEADERS,
     body: JSON.stringify({ old_bundle_id: oldBundleId, new_bundle_id: newBundleId }),
   });
   if (!res.ok) {
@@ -438,13 +446,31 @@ export async function supersedeBundleOnServer({ oldBundleId, newBundleId }) {
 export async function destroyRawArchiveOnServer({ archiveId, confirmDestroy = false }) {
   const res = await fetch('/api/bulk-import/raw-destroy', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_MUTATION_HEADERS,
     body: JSON.stringify({ archive_id: archiveId, confirm_destroy: confirmDestroy }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     const err = /** @type {Error & { code?: string }} */ (new Error(body.error || `Destroy failed with status ${res.status}`));
     err.code = body.code || 'DESTROY_FAILED';
+    throw err;
+  }
+  return await res.json();
+}
+
+/**
+ * Delete bundle manifest on server.
+ */
+export async function deleteBundleOnServer({ bundleId, serverPropertyId }) {
+  const res = await fetch('/api/bulk-import/delete', {
+    method: 'POST',
+    headers: JSON_MUTATION_HEADERS,
+    body: JSON.stringify({ bundle_id: bundleId, server_property_id: serverPropertyId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = /** @type {Error & { code?: string }} */ (new Error(body.error || `Delete failed with status ${res.status}`));
+    err.code = body.code || 'DELETE_FAILED';
     throw err;
   }
   return await res.json();
@@ -468,6 +494,7 @@ export async function uploadBundleToServer({
     headers: {
       'Content-Type': 'application/x-ndjson',
       'Content-Encoding': 'gzip',
+      'X-Requested-With': 'XMLHttpRequest',
       'x-server-property-id': serverPropertyId,
       'x-report-type': reportType,
       'x-raw-hash': rawFileHash,
@@ -495,7 +522,7 @@ export async function uploadBundleToServer({
 export async function activateBundleOnServer(metadata) {
   const res = await fetch('/api/bulk-import/activate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_MUTATION_HEADERS,
     body: JSON.stringify(metadata),
   });
 
@@ -610,8 +637,14 @@ export async function executeBulkImport(scanResult, meta = {}) {
   let bundleId = rawArchiveId || `imp_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
   const bundle = buildNormalizedBundle(scanResult, meta, bundleId);
 
-  // Compute normalized hash
-  const normalizedHash = await contentHash(normalizedContent(bundle.ndjson.split("\n").filter(Boolean).map(line => JSON.parse(line))));
+  // Compute normalized hash without duplicating huge arrays/strings:
+  const items = [];
+  for (const [entity, rows] of Object.entries(bundle.recordsByEntity)) {
+    for (const row of rows) {
+      items.push({ entity, row });
+    }
+  }
+  const normalizedHash = await contentHash(normalizedContent(items));
 
   // Gzip compression
   const compressedBuffer = await compressPayloadGzip(bundle.ndjson);

@@ -728,6 +728,14 @@ Primary gates: `scripts/probe-d1-quota-auth-failure.mjs`, `scripts/probe-d1-quot
   - `scripts/probe-bulk-import-e2e.mjs`
   - `scripts/probe-bulk-import-mutations.mjs`
 
+### Import UI and request hardening — 2026-09-23
+
+- All nine mutating `/api/bulk-import/*` client requests send `X-Requested-With: XMLHttpRequest`; the Worker same-origin mutation check remains enabled.
+- The Import workflow no longer applies its client import-rate limiter. Cloud bulk imports treat the projected Free-plan D1 write budget as advisory; destructive-action throttling and server/provider quota errors remain enforced.
+- Existing file and memory ceilings remain in place: 50 MiB client parse/raw upload, 25 MiB compressed normalized bundle, 16 MiB decoded Worker bundle, and 64 MiB browser compression/decompression output.
+- These ceilings cannot be raised safely by changing constants alone. The client builds full normalized representations; the Worker buffers compressed bytes, decodes to text, splits/parses all rows, and sorts canonical rows before hashing. Streaming support must preserve those validation and normalized-hash semantics.
+- `scripts/probe-bulk-import-mutation-headers.mjs`, `src/lib/bulkImportPipeline.test.js`, and `src/pages/ImportBatch18Regression.test.jsx` cover the request headers, 18-file queue, duplicate behavior, retry/Import All, and role expectations.
+
 ## Permanent One-Shot Raw Archive & Immutable Historical Data Plane
 
 - **Core Architecture & Philosophy**:

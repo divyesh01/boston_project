@@ -49,14 +49,15 @@
  * would separate it. Left out of this commit deliberately, to keep the diff to the one
  * property it proves.
  *
- * HAZARD, stated because this probe creates a git lock file. <repo>/.git/index.lock is
- * created with an exclusive flag, is never created over an existing one, and is released in
+ * HAZARD, stated because this probe creates a git lock file. The Git-reported per-worktree
+ * `index.lock` path is created with an exclusive flag, is never created over an existing
+ * one, and is released in
  * section B's own finally, again in the outer finally, and again from the SIGINT/SIGTERM
  * handlers below — so a console Ctrl-C, the one interruption neither finally can reach, no
  * longer leaves it behind. What remains is a SIGKILL or a power loss, which nothing can
  * catch: that leaves the lock on disk, and every git command needing the index (commit,
- * add, checkout) then fails until <repo>/.git/index.lock is deleted; git prints that
- * remedy itself.
+ * add, checkout) then fails until the per-worktree `index.lock` path is deleted; git prints
+ * that remedy itself.
  *
  * MUST NOT be discovered by scripts/verify-all.mjs. It spawns a harness that rewrites a
  * tracked source file, and that sweep enforces its per-suite timeout with
@@ -80,13 +81,13 @@ import path from "node:path";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TARGET = "src/lib/transactionNorm.js"; // M11's file — the one the sweep really corrupted
 const HARNESS = "scripts/probe-hotelkey-mutations.mjs";
-const LOCK = path.join(ROOT, ".git", "index.lock");
 // Named, not inlined, because a kill this cap imposes has to be reported with the number
 // that caused it — otherwise the residue it produces reads as the harness's fault.
 const HARNESS_TIMEOUT_MS = 300000;
 const at = (p) => path.join(ROOT, p);
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const git = (args) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" });
+const LOCK = path.resolve(ROOT, git(["rev-parse", "--git-path", "index.lock"]).trim());
 
 // Read the bytes ONCE, before anything else runs, and hand exactly these back in the
 // finally at the bottom. This probe is the last line of defence: it must never be the
@@ -227,8 +228,8 @@ function rescuePristine() {
 }
 
 // A real console Ctrl-C reaches neither finally in this file, and it used to leave
-// <repo>/.git/index.lock behind — after which every git add / commit / checkout in this repo
-// fails until somebody deletes that file by hand — and could leave the harness's mutant on
+// the Git-reported per-worktree `index.lock` path behind — after which every git add / commit
+// / checkout in this repo fails until somebody deletes that file by hand — and could leave the harness's mutant on
 // disk as well. Both handlers therefore do the whole cleanup: release the lock, then run the
 // same non-destructive rescue the outer finally runs, then exit non-zero, because a run that
 // was interrupted proved nothing. The abort is recorded in `killNotes` BEFORE the rescue, so

@@ -429,6 +429,8 @@ tree stay ignored. Verify with `git check-ignore -v <path>`.
 `fixtureText()` normalizes fixture line endings to LF when reading. This makes its generated
 CRLF cases independent of Git's Windows checkout conversion and prevents CRCRLF input while
 keeping the CRLF file-hash variation explicit in the tests.
+The HotelKey crash-safety probe resolves its lock path with `git rev-parse --git-path
+index.lock`, so linked worktrees use their own Git index lock.
 
 ### What the mutation harness proves
 

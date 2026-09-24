@@ -1076,3 +1076,11 @@ The runner also sets `CI=1` for Wrangler child processes to prevent progress UI 
 Fresh-cohort state reads use direct Wrangler `--command` queries rather than temporary SQL files.
 The matrix also performs an in-memory fixture invariant check before dispatch; the authoritative D1 fixture insert remains the preceding remote mutation gate.
 Workflow success is classified from smoke/import/hydration/large stages; cleanup is reported separately so a cleanup-registry failure cannot masquerade as a workflow-capacity failure. Fixture deletion is batched into one account cascade.
+
+### Explicit Report Replacement and Lineage Resolution (2026-09-24)
+
+When `/api/bulk-import/activate` encounters an active manifest for the same property, report type, and overlapping period:
+1. It queries candidate overlapping manifests and returns HTTP 409 `IMPORT_REPLACEMENT_REQUIRED` with `existing_bundle_id`, `existing_bundle` metadata, and `candidates`.
+2. When the caller explicitly provides `supersedes_bundle_id` and `expected_revision`, the Worker validates that the predecessor exists, is active, belongs to the same property and account, and matches the expected revision (protecting against concurrent modifications with `IMPORT_LINEAGE_CONFLICT`).
+3. D1 batch execution inserts the new manifest, marks the predecessor `superseded` (`active = 0`, `superseded_by_bundle_id = <new_id>`), updates `raw_file_archive` (`bundle_id = <new_id>`, `status = 'processed'`), and increments `business_sync_state.revision`.
+4. Both raw archives remain intact in object storage for immutable auditing. Tested in `scripts/probe-bulk-import-replacement-flow.mjs`.

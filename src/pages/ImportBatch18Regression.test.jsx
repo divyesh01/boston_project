@@ -119,15 +119,24 @@ vi.mock("@/components/ui/ResponsiveSelect", () => ({
   ),
 }));
 
-// Mock executeBulkImport and deleteBundleOnServer
+// Mock executeBulkImport, deleteBundleOnServer, and replacement flow helpers
 const mockExecuteBulkImport = vi.fn();
 const mockDeleteBundleOnServer = vi.fn().mockResolvedValue({ ok: true });
+const mockFetchPendingRawArchives = vi.fn().mockResolvedValue([]);
+const mockDownloadRawArchiveFromServer = vi.fn();
+const mockFetchActiveManifests = vi.fn().mockResolvedValue([]);
+const mockFetchManifestById = vi.fn();
+
 vi.mock("@/lib/bulkImportPipeline", async (importOriginal) => {
   const actual = /** @type {Record<string, any>} */ (await importOriginal());
   return {
     ...actual,
     executeBulkImport: (...args) => mockExecuteBulkImport(...args),
     deleteBundleOnServer: (...args) => mockDeleteBundleOnServer(...args),
+    fetchPendingRawArchives: (...args) => mockFetchPendingRawArchives(...args),
+    downloadRawArchiveFromServer: (...args) => mockDownloadRawArchiveFromServer(...args),
+    fetchActiveManifests: (...args) => mockFetchActiveManifests(...args),
+    fetchManifestById: (...args) => mockFetchManifestById(...args),
   };
 });
 
@@ -158,6 +167,10 @@ describe("Import <=18-File Batch & Regression Coverage", () => {
       importId: "bulk-imp-1",
     });
     mockUploadedReportFilter.mockResolvedValue([]);
+    mockFetchPendingRawArchives.mockResolvedValue([]);
+    mockDownloadRawArchiveFromServer.mockReset();
+    mockFetchActiveManifests.mockResolvedValue([]);
+    mockFetchManifestById.mockReset();
   });
 
   it("allows a batch of 18 files without client throttle or budget block", async () => {
@@ -339,6 +352,210 @@ describe("Import <=18-File Batch & Regression Coverage", () => {
         expect.objectContaining({ type: "occupancy" }),
         expect.objectContaining({ propertyId: "prop-boston" })
       );
+    });
+  });
+
+  it("prompts explicit replacement dialog when report overlaps active import, and activates successfully with predecessor revision", async () => {
+    mockScanReport.mockResolvedValueOnce({
+      type: "hotel_statistics",
+      totalRows: 14,
+      rowsToImport: Array(14).fill({}),
+      sections: [{ name: "Revenue", rows: 14 }],
+      validation: { ok: true, findings: [] },
+    });
+
+    const overlapErr = Object.assign(new Error("Report overlaps an active import; select its replacement explicitly"), {
+      code: "IMPORT_REPLACEMENT_REQUIRED",
+      status: 409,
+      existing_bundle_id: "active_hotel_stats_prev",
+      existing_bundle: {
+        id: "active_hotel_stats_prev",
+        original_file_name: "Hotel Statistics (1).csv",
+        revision: 1,
+        row_count: 14,
+        min_date: "2026-08-01",
+        max_date: "2026-08-07",
+      },
+      candidates: [
+        {
+          id: "active_hotel_stats_prev",
+          original_file_name: "Hotel Statistics (1).csv",
+          revision: 1,
+          row_count: 14,
+          min_date: "2026-08-01",
+          max_date: "2026-08-07",
+        }
+      ]
+    });
+
+    mockExecuteBulkImport.mockRejectedValueOnce(overlapErr);
+
+    const { container } = render(<Import />);
+    const file = new File(["Date,Metric\n2026-08-01,ADR"], "Hotel Statistics.csv", { type: "text/csv" });
+    fireEvent.change(container.querySelector('input[type="file"]'), { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByText("Hotel Statistics.csv")).toBeDefined();
+    });
+
+    const importBtn = screen.getByRole("button", { name: /^import$/i });
+    fireEvent.click(importBtn);
+
+    // Dialog appears immediately for single import with explicit replacement details
+    await waitFor(() => {
+      expect(screen.getByText("Explicit Report Replacement Required")).toBeDefined();
+      expect(screen.getByText("Hotel Statistics (1).csv")).toBeDefined();
+      expect(screen.getByText(/Revision 1 · Active/i)).toBeDefined();
+    });
+
+    // Cancel dialog to verify the queue row retains the "Select Replacement Report" action
+    const cancelBtn = screen.getByRole("button", { name: /cancel/i });
+    fireEvent.click(cancelBtn);
+
+    await waitFor(() => {
+      expect(screen.queryByText("Explicit Report Replacement Required")).toBeNull();
+      expect(screen.getByText(/explicit replacement required/i)).toBeDefined();
+    });
+
+    // Re-open from the dedicated queue action button
+    const selectBtn = screen.getByRole("button", { name: /select replacement report/i });
+    expect(selectBtn).toBeDefined();
+    fireEvent.click(selectBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText("Explicit Report Replacement Required")).toBeDefined();
+    });
+
+    // Mock successful replacement activation
+    mockExecuteBulkImport.mockResolvedValueOnce({
+      ok: true,
+      bulk: true,
+      count: 14,
+      excluded: 0,
+      importId: "bulk-imp-replaced",
+    });
+
+    const confirmBtn = screen.getByRole("button", { name: /confirm & replace report/i });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(mockExecuteBulkImport).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "hotel_statistics" }),
+        expect.objectContaining({
+          supersedesBundleId: "active_hotel_stats_prev",
+          expectedRevision: 1,
+        })
+      );
+    });
+
+    // Dialog closes and item completes
+    await waitFor(() => {
+      expect(screen.queryByText("Explicit Report Replacement Required")).toBeNull();
+      expect(screen.getByText(/14 rows/i)).toBeDefined();
+    });
+  });
+
+  it("resumes server-archived original without device upload, resolves overlap conflict, and replaces predecessor", async () => {
+    const pendingArchive = {
+      id: "arch_source_1",
+      raw_archive_id: "arch_source_1",
+      server_property_id: "prop-boston",
+      report_type: "source",
+      original_file_name: "Source Summary (1).csv",
+      file_size: 433742,
+    };
+
+    mockFetchPendingRawArchives
+      .mockResolvedValueOnce([pendingArchive])
+      .mockResolvedValueOnce([]); // after replacement, cleared
+
+    mockDownloadRawArchiveFromServer.mockResolvedValueOnce({
+      buffer: new TextEncoder().encode("Date,Source\n2026-08-01,OTA"),
+      contentType: "text/csv",
+    });
+
+    mockScanReport.mockResolvedValueOnce({
+      type: "source",
+      totalRows: 50,
+      rowsToImport: Array(50).fill({}),
+      sections: [{ name: "Source", rows: 50 }],
+      validation: { ok: true, findings: [] },
+    });
+
+    const overlapErr = Object.assign(new Error("Report overlaps an active import; select its replacement explicitly"), {
+      code: "IMPORT_REPLACEMENT_REQUIRED",
+      status: 409,
+      existing_bundle_id: "active_source_summary_prev",
+      existing_bundle: {
+        id: "active_source_summary_prev",
+        original_file_name: "Source Summary.csv",
+        revision: 2,
+        row_count: 50,
+      },
+      candidates: [
+        {
+          id: "active_source_summary_prev",
+          original_file_name: "Source Summary.csv",
+          revision: 2,
+          row_count: 50,
+        }
+      ]
+    });
+
+    // First attempt from server resume triggers overlap conflict
+    mockExecuteBulkImport.mockRejectedValueOnce(overlapErr);
+
+    render(<Import />);
+
+    // UI finds the server-archived original
+    await waitFor(() => {
+      expect(screen.getByText(/Found 1 server-archived original file awaiting processing/i)).toBeDefined();
+      expect(screen.getByText(/These original files are safely stored in the R2 archive/i)).toBeDefined();
+    });
+
+    const resumeBtn = screen.getByRole("button", { name: /Resume Source Summary \(1\)\.csv \(source\)/i });
+    fireEvent.click(resumeBtn);
+
+    // Verify downloaded from server storage, zero local device upload
+    await waitFor(() => {
+      expect(mockDownloadRawArchiveFromServer).toHaveBeenCalledWith("arch_source_1");
+    });
+
+    // Dialog opens with zero re-upload notification
+    await waitFor(() => {
+      expect(screen.getByText("Explicit Report Replacement Required")).toBeDefined();
+      expect(screen.getByText(/Resuming safely from server storage\. Zero device re-upload required\./i)).toBeDefined();
+      expect(screen.getByText("Source Summary.csv")).toBeDefined();
+      expect(screen.getByText(/Revision 2 · Active/i)).toBeDefined();
+    });
+
+    // Confirm replacement
+    mockExecuteBulkImport.mockResolvedValueOnce({
+      ok: true,
+      bulk: true,
+      count: 50,
+      excluded: 0,
+      importId: "bulk-imp-resumed-replaced",
+    });
+
+    const confirmBtn = screen.getByRole("button", { name: /confirm & replace report/i });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(mockExecuteBulkImport).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "source" }),
+        expect.objectContaining({
+          supersedesBundleId: "active_source_summary_prev",
+          expectedRevision: 2,
+          resumeManifest: pendingArchive,
+        })
+      );
+    });
+
+    // Dialog closes and pending archives refreshed
+    await waitFor(() => {
+      expect(screen.queryByText("Explicit Report Replacement Required")).toBeNull();
+      expect(screen.queryByText(/awaiting processing/i)).toBeNull();
     });
   });
 });

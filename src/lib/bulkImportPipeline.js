@@ -516,6 +516,47 @@ export async function uploadBundleToServer({
 }
 
 /**
+ * Compute normalized content hash for identity version 2 bundles.
+ */
+export async function computeNormalizedHash(bundle) {
+  const items = [];
+  for (const [entity, rows] of Object.entries(bundle.recordsByEntity)) {
+    for (const row of rows) {
+      items.push({ entity, row });
+    }
+  }
+  return await contentHash(normalizedContent(items));
+}
+
+/**
+ * Fetch all currently active manifests for a given property.
+ */
+export async function fetchActiveManifests(serverPropertyId) {
+  try {
+    const url = new URL('/api/bulk-import/manifest', typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
+    if (serverPropertyId) url.searchParams.set('server_property_id', serverPropertyId);
+    const res = await fetch(url.toString());
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.manifests) ? data.manifests.filter((m) => m.status === 'active') : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Fetch active manifest by bundle ID.
+ */
+export async function fetchManifestById(serverPropertyId, bundleId) {
+  try {
+    const active = await fetchActiveManifests(serverPropertyId);
+    return active.find((m) => m.id === bundleId) || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Activate bundle manifest in D1.
  * Consumes exactly 3 D1 writes!
  */
@@ -528,8 +569,15 @@ export async function activateBundleOnServer(metadata) {
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    const err = /** @type {Error & { code?: string }} */ (new Error(body.error || `Activation failed with status ${res.status}`));
+    const err = /** @type {Error & { code?: string, status?: number, existing_bundle_id?: string, existing_bundle?: any, candidates?: any[], details?: any }} */ (
+      new Error(body.error || `Activation failed with status ${res.status}`)
+    );
     err.code = body.code || 'IMPORT_BUNDLE_ACTIVATION_FAILED';
+    err.status = res.status;
+    err.existing_bundle_id = body.existing_bundle_id;
+    err.existing_bundle = body.existing_bundle;
+    err.candidates = Array.isArray(body.candidates) ? body.candidates : (body.existing_bundle ? [body.existing_bundle] : []);
+    err.details = body;
     throw err;
   }
   return await res.json();
@@ -638,13 +686,7 @@ export async function executeBulkImport(scanResult, meta = {}) {
   const bundle = buildNormalizedBundle(scanResult, meta, bundleId);
 
   // Compute normalized hash without duplicating huge arrays/strings:
-  const items = [];
-  for (const [entity, rows] of Object.entries(bundle.recordsByEntity)) {
-    for (const row of rows) {
-      items.push({ entity, row });
-    }
-  }
-  const normalizedHash = await contentHash(normalizedContent(items));
+  const normalizedHash = await computeNormalizedHash(bundle);
 
   // Gzip compression
   const compressedBuffer = await compressPayloadGzip(bundle.ndjson);
@@ -661,6 +703,12 @@ export async function executeBulkImport(scanResult, meta = {}) {
   });
 
   let supersedesBundleId = requestedPredecessor, expectedRevision = requestedRevision;
+  if (supersedesBundleId && expectedRevision == null) {
+    const predecessorManifest = await fetchManifestById(propertyId, supersedesBundleId);
+    if (predecessorManifest) {
+      expectedRevision = predecessorManifest.revision;
+    }
+  }
   if (forceImport && !supersedesBundleId) {
     let revision = 0, afterId = '';
     const candidates = [];
@@ -681,26 +729,37 @@ export async function executeBulkImport(scanResult, meta = {}) {
   if (supersedesBundleId === bundleId) bundleId = `raw_${crypto.randomUUID()}`;
 
   // Compact D1 activation (Updates raw_archived row, 3 D1 rows written)
-  const activationResult = await activateBundleOnServer({
-    id: bundleId,
-    source_archive_id: rawArchiveId,
-    server_property_id: propertyId,
-    report_type: scanResult.type,
-    raw_file_hash: rawFileHash,
-    normalized_hash: normalizedHash,
-    object_key: uploadResult.object_key,
-    schema_version: 1,
-    identity_version: 2,
-    supersedes_bundle_id: supersedesBundleId,
-    expected_revision: expectedRevision,
-    row_count: bundle.totalRowCount,
-    entity_counts: bundle.entityCounts,
-    min_date: bundle.minDate,
-    max_date: bundle.maxDate,
-    original_file_name: sourceFile,
-    file_size: bundle.ndjson.length,
-    compressed_size: compressedBuffer.byteLength,
-  });
+  let activationResult;
+  try {
+    activationResult = await activateBundleOnServer({
+      id: bundleId,
+      source_archive_id: rawArchiveId,
+      server_property_id: propertyId,
+      report_type: scanResult.type,
+      raw_file_hash: rawFileHash,
+      normalized_hash: normalizedHash,
+      object_key: uploadResult.object_key,
+      schema_version: 1,
+      identity_version: 2,
+      supersedes_bundle_id: supersedesBundleId,
+      expected_revision: expectedRevision,
+      row_count: bundle.totalRowCount,
+      entity_counts: bundle.entityCounts,
+      min_date: bundle.minDate,
+      max_date: bundle.maxDate,
+      original_file_name: sourceFile,
+      file_size: bundle.ndjson.length,
+      compressed_size: compressedBuffer.byteLength,
+    });
+  } catch (err) {
+    if (err.code === 'IMPORT_REPLACEMENT_REQUIRED') {
+      err.raw_archive_id = rawArchiveId;
+      err.bundle_id = bundleId;
+      err.scanResult = scanResult;
+      err.normalizedHash = normalizedHash;
+    }
+    throw err;
+  }
 
   const { syncBulkBundles } = await import('./bulkHydrationService.js');
   try {

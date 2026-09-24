@@ -794,4 +794,26 @@ Financial settings (taxes, OTA commission rates, CC processing fees, alert thres
 6. **Downstream Financial Recalculation**:
    Updates to settings trigger automatic cache invalidation of financial queries (`payments`, `sources`, `occupancy`, `gross`, `daily-aggregates`) and schedule an asynchronous rebuild of `DailyFinancialAggregate` in IndexedDB via `rebuildDailyAggregates({ propertyId: "all" })`, guaranteeing 100% mathematical consistency across all devices.
 
+---
+
+## 56. Explicit Report Replacement Flow & Server Archive Resume (2026-09-24)
+
+When uploading or resuming reports that overlap an active analytical period for the property (e.g. `Hotel Statistics.csv` or `Source Summary (1).csv`), the application enforces financial ledger integrity and explicit lineage tracking:
+
+1. **Guarded Overlap Detection & Candidate Resolution**:
+   - When `/api/bulk-import/activate` encounters an active manifest covering the same report type and date range, the Worker returns HTTP 409 `IMPORT_REPLACEMENT_REQUIRED` along with `existing_bundle_id`, `existing_bundle` metadata, and candidate active manifests.
+   - `activateBundleOnServer` preserves this metadata and throws an enriched error with `code: 'IMPORT_REPLACEMENT_REQUIRED'`.
+
+2. **Explicit Report Replacement Dialog (`ReportReplacementDialog`)**:
+   - In `src/pages/Import.jsx`, catching `IMPORT_REPLACEMENT_REQUIRED` opens a dedicated Radix UI modal.
+   - The dialog presents the incoming version card (file name, report type, row count, date ranges) and radio-button selection of conflicting active report candidates (revision, active date ranges, row counts).
+   - Requires explicit operator choice; automatic silent replacement is strictly prohibited.
+
+3. **Zero-Device-Upload Server Archive Resume**:
+   - When server-archived originals await processing in R2 storage, `handleResumePending` downloads the original raw bytes via `downloadRawArchiveFromServer(archiveId)` and resumes processing.
+   - If an overlap conflict is encountered, `ReportReplacementDialog` opens with the banner: `⚡ Resuming safely from server storage. Zero device re-upload required.`
+   - Confirming replacement submits `supersedesBundleId` and `expectedRevision` to `executeBulkImport` and `activateBundleOnServer`.
+   - The backend marks the predecessor manifest as `superseded` and activates the new manifest atomically while keeping both raw archives 100% intact.
+   - Covered by `scripts/probe-bulk-import-replacement-flow.mjs` and `src/pages/ImportBatch18Regression.test.jsx`.
+
 

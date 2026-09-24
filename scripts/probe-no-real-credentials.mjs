@@ -254,6 +254,9 @@ const ALLOWED_TEST_FIXTURES = new Map([
   ['GM-Secure-Pass-1!', 'probe-cross-browser-sync-e2e.mjs GM fixture'],
   ['Attacker-Pass-1!', 'probe-cross-browser-sync-e2e.mjs attacker fixture'],
   ['GM-Property-Access-Probe-1!', 'probe-gm-property-access.mjs test user fixture'],
+  ['test-oauth-token', 'probe-r2-s3-adapter.mjs GCS OAuth mock fixture'],
+  ['mock-gcs-oauth-token', 'probe-r2-s3-adapter.mjs GCS OAuth mock fixture'],
+  ['test-token', 'probe-r2-s3-adapter.mjs GCS OAuth mock fixture'],
 ]);
 
 const credOffenders = [];

@@ -860,7 +860,19 @@ async function activateBundle(request, env, scope) {
   const overlap = await queryFirst(env, `SELECT id FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND report_type=?
     AND status='active' AND id<>? AND (raw_file_hash=? OR (min_date<=? AND max_date>=?)) LIMIT 1`,
     [scope.accountId, propertyId, String(body.report_type || ''), predecessorId || '', rawHash, maxDate || '', minDate || '']);
-  if (overlap) throw new BulkImportError('Report overlaps an active import; select its replacement explicitly', 409, { code: 'IMPORT_REPLACEMENT_REQUIRED', existing_bundle_id: overlap.id });
+  if (overlap) {
+    const overlaps = await queryAll(env, `SELECT id, revision, original_file_name, report_type, min_date, max_date, created_at, activated_at, row_count, raw_file_hash
+      FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND report_type=?
+      AND status='active' AND id<>? AND (raw_file_hash=? OR (min_date<=? AND max_date>=?)) ORDER BY revision DESC LIMIT 5`,
+      [scope.accountId, propertyId, String(body.report_type || ''), predecessorId || '', rawHash, maxDate || '', minDate || '']);
+    const first = overlaps[0] || overlap;
+    throw new BulkImportError('Report overlaps an active import; select its replacement explicitly', 409, {
+      code: 'IMPORT_REPLACEMENT_REQUIRED',
+      existing_bundle_id: first.id,
+      existing_bundle: first,
+      candidates: overlaps.length > 0 ? overlaps : [first],
+    });
+  }
   const state = await queryFirst(env, 'SELECT revision FROM business_sync_state WHERE account_id=?', [scope.accountId]);
   if (!state) throw new BulkImportError('Sync state is not initialized', 409);
   const revision = Number(state.revision) + 1;

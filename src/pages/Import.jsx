@@ -36,12 +36,22 @@ import {
   FREE_PLAN_SAFE_IMPORT_BUDGET,
 } from "@/lib/d1WriteBudget";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
   isBulkImportEligible,
   executeBulkImport,
   fetchPendingRawArchives,
   downloadOriginalFile,
   downloadRawArchiveFromServer,
   deleteBundleOnServer,
+  fetchActiveManifests,
+  fetchManifestById,
 } from "@/lib/bulkImportPipeline";
 
 // Per-import undo. Deletes exactly the rows one import created, via the
@@ -328,6 +338,9 @@ export default function Import() {
   const [checkingImports, setCheckingImports] = useState(false);
   const [pendingRawArchives, setPendingRawArchives] = useState([]);
   const [resumingArchiveId, setResumingArchiveId] = useState(null);
+  const [replacementConflict, setReplacementConflict] = useState(null);
+  const [replacementLoading, setReplacementLoading] = useState(false);
+  const [replacementError, setReplacementError] = useState(null);
 
   const accessibleProperties = useMemo(
     () => properties.filter((p) => canAccessProperty(p.id)),
@@ -443,23 +456,112 @@ export default function Import() {
         csvText,
         rawBytes: buffer,
       });
-      await executeBulkImport(scan, {
-        propertyId: pendingItem.server_property_id,
-        propertyName: selectedProperty?.name || "",
-        importId: pendingItem.id,
-        sourceFile: pendingItem.original_file_name,
-        forceImport: true,
-        rawBytes: buffer,
-        resumeManifest: pendingItem,
-      });
-      const updated = await fetchPendingRawArchives(pendingItem.server_property_id);
-      setPendingRawArchives(updated || []);
-      refreshAggregates(pendingItem.server_property_id);
-      refetch();
+      try {
+        await executeBulkImport(scan, {
+          propertyId: pendingItem.server_property_id,
+          propertyName: selectedProperty?.name || "",
+          importId: pendingItem.id,
+          sourceFile: pendingItem.original_file_name,
+          forceImport: true,
+          rawBytes: buffer,
+          resumeManifest: pendingItem,
+        });
+        const updated = await fetchPendingRawArchives(pendingItem.server_property_id);
+        setPendingRawArchives(updated || []);
+        refreshAggregates(pendingItem.server_property_id);
+        refetch();
+      } catch (innerErr) {
+        if (innerErr.code === 'IMPORT_REPLACEMENT_REQUIRED') {
+          let candidates = innerErr.candidates || (innerErr.existing_bundle ? [innerErr.existing_bundle] : []);
+          if (!candidates.length && innerErr.existing_bundle_id) {
+            const manifest = await fetchManifestById(pendingItem.server_property_id, innerErr.existing_bundle_id);
+            if (manifest) candidates = [manifest];
+          }
+          if (!candidates.length) {
+            candidates = await fetchActiveManifests(pendingItem.server_property_id);
+            candidates = candidates.filter((m) => m.report_type === pendingItem.report_type);
+          }
+          setReplacementError(null);
+          setReplacementConflict({
+            isResume: true,
+            item: pendingItem,
+            scan,
+            rawBytes: buffer,
+            propertyId: pendingItem.server_property_id,
+            propertyName: selectedProperty?.name || "",
+            sourceFile: pendingItem.original_file_name,
+            incoming: {
+              fileName: pendingItem.original_file_name,
+              reportType: pendingItem.report_type,
+              rowCount: scan.totalRows || 0,
+              minDate: scan.minDate || pendingItem.min_date || "",
+              maxDate: scan.maxDate || pendingItem.max_date || "",
+            },
+            candidates,
+            selectedCandidateId: candidates[0]?.id || innerErr.existing_bundle_id,
+          });
+          return;
+        }
+        throw innerErr;
+      }
     } catch (e) {
       alert(`Resume failed: ${e.message}`);
     } finally {
       setResumingArchiveId(null);
+    }
+  };
+
+  const handleConfirmReplacement = async () => {
+    if (!replacementConflict) return;
+    setReplacementLoading(true);
+    setReplacementError(null);
+    try {
+      const selectedCandidate = replacementConflict.candidates.find(
+        (c) => c.id === replacementConflict.selectedCandidateId
+      ) || replacementConflict.candidates[0];
+
+      if (!selectedCandidate) {
+        throw new Error("No active report selected to replace.");
+      }
+
+      const { scan, propertyId: effPropertyId, propertyName: effPropertyName, sourceFile, rawBytes, isResume, item } = replacementConflict;
+
+      const result = await executeBulkImport(scan, {
+        propertyId: effPropertyId,
+        propertyName: effPropertyName,
+        importId: isResume ? (item.raw_archive_id || item.id) : item?.importId,
+        sourceFile,
+        forceImport: true,
+        rawBytes,
+        resumeManifest: isResume ? item : null,
+        supersedesBundleId: selectedCandidate.id,
+        expectedRevision: selectedCandidate.revision,
+      });
+
+      // Refresh pending archives
+      const updated = await fetchPendingRawArchives(effPropertyId);
+      setPendingRawArchives(updated || []);
+
+      // Refresh aggregates and history
+      refreshAggregates(effPropertyId);
+      refetch();
+
+      // If it was in the upload queue, update the queue item
+      if (!isResume && item?.key) {
+        setQueue((prev) =>
+          prev.map((q) =>
+            q.key === item.key
+              ? { ...q, status: "done", count: result.count, excluded: result.excluded || 0, error: "", replacementRequired: false }
+              : q
+          )
+        );
+      }
+
+      setReplacementConflict(null);
+    } catch (err) {
+      setReplacementError(err.message || "Failed to replace report");
+    } finally {
+      setReplacementLoading(false);
     }
   };
 
@@ -915,6 +1017,43 @@ export default function Import() {
       refreshAggregates(effPropertyId);
       return { name: item.name, ok: true, count: result.count, excluded: result.excluded || 0 };
     } catch (e) {
+      if (e?.code === 'IMPORT_REPLACEMENT_REQUIRED') {
+        const candidates = e.candidates || (e.existing_bundle ? [e.existing_bundle] : []);
+        let rawBytes = null;
+        if (item.file) {
+          try { rawBytes = new Uint8Array(await item.file.arrayBuffer()); } catch {}
+        }
+        const conflictData = {
+          isResume: false,
+          item,
+          scan: item.scan,
+          rawBytes,
+          propertyId: effPropertyId,
+          propertyName: effPropertyName,
+          sourceFile: item.name,
+          incoming: {
+            fileName: item.name,
+            reportType: item.scan?.type || type,
+            rowCount: item.scan?.totalRows || 0,
+            minDate: item.scan?.minDate || "",
+            maxDate: item.scan?.maxDate || "",
+          },
+          candidates,
+          selectedCandidateId: candidates[0]?.id || e.existing_bundle_id,
+        };
+        setQueue((prev) => prev.map((q) => (q.key === item.key ? {
+          ...q,
+          status: "error",
+          error: "Report overlaps an active import; explicit replacement required.",
+          replacementRequired: true,
+          replacementData: conflictData,
+        } : q)));
+        if (!isBatch) {
+          setReplacementError(null);
+          setReplacementConflict(conflictData);
+        }
+        return { name: item.name, ok: false, error: "Explicit replacement required", stopBatch: false };
+      }
       const friendly = friendlyImportError(e);
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: friendly } : q)));
       return { name: item.name, ok: false, error: friendly, stopBatch: e?.authoritativeOutcomeUnknown === true };
@@ -1679,9 +1818,23 @@ export default function Import() {
                   )}
 
                   {(q.status === "error" || q.status === "duplicate" || (q.status === "importing" && q.error)) && q.error && (
-                    <p className={`mt-1 text-xs ${q.status === "duplicate" || q.status === "importing" ? "text-[#FFB547]" : "text-[#FF6B6B]"}`}>
-                      {q.error}
-                    </p>
+                    <div className="mt-1">
+                      <p className={`text-xs ${q.status === "duplicate" || q.status === "importing" ? "text-[#FFB547]" : "text-[#FF6B6B]"}`}>
+                        {q.error}
+                      </p>
+                      {q.replacementRequired && q.replacementData && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReplacementError(null);
+                            setReplacementConflict(q.replacementData);
+                          }}
+                          className="mt-1.5 flex items-center gap-1.5 rounded-lg border border-[#FFB547]/40 bg-[#FFB547]/10 px-2.5 py-1 text-xs font-medium text-[#FFB547] transition-colors hover:bg-[#FFB547]/20"
+                        >
+                          <RefreshCw className="h-3 w-3" /> Select Replacement Report
+                        </button>
+                      )}
+                    </div>
                   )}
 
 {expandedKey === q.key && q.scan && (
@@ -2037,6 +2190,162 @@ export default function Import() {
           )}
         </div>
       </Card>
+
+      {/* ── Explicit Report Replacement Dialog ── */}
+      <Dialog open={!!replacementConflict} onOpenChange={(open) => { if (!open && !replacementLoading) setReplacementConflict(null); }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto bg-[#0A1628] border-white/10 text-white">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg font-semibold text-white">
+              <AlertTriangle className="h-5 w-5 text-[#FFB547]" />
+              Explicit Report Replacement Required
+            </DialogTitle>
+            <DialogDescription className="text-sm text-slate-400">
+              This report overlaps an active report for this property. To preserve financial ledger integrity,
+              you must explicitly select which active report version will be superseded.
+            </DialogDescription>
+          </DialogHeader>
+
+          {replacementError && (
+            <div className="rounded-lg border border-[#FF6B6B]/30 bg-[#FF6B6B]/10 p-3 text-xs text-[#FF6B6B]">
+              {replacementError}
+            </div>
+          )}
+
+          {replacementConflict && (
+            <div className="space-y-4 py-2">
+              {/* Incoming Report Card */}
+              <div className="rounded-xl border border-[#00D4FF]/30 bg-[#00D4FF]/[0.05] p-3.5 space-y-2">
+                <div className="flex items-center justify-between text-xs text-[#00D4FF] font-medium uppercase tracking-wider">
+                  <span>Incoming Version (Ready to Activate)</span>
+                  <span className="rounded-full bg-[#00D4FF]/20 px-2 py-0.5">New</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <span className="text-slate-400">File: </span>
+                    <span className="text-slate-200 font-mono">{replacementConflict.incoming.fileName}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400">Type: </span>
+                    <span className="text-slate-200 capitalize">{replacementConflict.incoming.reportType}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400">Rows: </span>
+                    <span className="text-slate-200 font-semibold">{replacementConflict.incoming.rowCount}</span>
+                  </div>
+                  {(replacementConflict.incoming.minDate || replacementConflict.incoming.maxDate) && (
+                    <div>
+                      <span className="text-slate-400">Dates: </span>
+                      <span className="text-slate-200">{replacementConflict.incoming.minDate || '—'} → {replacementConflict.incoming.maxDate || '—'}</span>
+                    </div>
+                  )}
+                </div>
+                {replacementConflict.isResume && (
+                  <p className="text-[11px] text-[#00D4FF]/80">
+                    ⚡ Resuming safely from server storage. Zero device re-upload required.
+                  </p>
+                )}
+              </div>
+
+              {/* Active Conflicting Reports */}
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-slate-300">
+                  Select Active Report to Supersede:
+                </label>
+                {replacementConflict.candidates.length === 0 ? (
+                  <p className="text-xs text-slate-400 italic">No detailed candidate list returned by server; active report will be superseded.</p>
+                ) : (
+                  <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                    {replacementConflict.candidates.map((cand) => {
+                      const isSelected = replacementConflict.selectedCandidateId === cand.id;
+                      return (
+                        <div
+                          key={cand.id}
+                          onClick={() => setReplacementConflict((prev) => prev ? { ...prev, selectedCandidateId: cand.id } : null)}
+                          className={`cursor-pointer rounded-xl border p-3 transition-colors ${
+                            isSelected
+                              ? "border-[#FFB547] bg-[#FFB547]/10"
+                              : "border-white/10 bg-[#040D1A]/60 hover:border-white/20"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="radio"
+                                name="replacement_candidate"
+                                checked={isSelected}
+                                onChange={() => setReplacementConflict((prev) => prev ? { ...prev, selectedCandidateId: cand.id } : null)}
+                                className="text-[#FFB547] focus:ring-[#FFB547]"
+                              />
+                              <span className="text-xs font-semibold text-slate-200 font-mono">
+                                {cand.original_file_name || cand.id}
+                              </span>
+                            </div>
+                            <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[11px] font-medium text-amber-300">
+                              Revision {cand.revision ?? 1} · Active
+                            </span>
+                          </div>
+                          <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-400 pl-5">
+                            <div>
+                              <span>Rows: </span>
+                              <span className="text-slate-300 font-semibold">{cand.row_count ?? '—'}</span>
+                            </div>
+                            {(cand.min_date || cand.max_date) && (
+                              <div>
+                                <span>Dates: </span>
+                                <span className="text-slate-300">{cand.min_date || '—'} → {cand.max_date || '—'}</span>
+                              </div>
+                            )}
+                            {cand.activated_at && (
+                              <div className="col-span-2 text-[11px] text-slate-500">
+                                Activated: {new Date(cand.activated_at).toLocaleString()}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-lg border border-white/5 bg-[#040D1A]/80 p-3 text-xs text-slate-400">
+                <span className="text-[#FFB547] font-medium">Audit Trail Guarantee: </span>
+                Both raw file archives remain permanently stored in storage. The active analytical views
+                will update to the new version atomically with an incremented revision.
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="flex items-center justify-end gap-2 border-t border-white/10 pt-3">
+            <button
+              type="button"
+              onClick={() => setReplacementConflict(null)}
+              disabled={replacementLoading}
+              className="rounded-lg border border-white/10 px-4 py-2 text-xs font-medium text-slate-300 hover:bg-white/5 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmReplacement}
+              disabled={replacementLoading || !replacementConflict?.selectedCandidateId}
+              className="flex items-center gap-1.5 rounded-lg bg-[#00E096] px-4 py-2 text-xs font-medium text-[#040D1A] transition-colors hover:bg-[#00c885] disabled:opacity-50"
+            >
+              {replacementLoading ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Replacing…
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Confirm & Replace Report
+                </>
+              )}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

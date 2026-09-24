@@ -1642,11 +1642,10 @@ export async function handleBusinessSyncRequest(request, env, scope, url, parts)
     console.error(JSON.stringify({
       incident_id: incidentId,
       message: "business sync unhandled error",
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
+      error_type: error instanceof Error ? error.name : "NonErrorThrown",
     }));
     return responseError(
-      `Internal sync error (${incidentId}): ${error instanceof Error ? error.message : String(error)}`,
+      `Internal sync error (${incidentId})`,
       500,
       { code: "BUSINESS_SYNC_INTERNAL_ERROR", incident_id: incidentId }
     );

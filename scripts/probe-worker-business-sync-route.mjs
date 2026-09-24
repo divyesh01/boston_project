@@ -1,4 +1,5 @@
 import worker from "../worker/index.js";
+import { handleBusinessSyncRequest } from "../worker/business-sync.js";
 import {
   assertEqual,
   generateRsaKey,
@@ -9,6 +10,7 @@ import {
   makeRunner,
   seedProperties,
   seedUser,
+  scopeAll,
   signRs256,
 } from "./_worker-testkit.mjs";
 
@@ -57,6 +59,29 @@ await run.check("enabled route reports no active dataset without touching local 
   const response = await worker.fetch(new Request("https://api.test/api/business-sync/snapshot?entity=Property", { headers: { "Cf-Access-Jwt-Assertion": await token("owner@sync.test") } }), fixture(true), CTX);
   assertEqual(response.status, 404);
   assertEqual((await response.json()).code, "no_active_dataset");
+});
+
+await run.check("unexpected business-sync database errors do not disclose internals to clients", async () => {
+  const sentinel = "SQL_INTERNAL_SENTINEL private-table-name";
+  const env = { DB: { prepare() { throw new Error(sentinel); } } };
+  const url = new URL("https://api.test/api/business-sync/snapshot?entity=Property");
+  const originalConsoleError = console.error;
+  const logged = [];
+  console.error = (...args) => logged.push(args.join(" "));
+  try {
+    const response = await handleBusinessSyncRequest(
+      new Request(url), env, scopeAll([]), url, url.pathname.split("/").filter(Boolean),
+    );
+    const body = await response.text();
+    const payload = JSON.parse(body);
+    assertEqual(response.status, 500);
+    if (body.includes(sentinel)) throw new Error("response leaked internal exception text");
+    if (logged.join(" ").includes(sentinel)) throw new Error("server log leaked internal exception text");
+    assertEqual(payload.code, "BUSINESS_SYNC_INTERNAL_ERROR");
+    if (!String(payload.incident_id || "").startsWith("inc_")) throw new Error("missing incident ID");
+  } finally {
+    console.error = originalConsoleError;
+  }
 });
 
 await run.check("non-owner migration attempt is forbidden through the real router", async () => {

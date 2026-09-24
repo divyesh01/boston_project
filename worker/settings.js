@@ -206,7 +206,10 @@ async function ensureSettingsTable(env) {
 
     tableEnsured = true;
   } catch (e) {
-    console.warn("[settings] ensure table:", e?.message);
+    console.warn(JSON.stringify({
+      message: "settings schema ensure failed",
+      error_type: e instanceof Error ? e.name : "NonErrorThrown",
+    }));
   }
 }
 
@@ -304,8 +307,13 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
         }
       );
     } catch (err) {
-      console.error("[settings] get error:", err);
-      return jsonResponse({ error: err.message || "could not retrieve settings" }, 500);
+      const incidentId = `settings_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+      console.error(JSON.stringify({ incident_id: incidentId, message: "settings read failed" }));
+      return jsonResponse({
+        error: "could not retrieve settings",
+        code: "SETTINGS_READ_FAILED",
+        incident_id: incidentId,
+      }, 500);
     }
   }
 
@@ -557,8 +565,13 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
           409
         );
       }
-      console.error("[settings] save error:", err);
-      return jsonResponse({ error: err.message || "could not save settings" }, 500);
+      const incidentId = `settings_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+      console.error(JSON.stringify({ incident_id: incidentId, message: "settings write failed" }));
+      return jsonResponse({
+        error: "could not save settings",
+        code: "SETTINGS_WRITE_FAILED",
+        incident_id: incidentId,
+      }, 500);
     }
   }
 

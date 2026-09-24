@@ -95,6 +95,33 @@ check("restricted GET includes global settings", scopedRead.status === 200 && sc
 check("restricted GET includes assigned-property settings", scopedBody.settings._byProperty?.P_A?.rri_commission_rates_v2 !== undefined);
 check("restricted GET excludes other-property settings", scopedBody.settings._byProperty?.P_B === undefined);
 
+const errorSentinel = "SQL_INTERNAL_SENTINEL app_setting_private";
+const leakingEnv = {
+  ...env,
+  DB: {
+    prepare(sql) {
+      if (/SELECT COUNT\(1\)/i.test(sql)) throw new Error(errorSentinel);
+      return { run: async () => ({ success: true }) };
+    },
+  },
+};
+const originalConsoleError = console.error;
+const originalConsoleWarn = console.warn;
+const errorLogs = [];
+console.error = (...args) => errorLogs.push(args.join(" "));
+console.warn = (...args) => errorLogs.push(args.join(" "));
+try {
+  const errorResponse = await handleSettingsRequest(new Request(url), leakingEnv, owner, url, ["settings"]);
+  const errorBody = await errorResponse.text();
+  const errorPayload = JSON.parse(errorBody);
+  check("unexpected settings read errors do not expose database details", !errorBody.includes(errorSentinel), errorBody);
+  check("unexpected settings read errors do not log database details", !errorLogs.join(" ").includes(errorSentinel));
+  check("unexpected settings read errors retain a safe code and incident ID", errorPayload.code === "SETTINGS_READ_FAILED" && String(errorPayload.incident_id || "").startsWith("settings_"));
+} finally {
+  console.error = originalConsoleError;
+  console.warn = originalConsoleWarn;
+}
+
 console.log(`\nprobe-worker-settings: ${passed} passed, ${failed} failed`);
 if (failed) process.exitCode = 1;
 else console.log("PASSED: All probe-worker-settings tests passed.");

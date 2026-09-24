@@ -26,6 +26,7 @@
 // Run: node scripts/probe-deploy-config.mjs
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -539,20 +540,15 @@ section('8. Dependency supply chain');
   const pkg = JSON.parse(read('package.json'));
   const xlsxSpec = (pkg.dependencies || {}).xlsx || '';
 
-  // The user chose the npm registry version for supply-chain integrity (npm audit,
-  // lockfile integrity).  We accept that despite the known CVEs in 0.18.5,
-  // because the registry is the only source and we have no newer version.
-  // The lockfile provides integrity to prevent tampering.
-  check('xlsx resolves to the npm registry (not a CDN tarball)',
-    /^npm:/.test(xlsxSpec) || /^https:\/\/registry\.npmjs\.org/.test(xlsxSpec) || /^\^?\d+\.\d+\.\d+$/.test(xlsxSpec),
-    `spec is "${xlsxSpec}" — expected npm registry`);
+  // SheetJS CE publishes newer releases on its official CDN; npm stops at
+  // 0.18.5. Vendor the official tarball so npm ci stays reproducible offline.
+  check('xlsx uses the vendored official SheetJS tarball',
+    /^file:vendor\/xlsx-\d+\.\d+\.\d+\.tgz$/.test(xlsxSpec), xlsxSpec);
   const ver = (xlsxSpec.match(/(\d+)\.(\d+)\.(\d+)/) || []).slice(1).map(Number);
   check('the xlsx version is readable', ver.length === 3, xlsxSpec);
-  // We do not enforce a minimum version because npm has no newer version.
-  // A future upgrade would need to come from a fork or alternative.
-  check('xlsx version is at least 0.18.5 (the npm version)',
-    ver.length === 3 && (ver[0] > 0 || (ver[0] === 0 && (ver[1] > 18 || (ver[1] === 18 && ver[2] >= 5)))),
-    `version ${ver.join('.')} — npm only has 0.18.5`);
+  check('xlsx version is beyond both known affected ranges',
+    ver.length === 3 && (ver[0] > 0 || ver[1] > 20 || (ver[1] === 20 && ver[2] >= 3)),
+    `version ${ver.join('.')}`);
 
   // The lockfile entry must have integrity to prevent tampering.
   const lock = JSON.parse(read('package-lock.json'));
@@ -561,8 +557,18 @@ section('8. Dependency supply chain');
     /^sha(512|384|256)-/.test(lockEntry.integrity || ''),
     'without integrity, npm ci could install a tampered package');
   check('the lockfile and package.json resolve to the same version',
-    Boolean(lockEntry.version) && lockEntry.version === (xlsxSpec.replace(/^[\^~]/, '')),
+    Boolean(lockEntry.version) && lockEntry.version === ver.join('.') && lockEntry.resolved === xlsxSpec &&
+      lock.packages?.['']?.dependencies?.xlsx === xlsxSpec,
     `lock version="${lockEntry.version || '(absent)'}" pkg="${xlsxSpec}"`);
+  const tarball = xlsxSpec.startsWith('file:') ? path.join(ROOT, xlsxSpec.slice(5)) : '';
+  check('the vendored xlsx tarball exists', Boolean(tarball) && existsSync(tarball), tarball);
+  if (tarball && existsSync(tarball)) {
+    const bytes = readFileSync(tarball);
+    check('xlsx tarball bytes match the lockfile SHA-512',
+      `sha512-${createHash('sha512').update(bytes).digest('base64')}` === lockEntry.integrity);
+    check('xlsx tarball SHA-256 matches the recorded official artifact',
+      read('vendor/README.md').includes(createHash('sha256').update(bytes).digest('hex')));
+  }
 }
 
 // ── 9. No committed credentials ────────────────────────────────────────────

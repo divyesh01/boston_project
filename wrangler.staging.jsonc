@@ -45,6 +45,7 @@
   // worker/auth.js normalizes the scheme and derives the JWKS certs URL from it.
   "vars": {
     "ENVIRONMENT": "staging",
+    "ENABLE_BUSINESS_SYNC_API": "true",
     "ACCESS_TEAM_DOMAIN": "https://tight-feather-dba0.cloudflareaccess.com",
     "ACCESS_AUD": "67befe0c14f5acc168e10af9e93ad7a58880875d5251f3d87497a86c2f019128"
   },

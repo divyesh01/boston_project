@@ -1,4 +1,5 @@
 import { parseBundle, normalizedContent, contentHash, REPORT_ENTITY } from './bulk-contract.js';
+import { typedRecordKey, resolvePropertyKeyFromMappings } from "./business-sync.js";
 import { assertPropertyInScope, ScopeError } from "./scope.js";
 import { queryAll, queryFirst } from "./db.js";
 import { isR2S3Enabled, resolveR2S3Stores } from "./r2-s3-adapter.js";
@@ -145,17 +146,87 @@ function manifestKey(manifest, scope, raw = false) {
 }
 
 /**
+ * Central server-side property identity resolver for EVERY bulk-import route
+ * that accepts a property id from body/header/query. The browser may send a
+ * legacy local alias (numeric 1 / string "1") from the pre-migration dataset,
+ * while D1 manifests, R2 object keys and storage metadata are keyed by the
+ * canonical server property id. This resolver never trusts the caller's id:
+ *
+ *   1. An id already present in the caller's scope is returned unchanged —
+ *      canonical callers pay zero extra D1 reads.
+ *   2. Anything else resolves ONLY through the account's active
+ *      business_dataset_pointer generation and the business_property_map rows
+ *      of that exact account+generation, reusing the typed identity contract
+ *      (typedRecordKey / numericStringAlternateTypedKey via
+ *      resolvePropertyKeyFromMappings): numeric 1 and string "1" resolve
+ *      equivalently through n:1 or s:1:1, while malformed or noncanonical
+ *      numerics ("01", "+1", "1.0") gain no loose aliases.
+ *   3. Resolution must yield exactly ONE distinct canonical server_property_id
+ *      and that id itself must be inside scope.propertyIds — missing,
+ *      ambiguous, or out-of-scope identities fail closed, with no owner bypass.
+ *
+ * Only the canonical id is returned, so no legacy alias is ever stored in or
+ * used for object keys, D1 manifest values, or storage metadata downstream.
+ */
+async function resolveServerPropertyId(env, scope, incomingPropertyId) {
+  const raw = incomingPropertyId;
+  const rawStr = String(raw ?? "");
+  if (!rawStr) throw new BulkImportError("server_property_id is required", 400, { code: "IMPORT_PROPERTY_REQUIRED" });
+  if (scope.propertyIds.includes(rawStr)) return rawStr;
+
+  const pointer = await queryFirst(
+    env,
+    "SELECT active_generation_id FROM business_dataset_pointer WHERE account_id = ?",
+    [scope.accountId]
+  );
+  const generationId = pointer?.active_generation_id ? String(pointer.active_generation_id) : "";
+  const mappings = generationId
+    ? await queryAll(
+        env,
+        "SELECT property_key, server_property_id FROM business_property_map WHERE account_id = ? AND generation_id = ?",
+        [scope.accountId, generationId]
+      )
+    : [];
+
+  let incomingKey = null;
+  if (typeof raw === "number" && Number.isSafeInteger(raw)) {
+    incomingKey = typedRecordKey(raw);
+  } else if (typeof raw === "string") {
+    try { incomingKey = typedRecordKey(raw); } catch { incomingKey = null; }
+  }
+
+  let canonicalId = null;
+  if (incomingKey !== null) {
+    try {
+      canonicalId = resolvePropertyKeyFromMappings(mappings, incomingKey);
+    } catch (error) {
+      if (error?.details?.code === "ambiguous_property_identity") {
+        throw new BulkImportError("ambiguous property identity", 422, { code: "IMPORT_PROPERTY_AMBIGUOUS" });
+      }
+      canonicalId = null;
+    }
+  }
+
+  if (canonicalId === null) {
+    // Unknown alias with no active-generation mapping: preserve the
+    // pre-alias fail-closed scope surface (ScopeError -> 403).
+    assertPropertyInScope(scope, rawStr);
+  }
+  // The resolved canonical id itself must be inside the caller's scope —
+  // owners get no bypass, exactly like assertPropertyInScope elsewhere.
+  assertPropertyInScope(scope, canonicalId);
+  return canonicalId;
+}
+
+/**
  * Check if a file is already imported by raw or normalized hash.
  * Consumes ZERO D1 writes.
  */
 async function checkDuplicate(request, env, scope) {
   const body = await readJsonBody(request);
-  const propertyId = String(body.server_property_id || "");
+  const propertyId = await resolveServerPropertyId(env, scope, body.server_property_id);
   const rawHash = String(body.raw_file_hash || "");
   const normalizedHash = String(body.normalized_hash || "").toLowerCase();
-
-  if (!propertyId) throw new BulkImportError("server_property_id is required", 400, { code: "IMPORT_PROPERTY_REQUIRED" });
-  assertPropertyInScope(scope, propertyId);
 
   if (!rawHash && !normalizedHash) {
     throw new BulkImportError("raw_file_hash or normalized_hash is required", 400, { code: "IMPORT_HASH_REQUIRED" });
@@ -185,11 +256,8 @@ async function checkDuplicate(request, env, scope) {
  */
 async function checkRawDuplicate(request, env, scope) {
   const body = await readJsonBody(request);
-  const propertyId = String(body.server_property_id || "");
+  const propertyId = await resolveServerPropertyId(env, scope, body.server_property_id);
   const rawHash = String(body.raw_file_hash || "").toLowerCase();
-
-  if (!propertyId) throw new BulkImportError("server_property_id is required", 400, { code: "IMPORT_PROPERTY_REQUIRED" });
-  assertPropertyInScope(scope, propertyId);
 
   if (!isValidHash(rawHash)) {
     throw new BulkImportError("valid 64-character raw_file_hash is required", 400, { code: "IMPORT_INVALID_HASH" });
@@ -228,7 +296,7 @@ async function uploadRawArchive(request, env, scope) {
   requireImportRole(scope);
 
   const url = new URL(request.url);
-  const propertyId = request.headers.get("x-server-property-id") || url.searchParams.get("server_property_id") || "";
+  const rawPropertyId = request.headers.get("x-server-property-id") || url.searchParams.get("server_property_id") || "";
   const reportType = request.headers.get("x-report-type") || url.searchParams.get("report_type") || "unknown";
   const rawHash = (request.headers.get("x-raw-hash") || url.searchParams.get("raw_hash") || "").toLowerCase();
   const rawArchiveId = request.headers.get("x-archive-id") || url.searchParams.get("archive_id") || `raw_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -236,8 +304,8 @@ async function uploadRawArchive(request, env, scope) {
   const mimeType = request.headers.get("content-type") || "application/octet-stream";
   const reportDate = request.headers.get("x-report-date") || url.searchParams.get("report_date") || null;
 
-  if (!propertyId) throw new BulkImportError("x-server-property-id is required", 400, { code: "IMPORT_PROPERTY_REQUIRED" });
-  assertPropertyInScope(scope, propertyId);
+  if (!rawPropertyId) throw new BulkImportError("x-server-property-id is required", 400, { code: "IMPORT_PROPERTY_REQUIRED" });
+  const propertyId = await resolveServerPropertyId(env, scope, rawPropertyId);
 
   if (!isValidHash(rawHash)) {
     throw new BulkImportError("valid 64-character raw_hash is required", 400, { code: "IMPORT_INVALID_HASH" });
@@ -370,7 +438,7 @@ async function recordRawArchive(request, env, scope) {
 
   const rawArchiveId = String(body.raw_archive_id || `raw_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`);
   const bundleId = String(body.id || rawArchiveId);
-  const propertyId = String(body.server_property_id || "");
+  const propertyId = await resolveServerPropertyId(env, scope, body.server_property_id);
   const reportType = String(body.report_type || "unknown");
   const rawHash = String(body.raw_file_hash || "").toLowerCase();
   const originalFileName = sanitizeFilename(body.original_file_name || "report.csv");
@@ -379,9 +447,6 @@ async function recordRawArchive(request, env, scope) {
   const minDate = body.min_date ? String(body.min_date) : null;
   const maxDate = body.max_date ? String(body.max_date) : null;
   const now = new Date().toISOString();
-
-  if (!propertyId) throw new BulkImportError("server_property_id is required", 400, { code: "IMPORT_PROPERTY_REQUIRED" });
-  assertPropertyInScope(scope, propertyId);
 
   if (!isValidHash(rawHash)) {
     throw new BulkImportError("valid raw_file_hash is required", 400, { code: "IMPORT_INVALID_HASH" });
@@ -499,7 +564,7 @@ async function recordRawArchive(request, env, scope) {
  * List pending raw archives waiting for processing.
  */
 async function getPendingRawArchives(url, env, scope) {
-  const propertyId = url.searchParams.get("server_property_id");
+  const requestedPropertyId = url.searchParams.get("server_property_id");
 
   let sql = `SELECT id, raw_archive_id, account_id, server_property_id, report_type,
                     raw_file_hash, raw_object_key, raw_size, raw_mime_type, original_file_name,
@@ -510,8 +575,8 @@ async function getPendingRawArchives(url, env, scope) {
                 AND status IN ('raw_archived', 'failed_processing')`;
   const params = [scope.accountId];
 
-  if (propertyId) {
-    assertPropertyInScope(scope, propertyId);
+  if (requestedPropertyId) {
+    const propertyId = await resolveServerPropertyId(env, scope, requestedPropertyId);
     sql += ` AND server_property_id = ?`;
     params.push(propertyId);
   } else if (scope.user?.role?.toLowerCase() !== "owner" && scope.user?.role?.toLowerCase() !== "admin" && scope.user?.property_access_mode !== "all") {
@@ -588,15 +653,15 @@ async function uploadBundle(request, env, scope) {
   requireImportRole(scope);
 
   const url = new URL(request.url);
-  const propertyId = request.headers.get("x-server-property-id") || url.searchParams.get("server_property_id") || "";
+  const rawPropertyId = request.headers.get("x-server-property-id") || url.searchParams.get("server_property_id") || "";
   const reportType = request.headers.get("x-report-type") || url.searchParams.get("report_type") || "";
   const rawHash = request.headers.get("x-raw-hash") || url.searchParams.get("raw_hash") || "";
   const normalizedHash = (request.headers.get("x-normalized-hash") || url.searchParams.get("normalized_hash") || "").toLowerCase();
   const rowCount = Number(request.headers.get("x-row-count") || url.searchParams.get("row_count") || 0);
   const payloadSha256 = request.headers.get("x-payload-sha256") || request.headers.get("x-content-sha256") || null;
 
-  if (!propertyId) throw new BulkImportError("x-server-property-id is required", 400, { code: "IMPORT_PROPERTY_REQUIRED" });
-  assertPropertyInScope(scope, propertyId);
+  if (!rawPropertyId) throw new BulkImportError("x-server-property-id is required", 400, { code: "IMPORT_PROPERTY_REQUIRED" });
+  const propertyId = await resolveServerPropertyId(env, scope, rawPropertyId);
 
   if (!isValidHash(normalizedHash)) {
     throw new BulkImportError("valid 64-character normalized_hash is required", 400, { code: "IMPORT_INVALID_HASH" });
@@ -658,7 +723,10 @@ async function uploadBundle(request, env, scope) {
     try {
       const decoded = createBoundedStream(new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip')), 16 * 1024 * 1024);
       text = await new Response(decoded.stream).text();
-      items = parseBundle(text, propertyId);
+      // Rows carry the property id the BROWSER built the bundle with (which may
+      // be a legacy alias), so validate them against the incoming id; every
+      // server-side key and metadata field below uses the resolved canonical id.
+      items = parseBundle(text, rawPropertyId);
     } catch (error) {
       if (error instanceof BulkImportError) throw error;
       throw new BulkImportError('Invalid gzip or bundle rows', 400, { code: 'IMPORT_INVALID_BUNDLE' });
@@ -745,9 +813,7 @@ async function uploadBundle(request, env, scope) {
 async function activateBundle(request, env, scope) {
   requireImportRole(scope);
   const body = await readJsonBody(request);
-  const propertyId = String(body.server_property_id || '');
-  if (!propertyId) throw new BulkImportError('Property required', 400);
-  assertPropertyInScope(scope, propertyId);
+  const propertyId = await resolveServerPropertyId(env, scope, body.server_property_id);
   const hash = String(body.normalized_hash || '').toLowerCase();
   const rawHash = String(body.raw_file_hash || '').toLowerCase();
   const key = canonicalKey(scope, propertyId, hash);
@@ -848,15 +914,15 @@ async function activateBundle(request, env, scope) {
  * Returns active bundle manifests since a specific revision.
  */
 async function getManifest(url, env, scope) {
-  const propertyId = url.searchParams.get("server_property_id");
+  const requestedPropertyId = url.searchParams.get("server_property_id");
   const sinceRevision = Number(url.searchParams.get("since_revision") || 0);
   const afterId = url.searchParams.get("after_id") || "";
 
   let sql = `SELECT * FROM import_bundle_manifest WHERE account_id = ? AND (revision > ? OR (revision = ? AND id > ?))`;
   const params = [scope.accountId, sinceRevision, sinceRevision, afterId];
 
-  if (propertyId) {
-    assertPropertyInScope(scope, propertyId);
+  if (requestedPropertyId) {
+    const propertyId = await resolveServerPropertyId(env, scope, requestedPropertyId);
     sql += ` AND server_property_id = ?`;
     params.push(propertyId);
   } else if (scope.user?.role?.toLowerCase() !== "owner" && scope.user?.role?.toLowerCase() !== "admin" && scope.user?.property_access_mode !== "all") {

@@ -22,6 +22,7 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
     let revision = Number(state?.revision || 0), afterId = state?.after_id || '', synced = 0;
     let scope = state?.scope || '';
     let conflicts = 0;
+    let activeManifests = 0, materializedRows = 0;
     for (;;) {
       const commitToken = (await localDb.BusinessSyncState.get(COMMIT_KEY))?.token;
       const url = new URL('/api/bulk-import/manifest', globalThis.location?.origin || 'http://localhost');
@@ -35,7 +36,7 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
       scope = data.scope;
       if (!Array.isArray(data.manifests)) throw new Error('Invalid manifest feed');
       const manifests = data.manifests;
-      if (!manifests.length) return { synced, lastRevision: revision };
+      if (!manifests.length) return { synced, lastRevision: revision, activeManifests, materializedRows, verified: true };
       const payloads = new Map();
       for (const manifest of manifests) {
         if (propertyId && manifest.server_property_id !== propertyId) throw new Error('Manifest scope mismatch');
@@ -83,6 +84,14 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
               property_id: manifest.server_property_id, report_type: manifest.report_type, file_name: manifest.original_file_name,
               file_hash: manifest.raw_file_hash, status: 'completed', rows_imported: manifest.row_count, raw_rows: [],
               created_date: manifest.activated_at || manifest.created_at });
+            const report = await localDb.UploadedReport.get(manifest.id);
+            if (!report || report.property_id !== manifest.server_property_id || Number(report.rows_imported) !== Number(manifest.row_count)) {
+              throw new Error(`Active report manifest ${manifest.id} was not materialized locally`);
+            }
+            for (const [entity, expected] of Object.entries(manifest.entity_counts || {})) {
+              const actual = await localDb[entity].where('import_id').equals(manifest.id).count();
+              if (actual !== Number(expected)) throw new Error(`Active report ${manifest.id} ${entity} rows did not reconcile locally`);
+            }
           }
           const last = manifests[manifests.length - 1];
           await setLastBulkRevision(Number(last.revision), propertyId, last.id, scope);
@@ -98,7 +107,12 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
       const last = manifests[manifests.length - 1];
       if (revision === Number(last.revision) && afterId === last.id) throw new Error('Manifest cursor did not advance');
       revision = Number(last.revision); afterId = last.id; synced += manifests.length;
-      if (manifests.length < 200) return { synced, lastRevision: revision };
+      for (const manifest of manifests) {
+        if (manifest.status !== 'active') continue;
+        activeManifests++;
+        materializedRows += Number(manifest.row_count) || 0;
+      }
+      if (manifests.length < 200) return { synced, lastRevision: revision, activeManifests, materializedRows, verified: true };
     }
   })();
   flights.set(key, job);

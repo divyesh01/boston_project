@@ -75,15 +75,12 @@ export function inRange(dateStr, from, to) {
 //     room ($1,011,258.67) + ancillary ($9,339.50) == total ($1,020,598.17)
 // So the total is assembled from the two ledgers that own each half.
 //
-// WHY ROOM COMES FROM THE OCCUPANCY LEG AND NOT FROM `room_rent`. Both carry the
-// same $1,011,258.67 (probe-money-kept-gross asserts the three agree), but the
-// gross rows reaching the UI are not always raw GrossRevenueDay rows. The daily
-// aggregate cache (dailyAggregates.js GROSS_MISC_FIELDS) carries only the MISC
-// charge columns, deliberately — room revenue travels on the occupancy leg as
-// `occ_revenue`. Summing `room_rent` off those rows yields 0, so a total built
-// that way reads $9,339.50 on every screen fed by the cache, which is exactly
-// the regression this comment exists to prevent. Room from the room ledger,
-// ancillary from the charge ledger, and the two shapes behave identically.
+// WHY ROOM COMES FROM OCCUPANCY WHEN IT EXISTS. Occupancy and Gross Revenue both
+// carry room revenue, so the helper uses occupancy for its room leg to avoid
+// counting the same room night twice. The aggregate cache also keeps gross
+// room_rent as a fallback: a property can have a Gross Revenue report without
+// an Occupancy Summary. In that case the Dashboard still shows the imported
+// room revenue instead of treating it as zero.
 //
 // EXCLUSIONS ARE BY NAME, NOT BY VALUE. `non_revenue` is by definition not
 // revenue, and `advance_deposit` is a liability until the stay is consumed —
@@ -92,8 +89,8 @@ export function inRange(dateStr, from, to) {
 // silently inflating the first time a property posts one.
 
 // Ancillary charge columns on a gross row. `room_rent` is deliberately NOT here:
-// it is the room ledger's quantity, added separately, and is absent entirely from
-// aggregate-cache rows. Keep in sync with dailyAggregates.js GROSS_MISC_FIELDS.
+// it is the room ledger's quantity, added separately. Keep in sync with
+// dailyAggregates.js GROSS_MISC_FIELDS.
 export const GROSS_ANCILLARY_COMPONENTS = Object.freeze([
   "misc_charge", "system_charge", "food", "event",
   "bar", "beverage", "laundry", "phone", "other",

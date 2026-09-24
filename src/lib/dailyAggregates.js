@@ -20,7 +20,7 @@ import { toCents, fromCents } from '@/lib/decimal';
 // the cache whenever its units or shape change so an old browser cannot render a
 // cents-valued source_net as dollars and turn a normal commission into a six-figure
 // deduction. The raw ledgers remain available as the honest fallback.
-export const DAILY_AGGREGATE_VERSION = 2;
+export const DAILY_AGGREGATE_VERSION = 3;
 
 const PAYMENT_FIELDS = [
   ...CARD_METHODS, 'cash', 'check', 'direct_bill', 'corpay', 'wire_transfer',
@@ -123,6 +123,7 @@ async function fetchLedger(name, propertyId, from, to) {
  * @property {number} gross_state_tax cents
  * @property {number} gross_city_tax cents
  * @property {number} gross_other_tax cents
+ * @property {number} gross_room_rent cents
  * @property {Record<string, number>} gross_misc cents
  * @property {Record<string, number>} payment cents
  * @property {number} payment_total cents
@@ -149,7 +150,7 @@ function newDay(pid, date) {
     property_id: pid,
     business_date: date,
     occ_revenue: 0, occ_rooms_sold: 0, occ_capacity_rooms: 0,
-    source_net: {}, gross_state_tax: 0, gross_city_tax: 0, gross_other_tax: 0, gross_misc: {},
+    source_net: {}, gross_state_tax: 0, gross_city_tax: 0, gross_other_tax: 0, gross_room_rent: 0, gross_misc: {},
     payment: {}, payment_total: 0, expense_by_category: {},
   };
 }
@@ -198,6 +199,7 @@ function finalizeDay(d) {
     gross_state_tax: fromCents(d.gross_state_tax),
     gross_city_tax: fromCents(d.gross_city_tax),
     gross_other_tax: fromCents(d.gross_other_tax),
+    gross_room_rent: fromCents(d.gross_room_rent),
     gross_misc: centsToDollars(d.gross_misc),
     payment: centsToDollars(d.payment),
     payment_total: fromCents(d.payment_total),
@@ -255,6 +257,7 @@ export function aggregateDays({ occ = [], src = [], gross = [], pay = [], exp = 
     d.gross_state_tax += toCents(r.state_tax);
     d.gross_city_tax += toCents(r.city_tax);
     d.gross_other_tax += toCents(r.other_tax);
+    d.gross_room_rent += toCents(r.room_rent);
     for (const f of GROSS_MISC_FIELDS) {
       d.gross_misc[f] = (d.gross_misc[f] || 0) + toCents(r[f]);
     }
@@ -389,8 +392,8 @@ export function buildSyntheticRows(aggregates) {
       }
     }
 
-    if (a.gross_state_tax || a.gross_city_tax || a.gross_other_tax || (a.gross_misc && Object.values(a.gross_misc).some((x) => x))) {
-      const g = { property_id: a.property_id, date, state_tax: a.gross_state_tax, city_tax: a.gross_city_tax, other_tax: a.gross_other_tax };
+    if (a.gross_room_rent || a.gross_state_tax || a.gross_city_tax || a.gross_other_tax || (a.gross_misc && Object.values(a.gross_misc).some((x) => x))) {
+      const g = { property_id: a.property_id, date, room_rent: a.gross_room_rent, state_tax: a.gross_state_tax, city_tax: a.gross_city_tax, other_tax: a.gross_other_tax };
       for (const f of GROSS_MISC_FIELDS) g[f] = a.gross_misc?.[f] || 0;
       grossRows.push(g);
     }

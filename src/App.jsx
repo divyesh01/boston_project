@@ -2,8 +2,9 @@ import { Suspense, lazy, useEffect, useState, Component } from 'react';
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as SonnerToaster } from "sonner";
 import { ErrorState } from "@/components/ui/status";
-import { QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { queryClientInstance } from '@/lib/query-client';
+import { hydrateAuthenticatedData } from '@/lib/startupHydration';
 import { YDocProvider } from '@/crdt';
 import { BrowserRouter as Router, Route, Routes, Navigate, useLocation } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
@@ -164,7 +165,7 @@ const LoginRedirect = () => {
 };
 
 const RequireAuth = ({ children }) => {
-  const { isAuthenticated, isLoadingAuth, authChecked, navigateToLogin } = useAuth();
+  const { isAuthenticated, isLoadingAuth, authChecked, navigateToLogin, user } = useAuth();
   const location = useLocation();
 
   useEffect(() => {
@@ -182,6 +183,54 @@ const RequireAuth = ({ children }) => {
   }
 
   if (!isAuthenticated) return null;
+  return <AuthoritativeDataGate userId={user?.id}>{children}</AuthoritativeDataGate>;
+};
+
+const AuthoritativeDataGate = ({ children, userId }) => {
+  const queryClient = useQueryClient();
+  const [attempt, setAttempt] = useState(0);
+  const [state, setState] = useState({ userId: null, status: 'loading', error: null });
+
+  useEffect(() => {
+    if (!userId) return undefined;
+    let cancelled = false;
+    setState({ userId, status: 'loading', error: null });
+    Promise.all([
+      import('@/api/base44Client'),
+      import('@/lib/bulkHydrationService'),
+      import('@/lib/dailyAggregates'),
+    ]).then(([client, bulk, aggregates]) => hydrateAuthenticatedData({
+      hydrateBusinessData: () => client.businessData.hydrateFromServer(),
+      syncBulkBundles: bulk.syncBulkBundles,
+      rebuildDailyAggregates: aggregates.rebuildDailyAggregates,
+      invalidateQueries: (filters) => queryClient.invalidateQueries(filters),
+    })).then(() => {
+      if (!cancelled) setState({ userId, status: 'ready', error: null });
+    }).catch((error) => {
+      if (!cancelled) setState({ userId, status: 'error', error });
+    });
+    return () => { cancelled = true; };
+  }, [userId, attempt, queryClient]);
+
+  if (state.userId !== userId || state.status === 'loading') {
+    return (
+      <div role="status" aria-live="polite" className="fixed inset-0 flex items-center justify-center bg-[#040D1A] text-slate-300">
+        Preparing your hotel data…
+      </div>
+    );
+  }
+  if (state.status === 'error') {
+    return (
+      <div role="alert" className="fixed inset-0 flex items-center justify-center bg-[#040D1A] p-6 text-slate-200">
+        <div className="max-w-lg rounded-xl border border-red-500/30 bg-[#0F1F35] p-6">
+          <h1 className="text-lg font-semibold text-red-300">Could not refresh hotel data</h1>
+          <p className="mt-2 text-sm text-slate-400">The Executive Hub is paused so it does not show old or incomplete totals. Check your connection and retry.</p>
+          <p className="mt-2 break-words text-xs text-slate-500">{state.error?.message || 'Authoritative data hydration failed.'}</p>
+          <button type="button" onClick={() => setAttempt((value) => value + 1)} className="mt-4 rounded-lg bg-[#6C63FF] px-4 py-2 text-sm font-medium text-white">Retry data refresh</button>
+        </div>
+      </div>
+    );
+  }
   return children;
 };
 

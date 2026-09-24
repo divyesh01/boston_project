@@ -39,12 +39,6 @@
     }
   ],
 
-  // Dedicated empty canary R2 buckets. Production uses separate GCS buckets.
-  "r2_buckets": [
-    { "binding": "RAW_ARCHIVE", "bucket_name": "rri-raw-canary-a61a110" },
-    { "binding": "BULK_DATA", "bucket_name": "rri-data-canary-a61a110" }
-  ],
-
   // Non-secret Access parameters. These are the AUDIENCE and TEAM DOMAIN the
   // Worker checks the injected Cf-Access JWT against — they are the public
   // identifiers of the Access application, not credentials, so they live here.
@@ -52,8 +46,20 @@
   "vars": {
     "ENVIRONMENT": "staging",
     "ENABLE_BUSINESS_SYNC_API": "true",
+    "S3_ENABLED": "true",
+    "S3_PROVIDER": "gcs",
+    "S3_ENDPOINT": "https://storage.googleapis.com",
+    "S3_REGION": "us-east1",
+    "S3_RAW_BUCKET": "rri-raw-canary-divyesh-2026-ba2db1fb0918",
+    "S3_DATA_BUCKET": "rri-data-canary-divyesh-2026-ba2db1fb0918",
     "ACCESS_TEAM_DOMAIN": "https://tight-feather-dba0.cloudflareaccess.com",
     "ACCESS_AUD": "67befe0c14f5acc168e10af9e93ad7a58880875d5251f3d87497a86c2f019128"
+  },
+
+  // Install only the existing canary service-account key as a Wrangler secret.
+  // The production service account cannot access these canary buckets.
+  "secrets": {
+    "required": ["GCS_SERVICE_ACCOUNT_JSON"]
   },
 
   "observability": {

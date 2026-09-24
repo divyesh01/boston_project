@@ -810,9 +810,9 @@ async function uploadBundle(request, env, scope) {
  * Updates raw_archived row OR inserts new manifest row, increments revision, and records 1 change event.
  * Exactly 3 D1 rows written! Total queries <= 5!
  */
-async function activateBundle(request, env, scope) {
+async function activateBundle(requestOrBody, env, scope) {
   requireImportRole(scope);
-  const body = await readJsonBody(request);
+  const body = typeof requestOrBody?.json === "function" ? await readJsonBody(requestOrBody) : requestOrBody;
   const propertyId = await resolveServerPropertyId(env, scope, body.server_property_id);
   const hash = String(body.normalized_hash || '').toLowerCase();
   const rawHash = String(body.raw_file_hash || '').toLowerCase();
@@ -833,10 +833,11 @@ async function activateBundle(request, env, scope) {
   const active = await queryFirst(env, "SELECT * FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND normalized_hash=? AND status='active'", [scope.accountId, propertyId, hash]);
   if (active) {
     // A distinct original with identical business content remains archived, but is no longer pending processing.
-    if (body.id && body.id !== active.id) await env.DB.prepare(`UPDATE import_bundle_manifest SET status='superseded',
+    const archiveId = String(body.source_archive_id || body.id || '');
+    if (archiveId && archiveId !== active.id) await env.DB.prepare(`UPDATE import_bundle_manifest SET status='superseded',
       processing_status='active',superseded_by_bundle_id=? WHERE account_id=? AND server_property_id=? AND id=?
       AND raw_file_hash=? AND status IN ('raw_archived','failed_processing')`)
-      .bind(active.id,scope.accountId,propertyId,String(body.id),rawHash).run();
+      .bind(active.id,scope.accountId,propertyId,archiveId,rawHash).run();
     return Response.json({ ok: true, status: 'already_active', bundle_id: active.id, revision: active.revision });
   }
   const raw = await queryFirst(env, "SELECT * FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND raw_file_hash=? AND status IN ('raw_archived','failed_processing') AND archive_status='archived' ORDER BY created_at,id LIMIT 1", [scope.accountId, propertyId, rawHash]);
@@ -1004,9 +1005,9 @@ async function downloadBundle(parts, env, scope) {
  * Lineage supersede: mark old bundle superseded by new bundle.
  * Preserves both raw source archives in R2 untouched!
  */
-async function supersedeBundle(request, env, scope) {
+async function supersedeBundle(requestOrBody, env, scope) {
   requireImportRole(scope);
-  const body = await readJsonBody(request);
+  const body = typeof requestOrBody?.json === "function" ? await readJsonBody(requestOrBody) : requestOrBody;
   const oldBundleId = String(body.old_bundle_id || "");
   const newBundleId = String(body.new_bundle_id || "");
 
@@ -1091,9 +1092,9 @@ async function supersedeBundle(request, env, scope) {
  * Delete / tombstone an imported bundle from analytics.
  * Marks manifest tombstoned; immutable payload collection is a separate operation.
  */
-async function deleteBundle(request, env, scope) {
+async function deleteBundle(requestOrBody, env, scope) {
   requireImportRole(scope);
-  const body = await readJsonBody(request);
+  const body = typeof requestOrBody?.json === "function" ? await readJsonBody(requestOrBody) : requestOrBody;
   const bundleId = String(body.bundle_id || "");
 
   if (!bundleId) throw new BulkImportError("bundle_id is required", 400, { code: "IMPORT_BUNDLE_REQUIRED" });
@@ -1227,7 +1228,8 @@ export async function handleBulkImportRequest(request, env, scope, url, parts) {
       return await uploadBundle(request, env, scope);
     }
     if (action === "activate" && request.method === "POST") {
-      return await retryRevision(() => activateBundle(request.clone(), env, scope));
+      const body = await readJsonBody(request);
+      return await retryRevision(() => activateBundle(body, env, scope));
     }
     if (action === "manifest" && request.method === "GET") {
       return await getManifest(url, env, scope);
@@ -1236,10 +1238,12 @@ export async function handleBulkImportRequest(request, env, scope, url, parts) {
       return await downloadBundle(parts, env, scope);
     }
     if (action === "supersede" && request.method === "POST") {
-      return await retryRevision(() => supersedeBundle(request.clone(), env, scope));
+      const body = await readJsonBody(request);
+      return await retryRevision(() => supersedeBundle(body, env, scope));
     }
     if (action === "delete" && request.method === "POST") {
-      return await retryRevision(() => deleteBundle(request.clone(), env, scope));
+      const body = await readJsonBody(request);
+      return await retryRevision(() => deleteBundle(body, env, scope));
     }
     if (action === "raw-destroy" && request.method === "POST") {
       return await destroyRawArchive(request, env, scope);
@@ -1263,6 +1267,9 @@ async function retryRevision(operation) {
     try { return await operation(); }
     catch (error) {
       if (!/CHECK constraint failed: ok|business_change.account_id, business_change.seq|business_mutation_guard.account_id, business_mutation_guard.mutation_id|import_bundle_manifest.account_id, import_bundle_manifest.server_property_id, import_bundle_manifest.normalized_hash/.test(String(error?.message || error))) throw error;
+      if (attempt < 4) {
+        await new Promise((resolve) => setTimeout(resolve, 30 * (2 ** attempt) + Math.floor(Math.random() * 40)));
+      }
     }
   }
   throw new BulkImportError('Concurrent import; retry request', 409, { code: 'IMPORT_REVISION_CONFLICT' });

@@ -560,15 +560,24 @@ export async function fetchManifestById(serverPropertyId, bundleId) {
  * Activate bundle manifest in D1.
  * Consumes exactly 3 D1 writes!
  */
-export async function activateBundleOnServer(metadata) {
-  const res = await fetch('/api/bulk-import/activate', {
-    method: 'POST',
-    headers: JSON_MUTATION_HEADERS,
-    body: JSON.stringify(metadata),
-  });
+export async function activateBundleOnServer(metadata, { maxRetries = 3 } = {}) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const res = await fetch('/api/bulk-import/activate', {
+      method: 'POST',
+      headers: JSON_MUTATION_HEADERS,
+      body: JSON.stringify(metadata),
+    });
 
-  if (!res.ok) {
+    if (res.ok) {
+      return await res.json();
+    }
+
     const body = await res.json().catch(() => ({}));
+    if (res.status === 409 && body.code === 'IMPORT_REVISION_CONFLICT' && attempt < maxRetries) {
+      await new Promise((r) => setTimeout(r, 100 * (2 ** attempt) + Math.floor(Math.random() * 50)));
+      continue;
+    }
+
     const err = /** @type {Error & { code?: string, status?: number, existing_bundle_id?: string, existing_bundle?: any, candidates?: any[], details?: any }} */ (
       new Error(body.error || `Activation failed with status ${res.status}`)
     );
@@ -580,7 +589,6 @@ export async function activateBundleOnServer(metadata) {
     err.details = body;
     throw err;
   }
-  return await res.json();
 }
 
 /**
@@ -759,6 +767,22 @@ export async function executeBulkImport(scanResult, meta = {}) {
       err.normalizedHash = normalizedHash;
     }
     throw err;
+  }
+
+  if (activationResult.status === 'already_active') {
+    onStageChange?.('done', 'Duplicate file — already imported and active');
+    return {
+      ok: true,
+      bulk: true,
+      count: 0,
+      excluded: scanResult.totalRows || bundle.totalRowCount,
+      importId: activationResult.bundle_id,
+      bundle_id: activationResult.bundle_id,
+      raw_archive_id: rawArchiveId,
+      revision: activationResult.revision,
+      duplicate: true,
+      reason: 'Duplicate file — already imported and active.',
+    };
   }
 
   const { syncBulkBundles } = await import('./bulkHydrationService.js');

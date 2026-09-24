@@ -1084,3 +1084,16 @@ When `/api/bulk-import/activate` encounters an active manifest for the same prop
 2. When the caller explicitly provides `supersedes_bundle_id` and `expected_revision`, the Worker validates that the predecessor exists, is active, belongs to the same property and account, and matches the expected revision (protecting against concurrent modifications with `IMPORT_LINEAGE_CONFLICT`).
 3. D1 batch execution inserts the new manifest, marks the predecessor `superseded` (`active = 0`, `superseded_by_bundle_id = <new_id>`), updates `raw_file_archive` (`bundle_id = <new_id>`, `status = 'processed'`), and increments `business_sync_state.revision`.
 4. Both raw archives remain intact in object storage for immutable auditing. Tested in `scripts/probe-bulk-import-replacement-flow.mjs`.
+
+### Concurrent Activation Recovery and Revision Conflict Resolution (2026-09-24)
+
+When multiple report activations are dispatched concurrently (such as in batch uploads or parallel browser operations):
+1. **Request Body Stream Preservation**: In `worker/bulk-import.js`, JSON request bodies are parsed once upfront (`readJsonBody`) rather than inside the `retryRevision` loop, preventing body-stream consumption or clone exhaustion during retries across `activate`, `supersede`, and `delete`.
+2. **Jittered Exponential Backoff**: `retryRevision` catches retryable D1 constraint errors (`CHECK constraint failed: ok`, `UNIQUE constraint failed: business_change.account_id, business_change.seq`, etc.) and adds bounded jittered backoff (`30 * 2^attempt + random(0-40)ms`). This breaks lockstep collisions between concurrent Cloudflare Worker isolates and gives winning transactions time to commit.
+3. **Authoritative Re-evaluation**: On retry, `activateBundle` re-queries D1 state:
+   - If the winning transaction committed identical content (`normalized_hash`), it returns HTTP 200 `{ ok: true, status: 'already_active' }`, which the client handles as duplicate (recording 0 rows without failure).
+   - If the winning transaction committed an overlapping report (e.g. `Hotel Statistics.csv` and `Hotel Statistics (1).csv`), it throws HTTP 409 `IMPORT_REPLACEMENT_REQUIRED` with candidate predecessor metadata for explicit user replacement.
+   - If unrelated, it reads the incremented revision from `business_sync_state` and commits atomically.
+4. **Client-Side Bounded Retry**: In `src/lib/bulkImportPipeline.js`, `activateBundleOnServer` catches transient HTTP 409 `IMPORT_REVISION_CONFLICT` and retries with backoff up to 3 times, allowing the client to re-evaluate the authoritative committed state and preventing transient concurrency errors from surfacing as failures in the UI.
+5. **Guard Integrity**: All D1 transaction guards (`business_mutation_guard` `CHECK(ok=1)`, `business_change.seq` uniqueness) remain strictly enforced. Validated in `scripts/probe-bulk-import-concurrency-recovery.mjs`.
+

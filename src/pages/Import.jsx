@@ -498,6 +498,7 @@ export default function Import() {
               maxDate: scan.maxDate || pendingItem.max_date || "",
             },
             candidates,
+            selectedCandidateIds: candidates.map((c) => c.id),
             selectedCandidateId: candidates[0]?.id || innerErr.existing_bundle_id,
           });
           return;
@@ -516,13 +517,23 @@ export default function Import() {
     setReplacementLoading(true);
     setReplacementError(null);
     try {
-      const selectedCandidate = replacementConflict.candidates.find(
-        (c) => c.id === replacementConflict.selectedCandidateId
-      ) || replacementConflict.candidates[0];
+      const selectedIds = replacementConflict.selectedCandidateIds || (replacementConflict.selectedCandidateId ? [replacementConflict.selectedCandidateId] : []);
+      const selectedCandidates = replacementConflict.candidates.filter(
+        (c) => selectedIds.includes(c.id)
+      );
 
-      if (!selectedCandidate) {
+      if (selectedCandidates.length === 0) {
         throw new Error("No active report selected to replace.");
       }
+
+      if (selectedCandidates.length < replacementConflict.candidates.length) {
+        throw new Error(`All ${replacementConflict.candidates.length} overlapping reports must be selected to proceed.`);
+      }
+
+      const predecessors = selectedCandidates.map((c) => ({
+        id: c.id,
+        expected_revision: c.revision,
+      }));
 
       const { scan, propertyId: effPropertyId, propertyName: effPropertyName, sourceFile, rawBytes, isResume, item } = replacementConflict;
 
@@ -534,8 +545,9 @@ export default function Import() {
         forceImport: true,
         rawBytes,
         resumeManifest: isResume ? item : null,
-        supersedesBundleId: selectedCandidate.id,
-        expectedRevision: selectedCandidate.revision,
+        predecessors,
+        supersedesBundleId: selectedCandidates[0].id,
+        expectedRevision: selectedCandidates[0].revision,
       });
 
       // Refresh pending archives
@@ -1039,6 +1051,7 @@ export default function Import() {
             maxDate: item.scan?.maxDate || "",
           },
           candidates,
+          selectedCandidateIds: candidates.map((c) => c.id),
           selectedCandidateId: candidates[0]?.id || e.existing_bundle_id,
         };
         setQueue((prev) => prev.map((q) => (q.key === item.key ? {
@@ -2248,19 +2261,48 @@ export default function Import() {
 
               {/* Active Conflicting Reports */}
               <div className="space-y-2">
-                <label className="text-xs font-medium text-slate-300">
-                  Select Active Report to Supersede:
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-slate-300">
+                    {replacementConflict.candidates.length > 1
+                      ? `Overlapping Active Reports to Supersede (${replacementConflict.candidates.length}):`
+                      : "Select Active Report to Supersede:"}
+                  </label>
+                  {replacementConflict.candidates.length > 1 && (
+                    <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[11px] font-medium text-amber-300">
+                      Multi-Report Replacement
+                    </span>
+                  )}
+                </div>
+                {replacementConflict.candidates.length > 1 && (
+                  <p className="text-[11px] text-amber-300/80">
+                    This incoming report covers the timeframe of {replacementConflict.candidates.length} active reports. To avoid duplicate analytical records, all overlapping active reports must be superseded.
+                  </p>
+                )}
                 {replacementConflict.candidates.length === 0 ? (
                   <p className="text-xs text-slate-400 italic">No detailed candidate list returned by server; active report will be superseded.</p>
                 ) : (
                   <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
                     {replacementConflict.candidates.map((cand) => {
-                      const isSelected = replacementConflict.selectedCandidateId === cand.id;
+                      const selectedIds = replacementConflict.selectedCandidateIds || (replacementConflict.selectedCandidateId ? [replacementConflict.selectedCandidateId] : []);
+                      const isSelected = selectedIds.includes(cand.id);
+                      const toggleCandidate = () => {
+                        setReplacementConflict((prev) => {
+                          if (!prev) return null;
+                          const curIds = prev.selectedCandidateIds || (prev.selectedCandidateId ? [prev.selectedCandidateId] : []);
+                          const nextIds = curIds.includes(cand.id)
+                            ? curIds.filter((id) => id !== cand.id)
+                            : [...curIds, cand.id];
+                          return {
+                            ...prev,
+                            selectedCandidateIds: nextIds,
+                            selectedCandidateId: nextIds[0] || null,
+                          };
+                        });
+                      };
                       return (
                         <div
                           key={cand.id}
-                          onClick={() => setReplacementConflict((prev) => prev ? { ...prev, selectedCandidateId: cand.id } : null)}
+                          onClick={toggleCandidate}
                           className={`cursor-pointer rounded-xl border p-3 transition-colors ${
                             isSelected
                               ? "border-[#FFB547] bg-[#FFB547]/10"
@@ -2270,11 +2312,11 @@ export default function Import() {
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
                               <input
-                                type="radio"
+                                type="checkbox"
                                 name="replacement_candidate"
                                 checked={isSelected}
-                                onChange={() => setReplacementConflict((prev) => prev ? { ...prev, selectedCandidateId: cand.id } : null)}
-                                className="text-[#FFB547] focus:ring-[#FFB547]"
+                                onChange={toggleCandidate}
+                                className="rounded text-[#FFB547] focus:ring-[#FFB547]"
                               />
                               <span className="text-xs font-semibold text-slate-200 font-mono">
                                 {cand.original_file_name || cand.id}
@@ -2328,7 +2370,11 @@ export default function Import() {
             <button
               type="button"
               onClick={handleConfirmReplacement}
-              disabled={replacementLoading || !replacementConflict?.selectedCandidateId}
+              disabled={
+                replacementLoading ||
+                !(replacementConflict?.selectedCandidateIds?.length || replacementConflict?.selectedCandidateId) ||
+                ((replacementConflict?.selectedCandidateIds?.length || 0) < (replacementConflict?.candidates?.length || 0))
+              }
               className="flex items-center gap-1.5 rounded-lg bg-[#00E096] px-4 py-2 text-xs font-medium text-[#040D1A] transition-colors hover:bg-[#00c885] disabled:opacity-50"
             >
               {replacementLoading ? (
@@ -2339,7 +2385,7 @@ export default function Import() {
               ) : (
                 <>
                   <CheckCircle2 className="h-3.5 w-3.5" />
-                  Confirm & Replace Report
+                  Confirm & Replace Report{replacementConflict?.candidates?.length > 1 ? "s" : ""}
                 </>
               )}
             </button>

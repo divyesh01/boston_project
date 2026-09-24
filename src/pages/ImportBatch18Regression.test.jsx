@@ -558,4 +558,99 @@ describe("Import <=18-File Batch & Regression Coverage", () => {
       expect(screen.queryByText(/awaiting processing/i)).toBeNull();
     });
   });
+
+  it("handles multi-predecessor replacement requiring all active overlapping reports to be superseded", async () => {
+    const pendingArchive = {
+      id: "raw_source_multi",
+      raw_archive_id: "raw_source_multi",
+      server_property_id: "prop-boston",
+      report_type: "source",
+      original_file_name: "Source Summary (1).csv",
+      file_size: 433742,
+    };
+
+    mockFetchPendingRawArchives
+      .mockResolvedValueOnce([pendingArchive])
+      .mockResolvedValueOnce([]);
+
+    mockDownloadRawArchiveFromServer.mockResolvedValueOnce({
+      buffer: new TextEncoder().encode("Date,Source\n2026-08-01,OTA"),
+      contentType: "text/csv",
+    });
+
+    mockScanReport.mockResolvedValueOnce({
+      type: "source",
+      totalRows: 7918,
+      rowsToImport: Array(7918).fill({}),
+      sections: [{ name: "Source", rows: 7918 }],
+      validation: { ok: true, findings: [] },
+    });
+
+    const candidates = [
+      { id: "pred_q1", original_file_name: "Source_Summary_Q1.csv", revision: 2177, row_count: 3330 },
+      { id: "pred_q2", original_file_name: "Source_Summary_Q2.csv", revision: 2401, row_count: 3367 },
+      { id: "pred_q3", original_file_name: "Source_Summary_Q3.csv", revision: 2402, row_count: 1221 },
+    ];
+
+    const overlapErr = Object.assign(new Error("Report overlaps an active import; select its replacement explicitly"), {
+      code: "IMPORT_REPLACEMENT_REQUIRED",
+      status: 409,
+      existing_bundle_id: "pred_q1",
+      existing_bundle: candidates[0],
+      candidates,
+    });
+
+    mockExecuteBulkImport.mockRejectedValueOnce(overlapErr);
+
+    render(<Import />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Found 1 server-archived original file awaiting processing/i)).toBeDefined();
+    });
+
+    const resumeBtn = screen.getByRole("button", { name: /Resume Source Summary \(1\)\.csv \(source\)/i });
+    fireEvent.click(resumeBtn);
+
+    // Dialog opens with multi-report warning and all 3 candidates
+    await waitFor(() => {
+      expect(screen.getByText("Explicit Report Replacement Required")).toBeDefined();
+      expect(screen.getByText(/Multi-Report Replacement/i)).toBeDefined();
+      expect(screen.getByText("Source_Summary_Q1.csv")).toBeDefined();
+      expect(screen.getByText("Source_Summary_Q2.csv")).toBeDefined();
+      expect(screen.getByText("Source_Summary_Q3.csv")).toBeDefined();
+    });
+
+    // Confirm button is ready
+    mockExecuteBulkImport.mockResolvedValueOnce({
+      ok: true,
+      bulk: true,
+      count: 7918,
+      excluded: 0,
+      importId: "bulk-imp-multi-replaced",
+    });
+
+    const confirmBtn = screen.getByRole("button", { name: /confirm & replace report/i });
+    expect(confirmBtn).not.toBeDisabled();
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(mockExecuteBulkImport).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "source" }),
+        expect.objectContaining({
+          predecessors: [
+            { id: "pred_q1", expected_revision: 2177 },
+            { id: "pred_q2", expected_revision: 2401 },
+            { id: "pred_q3", expected_revision: 2402 },
+          ],
+          supersedesBundleId: "pred_q1",
+          expectedRevision: 2177,
+          resumeManifest: pendingArchive,
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Explicit Report Replacement Required")).toBeNull();
+    });
+  });
 });

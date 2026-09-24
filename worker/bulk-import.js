@@ -850,76 +850,162 @@ async function activateBundle(requestOrBody, env, scope) {
     verifyObject(await rawStore.head(sourceKey),scope,propertyId,rawHash,true);
   }
   const bundleId = raw?.id || String(body.id || crypto.randomUUID());
-  const predecessorId = body.supersedes_bundle_id ? String(body.supersedes_bundle_id) : null;
-  let predecessor = null;
-  if (predecessorId) {
-    predecessor = await queryFirst(env, "SELECT * FROM import_bundle_manifest WHERE account_id=? AND id=?", [scope.accountId, predecessorId]);
-    if (!predecessor || predecessor.id === bundleId || predecessor.server_property_id !== propertyId ||
-        predecessor.report_type !== body.report_type || predecessor.status !== 'active' || predecessor.superseded_by_bundle_id ||
-        Number(body.expected_revision) !== predecessor.revision) throw new BulkImportError('Replacement is stale or out of scope', 409, { code: 'IMPORT_LINEAGE_CONFLICT' });
+
+  // Parse generic predecessor list (backward compatible with supersedes_bundle_id + expected_revision)
+  let requestedPredecessors = [];
+  if (Array.isArray(body.predecessors) && body.predecessors.length > 0) {
+    requestedPredecessors = body.predecessors.map((p) => {
+      if (typeof p === "string") return { id: p, expected_revision: body.expected_revision != null ? Number(body.expected_revision) : null };
+      return {
+        id: String(p.id || p.bundle_id || ""),
+        expected_revision: p.expected_revision != null ? Number(p.expected_revision) : (p.revision != null ? Number(p.revision) : (body.expected_revision != null ? Number(body.expected_revision) : null)),
+      };
+    });
+  } else if (body.supersedes_bundle_id) {
+    requestedPredecessors = [{
+      id: String(body.supersedes_bundle_id),
+      expected_revision: body.expected_revision != null ? Number(body.expected_revision) : null,
+    }];
   }
-  const overlap = await queryFirst(env, `SELECT id FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND report_type=?
+
+  // Discover all active overlapping reports for this account, property, and report type
+  const overlapCheck = await queryFirst(env, `SELECT id FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND report_type=?
     AND status='active' AND id<>? AND (raw_file_hash=? OR (min_date<=? AND max_date>=?)) LIMIT 1`,
-    [scope.accountId, propertyId, String(body.report_type || ''), predecessorId || '', rawHash, maxDate || '', minDate || '']);
-  if (overlap) {
-    const overlaps = await queryAll(env, `SELECT id, revision, original_file_name, report_type, min_date, max_date, created_at, activated_at, row_count, raw_file_hash
-      FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND report_type=?
-      AND status='active' AND id<>? AND (raw_file_hash=? OR (min_date<=? AND max_date>=?)) ORDER BY revision DESC LIMIT 5`,
-      [scope.accountId, propertyId, String(body.report_type || ''), predecessorId || '', rawHash, maxDate || '', minDate || '']);
-    const first = overlaps[0] || overlap;
+    [scope.accountId, propertyId, String(body.report_type || ''), bundleId, rawHash, maxDate || '', minDate || '']);
+
+  const activeOverlaps = overlapCheck ? await queryAll(env, `SELECT id, revision, original_file_name, report_type, min_date, max_date, created_at, activated_at, row_count, raw_file_hash, server_property_id
+    FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND report_type=?
+    AND status='active' AND id<>? AND (raw_file_hash=? OR (min_date<=? AND max_date>=?)) ORDER BY min_date ASC, revision DESC`,
+    [scope.accountId, propertyId, String(body.report_type || ''), bundleId, rawHash, maxDate || '', minDate || '']) : [];
+
+  if (requestedPredecessors.length === 0 && activeOverlaps.length > 0) {
+    const first = activeOverlaps[0];
     throw new BulkImportError('Report overlaps an active import; select its replacement explicitly', 409, {
       code: 'IMPORT_REPLACEMENT_REQUIRED',
       existing_bundle_id: first.id,
       existing_bundle: first,
-      candidates: overlaps.length > 0 ? overlaps : [first],
+      candidates: activeOverlaps,
     });
   }
+
+  const validatedPredecessors = [];
+  if (requestedPredecessors.length > 0) {
+    const seenPredIds = new Set();
+    for (const p of requestedPredecessors) {
+      if (!p.id || seenPredIds.has(p.id)) {
+        throw new BulkImportError('Duplicate or invalid predecessor in replacement list', 409, { code: 'IMPORT_LINEAGE_CONFLICT' });
+      }
+      seenPredIds.add(p.id);
+
+      const predecessor = await queryFirst(env, "SELECT * FROM import_bundle_manifest WHERE account_id=? AND id=?", [scope.accountId, p.id]);
+      if (!predecessor) throw new BulkImportError('Replacement is stale or out of scope', 409, { code: 'IMPORT_LINEAGE_CONFLICT' });
+      if (predecessor.id === bundleId) throw new BulkImportError('Bundle cannot replace itself', 409, { code: 'IMPORT_LINEAGE_CONFLICT' });
+      if (predecessor.server_property_id !== propertyId) throw new BulkImportError('Predecessor belongs to another property', 409, { code: 'IMPORT_LINEAGE_CONFLICT' });
+      if (predecessor.report_type !== body.report_type) throw new BulkImportError('Predecessor report type mismatch', 409, { code: 'IMPORT_LINEAGE_CONFLICT' });
+      if (predecessor.status !== 'active' || predecessor.superseded_by_bundle_id) {
+        throw new BulkImportError('Replacement is stale or out of scope', 409, { code: 'IMPORT_LINEAGE_CONFLICT' });
+      }
+      if (p.expected_revision != null && Number(p.expected_revision) !== predecessor.revision) {
+        throw new BulkImportError('Replacement is stale or out of scope', 409, { code: 'IMPORT_LINEAGE_CONFLICT' });
+      }
+
+      // Predecessor must actually overlap the incoming import (identical raw hash OR intersecting dates)
+      const predOverlaps = (predecessor.raw_file_hash === rawHash) ||
+        (predecessor.min_date != null && predecessor.max_date != null && minDate != null && maxDate != null &&
+         predecessor.min_date <= maxDate && predecessor.max_date >= minDate);
+      if (!predOverlaps) {
+        throw new BulkImportError('Predecessor does not overlap import date range', 409, { code: 'IMPORT_LINEAGE_CONFLICT' });
+      }
+
+      validatedPredecessors.push(predecessor);
+    }
+
+    // Require ALL active overlaps to be selected to prevent duplicate analytical data
+    const missing = activeOverlaps.filter((ao) => !seenPredIds.has(ao.id));
+    if (missing.length > 0) {
+      throw new BulkImportError('All overlapping active imports must be selected for replacement', 409, {
+        code: 'IMPORT_REPLACEMENT_REQUIRED',
+        existing_bundle_id: missing[0].id,
+        existing_bundle: missing[0],
+        candidates: activeOverlaps,
+        missing_predecessor_ids: missing.map((m) => m.id),
+      });
+    }
+  }
+
   const state = await queryFirst(env, 'SELECT revision FROM business_sync_state WHERE account_id=?', [scope.accountId]);
   if (!state) throw new BulkImportError('Sync state is not initialized', 409);
   const revision = Number(state.revision) + 1;
   const now = new Date().toISOString();
   const statements = [];
-  // Transaction-time overlap guard: a concurrent activation can commit an
-  // overlapping bundle after the preflight SELECT above returned null but before
-  // this batch executes, and it would allocate a distinct revision, so the unique
-  // business_change seq cannot catch it. Re-check the overlap predicate at commit
-  // time behind CHECK(ok=1), which rolls back the whole batch atomically.
+
+  // Overlap guard behind CHECK(ok=1): ensures no concurrent activation committed another overlapping report
+  const predIds = validatedPredecessors.map((p) => p.id);
+  const predPlaceholders = predIds.map(() => '?').join(',');
+  const notInClause = predIds.length > 0 ? `AND id NOT IN (${predPlaceholders})` : '';
   statements.push(env.DB.prepare(`INSERT INTO business_mutation_guard(account_id,mutation_id,request_hash,ok,created_at)
     VALUES(?,?,?,CASE WHEN NOT EXISTS(SELECT 1 FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND report_type=?
-      AND status='active' AND id<>? AND (raw_file_hash=? OR (min_date<=? AND max_date>=?)) LIMIT 1) THEN 1 ELSE 0 END,?)`)
-    .bind(scope.accountId,`overlap-activate:${bundleId}`,hash,scope.accountId,propertyId,String(body.report_type||''),predecessorId||'',rawHash,maxDate||'',minDate||'',now));
+      AND status='active' AND id<>? ${notInClause} AND (raw_file_hash=? OR (min_date<=? AND max_date>=?)) LIMIT 1) THEN 1 ELSE 0 END,?)`)
+    .bind(scope.accountId, `overlap-activate:${bundleId}`, hash, scope.accountId, propertyId, String(body.report_type||''), bundleId, ...predIds, rawHash, maxDate||'', minDate||'', now));
+
   if (source && !raw) statements.push(env.DB.prepare(`INSERT INTO business_mutation_guard(account_id,mutation_id,request_hash,ok,created_at)
     VALUES(?,?,?,CASE WHEN EXISTS(SELECT 1 FROM import_bundle_manifest WHERE account_id=? AND id=? AND archive_status='archived') THEN 1 ELSE 0 END,?)`)
     .bind(scope.accountId,`source-activate:${bundleId}`,hash,scope.accountId,source.id,now));
+
   if (raw) statements.push(env.DB.prepare(`INSERT INTO business_mutation_guard(account_id,mutation_id,request_hash,ok,created_at)
     VALUES(?,?,?,CASE WHEN EXISTS(SELECT 1 FROM import_bundle_manifest WHERE account_id=? AND id=?
       AND status IN ('raw_archived','failed_processing') AND archive_status='archived') THEN 1 ELSE 0 END,?)`)
     .bind(scope.accountId,`raw-activate:${bundleId}`,hash,scope.accountId,bundleId,now));
-  // CHECK(ok=1) aborts the complete transaction if concurrent state changed.
-  if (predecessor) statements.push(env.DB.prepare(`INSERT INTO business_mutation_guard(account_id,mutation_id,request_hash,ok,created_at)
-    VALUES (?,?,?, CASE WHEN EXISTS(SELECT 1 FROM import_bundle_manifest WHERE account_id=? AND id=? AND status='active' AND revision=?) THEN 1 ELSE 0 END,?)`)
-    .bind(scope.accountId, `replace:${bundleId}`, hash, scope.accountId, predecessor.id, predecessor.revision, now));
-  if (predecessor) statements.push(env.DB.prepare("UPDATE import_bundle_manifest SET status='superseded',superseded_by_bundle_id=?,superseded_at=?,revision=? WHERE account_id=? AND id=?")
-    .bind(bundleId, now, revision, scope.accountId, predecessor.id));
+
+  // CHECK(ok=1) verifies each predecessor is still active and unmodified concurrently
+  for (const pred of validatedPredecessors) {
+    statements.push(env.DB.prepare(`INSERT INTO business_mutation_guard(account_id,mutation_id,request_hash,ok,created_at)
+      VALUES (?,?,?, CASE WHEN EXISTS(SELECT 1 FROM import_bundle_manifest WHERE account_id=? AND id=? AND status='active' AND revision=?) THEN 1 ELSE 0 END,?)`)
+      .bind(scope.accountId, `replace:${bundleId}:${pred.id}`, hash, scope.accountId, pred.id, pred.revision, now));
+  }
+
+  // Update each predecessor to status='superseded' pointing to successor
+  for (const pred of validatedPredecessors) {
+    statements.push(env.DB.prepare("UPDATE import_bundle_manifest SET status='superseded',superseded_by_bundle_id=?,superseded_at=?,revision=? WHERE account_id=? AND id=?")
+      .bind(bundleId, now, revision, scope.accountId, pred.id));
+  }
+
+  // Record relational lineage in import_bundle_lineage table
+  for (const pred of validatedPredecessors) {
+    statements.push(env.DB.prepare("INSERT OR IGNORE INTO import_bundle_lineage(account_id,successor_bundle_id,predecessor_bundle_id,created_at) VALUES(?,?,?,?)")
+      .bind(scope.accountId, bundleId, pred.id, now));
+  }
+
+  // Backward compatibility: supersedes_bundle_id on successor points to primary predecessor
+  const primaryPredecessorId = validatedPredecessors.length > 0 ? validatedPredecessors[0].id : null;
+
   if (raw) {
     statements.push(env.DB.prepare(`UPDATE import_bundle_manifest SET normalized_hash=?,object_key=?,normalized_object_key=?,identity_version=?,
       report_type=?,row_count=?,entity_counts_json=?,min_date=?,max_date=?,compressed_size=?,processing_status='active',status='active',activated_at=?,revision=?,supersedes_bundle_id=?
       WHERE account_id=? AND id=? AND status IN ('raw_archived','failed_processing')`)
-      .bind(hash,key,key,identityVersion,String(body.report_type||''),rowCount,JSON.stringify(counts),minDate,maxDate,head.size,now,revision,predecessorId,scope.accountId,bundleId));
+      .bind(hash,key,key,identityVersion,String(body.report_type||''),rowCount,JSON.stringify(counts),minDate,maxDate,head.size,now,revision,primaryPredecessorId,scope.accountId,bundleId));
   } else {
     statements.push(env.DB.prepare(`INSERT INTO import_bundle_manifest(id,account_id,server_property_id,report_type,raw_file_hash,normalized_hash,object_key,normalized_object_key,
       identity_version,row_count,entity_counts_json,min_date,max_date,original_file_name,compressed_size,uploaded_by,processing_status,status,created_at,activated_at,revision,supersedes_bundle_id)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'active','active',?,?,?,?)`)
-      .bind(bundleId,scope.accountId,propertyId,String(body.report_type||''),rawHash,hash,key,key,identityVersion,rowCount,JSON.stringify(counts),minDate,maxDate,String(body.original_file_name||'report.csv'),head.size,String(scope.user.id),now,now,revision,predecessorId));
+      .bind(bundleId,scope.accountId,propertyId,String(body.report_type||''),rawHash,hash,key,key,identityVersion,rowCount,JSON.stringify(counts),minDate,maxDate,String(body.original_file_name||'report.csv'),head.size,String(scope.user.id),now,now,revision,primaryPredecessorId));
     if (source) statements.push(env.DB.prepare("UPDATE import_bundle_manifest SET raw_archive_id=?,raw_object_key=?,raw_size=?,raw_mime_type=?,archive_status='archived' WHERE account_id=? AND id=?")
       .bind(source.raw_archive_id||source.id,source.raw_object_key,source.raw_size,source.raw_mime_type,scope.accountId,bundleId));
   }
   statements.push(env.DB.prepare('UPDATE business_sync_state SET revision=? WHERE account_id=?').bind(revision,scope.accountId));
   statements.push(env.DB.prepare(`INSERT INTO business_change(account_id,seq,generation_id,entity_name,record_key,server_property_id,operation,row_json,row_hash,mutation_id,request_hash,created_at)
     VALUES(?,?,'bulk','ImportBundle',?,?,'upsert',?,?,?,?,?)`)
-    .bind(scope.accountId,revision,bundleId,propertyId,JSON.stringify({bundle_id:bundleId}),hash,`bulk:${bundleId}:activate`,hash,now));
+    .bind(scope.accountId,revision,bundleId,propertyId,JSON.stringify({bundle_id:bundleId,superseded_bundle_ids:predIds}),hash,`bulk:${bundleId}:activate`,hash,now));
   await env.DB.batch(statements);
-  return Response.json({ok:true,status:'active',bundle_id:bundleId,revision,row_count:rowCount,superseded_count:predecessor ? 1 : 0},{status:201});
+  return Response.json({
+    ok: true,
+    status: 'active',
+    bundle_id: bundleId,
+    revision,
+    row_count: rowCount,
+    superseded_count: validatedPredecessors.length,
+    superseded_bundle_ids: predIds,
+  }, { status: 201 });
 }
 
 /**

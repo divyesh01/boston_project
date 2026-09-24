@@ -816,4 +816,12 @@ When uploading or resuming reports that overlap an active analytical period for 
    - The backend marks the predecessor manifest as `superseded` and activates the new manifest atomically while keeping both raw archives 100% intact.
    - Covered by `scripts/probe-bulk-import-replacement-flow.mjs` and `src/pages/ImportBatch18Regression.test.jsx`.
 
+4. **Multi-Report Predecessor Replacement (`many-to-one`)**:
+   - In `src/pages/Import.jsx`, when an incoming file overlaps multiple active reports (e.g. `Source Summary (1).csv` covering Jan 1 → Aug 2 overlapping three quarterly reports), `candidates` contains all active overlaps.
+   - The UI automatically selects all overlapping reports with interactive checkboxes and warns the user: `This incoming report covers the timeframe of N active reports. To avoid duplicate analytical records, all overlapping active reports must be superseded.`
+   - Confirming replacement submits `predecessors: [{ id, expected_revision }]` to `executeBulkImport`, which forwards to `activateBundleOnServer`.
+   - All predecessors are superseded atomically in D1, 0 duplicate analytical rows are stored, and Dexie hydration flushes old superseded rows while syncing the new active bundle.
+   - Tested in `src/pages/ImportBatch18Regression.test.jsx` and `scripts/probe-bulk-import-multi-replacement.mjs`.
+
+
 

@@ -608,6 +608,7 @@ export async function executeBulkImport(scanResult, meta = {}) {
     resumeManifest = null,
     supersedesBundleId: requestedPredecessor = null,
     expectedRevision: requestedRevision = null,
+    predecessors: requestedPredecessors = null,
   } = meta;
 
   if (typeof propertyId !== 'string' || propertyId.trim() === '') {
@@ -711,13 +712,22 @@ export async function executeBulkImport(scanResult, meta = {}) {
   });
 
   let supersedesBundleId = requestedPredecessor, expectedRevision = requestedRevision;
+  let predecessors = requestedPredecessors;
   if (supersedesBundleId && expectedRevision == null) {
     const predecessorManifest = await fetchManifestById(propertyId, supersedesBundleId);
     if (predecessorManifest) {
       expectedRevision = predecessorManifest.revision;
     }
   }
-  if (forceImport && !supersedesBundleId) {
+  if (!predecessors && supersedesBundleId) {
+    predecessors = [{ id: supersedesBundleId, expected_revision: expectedRevision }];
+  } else if (Array.isArray(predecessors) && predecessors.length > 0 && !supersedesBundleId) {
+    supersedesBundleId = typeof predecessors[0] === 'string' ? predecessors[0] : predecessors[0].id;
+    if (expectedRevision == null && typeof predecessors[0] === 'object') {
+      expectedRevision = predecessors[0].expected_revision ?? predecessors[0].revision ?? null;
+    }
+  }
+  if (forceImport && !supersedesBundleId && (!predecessors || predecessors.length === 0)) {
     let revision = 0, afterId = '';
     const candidates = [];
     for (;;) {
@@ -731,10 +741,16 @@ export async function executeBulkImport(scanResult, meta = {}) {
       const last = manifests[manifests.length - 1]; revision = last.revision; afterId = last.id;
     }
     if (candidates.length > 1) throw new Error('Correction overlaps multiple reports; reconcile the reports before importing');
-    if (candidates.length === 1) { supersedesBundleId = candidates[0].id; expectedRevision = candidates[0].revision; }
+    if (candidates.length === 1) {
+      supersedesBundleId = candidates[0].id;
+      expectedRevision = candidates[0].revision;
+      predecessors = [{ id: candidates[0].id, expected_revision: candidates[0].revision }];
+    }
   }
 
-  if (supersedesBundleId === bundleId) bundleId = `raw_${crypto.randomUUID()}`;
+  if (supersedesBundleId === bundleId || (Array.isArray(predecessors) && predecessors.some(p => (typeof p === 'string' ? p : p.id) === bundleId))) {
+    bundleId = `raw_${crypto.randomUUID()}`;
+  }
 
   // Compact D1 activation (Updates raw_archived row, 3 D1 rows written)
   let activationResult;
@@ -751,6 +767,7 @@ export async function executeBulkImport(scanResult, meta = {}) {
       identity_version: 2,
       supersedes_bundle_id: supersedesBundleId,
       expected_revision: expectedRevision,
+      predecessors,
       row_count: bundle.totalRowCount,
       entity_counts: bundle.entityCounts,
       min_date: bundle.minDate,

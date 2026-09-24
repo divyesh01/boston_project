@@ -1097,3 +1097,13 @@ When multiple report activations are dispatched concurrently (such as in batch u
 4. **Client-Side Bounded Retry**: In `src/lib/bulkImportPipeline.js`, `activateBundleOnServer` catches transient HTTP 409 `IMPORT_REVISION_CONFLICT` and retries with backoff up to 3 times, allowing the client to re-evaluate the authoritative committed state and preventing transient concurrency errors from surfacing as failures in the UI.
 5. **Guard Integrity**: All D1 transaction guards (`business_mutation_guard` `CHECK(ok=1)`, `business_change.seq` uniqueness) remain strictly enforced. Validated in `scripts/probe-bulk-import-concurrency-recovery.mjs`.
 
+### Atomic Multi-Predecessor Replacement and Relational Lineage (2026-09-24)
+
+When a consolidated or multi-quarter report (such as `Source Summary (1).csv` covering Jan 1 → Aug 2) is imported to replace multiple separate active reports (such as 3 quarterly reports covering the same period):
+1. **Generic Predecessor List**: `/api/bulk-import/activate` accepts `predecessors: [{ id, expected_revision }]` alongside backwards-compatible `supersedes_bundle_id`.
+2. **Strict Validation & Omission Fail-Closed**: Every predecessor in `predecessors` must exist, belong to the authorized account and property, match the report type, be currently active, match the expected revision, and actually overlap the date range or raw hash. Crucially, ALL active overlapping reports must be included in the replacement list; omitting any active overlap throws `IMPORT_REPLACEMENT_REQUIRED` with `missing_predecessor_ids` to prevent double-counting or partial overlaps.
+3. **Atomic Transaction & Single Revision Increment**: D1 batch execution marks all predecessors `superseded` (`status='superseded'`, `superseded_by_bundle_id = <successor_id>`), activates the successor (`status='active'`), inserts relational records into `import_bundle_lineage (account_id, successor_bundle_id, predecessor_bundle_id, created_at)` without comma-separated strings, updates `business_sync_state.revision` by exactly +1, and logs a single `business_change` event.
+4. **Backward Compatibility**: On the successor manifest, `supersedes_bundle_id` points to the primary predecessor (`predecessors[0].id`), maintaining full compatibility with all foreign keys and read-only audit queries.
+5. **Mutation Guard**: `business_mutation_guard` verifies at commit time behind `CHECK(ok=1)` that every predecessor is still active at its expected revision and no concurrent overlapping imports committed. Validated in `scripts/probe-bulk-import-multi-replacement.mjs`.
+
+

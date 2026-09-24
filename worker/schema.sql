@@ -986,3 +986,18 @@ CREATE INDEX IF NOT EXISTS idx_bundle_property_type
 
 CREATE INDEX IF NOT EXISTS idx_bundle_pending_processing
   ON import_bundle_manifest (account_id, server_property_id, status);
+
+CREATE TABLE IF NOT EXISTS import_bundle_lineage (
+  account_id            TEXT NOT NULL,
+  successor_bundle_id   TEXT NOT NULL,
+  predecessor_bundle_id TEXT NOT NULL,
+  created_at            TEXT NOT NULL,
+  PRIMARY KEY (account_id, successor_bundle_id, predecessor_bundle_id),
+  FOREIGN KEY (account_id) REFERENCES account(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_lineage_pred
+  ON import_bundle_lineage (account_id, predecessor_bundle_id);
+
+CREATE INDEX IF NOT EXISTS idx_lineage_succ
+  ON import_bundle_lineage (account_id, successor_bundle_id);

@@ -1,0 +1,37 @@
+{
+  "csv": "Date,Total Sold Rooms,Total Rooms,Room Revenue,Notes,Formula Value,Text Formula\n1/1/26,50,100,1234.56,,1234.56,\"=SUM(1,1)\"\n1/2/26,0,100,0,Merged note,,",
+  "formula": {
+    "f": "D2*1",
+    "v": 1234.56
+  },
+  "textFormula": "=SUM(1,1)",
+  "merges": [
+    {
+      "s": {
+        "c": 4,
+        "r": 2
+      },
+      "e": {
+        "c": 5,
+        "r": 2
+      }
+    }
+  ],
+  "rowsToImport": [
+    {
+      "date": "2026-01-01",
+      "rooms_sold": 50,
+      "total_rooms": 100,
+      "room_revenue": 1234.56,
+      "occupancy": 0.5
+    },
+    {
+      "date": "2026-01-02",
+      "rooms_sold": 0,
+      "total_rooms": 100,
+      "room_revenue": 0,
+      "occupancy": 0
+    }
+  ],
+  "validationOk": true
+}

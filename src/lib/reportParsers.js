@@ -376,8 +376,20 @@ async function skipExisting(entity, rows, keyFn, propertyId) {
 // '-12.50' with an apostrophe before parsing corrupts numeric data into NaN.
 async function getRowsArray(type, fileUrl, meta) {
   if (meta?.rawBytes && /\.xlsx?$/i.test(meta.sourceFile || '')) {
-    const XLSX = await import('xlsx');
     if (meta.rawBytes.byteLength > MAX_IMPORT_BYTES) throw new Error('Workbook exceeds import size limit');
+    if (/\.xlsx$/i.test(meta.sourceFile || '')) {
+      const bytes = meta.rawBytes;
+      const header = bytes instanceof ArrayBuffer
+        ? new Uint8Array(bytes, 0, Math.min(bytes.byteLength, 4))
+        : ArrayBuffer.isView(bytes)
+          ? new Uint8Array(bytes.buffer, bytes.byteOffset, Math.min(bytes.byteLength, 4))
+          : null;
+      if (!header || header.length < 4 || header[0] !== 0x50 || header[1] !== 0x4b ||
+          header[2] !== 0x03 || header[3] !== 0x04) {
+        throw new Error('Invalid XLSX workbook signature');
+      }
+    }
+    const XLSX = await import('xlsx');
     const workbook = XLSX.read(meta.rawBytes, { type: 'array', cellDates: true });
     if (workbook.SheetNames.length !== 1) throw new Error('Select a single-sheet report before importing; multiple sheets are not silently skipped');
     const sheet = workbook.Sheets[workbook.SheetNames[0]];

@@ -11,12 +11,10 @@
 //
 // THE REGRESSION THIS PROBE NOW ALSO GUARDS (found in the running app, not here).
 // The first fix derived the total by summing gross-row components including
-// `room_rent`. That is correct for raw GrossRevenueDay rows and WRONG for the
-// rows the Dashboard actually passes: `aggData.grossRows` comes from the daily
-// aggregate cache, whose GROSS_MISC_FIELDS list deliberately omits `room_rent`
-// because room revenue travels on the occupancy leg. Summing components off
-// those rows produced $9,339.50 as "Total Revenue" and a keep rate of -1262%.
-// Section [2] runs the real aggregate path so that can never ship again.
+// `room_rent` while also adding the occupancy room leg. That double-counted the
+// same room nights. The aggregate cache now keeps room_rent only as a fallback
+// when occupancy is absent, and grossRevenueForPeriod prefers occupancy whenever
+// it exists. Section [2] runs the real aggregate path so both cases stay equal.
 //
 // WHAT THIS PROBE IS *NOT* ASSERTING. It does not assert
 // sum(OccupancyDay.room_revenue) == $1,020,598.17. That would mean booking pet
@@ -154,12 +152,12 @@ const synth = buildSyntheticRows(aggregates);
 ok(synth.grossRows.length > 0, "aggregate path emitted gross rows", `${synth.grossRows.length} rows`);
 ok(synth.occRows.length > 0, "aggregate path emitted occupancy rows", `${synth.occRows.length} rows`);
 
-// Documents the trap rather than assuming it: these rows genuinely have no
-// room_rent, so any total built by summing `room_rent` off them reads $0 room.
+// The aggregate retains room rent as the gross-only fallback. The helper still
+// takes its room leg from occupancy when both ledgers are present.
 const aggRoomRent = sumCents(synth.grossRows.map((r) => r.room_rent));
-eq(aggRoomRent, 0, "aggregate gross rows carry NO room_rent (this is the trap)");
-ok(!Object.prototype.hasOwnProperty.call(synth.grossRows[0] || {}, "room_rent"),
-  "room_rent is absent from the aggregate row shape entirely");
+eq(aggRoomRent, ROOM_CENTS, "aggregate gross rows preserve room_rent for gross-only periods");
+ok(Object.prototype.hasOwnProperty.call(synth.grossRows[0] || {}, "room_rent"),
+  "room_rent is present in the aggregate row shape");
 
 const agg = grossRevenueForPeriod({ grossRows: synth.grossRows, occRows: synth.occRows });
 eq(agg.cents, TOTAL_CENTS, "total revenue via the aggregate cache");

@@ -29,7 +29,7 @@ FROM import_bundle_manifest WHERE status = 'active' GROUP BY report_type ORDER B
 SELECT id AS property_id, account_id, code, name, active FROM property ORDER BY account_id, id;
 
 -- 8. Business Sync State Revisions
-SELECT account_id, revision, updated_at FROM business_sync_state;
+SELECT account_id, revision FROM business_sync_state;
 
 -- 9. Business Change Stream Head Revision
 SELECT account_id, max(seq) AS head_seq, count(*) AS total_change_events FROM business_change GROUP BY account_id;

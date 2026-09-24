@@ -159,6 +159,8 @@ export default function Dashboard() {
 
   const { revenue, roomsSold, capacity, occupancy, adr, revpar } = currentStats;
   const uniqueDays = new Set(occRows.map((r) => String(r.date).slice(0, 10))).size;
+  const hasOccupancyData = occRows.length > 0;
+  const hasRevenueData = grossRows.length > 0 || hasOccupancyData;
 
   // `revenue` above is ROOM revenue — it is the numerator for ADR and RevPAR and
   // must stay room-only. The card labelled "Total Revenue" needs the actual
@@ -324,16 +326,20 @@ export default function Dashboard() {
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <KpiCard
             label="Total Revenue"
-            value={money2(totalRev.dollars)}
-            sub={totalRev.ancillaryCents > 0
+            value={hasRevenueData ? money2(totalRev.dollars) : "N/A"}
+            sub={!hasRevenueData
+              ? "No Gross Revenue or Occupancy Summary for this period"
+              : !grossRows.length
+                ? `${uniqueDays} days · room revenue only · no Gross Revenue report`
+                : totalRev.ancillaryCents > 0
               ? `${uniqueDays} days · room ${money2(fromCents(totalRev.roomCents))} + ancillary ${money2(fromCents(totalRev.ancillaryCents))}`
               : `${uniqueDays} unique days`}
             accent={C.purple}
             icon={DollarSign}
           />
-          <KpiCard label="Rooms Sold" value={num(roomsSold)} sub={`of ${num(capacity)} available`} accent={C.cyan} icon={BedDouble} />
-          <KpiCard label="Occupancy" value={pct(occupancy)} sub={`Avg ${num(Math.round(roomsSold / (occRows.length || 1)))} rooms/night`} accent={C.green} icon={Percent} />
-          <KpiCard label="ADR / RevPAR" value={money2(adr)} sub={`RevPAR ${money2(revpar)}`} accent={C.amber} icon={Gauge} />
+          <KpiCard label="Rooms Sold" value={hasOccupancyData ? num(roomsSold) : "N/A"} sub={hasOccupancyData ? `of ${num(capacity)} available` : "No Occupancy Summary for this period"} accent={C.cyan} icon={BedDouble} />
+          <KpiCard label="Occupancy" value={hasOccupancyData ? pct(occupancy) : "N/A"} sub={hasOccupancyData ? `Avg ${num(Math.round(roomsSold / occRows.length))} rooms/night` : "No Occupancy Summary for this period"} accent={C.green} icon={Percent} />
+          <KpiCard label="ADR / RevPAR" value={hasOccupancyData ? money2(adr) : "N/A"} sub={hasOccupancyData ? `RevPAR ${money2(revpar)}` : "No Occupancy Summary for this period"} accent={C.amber} icon={Gauge} />
         </div>
 
         {compareOn && prevStats && (

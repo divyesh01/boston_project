@@ -2,10 +2,10 @@ import React, { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, ClipboardList, BedDouble, Gauge } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { useOccupancy } from "@/lib/useHotelData";
+import { useGrossRevenue, useOccupancy } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { db } from "@/api/base44Client";
-import { money, num, inRange } from "@/lib/hotel";
+import { money, num, inRange, grossRevenueForPeriod } from "@/lib/hotel";
 import { sumCommittedPay } from "@/lib/payrollCalc";
 
 const THEMES = {
@@ -105,7 +105,9 @@ export default function ModuleCards() {
   // `months` was hardcoded to [] here while every other card on the dashboard
   // passes it, so in Multi-Month mode these three tiles summed the whole
   // envelope range while the KPIs above them summed only the picked months.
-  const { data: occ = [], isLoading } = useOccupancy(dateRange, property, months);
+  const { data: occ = [], isLoading: occupancyLoading } = useOccupancy(dateRange, property, months);
+  const { data: grossRows = [], isLoading: grossLoading } = useGrossRevenue(dateRange, property, months);
+  const isLoading = occupancyLoading || grossLoading;
 
   // Payroll used to be an unscoped `list(..., 500)`: it ignored both the
   // property selection and the period, so the tile reported every run ever
@@ -130,7 +132,7 @@ export default function ModuleCards() {
 
   const stats = useMemo(() => {
     const rowsSold = occ.reduce((a, r) => a + (Number(r.rooms_sold) || 0), 0);
-    const revenue = occ.reduce((a, r) => a + (Number(r.room_revenue) || 0), 0);
+    const revenue = grossRevenueForPeriod({ grossRows, occRows: occ });
     const approved = payroll.filter((p) => p.payroll_status === "approved").length;
     // Card headline shows committed cost, matching Money Kept rather than the
     // gross of every draft.
@@ -145,16 +147,20 @@ export default function ModuleCards() {
       },
       rooms: {
         statLabel: "Rooms Sold",
-        statValue: isLoading ? "—" : num(rowsSold),
+        statValue: isLoading ? "—" : occ.length ? num(rowsSold) : "N/A",
         statSub: occ.length ? `${num(occ.length)} days tracked` : "no data yet",
       },
       revenue: {
-        statLabel: "Gross Revenue",
-        statValue: isLoading ? "—" : money(revenue),
-        statSub: occ.length ? `${num(occ.length)} days tracked` : "no data yet",
+        statLabel: revenue.basis === "room" ? "Room Revenue" : "Gross Revenue",
+        statValue: isLoading ? "—" : (occ.length || grossRows.length) ? money(revenue.dollars) : "N/A",
+        statSub: grossRows.length
+          ? `${num(grossRows.length)} Gross Revenue rows`
+          : occ.length
+            ? `${num(occ.length)} days · room revenue only · no Gross Revenue report`
+            : "No Gross Revenue or Occupancy Summary for this period",
       },
     };
-  }, [occ, payroll, isLoading]);
+  }, [occ, grossRows, payroll, isLoading]);
 
   return (
     <section className="space-y-3">

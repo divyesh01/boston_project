@@ -39,6 +39,12 @@
     }
   ],
 
+  // Dedicated empty canary R2 buckets. Production uses separate GCS buckets.
+  "r2_buckets": [
+    { "binding": "RAW_ARCHIVE", "bucket_name": "rri-raw-canary-a61a110" },
+    { "binding": "BULK_DATA", "bucket_name": "rri-data-canary-a61a110" }
+  ],
+
   // Non-secret Access parameters. These are the AUDIENCE and TEAM DOMAIN the
   // Worker checks the injected Cf-Access JWT against — they are the public
   // identifiers of the Access application, not credentials, so they live here.

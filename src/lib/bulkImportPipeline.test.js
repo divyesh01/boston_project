@@ -10,7 +10,19 @@ import {
   destroyRawArchiveOnServer,
   deleteBundleOnServer,
   JSON_MUTATION_HEADERS,
+  isBulkImportEligible,
+  buildNormalizedBundle,
 } from "./bulkImportPipeline.js";
+
+describe('Gross Revenue bulk routing', () => {
+  it('accepts the parser gross type and keeps its rows', () => {
+    expect(isBulkImportEligible('gross')).toBe(true);
+    const bundle = buildNormalizedBundle({ type: 'gross', rowsToImport: [
+      { date: '2026-01-01', total_revenue: 123 },
+    ] }, { propertyId: 'property-1', sourceFile: 'Gross Revenue.csv' }, 'bundle-1');
+    expect(bundle.entityCounts).toEqual({ GrossRevenueDay: 1 });
+  });
+});
 
 describe("bulkImportPipeline mutating fetch headers", () => {
   let originalFetch;

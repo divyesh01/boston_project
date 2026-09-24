@@ -3,6 +3,8 @@ import { db } from '@/api/base44Client';
 import { useQuery } from "@tanstack/react-query";
 import { purgeExpiredUploadedReportRawRows } from '@/lib/uploadRetention';
 import { getDailyAggregates, buildSyntheticRows } from '@/lib/dailyAggregates';
+import { mergeImportHistory } from '@/lib/importHistory';
+import { fetchActiveManifests } from '@/lib/bulkImportPipeline';
 
 export function useReservations(dateRange, propertyId) {
   return useQuery({
@@ -256,7 +258,9 @@ export function useUploads() {
       // Background retention sweep: null out raw-row previews past their TTL so
       // IndexedDB stays lean. Fire-and-forget — never blocks the import history.
       purgeExpiredUploadedReportRawRows().catch(() => {});
-      return rows;
+      if (import.meta.env.VITE_USE_SERVER_DATA_SYNC !== 'true') return rows;
+      const manifests = await fetchActiveManifests('', { strict: true });
+      return mergeImportHistory(rows, manifests);
     },
   });
 }

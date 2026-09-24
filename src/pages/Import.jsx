@@ -65,7 +65,7 @@ import {
 function DownloadOriginalButton({ upload: u }) {
   const [downloading, setDownloading] = useState(false);
   const archiveId = u.raw_archive_id || u.import_id;
-  if (!archiveId) return null;
+  if (!u.bulk_import_id || !archiveId) return null;
 
   const handleDownload = async () => {
     setDownloading(true);
@@ -341,6 +341,26 @@ export default function Import() {
   const [replacementConflict, setReplacementConflict] = useState(null);
   const [replacementLoading, setReplacementLoading] = useState(false);
   const [replacementError, setReplacementError] = useState(null);
+
+  // A request can fail after the server commits. Reconcile failed queue cards
+  // against active manifest history before offering another write.
+  useEffect(() => {
+    if (!uploads.length) return;
+    const successful = new Map(uploads.filter((u) => u.content_hash && u.property_id)
+      .map((u) => [`${u.property_id}:${u.content_hash}`, u]));
+    const reconciled = queue.filter((item) => item.status === 'error' && item.contentHash &&
+      successful.has(`${item.propertyId || propertyId}:${item.contentHash}`));
+    if (!reconciled.length) return;
+    const matches = new Map(reconciled.map((item) => [item.key,
+      successful.get(`${item.propertyId || propertyId}:${item.contentHash}`)]));
+    const names = new Map(reconciled.map((item) => [item.name, matches.get(item.key)]));
+    setQueue((previous) => previous.map((item) => matches.has(item.key)
+      ? { ...item, status: 'done', count: Number(matches.get(item.key)?.rows_imported) || 0, error: '', replacementRequired: false }
+      : item));
+    setResults((previous) => previous.map((result) => names.has(result.name) && !result.ok
+      ? { ...result, ok: true, error: '', count: Number(names.get(result.name)?.rows_imported) || 0, excluded: 0 }
+      : result));
+  }, [uploads, queue, propertyId]);
 
   const accessibleProperties = useMemo(
     () => properties.filter((p) => canAccessProperty(p.id)),
@@ -1069,6 +1089,7 @@ export default function Import() {
       }
       const friendly = friendlyImportError(e);
       setQueue((prev) => prev.map((q) => (q.key === item.key ? { ...q, status: "error", error: friendly } : q)));
+      if (isBulkImportEligible(item.scan?.type || type)) Promise.resolve().then(() => refetch()).catch(() => {});
       return { name: item.name, ok: false, error: friendly, stopBatch: e?.authoritativeOutcomeUnknown === true };
     }
   };
@@ -2177,7 +2198,7 @@ export default function Import() {
                     <div className="min-w-0">
                       <p className="truncate text-sm text-white">{u.file_name}</p>
                       <p className="text-xs text-slate-500">
-                        {u.property_name || "—"} · {u.report_type} · {String(u.created_date || "").slice(0, 10)}
+                        {u.property_name || properties.find((p) => p.id === u.property_id)?.name || (accessibleProperties.length === 1 ? accessibleProperties[0].name : "—")} · {u.report_type} · {String(u.created_date || "").slice(0, 10)}
                       </p>
                     </div>
                   </div>

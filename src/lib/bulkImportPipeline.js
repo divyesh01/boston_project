@@ -4,6 +4,7 @@ import localDb from '../api/localDb.js';
 export const ENTITY_MAP = Object.freeze({
   occupancy: "OccupancyDay",
   source: "SourceDay",
+  gross: "GrossRevenueDay",
   gross_revenue: "GrossRevenueDay",
   payments: "PaymentDay",
   clerk: "ClerkShiftRecord",
@@ -15,7 +16,7 @@ export const ENTITY_MAP = Object.freeze({
 });
 
 export const BULK_REPORT_TYPES = Object.freeze([
-  'occupancy', 'source', 'gross_revenue', 'payments', 'clerk',
+  'occupancy', 'source', 'gross', 'gross_revenue', 'payments', 'clerk',
   'adjustments_refunds', 'hotel_statistics', 'transactions', 'timecard'
 ]);
 
@@ -531,15 +532,27 @@ export async function computeNormalizedHash(bundle) {
 /**
  * Fetch all currently active manifests for a given property.
  */
-export async function fetchActiveManifests(serverPropertyId) {
+export async function fetchActiveManifests(serverPropertyId, { strict = false } = {}) {
   try {
-    const url = new URL('/api/bulk-import/manifest', typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
-    if (serverPropertyId) url.searchParams.set('server_property_id', serverPropertyId);
-    const res = await fetch(url.toString());
-    if (!res.ok) return [];
-    const data = await res.json();
-    return Array.isArray(data.manifests) ? data.manifests.filter((m) => m.status === 'active') : [];
-  } catch {
+    let revision = 0, afterId = '';
+    const active = [];
+    for (;;) {
+      const url = new URL('/api/bulk-import/manifest', typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
+      if (serverPropertyId) url.searchParams.set('server_property_id', serverPropertyId);
+      url.searchParams.set('since_revision', String(revision));
+      url.searchParams.set('after_id', afterId);
+      const res = await fetch(url.toString());
+      if (!res.ok) throw new Error(`Import manifest failed: ${res.status}`);
+      const data = await res.json();
+      if (!Array.isArray(data.manifests)) throw new Error('Invalid import manifest');
+      active.push(...data.manifests.filter((m) => m.status === 'active'));
+      if (data.manifests.length < 200) return active;
+      const last = data.manifests.at(-1);
+      revision = Number(last.revision);
+      afterId = last.id;
+    }
+  } catch (error) {
+    if (strict) throw error;
     return [];
   }
 }
@@ -597,6 +610,7 @@ export async function activateBundleOnServer(metadata, { maxRetries = 3 } = {}) 
  * Phase 2: Normalized processing and activation in D1.
  */
 export async function executeBulkImport(scanResult, meta = {}) {
+  const reportType = scanResult.type === 'gross' ? 'gross_revenue' : scanResult.type;
   const {
     propertyId,
     propertyName = '',
@@ -660,7 +674,7 @@ export async function executeBulkImport(scanResult, meta = {}) {
     onStageChange?.('archiving', 'Uploading original to permanent archive…');
     const uploadRawRes = await uploadRawArchiveToServer({
       serverPropertyId: propertyId,
-      reportType: scanResult.type || 'unknown',
+      reportType: reportType || 'unknown',
       rawFileHash,
       rawArchiveId,
       originalFileName: sourceFile,
@@ -674,7 +688,7 @@ export async function executeBulkImport(scanResult, meta = {}) {
       raw_archive_id: rawArchiveId,
       id: rawArchiveId,
       server_property_id: propertyId,
-      report_type: scanResult.type || 'unknown',
+      report_type: reportType || 'unknown',
       raw_file_hash: rawFileHash,
       raw_object_key: rawObjectKey,
       original_file_name: sourceFile,
@@ -703,7 +717,7 @@ export async function executeBulkImport(scanResult, meta = {}) {
   // Upload normalized bundle to R2
   const uploadResult = await uploadBundleToServer({
     serverPropertyId: propertyId,
-    reportType: scanResult.type,
+    reportType,
     rawFileHash,
     normalizedHash,
     rowCount: bundle.totalRowCount,
@@ -735,7 +749,7 @@ export async function executeBulkImport(scanResult, meta = {}) {
       const response = await fetch(`/api/bulk-import/manifest?${query}`);
       if (!response.ok) throw new Error('Cannot verify replacement authority');
       const { manifests } = await response.json();
-      for (const m of manifests) if (m.status === 'active' && m.report_type === scanResult.type && m.normalized_hash !== normalizedHash &&
+      for (const m of manifests) if (m.status === 'active' && m.report_type === reportType && m.normalized_hash !== normalizedHash &&
         (m.raw_file_hash === rawFileHash || (m.min_date && m.max_date && bundle.minDate && bundle.maxDate && m.min_date <= bundle.maxDate && m.max_date >= bundle.minDate))) candidates.push(m);
       if (manifests.length < 200) break;
       const last = manifests[manifests.length - 1]; revision = last.revision; afterId = last.id;
@@ -759,7 +773,7 @@ export async function executeBulkImport(scanResult, meta = {}) {
       id: bundleId,
       source_archive_id: rawArchiveId,
       server_property_id: propertyId,
-      report_type: scanResult.type,
+      report_type: reportType,
       raw_file_hash: rawFileHash,
       normalized_hash: normalizedHash,
       object_key: uploadResult.object_key,

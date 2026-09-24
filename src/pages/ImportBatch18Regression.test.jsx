@@ -151,6 +151,7 @@ describe("Import <=18-File Batch & Regression Coverage", () => {
     mockProperties = [
       { id: "prop-boston", name: "Red Roof Boston" },
     ];
+    mockUploads = [];
     mockIncompleteSessions = [];
     mockScanReport.mockResolvedValue({
       type: "occupancy",
@@ -209,6 +210,23 @@ describe("Import <=18-File Batch & Regression Coverage", () => {
     // Verify alert was never called for rate limit or budget block
     expect(window.alert).not.toHaveBeenCalledWith(expect.stringContaining("Too many requests"));
     expect(window.alert).not.toHaveBeenCalledWith(expect.stringContaining("80,000 writes"));
+  });
+
+  it("clears a failed queue card when the server has activated that file", async () => {
+    mockExecuteBulkImport.mockRejectedValueOnce(new Error('Response lost after commit'));
+    const view = render(<Import />);
+    fireEvent.change(view.container.querySelector('input[type="file"]'), { target: {
+      files: [new File(['date,rooms\n2026-01-01,50'], 'server-success.csv', { type: 'text/csv' })],
+    } });
+    await waitFor(() => expect(screen.getByText('Ready to import')).toBeDefined());
+    fireEvent.click(screen.getByRole('button', { name: /import all/i }));
+    await waitFor(() => expect(screen.getByText('Response lost after commit')).toBeDefined());
+
+    mockUploads = [{ id: 'server-bundle', bulk_import_id: 'server-bundle', property_id: 'prop-boston',
+      content_hash: 'sha-server-success.csv', report_type: 'occupancy', file_name: 'server-success.csv', rows_imported: 100 }];
+    view.rerender(<Import />);
+    await waitFor(() => expect(screen.queryByText('Response lost after commit')).toBeNull());
+    expect(screen.getByText('100 rows')).toBeDefined();
   });
 
   it("marks duplicates and prevents duplicate import unless force import is enabled", async () => {

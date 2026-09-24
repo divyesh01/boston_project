@@ -1107,3 +1107,8 @@ When a consolidated or multi-quarter report (such as `Source Summary (1).csv` co
 5. **Mutation Guard**: `business_mutation_guard` verifies at commit time behind `CHECK(ok=1)` that every predecessor is still active at its expected revision and no concurrent overlapping imports committed. Validated in `scripts/probe-bulk-import-multi-replacement.mjs`.
 
 
+## Import page reconciliation — 2026-09-24
+
+The Import page reads active bulk manifests from the server when business sync is enabled. This lets a fresh browser show a completed Source Summary or Hotel Statistics report even when its local history cache is empty. A failed queue card is cleared when the same property's file hash is active on the server. Repeated legacy Gross Revenue history rows with the same file hash show as one row, keeping the first import session that owns the data. Gross Revenue's parser type (`gross`) now uses the bulk path under the server's `gross_revenue` type for future imports.
+
+The production Hotel Statistics successor had already written its revision-2403 change event and superseded its predecessor, but its manifest still said `raw_archived`. A guarded one-row D1 repair marked that successor active; no source archive or report rows were deleted. The pending count then fell to zero.

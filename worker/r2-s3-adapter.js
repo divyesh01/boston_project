@@ -205,7 +205,7 @@ function parseObject(key, response) {
   for (const [name, value] of response.headers.entries()) {
     const lowerName = name.toLowerCase();
     if (lowerName.startsWith("x-amz-meta-") || lowerName.startsWith("x-goog-meta-")) {
-      const metaKey = lowerName.startsWith("x-amz-meta-") ? name.slice("x-amz-meta-".length) : name.slice("x-goog-meta-".length);
+      const metaKey = lowerName.startsWith("x-amz-meta-") ? lowerName.slice("x-amz-meta-".length) : lowerName.slice("x-goog-meta-".length);
       customMetadata[metaKey] = decodeMetadataValue(value);
     }
   }
@@ -420,7 +420,7 @@ function gcsMetadataHeaders(object, bodyHeaders = {}) {
   if (object?.contentType) headers.set("content-type", object.contentType);
   if (object?.contentEncoding) headers.set("content-encoding", object.contentEncoding);
   for (const [name, value] of Object.entries(object?.metadata || {})) {
-    headers.set(`x-goog-meta-${name}`, encodeMetadataValue(value));
+    headers.set(`x-goog-meta-${name.toLowerCase()}`, encodeMetadataValue(value));
   }
   return headers;
 }
@@ -477,17 +477,26 @@ export class GcsJsonClient {
     if (method === "POST" && headers.get("x-goog-resumable") === "start") {
       const metadata = {};
       for (const [name, value] of headers.entries()) {
-        if (name.toLowerCase().startsWith("x-goog-meta-")) metadata[name.slice("x-goog-meta-".length)] = decodeMetadataValue(value);
+        const lowerName = name.toLowerCase();
+        if (lowerName.startsWith("x-goog-meta-")) {
+          metadata[lowerName.slice("x-goog-meta-".length)] = decodeMetadataValue(value);
+        }
       }
       const body = { name: key, metadata };
       if (headers.get("content-type")) body.contentType = headers.get("content-type");
       if (headers.get("content-encoding")) body.contentEncoding = headers.get("content-encoding");
-      const query = new URLSearchParams({ uploadType: "resumable", name: key });
+      const query = new URLSearchParams({ uploadType: "resumable" });
       if (headers.get("x-goog-if-generation-match") === "0") query.set("ifGenerationMatch", "0");
       const initiationUrl = `${this.endpoint}/upload/storage/v1/b/${encodedBucket}/o?${query.toString()}`;
+      const initHeaders = {
+        "content-type": "application/json; charset=UTF-8",
+      };
+      if (body.contentType) {
+        initHeaders["x-upload-content-type"] = body.contentType;
+      }
       return this.authorized(initiationUrl, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: initHeaders,
         body: JSON.stringify(body),
       });
     }
@@ -671,6 +680,12 @@ function createGcsPutStore({ client, endpoint, bucket, fetchImpl, digestFactory 
         "content-length": String(finalChunk.byteLength),
         "x-goog-hash": `crc32c=${crc32cBase64}`,
       };
+      for (const [name, value] of Object.entries(options?.customMetadata || {})) {
+        if (!/^[a-z0-9._-]+$/i.test(name)) throw configError("invalid custom metadata name");
+        if (value != null) {
+          finalHeaders[`x-goog-meta-${name.toLowerCase()}`] = encodeMetadataValue(value);
+        }
+      }
 
       let finalResponse;
       try {

@@ -1047,5 +1047,485 @@ for (const operation of ["head", "get"]) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// REGRESSION: GCS JSON Resumable Upload Metadata Persistence & Outbound Request
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const outboundCalls = [];
+  const tokenFetch = async (url, init = {}) => {
+    outboundCalls.push({ url: String(url), init });
+    if (String(url).includes("oauth2.googleapis.com")) {
+      return new Response(JSON.stringify({ access_token: "test-oauth-token", expires_in: 3600 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    const parsed = new URL(url);
+    if (parsed.pathname.includes("/upload/storage/v1/")) {
+      return new Response(null, {
+        status: 200,
+        headers: { location: "https://storage.googleapis.com/upload/session?upload_id=regression-session" },
+      });
+    }
+    return new Response(null, { status: 200, headers: { etag: '"created-etag"' } });
+  };
+
+  const sessionCalls = [];
+  const sessionFetch = async (url, init = {}) => {
+    sessionCalls.push({ url: String(url), init });
+    return new Response(null, {
+      status: 201,
+      headers: { etag: '"committed-etag"' },
+    });
+  };
+
+  const stores = resolveR2S3Stores(GCS_ENV, {
+    tokenFetch,
+    fetch: sessionFetch,
+    digestFactory: nodeDigestFactory,
+  });
+
+  const payload = new Uint8Array([1, 2, 3]);
+  const rawHash = createHash("sha256").update(payload).digest("hex");
+  const testKey = `rri-raw/acc_test/prop_test/${rawHash}`;
+  const customMetadata = {
+    account_id: "acc_test",
+    server_property_id: "prop_test",
+    raw_hash: rawHash,
+    immutable: "true",
+  };
+
+  await stores.rawStore.put(testKey, payload, {
+    customMetadata,
+    httpMetadata: { contentType: "text/csv" },
+    sha256: rawHash,
+    onlyIf: { etagDoesNotMatch: "*" },
+  });
+
+  const initiation = outboundCalls.find((call) => call.init.method === "POST" && String(call.url).includes("/upload/storage/v1/"));
+  check(initiation != null, "GCS resumable upload initiation request was made");
+  check(initiation.init.method === "POST", "GCS resumable upload initiation method is POST");
+
+  const initUrl = new URL(initiation.url);
+  check(initUrl.origin === "https://storage.googleapis.com", "GCS initiation targets storage.googleapis.com");
+  check(initUrl.pathname === `/upload/storage/v1/b/${GCS_ENV.S3_RAW_BUCKET}/o`, "GCS initiation targets JSON API resumable endpoint");
+  check(initUrl.searchParams.get("uploadType") === "resumable", "GCS initiation carries uploadType=resumable");
+  check(initUrl.searchParams.get("ifGenerationMatch") === "0", "GCS initiation carries ifGenerationMatch=0 query parameter");
+  check(!initUrl.searchParams.has("name"), "GCS initiation does not place object name in query parameters (avoids metadata loss)");
+  const allowedQueryParams = new Set(["uploadType", "ifGenerationMatch"]);
+  const queryParamKeys = [...initUrl.searchParams.keys()];
+  check(queryParamKeys.every((key) => allowedQueryParams.has(key)), "GCS initiation query parameters only contain allowed parameters");
+
+  const initHeaders = new Headers(initiation.init.headers);
+  check(initHeaders.get("content-type")?.toLowerCase().includes("application/json"), "GCS initiation content-type is application/json");
+  check(initHeaders.get("content-type")?.toLowerCase().includes("charset=utf-8"), "GCS initiation content-type declares UTF-8 charset");
+  check(initHeaders.get("x-upload-content-type") === "text/csv", "GCS initiation sends X-Upload-Content-Type header");
+
+  let initBody;
+  try {
+    initBody = JSON.parse(initiation.init.body);
+  } catch {
+    initBody = null;
+  }
+  check(initBody != null && typeof initBody === "object", "GCS initiation body parses as JSON");
+  check(initBody?.name === testKey, "GCS initiation body carries exact object name");
+  check(initBody?.contentType === "text/csv", "GCS initiation body carries exact contentType");
+  check(initBody?.metadata != null && typeof initBody.metadata === "object", "GCS initiation body carries metadata object");
+  check(initBody?.metadata?.account_id === "acc_test", "GCS initiation metadata includes account_id");
+  check(initBody?.metadata?.server_property_id === "prop_test", "GCS initiation metadata includes server_property_id");
+  check(initBody?.metadata?.raw_hash === rawHash, "GCS initiation metadata includes raw_hash");
+  check(initBody?.metadata?.immutable === "true", "GCS initiation metadata includes immutable");
+  check(Object.keys(initBody?.metadata || {}).length === 4, "GCS initiation metadata contains exactly 4 keys without silent loss");
+
+  const finalCommit = sessionCalls.find((call) => call.init.method === "PUT");
+  check(finalCommit != null, "GCS resumable data session PUT was called");
+  const finalHeaders = new Headers(finalCommit.init.headers);
+  check(finalHeaders.get("x-goog-meta-account_id") === "acc_test", "GCS final commit PUT carries x-goog-meta-account_id");
+  check(finalHeaders.get("x-goog-meta-server_property_id") === "prop_test", "GCS final commit PUT carries x-goog-meta-server_property_id");
+  check(finalHeaders.get("x-goog-meta-raw_hash") === rawHash, "GCS final commit PUT carries x-goog-meta-raw_hash");
+  check(finalHeaders.get("x-goog-meta-immutable") === "true", "GCS final commit PUT carries x-goog-meta-immutable");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REGRESSION: Full GCS JSON API Lifecycle (Put, Head, Get, 412, Unicode, Bundle)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const mockStorage = new Map(); // key -> { bucket, name, metadata, contentType, contentEncoding, bytes, etag, updated, generation }
+  const activeSessions = new Map(); // sessionId -> sessionData
+  let sessionCounter = 0;
+
+  const handleGcsFetch = async (urlStr, init = {}) => {
+    const url = new URL(urlStr);
+    const method = String(init.method || "GET").toUpperCase();
+
+    // 1. OAuth token endpoint
+    if (url.origin === "https://oauth2.googleapis.com" && url.pathname === "/token") {
+      return new Response(JSON.stringify({ access_token: "mock-gcs-oauth-token", expires_in: 3600 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
+    // 2. Resumable upload initiation endpoint
+    if (url.origin === "https://storage.googleapis.com" && url.pathname.startsWith("/upload/storage/v1/b/")) {
+      const parts = url.pathname.split("/").filter(Boolean);
+      const bucket = decodeURIComponent(parts[4]);
+      const isResumable = url.searchParams.get("uploadType") === "resumable";
+      if (method === "POST" && isResumable) {
+        // CRITICAL CHECK: Real GCS behavior!
+        // If "name" is passed in query parameters, GCS ignores the body and metadata is empty {}.
+        const queryName = url.searchParams.get("name");
+        let objectName = queryName;
+        let metadata = {};
+        let contentType = undefined;
+        let contentEncoding = undefined;
+
+        if (queryName) {
+          // GCS simple resumable initiation: body ignored, metadata lost!
+          metadata = {};
+        } else {
+          // GCS metadata-bearing resumable initiation: body parsed!
+          const parsedBody = JSON.parse(init.body || "{}");
+          objectName = parsedBody.name;
+          metadata = parsedBody.metadata || {};
+          contentType = parsedBody.contentType;
+          contentEncoding = parsedBody.contentEncoding;
+        }
+
+        const ifGenMatch = url.searchParams.get("ifGenerationMatch");
+        const storageKey = `${bucket}/${objectName}`;
+        const existing = mockStorage.get(storageKey);
+
+        if (ifGenMatch === "0" && existing) {
+          return new Response(JSON.stringify({ error: { code: 412, message: "Precondition Failed" } }), {
+            status: 412,
+            headers: { "content-type": "application/json" },
+          });
+        }
+
+        sessionCounter += 1;
+        const sessionId = `mock-session-${sessionCounter}`;
+        activeSessions.set(sessionId, {
+          bucket,
+          objectName,
+          metadata,
+          contentType,
+          contentEncoding,
+          ifGenMatch,
+        });
+
+        return new Response(null, {
+          status: 200,
+          headers: {
+            location: `https://storage.googleapis.com/upload/session?upload_id=${sessionId}`,
+          },
+        });
+      }
+    }
+
+    // 3. Resumable session data upload (PUT chunk / commit)
+    if (url.origin === "https://storage.googleapis.com" && url.pathname === "/upload/session") {
+      const sessionId = url.searchParams.get("upload_id");
+      const session = activeSessions.get(sessionId);
+      if (!session) {
+        return new Response(null, { status: 404 });
+      }
+
+      if (method === "PUT") {
+        const storageKey = `${session.bucket}/${session.objectName}`;
+        const existing = mockStorage.get(storageKey);
+        if (session.ifGenMatch === "0" && existing) {
+          return new Response(JSON.stringify({ error: { code: 412, message: "Precondition Failed" } }), {
+            status: 412,
+            headers: { "content-type": "application/json" },
+          });
+        }
+
+        const chunkBytes = init.body instanceof Uint8Array
+          ? init.body
+          : new Uint8Array(init.body ? await new Response(init.body).arrayBuffer() : []);
+
+        const etag = `"${createHash("md5").update(chunkBytes).digest("hex")}"`;
+        const updated = new Date().toISOString();
+
+        // GCS also allows X-Goog-Meta-* headers on PUT chunk
+        const headers = new Headers(init.headers || {});
+        for (const [name, value] of headers.entries()) {
+          const lowerName = name.toLowerCase();
+          if (lowerName.startsWith("x-goog-meta-")) {
+            const metaKey = lowerName.slice("x-goog-meta-".length);
+            session.metadata[metaKey] = value;
+          }
+        }
+
+        mockStorage.set(storageKey, {
+          bucket: session.bucket,
+          name: session.objectName,
+          metadata: { ...session.metadata },
+          contentType: session.contentType || "application/octet-stream",
+          contentEncoding: session.contentEncoding,
+          bytes: chunkBytes,
+          etag,
+          updated,
+          generation: (existing?.generation || 0) + 1,
+        });
+
+        activeSessions.delete(sessionId);
+        return new Response(JSON.stringify({
+          kind: "storage#object",
+          name: session.objectName,
+          bucket: session.bucket,
+          size: String(chunkBytes.byteLength),
+          etag,
+          updated,
+          contentType: session.contentType,
+          contentEncoding: session.contentEncoding,
+          metadata: session.metadata,
+        }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            etag,
+          },
+        });
+      }
+    }
+
+    // 4. Object metadata / media endpoint: /storage/v1/b/[BUCKET]/o/[KEY]
+    if (url.origin === "https://storage.googleapis.com" && url.pathname.startsWith("/storage/v1/b/")) {
+      const parts = url.pathname.split("/").filter(Boolean);
+      const bucket = decodeURIComponent(parts[3]);
+      const key = decodeURIComponent(parts.slice(5).join("/"));
+      const storageKey = `${bucket}/${key}`;
+      const object = mockStorage.get(storageKey);
+
+      if (!object) {
+        return new Response(JSON.stringify({ error: { code: 404, message: "Not Found" } }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (method === "GET") {
+        if (url.searchParams.get("alt") === "media") {
+          return new Response(object.bytes, {
+            status: 200,
+            headers: {
+              "content-type": object.contentType || "application/octet-stream",
+              etag: object.etag,
+              "last-modified": new Date(object.updated).toUTCString(),
+            },
+          });
+        }
+        return new Response(JSON.stringify({
+          kind: "storage#object",
+          name: object.name,
+          bucket: object.bucket,
+          size: String(object.bytes.byteLength),
+          etag: object.etag,
+          updated: object.updated,
+          contentType: object.contentType,
+          contentEncoding: object.contentEncoding,
+          metadata: object.metadata,
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (method === "DELETE") {
+        mockStorage.delete(storageKey);
+        return new Response(null, { status: 204 });
+      }
+    }
+
+    return new Response(null, { status: 400 });
+  };
+
+  const gcsStores = resolveR2S3Stores(GCS_ENV, {
+    tokenFetch: handleGcsFetch,
+    fetch: handleGcsFetch,
+    digestFactory: nodeDigestFactory,
+  });
+
+  // A. Raw CSV File Upload & Metadata Verification
+  {
+    const rawPayload = new TextEncoder().encode("header1,header2\nval1,val2\n");
+    const rawHash = createHash("sha256").update(rawPayload).digest("hex");
+    const rawKey = `rri-raw/acc_corp/prop_hotel_1/${rawHash}`;
+    const rawMetadata = {
+      account_id: "acc_corp",
+      server_property_id: "prop_hotel_1",
+      report_type: "daily_revenue",
+      raw_hash: rawHash,
+      raw_archive_id: "raw_arch_12345",
+      original_file_name: "daily_rev.csv",
+      uploaded_by: "user_789",
+      immutable: "true",
+    };
+
+    const putResult = await gcsStores.rawStore.put(rawKey, rawPayload, {
+      customMetadata: rawMetadata,
+      httpMetadata: { contentType: "text/csv" },
+      sha256: rawHash,
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+
+    check(putResult != null, "GCS raw upload succeeds on initial put");
+    check(putResult?.key === rawKey, "GCS raw upload returns exact key");
+    check(typeof putResult?.etag === "string" && putResult.etag.length > 0, "GCS raw upload returns valid etag");
+
+    const headResult = await gcsStores.rawStore.head(rawKey);
+    check(headResult != null, "GCS raw object head succeeds");
+    check(headResult?.size === rawPayload.byteLength, "GCS head size matches exact payload byte length");
+    check(headResult?.httpMetadata?.contentType === "text/csv", "GCS head preserves contentType");
+    check(headResult?.customMetadata != null, "GCS head returns customMetadata");
+    check(headResult?.customMetadata?.account_id === "acc_corp", "GCS head customMetadata includes account_id");
+    check(headResult?.customMetadata?.server_property_id === "prop_hotel_1", "GCS head customMetadata includes server_property_id");
+    check(headResult?.customMetadata?.report_type === "daily_revenue", "GCS head customMetadata includes report_type");
+    check(headResult?.customMetadata?.raw_hash === rawHash, "GCS head customMetadata includes raw_hash");
+    check(headResult?.customMetadata?.raw_archive_id === "raw_arch_12345", "GCS head customMetadata includes raw_archive_id");
+    check(headResult?.customMetadata?.original_file_name === "daily_rev.csv", "GCS head customMetadata includes original_file_name");
+    check(headResult?.customMetadata?.uploaded_by === "user_789", "GCS head customMetadata includes uploaded_by");
+    check(headResult?.customMetadata?.immutable === "true", "GCS head customMetadata includes immutable");
+
+    const getResult = await gcsStores.rawStore.get(rawKey);
+    check(getResult != null, "GCS raw object get succeeds");
+    const retrievedText = await getResult.text();
+    check(retrievedText === "header1,header2\nval1,val2\n", "GCS get returns exact original raw payload");
+    check(getResult.customMetadata?.raw_hash === rawHash, "GCS get includes customMetadata");
+
+    // Idempotent write-once: duplicate put with etagDoesNotMatch: "*" returns null (HTTP 412)
+    const duplicatePut = await gcsStores.rawStore.put(rawKey, rawPayload, {
+      customMetadata: rawMetadata,
+      httpMetadata: { contentType: "text/csv" },
+      sha256: rawHash,
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+    check(duplicatePut === null, "GCS raw upload write-once returns null on duplicate put (HTTP 412)");
+  }
+
+  // B. Normalized Gzip Bundle Upload & Metadata Verification
+  {
+    const bundlePayload = new Uint8Array([31, 139, 8, 0, 1, 2, 3, 4, 5, 6]); // synthetic gzip
+    const normHash = createHash("sha256").update(bundlePayload).digest("hex");
+    const bundleKey = `rri-bulk/acc_corp/prop_hotel_1/v1/${normHash}.ndjson.gz`;
+    const bundleMetadata = {
+      account_id: "acc_corp",
+      server_property_id: "prop_hotel_1",
+      report_type: "daily_revenue",
+      normalized_hash: normHash,
+      raw_hash: "a".repeat(64),
+      min_date: "2026-09-01",
+      max_date: "2026-09-23",
+      row_count: "150",
+      identity_version: "2",
+      entity_counts_json: JSON.stringify({ daily_revenue: 150 }),
+      immutable: "true",
+    };
+
+    const putBundleResult = await gcsStores.bulkStore.put(bundleKey, bundlePayload, {
+      customMetadata: bundleMetadata,
+      httpMetadata: {
+        contentType: "application/x-ndjson",
+        contentEncoding: "gzip",
+      },
+      sha256: normHash,
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+
+    check(putBundleResult != null, "GCS normalized bundle put succeeds");
+    check(putBundleResult?.key === bundleKey, "GCS normalized bundle returns exact key");
+
+    const headBundle = await gcsStores.bulkStore.head(bundleKey);
+    check(headBundle != null, "GCS normalized bundle head succeeds");
+    check(headBundle?.size === bundlePayload.byteLength, "GCS bundle head size matches payload length");
+    check(headBundle?.httpMetadata?.contentType === "application/x-ndjson", "GCS bundle head preserves application/x-ndjson contentType");
+    check(headBundle?.httpMetadata?.contentEncoding === "gzip", "GCS bundle head preserves gzip contentEncoding");
+    check(headBundle?.customMetadata?.normalized_hash === normHash, "GCS bundle head preserves normalized_hash");
+    check(headBundle?.customMetadata?.row_count === "150", "GCS bundle head preserves row_count");
+    check(headBundle?.customMetadata?.identity_version === "2", "GCS bundle head preserves identity_version");
+    check(headBundle?.customMetadata?.entity_counts_json === '{"daily_revenue":150}', "GCS bundle head preserves entity_counts_json");
+
+    const duplicateBundlePut = await gcsStores.bulkStore.put(bundleKey, bundlePayload, {
+      customMetadata: bundleMetadata,
+      httpMetadata: {
+        contentType: "application/x-ndjson",
+        contentEncoding: "gzip",
+      },
+      sha256: normHash,
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+    check(duplicateBundlePut === null, "GCS bundle upload write-once returns null on duplicate put");
+  }
+
+  // C. Unicode Metadata Round-Trip Encoding & Decoding
+  {
+    const unicodePayload = new TextEncoder().encode("unicode,test\n");
+    const unicodeHash = createHash("sha256").update(unicodePayload).digest("hex");
+    const unicodeKey = `rri-raw/acc_corp/prop_hotel_1/${unicodeHash}`;
+    const unicodeMetadata = {
+      account_id: "acc_corp",
+      server_property_id: "prop_hotel_1",
+      raw_hash: unicodeHash,
+      original_file_name: "Café ✓.csv",
+      notes: "Tokyo 東京 🚀",
+      immutable: "true",
+    };
+
+    const putUniResult = await gcsStores.rawStore.put(unicodeKey, unicodePayload, {
+      customMetadata: unicodeMetadata,
+      httpMetadata: { contentType: "text/csv" },
+      sha256: unicodeHash,
+    });
+    check(putUniResult != null, "GCS unicode metadata upload succeeds");
+
+    const headUni = await gcsStores.rawStore.head(unicodeKey);
+    check(headUni != null, "GCS unicode object head succeeds");
+    check(headUni?.customMetadata?.original_file_name === "Café ✓.csv", "GCS head decodes RFC 2047 unicode original_file_name accurately");
+    check(headUni?.customMetadata?.notes === "Tokyo 東京 🚀", "GCS head decodes RFC 2047 multibyte unicode notes accurately");
+  }
+
+  // D. Commit Chunk 412 Precondition Failed Handling
+  {
+    const commitFailSessionFetch = async (urlStr, init = {}) => {
+      const url = new URL(urlStr);
+      if (url.origin === "https://oauth2.googleapis.com") {
+        return new Response(JSON.stringify({ access_token: "test-token", expires_in: 3600 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.pathname.includes("/upload/storage/v1/")) {
+        return new Response(null, {
+          status: 200,
+          headers: { location: "https://storage.googleapis.com/upload/session?upload_id=fail-session" },
+        });
+      }
+      // Commit PUT returns 412
+      return new Response(JSON.stringify({ error: { code: 412, message: "Precondition Failed" } }), {
+        status: 412,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const commitFailStores = resolveR2S3Stores(GCS_ENV, {
+      tokenFetch: commitFailSessionFetch,
+      fetch: commitFailSessionFetch,
+      digestFactory: nodeDigestFactory,
+    });
+
+    const payload = new Uint8Array([1, 2, 3]);
+    const hash = createHash("sha256").update(payload).digest("hex");
+    const result = await commitFailStores.rawStore.put(`rri-raw/acc/prop/${hash}`, payload, {
+      sha256: hash,
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+    check(result === null, "GCS putResumable returns null when final chunk commit returns HTTP 412");
+  }
+}
+
 console.log(`PASSED: R2, Backblaze B2, and GCS object-storage adapter probe (${assertions} assertions)`);
 process.exitCode = assertions > 0 ? 0 : 1;
+
+

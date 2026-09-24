@@ -988,29 +988,33 @@ use `If-None-Match: *`.
 
 GCS uses the JSON API with a short-lived OAuth bearer token minted from the service
 account JWT using Web Crypto RSASSA-PKCS1-v1_5/SHA-256. Resumable initiation is a
-JSON `POST` with `ifGenerationMatch=0` and an explicit metadata object; the returned
-HTTPS session URI is the only capability used for subsequent unsigned chunk PUTs and
-the cancellation DELETE. Metadata reads use the JSON object endpoint and media reads
-use `alt=media`, while deletes use the same JSON object endpoint. The adapter accepts
-session URIs only from `storage.googleapis.com` and never exposes their query
-strings. It streams in 256 KiB chunks with at most two chunks buffered, verifies the
-expected SHA-256 with the Workers `crypto.DigestStream` before the final commit, and
-sends a whole-object CRC32C in the final `x-goog-hash` header for server validation.
-HTTP 412 at initiation or final commit maps to the native R2 `null` result. The
-import pipeline then HEADs and verifies the winning canonical object before returning
-an idempotent 200 response. The default OAuth fetch callback wraps `globalThis.fetch`
-so workerd invokes it with the required global receiver; explicitly injected fetch
-callbacks remain unchanged. The adapter probe covers both paths after a live canary
-diagnostic reproduced workerd's `Illegal invocation` for the unbound default.
+JSON `POST` to `/upload/storage/v1/b/[BUCKET]/o?uploadType=resumable` without `name`
+in the query string (as GCS simple upload ignores request body when `name` is in query
+parameters). The request carries `Content-Type: application/json; charset=UTF-8` and
+`X-Upload-Content-Type` with an explicit `{ name, contentType, contentEncoding, metadata }`
+JSON body and `ifGenerationMatch=0`. The returned HTTPS session URI is the only capability
+used for subsequent unsigned chunk PUTs and the cancellation DELETE. The final PUT chunk
+also forwards lowercase `x-goog-meta-*` headers for robust metadata persistence. Metadata
+reads use the JSON object endpoint and media reads use `alt=media`, while deletes use the
+same JSON object endpoint. The adapter accepts session URIs only from `storage.googleapis.com`
+and never exposes their query strings. It streams in 256 KiB chunks with at most two chunks
+buffered, verifies the expected SHA-256 with the Workers `crypto.DigestStream` before the
+final commit, and sends a whole-object CRC32C in the final `x-goog-hash` header for server
+validation. HTTP 412 at initiation or final commit maps to the native R2 `null` result. The
+import pipeline then HEADs and verifies the winning canonical object before returning an
+idempotent 200 response. The default OAuth fetch callback wraps `globalThis.fetch` so workerd
+invokes it with the required global receiver; explicitly injected fetch callbacks remain
+unchanged. The adapter probe covers both paths after a live canary diagnostic reproduced
+workerd's `Illegal invocation` for the unbound default.
 
 All storage access, including raw-source verification during activation, passes
 through `getStores()`. `scripts/probe-r2-s3-adapter.mjs` proves legacy R2, Backblaze,
-and GCS configuration; OAuth JWT/token caching; JSON resumable initiation; URL
-encoding; bounded resumable chunk ranges; unsigned GCS session requests; atomic
-generation-zero creation; metadata and Unicode fidelity; SHA-256 and CRC32C
-handling; 404 and 412 mapping; session-URI and credential redaction; native
-fallback; default-fetch receiver safety; injected-fetch preservation; and removal of
-the direct-binding bypass without network access.
+and GCS configuration; OAuth JWT/token caching; JSON resumable initiation without
+query-string `name` to prevent metadata loss; URL encoding; bounded resumable chunk
+ranges; unsigned GCS session requests; atomic generation-zero creation; metadata and
+Unicode fidelity; SHA-256 and CRC32C handling; 404 and 412 mapping; session-URI and
+credential redaction; native fallback; default-fetch receiver safety; injected-fetch
+preservation; and removal of the direct-binding bypass without network access.
 
 The first remote Backblaze canary remains blocked until operators provide the RAW
 bucket, DATA bucket, bucket region and endpoint, plus a dedicated canary application

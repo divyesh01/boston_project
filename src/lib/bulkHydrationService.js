@@ -39,13 +39,14 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
       if (!manifests.length) return { synced, lastRevision: revision, activeManifests, materializedRows, verified: true };
       const payloads = new Map();
       for (const manifest of manifests) {
-        if (propertyId && manifest.server_property_id !== propertyId) throw new Error('Manifest scope mismatch');
+        const acceptedPropertyIds = [manifest.server_property_id, ...(manifest.legacy_property_ids || [])];
+        if (propertyId && !acceptedPropertyIds.includes(propertyId)) throw new Error('Manifest scope mismatch');
         if (manifest.status !== 'active') continue;
         const res = await fetch(`/api/bulk-import/bundle/${encodeURIComponent(manifest.id)}`);
         if (!res.ok) throw new Error(`Bundle download failed: ${res.status}`);
         const bytes = await res.arrayBuffer();
         const text = await decompressPayloadGzip(bytes);
-        const items = parseBundle(text, manifest.server_property_id);
+        const items = parseBundle(text, acceptedPropertyIds);
         const hash = await contentHash(Number(manifest.identity_version) === 2 ? normalizedContent(items) : text);
         if (hash !== manifest.normalized_hash || items.length !== Number(manifest.row_count)) throw new Error('Bundle hash or count mismatch');
         const counts = items.reduce((out, item) => { out[item.entity] = (out[item.entity] || 0) + 1; return out; }, {});

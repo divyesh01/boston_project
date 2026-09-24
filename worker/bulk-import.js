@@ -1035,12 +1035,43 @@ async function getManifest(url, env, scope) {
 
   sql += ` ORDER BY revision ASC, id ASC LIMIT 200`;
   const manifests = await queryAll(env, sql, params);
+  // Older normalized bundles retain the property id used by the importing
+  // browser (for example numeric local id 1), while manifests are scoped to
+  // the canonical server id. Resolve those legacy ids only through the active
+  // account generation so hydration can validate them before canonicalizing.
+  const pointer = await queryFirst(env,
+    "SELECT active_generation_id FROM business_dataset_pointer WHERE account_id = ?", [scope.accountId]);
+  const mappings = pointer?.active_generation_id
+    ? await queryAll(env,
+      "SELECT property_key, server_property_id FROM business_property_map WHERE account_id = ? AND generation_id = ?",
+      [scope.accountId, String(pointer.active_generation_id)])
+    : [];
+  const legacyIdsByProperty = new Map();
+  for (const mapping of mappings) {
+    const key = String(mapping.property_key || "");
+    let values = /** @type {(string | number)[]} */ ([]);
+    if (/^n:-?(0|[1-9]\d*)$/.test(key)) {
+      const numeric = Number(key.slice(2));
+      if (Number.isSafeInteger(numeric) && String(numeric) === key.slice(2)) values = [numeric, String(numeric)];
+    } else {
+      const match = /^s:(\d+):(.*)$/s.exec(key);
+      if (match && Number(match[1]) === match[2].length) {
+        values = [match[2]];
+        if (/^-?(0|[1-9]\d*)$/.test(match[2])) {
+          const numeric = Number(match[2]);
+          if (Number.isSafeInteger(numeric) && String(numeric) === match[2]) values.push(numeric);
+        }
+      }
+    }
+    if (values.length) legacyIdsByProperty.set(String(mapping.server_property_id), values);
+  }
 
   return Response.json({
     scope: `${scope.accountId}:${[...scope.propertyIds].sort().join(",")}`,
     manifests: manifests.map((m) => ({
       ...m,
       entity_counts: JSON.parse(m.entity_counts_json || "{}"),
+      legacy_property_ids: legacyIdsByProperty.get(String(m.server_property_id)) || [],
     })),
   });
 }

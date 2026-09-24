@@ -167,6 +167,7 @@ await run.check('Active server imports reproduce the fresh-browser zero-revenue 
   assertEqual(grossRevenueForPeriod({ grossRows: rawGrossB, occRows: [] }).cents, 700000, 'raw P_B gross ledger proves revenue exists without occupancy');
   assertEqual(await dashboardRevenueCentsFor('P_B'), 700000, 'aggregate Dashboard path keeps P_B room rent when occupancy is absent');
   const propertyAFirst = await dashboardRevenueCentsFor('P_A');
+  assertEqual(propertyAFirst, Math.round(dashboardRevenue * 100), 'P_A raw and aggregate Dashboard paths reconcile to the exact same cents');
   const propertyBAfterA = await dashboardRevenueCentsFor('P_B');
   const propertyAAfterB = await dashboardRevenueCentsFor('P_A');
   assertEqual(propertyAFirst, propertyAAfterB, 'property A -> B -> A returns A totals unchanged');

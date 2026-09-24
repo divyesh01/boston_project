@@ -20,9 +20,10 @@ export async function contentHash(text) {
 export function parseBundle(text, propertyId) {
   if (!text.trim()) throw new Error('Empty bundle');
   const items = text.split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
+  const acceptedPropertyIds = new Set(Array.isArray(propertyId) ? propertyId : [propertyId]);
   for (const item of items) {
     if (!BULK_ENTITIES.includes(item?.entity) || !item.row || Array.isArray(item.row) ||
-        typeof item.row !== 'object' || item.row.property_id !== propertyId) throw new Error('Invalid bundle row or property');
+        typeof item.row !== 'object' || !acceptedPropertyIds.has(item.row.property_id)) throw new Error('Invalid bundle row or property');
   }
   return items;
 }

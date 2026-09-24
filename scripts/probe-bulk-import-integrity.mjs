@@ -6,7 +6,7 @@ import { makeInstrumentedEnv, makeRunner, assert, assertEqual, scopeAll } from '
 import { clearMockStore, getMockStore, testR2Binding } from './_r2-testkit.mjs';
 import { handleBulkImportRequest } from '../worker/bulk-import.js';
 import { executeBulkImport, buildNormalizedBundle, sha256Hex, compressPayloadGzip } from '../src/lib/bulkImportPipeline.js';
-import { contentHash, normalizedContent } from '../worker/bulk-contract.js';
+import { contentHash, normalizedContent, parseBundle } from '../worker/bulk-contract.js';
 import { syncBulkBundles, getLastBulkRevision } from '../src/lib/bulkHydrationService.js';
 import localDb from '../src/api/localDb.js';
 const nativeFetch = globalThis.fetch;
@@ -101,6 +101,64 @@ await run.check('Stable identity, duplicate retry and atomic correction keep exa
   assertEqual(db.prepare("SELECT COUNT(*) n FROM import_bundle_manifest WHERE status='active'").get().n,1);
   assertEqual((await localDb.PaymentDay.toArray())[0].total,125);
   assertEqual((await post('supersede',{old_bundle_id:correction.bundle_id,new_bundle_id:first.bundle_id,expected_revision:2})).status,409);
+});
+await run.check('Legacy property alias bundles hydrate under the canonical manifest property', async () => {
+  await setup();
+  db.prepare('INSERT INTO property(id,account_id,code,name) VALUES(?,?,?,?)').run('P_A','A_1','A','Property A');
+  db.prepare('INSERT INTO property(id,account_id,code,name) VALUES(?,?,?,?)').run('P_B','A_1','B','Property B');
+  db.prepare(`INSERT INTO user(id,account_id,username,email,role,property_access_mode,password_hash,salt,created_date,updated_date)
+    VALUES(?,?,?,?,?,?,?,?,?,?)`).run('owner','A_1','owner','owner@test.local','owner','all','hash','salt','2026-09-12','2026-09-12');
+  db.prepare(`INSERT INTO business_dataset(account_id,generation_id,status,schema_version,manifest_hash,manifest_json,
+    expected_chunks,expected_records,created_by,created_at,activated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
+    .run('A_1','gen-1','active',1,'manifest-hash','{}',1,1,'owner','2026-09-12','2026-09-12');
+  db.prepare('INSERT INTO business_dataset_pointer(account_id,active_generation_id,updated_at) VALUES(?,?,?)')
+    .run('A_1','gen-1','2026-09-12');
+  db.prepare(`INSERT INTO business_property_map(account_id,generation_id,property_key,server_property_id,property_code)
+    VALUES(?,?,?,?,?)`).run('A_1','gen-1','n:1','P_A','A');
+  db.prepare(`INSERT INTO business_property_map(account_id,generation_id,property_key,server_property_id,property_code)
+    VALUES(?,?,?,?,?)`).run('A_1','gen-1','n:2','P_B','B');
+  let result;
+  try { result = await executeBulkImport(scan(),{...meta('legacy alias source'),propertyId:'1'}); }
+  catch (error) { throw error.cause || error; }
+  const manifest = db.prepare('SELECT server_property_id FROM import_bundle_manifest WHERE id=?').get(result.bundle_id);
+  assertEqual(manifest.server_property_id,'P_A','server manifest stays scoped to canonical property');
+  const row = await localDb.PaymentDay.where('import_id').equals(result.bundle_id).first();
+  assertEqual(row?.property_id,'P_A','legacy bundle row materializes under the canonical property');
+  const feed = await (await fetch('/api/bulk-import/manifest?server_property_id=P_A')).json();
+  assertEqual(JSON.stringify(feed.manifests[0].legacy_property_ids),JSON.stringify([1,'1']),
+    'manifest exposes only its active property-map aliases');
+  assert(!feed.manifests[0].legacy_property_ids.includes(2) && !feed.manifests[0].legacy_property_ids.includes('2'),
+    'property A manifest never accepts property B aliases');
+  let crossPropertyRejected = false;
+  try { parseBundle(JSON.stringify({entity:'PaymentDay',row:{property_id:2,total:100}}),
+    [feed.manifests[0].server_property_id,...feed.manifests[0].legacy_property_ids]); }
+  catch { crossPropertyRejected = true; }
+  assert(crossPropertyRejected,'property A parser rejects a row carrying property B alias');
+});
+await run.check('Identical file is property-scoped across properties and deduped within one property', async () => {
+  await setup();
+  const bytes = new TextEncoder().encode('Date,Total\n2026-09-01,100.00\n');
+  const firstA = await executeBulkImport(scan(),{...meta('same.csv'),propertyId:'P_A',rawBytes:bytes});
+  const authorityA = db.prepare("SELECT server_property_id,raw_file_hash,normalized_hash FROM import_bundle_manifest WHERE id=?").get(firstA.bundle_id);
+  const crossPropertyCheck = await post('check-duplicate',{server_property_id:'P_B',raw_file_hash:authorityA.raw_file_hash,normalized_hash:authorityA.normalized_hash});
+  assertEqual((await crossPropertyCheck.json()).is_duplicate,false,
+    'property B must not be suppressed by A even when duplicate check receives A exact hashes');
+  const firstB = await executeBulkImport(scan(),{...meta('same.csv'),propertyId:'P_B',rawBytes:bytes});
+  assert(firstA.bundle_id !== firstB.bundle_id,'same physical file creates distinct property-scoped authority');
+  assertEqual(firstA.raw_archive_id !== firstB.raw_archive_id,true,'raw archives have property-scoped identities');
+  const active = db.prepare("SELECT server_property_id,raw_file_hash,normalized_hash,object_key,raw_object_key FROM import_bundle_manifest WHERE status='active' ORDER BY server_property_id").all();
+  assertEqual(active.length,2,'both properties retain active authority');
+  assertEqual(active[0].raw_file_hash,active[1].raw_file_hash,'raw hash is identical across properties');
+  assert(active[0].normalized_hash !== active[1].normalized_hash,
+    'normalized hashes differ because property_id is part of canonical normalized content');
+  assert(active[0].object_key !== active[1].object_key && active[0].raw_object_key !== active[1].raw_object_key,
+    'object keys remain property scoped despite identical hashes');
+  const retryA = await executeBulkImport(scan(),{...meta('renamed-copy.csv'),propertyId:'P_A',rawBytes:bytes});
+  assertEqual(retryA.duplicate,true,'same raw bytes under property A are a duplicate even with a renamed filename');
+  assertEqual(db.prepare("SELECT COUNT(*) AS n FROM import_bundle_manifest WHERE status='active'").get().n,2,
+    'same-property retry creates no extra authority and leaves property B intact');
+  assertEqual(await localDb.PaymentDay.where('property_id').equals('P_A').count(),1,'A local row stays scoped to A');
+  assertEqual(await localDb.PaymentDay.where('property_id').equals('P_B').count(),1,'B local row stays scoped to B');
 });
 await run.check('Parser correction reuses immutable source while creating new analytics version', async () => {
   await setup();

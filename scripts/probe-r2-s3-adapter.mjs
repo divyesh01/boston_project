@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { AwsClient } from "aws4fetch";
 import {
   isR2S3Enabled,
@@ -937,6 +938,50 @@ for (const operation of ["head", "get"]) {
   now = new Date(now.getTime() + 3600 * 1000);
   await client.fetch("https://storage.googleapis.com/rri-data-canary-gcs/folder/Caf%C3%A9%20report.csv", { method: "HEAD" });
   check(tokenRequests === 2, "GCS OAuth access token refreshes when expired");
+}
+
+{
+  const plainBundle = Buffer.from('{"entity":"GrossRevenueDay","row":{"business_date":"2026-01-01"}}');
+  const compressedBundle = gzipSync(plainBundle);
+  let mediaAcceptEncoding = "";
+  const tokenFetch = async (url, init = {}) => {
+    if (String(url) === "https://oauth2.googleapis.com/token") {
+      return new Response(JSON.stringify({ access_token: oauthAccessTokenFixture, expires_in: 3600 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    const parsed = new URL(url);
+    if (parsed.searchParams.get("alt") === "media") {
+      mediaAcceptEncoding = new Headers(init.headers).get("accept-encoding") || "";
+      if (mediaAcceptEncoding.includes("gzip")) {
+        return new Response(compressedBundle, { status: 200, headers: { "content-encoding": "gzip" } });
+      }
+      // Cloud Storage decompressively transcodes gzip-encoded objects unless
+      // the requester explicitly asks for gzip. It drops Content-Encoding.
+      return new Response(plainBundle, { status: 200 });
+    }
+    return new Response(JSON.stringify({
+      name: "normalized-bundle.ndjson.gz",
+      size: String(compressedBundle.byteLength),
+      etag: "gzip-transcode-fixture",
+      contentType: "application/x-ndjson",
+      contentEncoding: "gzip",
+      metadata: { account_id: "account", server_property_id: "HOTEL_A", normalized_hash: "a".repeat(64) },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  const store = resolveR2S3Stores(GCS_ENV, {
+    tokenFetch,
+    fetch: async () => new Response(null, { status: 200 }),
+    digestFactory: nodeDigestFactory,
+  }).bulkStore;
+  const object = await store.get("normalized-bundle.ndjson.gz");
+  const receivedBytes = await object.arrayBuffer();
+  const decoded = gunzipSync(Buffer.from(receivedBytes)).toString("utf8");
+
+  check(mediaAcceptEncoding.toLowerCase().includes("gzip"), "GCS normalized bundle download requests gzip to prevent decompressive transcoding");
+  check(decoded === plainBundle.toString("utf8"), "GCS normalized bundle download remains valid gzip for browser hydration");
 }
 
 {

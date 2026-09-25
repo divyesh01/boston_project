@@ -510,7 +510,11 @@ export class GcsJsonClient {
       const metadataResponse = await this.authorized(metadataUrl, { method: "GET" });
       if (!metadataResponse.ok) return metadataResponse;
       const object = await metadataResponse.json();
-      const mediaResponse = await this.authorized(`${metadataUrl}?alt=media`, { method: "GET" });
+      const mediaHeaders = object.contentEncoding === "gzip" ? { "accept-encoding": "gzip" } : undefined;
+      const mediaResponse = await this.authorized(`${metadataUrl}?alt=media`, {
+        method: "GET",
+        ...(mediaHeaders ? { headers: mediaHeaders } : {}),
+      });
       if (!mediaResponse.ok) return mediaResponse;
       return new Response(mediaResponse.body, {
         status: mediaResponse.status,

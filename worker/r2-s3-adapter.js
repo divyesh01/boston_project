@@ -510,16 +510,23 @@ export class GcsJsonClient {
       const metadataResponse = await this.authorized(metadataUrl, { method: "GET" });
       if (!metadataResponse.ok) return metadataResponse;
       const object = await metadataResponse.json();
-      const mediaHeaders = object.contentEncoding === "gzip" ? { "accept-encoding": "gzip" } : undefined;
+      // Workerd exposes decoded body bytes for a gzip-encoded upstream response.
+      // Ask GCS for plain media, then frame exactly one gzip layer for callers
+      // that consume the stored bundle as opaque gzip bytes.
+      const mediaHeaders = object.contentEncoding === "gzip" ? { "accept-encoding": "identity" } : undefined;
       const mediaResponse = await this.authorized(`${metadataUrl}?alt=media`, {
         method: "GET",
         ...(mediaHeaders ? { headers: mediaHeaders } : {}),
       });
       if (!mediaResponse.ok) return mediaResponse;
-      return new Response(mediaResponse.body, {
+      const gzipBody = object.contentEncoding === "gzip";
+      const responseHeaders = gcsMetadataHeaders(object, mediaResponse.headers);
+      if (gzipBody) responseHeaders.delete("content-length");
+      return new Response(gzipBody ? mediaResponse.body.pipeThrough(new CompressionStream("gzip")) : mediaResponse.body, {
         status: mediaResponse.status,
         statusText: mediaResponse.statusText,
-        headers: gcsMetadataHeaders(object, mediaResponse.headers),
+        headers: responseHeaders,
+        ...(gzipBody ? { encodeBody: "manual" } : {}),
       });
     }
     if (method === "DELETE") {

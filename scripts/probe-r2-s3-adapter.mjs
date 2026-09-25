@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { AwsClient } from "aws4fetch";
+import { parseBundle } from "../worker/bulk-contract.js";
 import {
   isR2S3Enabled,
   resolveR2S3Stores,
@@ -941,8 +943,12 @@ for (const operation of ["head", "get"]) {
 }
 
 {
-  const plainBundle = Buffer.from('{"entity":"GrossRevenueDay","row":{"business_date":"2026-01-01"}}');
+  const plainBundle = Buffer.from([
+    '{"entity":"GrossRevenueDay","row":{"property_id":"HOTEL_A","business_date":"2026-01-01","total":100}}',
+    '{"entity":"GrossRevenueDay","row":{"property_id":"HOTEL_A","business_date":"2026-01-02","total":200}}',
+  ].join("\n"));
   const compressedBundle = gzipSync(plainBundle);
+  const expectedHash = createHash("sha256").update(plainBundle).digest("hex");
   let mediaAcceptEncoding = "";
   const tokenFetch = async (url, init = {}) => {
     if (String(url) === "https://oauth2.googleapis.com/token") {
@@ -955,10 +961,10 @@ for (const operation of ["head", "get"]) {
     if (parsed.searchParams.get("alt") === "media") {
       mediaAcceptEncoding = new Headers(init.headers).get("accept-encoding") || "";
       if (mediaAcceptEncoding.includes("gzip")) {
-        return new Response(compressedBundle, { status: 200, headers: { "content-encoding": "gzip" } });
+        // Workerd exposes already-decoded body bytes while retaining the GCS
+        // response's Content-Encoding header. The old adapter trusted that header.
+        return new Response(plainBundle, { status: 200, headers: { "content-encoding": "gzip" } });
       }
-      // Cloud Storage decompressively transcodes gzip-encoded objects unless
-      // the requester explicitly asks for gzip. It drops Content-Encoding.
       return new Response(plainBundle, { status: 200 });
     }
     return new Response(JSON.stringify({
@@ -967,7 +973,7 @@ for (const operation of ["head", "get"]) {
       etag: "gzip-transcode-fixture",
       contentType: "application/x-ndjson",
       contentEncoding: "gzip",
-      metadata: { account_id: "account", server_property_id: "HOTEL_A", normalized_hash: "a".repeat(64) },
+      metadata: { account_id: "account", server_property_id: "HOTEL_A", normalized_hash: expectedHash },
     }), { status: 200, headers: { "content-type": "application/json" } });
   };
 
@@ -977,11 +983,54 @@ for (const operation of ["head", "get"]) {
     digestFactory: nodeDigestFactory,
   }).bulkStore;
   const object = await store.get("normalized-bundle.ndjson.gz");
-  const receivedBytes = await object.arrayBuffer();
-  const decoded = gunzipSync(Buffer.from(receivedBytes)).toString("utf8");
+  const proxy = new Response(object.body, { headers: { "content-type": "application/gzip" } });
+  const server = createServer(async (_request, response) => {
+    response.writeHead(proxy.status, Object.fromEntries(proxy.headers));
+    response.end(Buffer.from(await proxy.arrayBuffer()));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  let receivedBytes;
+  try {
+    const browserFacing = await fetch(`http://127.0.0.1:${server.address().port}/bundle`);
+    check(browserFacing.headers.get("content-encoding") === null, "bundle proxy does not trigger HTTP decompression");
+    receivedBytes = Buffer.from(await browserFacing.arrayBuffer());
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+  const decoded = gunzipSync(receivedBytes).toString("utf8");
+  const items = parseBundle(decoded, "HOTEL_A");
+  check(mediaAcceptEncoding === "identity", "GCS bundle fetch requests plain media before explicit gzip framing");
+  check(object.size === 0, "recompressed GCS response does not reuse the stale stored content length");
+  check(receivedBytes[0] === 0x1f && receivedBytes[1] === 0x8b, "browser-facing bundle retains one gzip layer");
+  check(createHash("sha256").update(decoded).digest("hex") === expectedHash, "GCS-to-browser bundle preserves normalized hash");
+  check(items.length === 2 && items.every(item => item.entity === "GrossRevenueDay"), "GCS-to-browser bundle preserves normalized rows");
 
-  check(mediaAcceptEncoding.toLowerCase().includes("gzip"), "GCS normalized bundle download requests gzip to prevent decompressive transcoding");
-  check(decoded === plainBundle.toString("utf8"), "GCS normalized bundle download remains valid gzip for browser hydration");
+  let plainMediaAcceptEncoding = "";
+  const plainStore = resolveR2S3Stores(GCS_ENV, {
+    tokenFetch: async (url, init = {}) => {
+      if (String(url) === "https://oauth2.googleapis.com/token") {
+        return Response.json({ access_token: oauthAccessTokenFixture, expires_in: 3600 });
+      }
+      if (new URL(url).searchParams.get("alt") === "media") {
+        plainMediaAcceptEncoding = new Headers(init.headers).get("accept-encoding") || "";
+        return new Response(plainBundle, { headers: { "content-type": "application/x-ndjson" } });
+      }
+      return Response.json({
+        name: "plain-bundle.ndjson",
+        size: String(plainBundle.length),
+        contentType: "application/x-ndjson",
+        metadata: { account_id: "account", server_property_id: "HOTEL_A", normalized_hash: expectedHash },
+      });
+    },
+    fetch: async () => new Response(null, { status: 200 }),
+    digestFactory: nodeDigestFactory,
+  }).bulkStore;
+  const plainObject = await plainStore.get("plain-bundle.ndjson");
+  const plainText = await plainObject.text();
+  check(plainMediaAcceptEncoding === "", "plain GCS object does not request gzip");
+  check(plainObject.httpMetadata.contentEncoding === undefined, "plain GCS object remains unencoded");
+  check(createHash("sha256").update(plainText).digest("hex") === expectedHash, "plain GCS object preserves normalized hash");
+  check(parseBundle(plainText, "HOTEL_A").length === 2, "plain GCS object preserves normalized row count");
 }
 
 {

@@ -370,7 +370,9 @@ console.log("\n7. the row caps that silently dropped the newest rows are gone");
     !CAPPED_READ.test(code(agg)) && !/\.list\(/.test(code(agg)),
     "list('-created_date', 200000) sorted desc then sliced, dropping the OLDEST rows");
   ok("…and passes a date condition into the query instead of filtering after it",
-    /query\[field\]\s*=\s*bound/.test(code(agg)) && /query\.business_date\s*=\s*bound/.test(code(agg)));
+    /table\.where\(`\[property_id\+\$\{field\}\]`\)\.between\(/.test(code(agg)) &&
+    /table\.where\(field\)\.between\(/.test(code(agg)) &&
+    /query\.business_date\s*=\s*bound/.test(code(agg)));
   ok("reportParsers passes no row limit to any read either",
     !CAPPED_READ.test(code(rp)),
     "sorted ascending then sliced, so the rows dropped were the ones just imported");

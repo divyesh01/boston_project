@@ -86,15 +86,16 @@ export function dateBound(from, to) {
 }
 
 async function fetchLedger(name, propertyId, from, to) {
-  const query = {};
   const field = LEDGER_DATE_FIELD[name];
-  const bound = field ? dateBound(from, to) : null;
-  if (bound) query[field] = bound;
+  const table = localDb[name];
+  const low = from ? String(from).slice(0, 10) : '';
+  const high = to ? `${String(to).slice(0, 10)}\uffff` : '\uffff';
 
   let rows;
   if (propertyId && propertyId !== 'all') {
-    query.property_id = propertyId;
-    rows = await db.entities[name].filter(query);
+    rows = from || to
+      ? await table.where(`[property_id+${field}]`).between([propertyId, low], [propertyId, high]).toArray()
+      : await table.where('property_id').equals(propertyId).toArray();
   } else {
     // No 200000 cap. list() sorted by -created_date and then sliced, so once a
     // table passed that many rows the OLDEST rows fell out of the rebuild — and
@@ -102,8 +103,14 @@ async function fetchLedger(name, propertyId, from, to) {
     // dropped would have shown as revenue that quietly went missing. The cap
     // never bounded memory either: the proxy materializes the whole table before
     // slicing it.
-    rows = await db.entities[name].filter(query, '-created_date');
+    rows = from || to
+      ? await table.where(field).between(low, high).toArray()
+      : await table.toArray();
+    rows.sort((a, b) => String(b.created_date || '').localeCompare(String(a.created_date || '')));
   }
+  // A cache rebuild may run inside business hydration. The entity proxy would
+  // wait for that same hydration promise, so read its committed local ledgers.
+  // Dashboard reads remain authorization-scoped in getDailyAggregates().
   return rows.filter((r) => inRange(r.date || r.business_date || r.expense_date, from, to));
 }
 

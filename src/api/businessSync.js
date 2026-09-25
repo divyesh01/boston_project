@@ -395,7 +395,7 @@ export function createBusinessSyncClient({
     return { rebuild: false, state: next };
   }
 
-  async function hydrate({ force = false, allowDuringTransaction = false } = {}) {
+  async function hydrate({ force = false, allowDuringTransaction = false, rebuildAttempts = 0 } = {}) {
     if (hydrationPromise) return hydrationPromise;
     hydrationPromise = (async () => {
       isHydrating = true;
@@ -464,8 +464,11 @@ export function createBusinessSyncClient({
         const state = await localDb.BusinessSyncState.get(SYNC_STATE_KEY);
         const applied = await applyFeed(state);
         if (applied.rebuild) {
+          if (rebuildAttempts >= 1) {
+            throw new Error('Authoritative dataset changed repeatedly during hydration; retry.');
+          }
           hydrationPromise = null;
-          return hydrate({ force: true });
+          return hydrate({ force: true, rebuildAttempts: rebuildAttempts + 1 });
         }
         try {
           const { syncBulkBundles } = await import('../lib/bulkHydrationService.js');

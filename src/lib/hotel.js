@@ -556,15 +556,16 @@ export function perPropertyStats(occRows = [], properties = []) {
     const fallbackRooms = prop?.rooms || PROPERTY.rooms;
     const revenue = sumCents(rows.map(r => r.room_revenue));
     const roomsSold = sumCents(rows.map(r => r.rooms_sold));
-    // Inventory per DAY, not per row — see capacityRoomNightsBy above. This
-    // function carried its own copy of the per-row fallback, so the per-property
-    // table under-reported occupancy for the same reason the portfolio total did.
+    // Keep the property-day denominator alongside the ratio. The portfolio table
+    // must sum these room-nights to calculate a weighted total; a property
+    // percentage alone is not enough to recover that denominator.
     const capacity = capacityRoomNightsBy(rows, () => fallbackRooms) * 100;
     results.push({
       property_id: pid,
       property_name: prop?.name || rows[0]?.property_name || "Unknown",
       revenue: fromCents(revenue),
       roomsSold: fromCents(roomsSold),
+      capacity: fromCents(capacity),
       occupancy: capacity ? fromRate(divideRate(roomsSold, capacity)) : 0,
       adr: roomsSold ? fromCents(divide(revenue, roomsSold)) : 0,
       revpar: capacity ? fromCents(divide(revenue, capacity)) : 0,

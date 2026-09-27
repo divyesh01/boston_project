@@ -267,6 +267,43 @@ await run.check('Hydration errors preserve cursor and existing data', async () =
   env.BULK_DATA.get = originalGet;
   await syncBulkBundles({propertyId:'P_A'}); assertEqual(await localDb.PaymentDay.count(),1);
 });
+await run.check('HTTP bundle download failure preserves local state and retry hydrates without re-upload', async () => {
+  await setup();
+  const result = await executeBulkImport(scan(),meta('download-retry'));
+  await localDb.BusinessSyncState.clear();
+  await localDb.PaymentDay.clear();
+  await localDb.UploadedReport.clear();
+  await localDb.PaymentDay.put({id:77,property_id:'P_A',date:'2026-09-02',total:77});
+  const routeFetch = globalThis.fetch;
+  let injected = false;
+  globalThis.fetch = async (input, init) => {
+    if (!injected && String(input).includes(`/bundle/${result.bundle_id}`)) {
+      injected = true;
+      return new Response('temporary bundle outage', {status:503});
+    }
+    return routeFetch(input, init);
+  };
+  try {
+    let rejected = false;
+    try { await syncBulkBundles({propertyId:'P_A'}); } catch (error) {
+      rejected = true;
+      assert(error.message.includes('503'), 'surface the bundle HTTP failure');
+    }
+    assert(rejected, 'the failed bundle request must reject hydration');
+    assertEqual(await getLastBulkRevision('P_A'),0,'cursor must remain at its committed revision');
+    assertEqual(await localDb.PaymentDay.count(),1,'pre-existing local row must remain atomic');
+    assertEqual((await localDb.PaymentDay.get(77)).total,77,'pre-existing value must remain intact');
+    assertEqual(await localDb.UploadedReport.count(),0,'no local report may be partially committed');
+
+    const retry = await syncBulkBundles({propertyId:'P_A'});
+    assert(retry.verified, 'retry from existing server bundle must verify');
+    assertEqual(await localDb.PaymentDay.count(),2,'retry materializes the existing bundle');
+    assertEqual(await localDb.UploadedReport.count(),1,'retry materializes one history report');
+    assert((await getLastBulkRevision('P_A')) > 0,'cursor advances only after successful retry');
+  } finally {
+    globalThis.fetch = routeFetch;
+  }
+});
 await run.check('Raw deletion survives D1 completion failure without changing analytics authority', async () => {
   await setup();
   const result = await executeBulkImport(scan(),meta('destroy'));

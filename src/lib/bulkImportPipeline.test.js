@@ -12,7 +12,27 @@ import {
   JSON_MUTATION_HEADERS,
   isBulkImportEligible,
   buildNormalizedBundle,
+  executeBulkImport,
+  sha256Hex,
 } from "./bulkImportPipeline.js";
+
+describe('archived Hotel Statistics resume', () => {
+  it('refuses to invent a statement date before any server write', async () => {
+    const rawBytes = new TextEncoder().encode('archived original');
+    const rawFileHash = await sha256Hex(rawBytes);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    try {
+      await expect(executeBulkImport({ type: 'hotel_statistics', businessDateSource: 'import_date',
+        rowsToImport: [], totalRows: 0 }, {
+        propertyId: 'HOTEL_A', rawBytes,
+        resumeManifest: { id: 'raw-1', raw_file_hash: rawFileHash, server_property_id: 'HOTEL_A' },
+      })).rejects.toMatchObject({ code: 'IMPORT_ARCHIVE_DATE_REQUIRED' });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
 
 describe('Gross Revenue bulk routing', () => {
   it('accepts the parser gross type and keeps its rows', () => {

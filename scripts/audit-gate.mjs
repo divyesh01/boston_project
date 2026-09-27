@@ -5,9 +5,9 @@
 // WHY THIS FILE EXISTS
 // `npm audit --audit-level=high` exits 1 on a high-severity advisory even when
 // no fix exists, which on 2026-08-21 made the GitHub Actions job unpassable: the
-// `xlsx` package carries two high advisories marked "No fix available", because
-// SheetJS left the npm registry at 0.18.5 and publishes fixes only from its own
-// CDN. The two ways out of that are both bad on their own:
+// then-installed `xlsx` package carried two high advisories marked "No fix
+// available". Those exceptions became stale after the package update and were
+// removed. The two broad alternatives would have been bad on their own:
 //
 //   --audit-level=critical  → silently tolerates EVERY high, forever, including
 //                             ones that arrive next month in other packages.
@@ -36,29 +36,7 @@ const BLOCKING = new Set(["high", "critical"]);
  * codebase. "No fix available" is not a reason on its own — it is the situation,
  * not the argument.
  */
-const ACCEPTED = {
-  "xlsx:GHSA-4r6h-8v6p-xvw6": {
-    what: "Prototype Pollution in SheetJS",
-    why:
-      "Not reachable: this repo uses xlsx WRITE-ONLY. The single importer is " +
-      "src/lib/exportData.js:55 and it calls only utils.aoa_to_sheet, " +
-      "utils.json_to_sheet, utils.book_new, utils.book_append_sheet and " +
-      "writeFile. Verified 2026-08-21 that XLSX.read, XLSX.readFile and " +
-      "sheet_to_json appear nowhere under src/. Uploaded spreadsheets are " +
-      "parsed server-side by the platform " +
-      "(db.integrations.Core.ExtractDataFromUploadedFile, " +
-      "src/pages/DataIntelligence.jsx:161), never by this package. The advisory " +
-      "requires parsing an attacker-supplied workbook.",
-    reviewed: "2026-08-21",
-  },
-  "xlsx:GHSA-5pgg-2g8v-p4x9": {
-    what: "SheetJS Regular Expression Denial of Service (ReDoS)",
-    why:
-      "Same reachability argument as GHSA-4r6h-8v6p-xvw6: the ReDoS is in the " +
-      "parse path, and nothing in src/ parses a spreadsheet with this package.",
-    reviewed: "2026-08-21",
-  },
-};
+const ACCEPTED = {};
 
 const res = spawnSync("npm", ["audit", "--json"], {
   encoding: "utf8",

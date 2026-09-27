@@ -5,6 +5,15 @@ const BULK_SYNC_KEY = 'authoritative-bulk-bundle-sync-v2';
 const COMMIT_KEY = `${BULK_SYNC_KEY}:commit`;
 class HydrationConflict extends Error {}
 const flights = new Map();
+function localPropertyIdFor(manifest, properties) {
+  const accepted = [manifest.server_property_id, ...(manifest.legacy_property_ids || [])];
+  const matches = properties.filter((property) => accepted.includes(property.id));
+  if (matches.length === 1) return matches[0].id;
+  if (matches.length > 1 || properties.length) {
+    throw new Error(`Active report ${manifest.id} has no unique local property mapping`);
+  }
+  return manifest.server_property_id;
+}
 const stateKey = propertyId => `${BULK_SYNC_KEY}:${propertyId || 'all'}`;
 export async function getLastBulkRevision(propertyId = '') {
   return Number((await localDb.BusinessSyncState.get(stateKey(propertyId)))?.revision || 0);
@@ -53,11 +62,12 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
         if (JSON.stringify(Object.entries(counts).sort()) !== JSON.stringify(Object.entries(manifest.entity_counts || {}).sort())) throw new Error('Entity counts mismatch');
         payloads.set(manifest.id, items);
       }
-      const tables = [...BULK_ENTITIES.map(name => localDb[name]), localDb.UploadedReport, localDb.BusinessSyncState];
+      const tables = [...BULK_ENTITIES.map(name => localDb[name]), localDb.Property, localDb.UploadedReport, localDb.BusinessSyncState];
       try {
         await localDb.transaction('rw', tables, async () => {
           // All/property syncs and other tabs share this transactional commit fence.
           if ((await localDb.BusinessSyncState.get(COMMIT_KEY))?.token !== commitToken) throw new HydrationConflict();
+          const properties = await localDb.Property.toArray();
           // Remove retired versions before inserting replacements, even at the same revision.
           for (const manifest of manifests) {
             if (!['tombstoned', 'superseded', 'destroyed'].includes(manifest.status)) continue;
@@ -67,26 +77,27 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
           for (const manifest of manifests) {
             const items = payloads.get(manifest.id);
             if (!items) continue;
+            const localPropertyId = localPropertyIdFor(manifest, properties);
             const groups = {};
             items.forEach((item, index) => {
               (groups[item.entity] ||= []).push({ ...item.row,
                 id: generateDeterministicRowId(manifest.id, item.entity, index),
-                property_id: manifest.server_property_id, import_id: manifest.id, bulk_import_id: manifest.id });
+                property_id: localPropertyId, import_id: manifest.id, bulk_import_id: manifest.id });
             });
             for (const [entity, rows] of Object.entries(groups)) {
               // R2 is authoritative for this report's covered dates. Remove overlapping legacy cache rows.
               const dates = new Set(rows.map(row => String(row.date || row.business_date || row.shift_date || '').slice(0, 10)));
-              await localDb[entity].where('property_id').equals(manifest.server_property_id)
+              await localDb[entity].where('property_id').equals(localPropertyId)
                 .filter(row => !row.bulk_import_id && dates.has(String(row.date || row.business_date || row.shift_date || '').slice(0, 10))).delete();
               await localDb[entity].where('import_id').equals(manifest.id).delete();
               await localDb[entity].bulkPut(rows);
             }
             await localDb.UploadedReport.put({ id: manifest.id, import_id: manifest.id, bulk_import_id: manifest.id, raw_archive_id: manifest.raw_archive_id || manifest.id,
-              property_id: manifest.server_property_id, report_type: manifest.report_type, file_name: manifest.original_file_name,
+              property_id: localPropertyId, report_type: manifest.report_type, file_name: manifest.original_file_name,
               file_hash: manifest.raw_file_hash, status: 'completed', rows_imported: manifest.row_count, raw_rows: [],
               created_date: manifest.activated_at || manifest.created_at });
             const report = await localDb.UploadedReport.get(manifest.id);
-            if (!report || report.property_id !== manifest.server_property_id || Number(report.rows_imported) !== Number(manifest.row_count)) {
+            if (!report || report.property_id !== localPropertyId || Number(report.rows_imported) !== Number(manifest.row_count)) {
               throw new Error(`Active report manifest ${manifest.id} was not materialized locally`);
             }
             for (const [entity, expected] of Object.entries(manifest.entity_counts || {})) {

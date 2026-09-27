@@ -631,6 +631,14 @@ export async function executeBulkImport(scanResult, meta = {}) {
     throw err;
   }
 
+  if (resumeManifest && reportType === 'hotel_statistics' &&
+      (!['explicit', 'filename'].includes(scanResult.businessDateSource) ||
+       !/^\d{4}-\d{2}-\d{2}$/.test(scanResult.businessDate || ''))) {
+    const err = /** @type {Error & { code?: string }} */ (new Error('Choose the original statement date before resuming this archived Hotel Statistics report.'));
+    err.code = 'IMPORT_ARCHIVE_DATE_REQUIRED';
+    throw err;
+  }
+
   const validation = scanResult?.validation;
   if (validation && !validation.ok && !forceImport) {
     const layer = validation.firstFailingLayer || 'validation';

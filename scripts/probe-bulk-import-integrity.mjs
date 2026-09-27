@@ -134,6 +134,43 @@ await run.check('Legacy property alias bundles hydrate under the canonical manif
     [feed.manifests[0].server_property_id,...feed.manifests[0].legacy_property_ids]); }
   catch { crossPropertyRejected = true; }
   assert(crossPropertyRejected,'property A parser rejects a row carrying property B alias');
+
+  // The server keeps P_A, but the browser roster and filters use the mapped
+  // local property id. Replaying authority must materialize under that id.
+  await localDb.Property.put({ id: 1, name: 'Property A', code: 'A' });
+  await localDb.Property.put({ id: 2, name: 'Property B', code: 'B' });
+  await syncBulkBundles({ force: true, propertyId: '1' });
+  assertEqual((await localDb.PaymentDay.where('import_id').equals(result.bundle_id).first())?.property_id,
+    1, 'replayed P_A bundle joins only its server-proven local roster id');
+  assertEqual(await localDb.PaymentDay.where('property_id').equals(2).count(), 0,
+    'P_B roster does not receive P_A rows');
+});
+await run.check('Staging UUID roster resolves canonical manifests before local dashboard reads', async () => {
+  await setup();
+  const localA = 'ce51c4c8-c67b-4a63-91d6-7a2e2b8e4e65';
+  const localB = '4d997ae3-59d1-4317-a721-aa1095c4a2b7';
+  for (const [id, code, name] of [['P_A', 'A', 'Hotel A'], ['P_B', 'B', 'Hotel B']]) {
+    db.prepare('INSERT INTO property(id,account_id,code,name) VALUES(?,?,?,?)').run(id, 'A_1', code, name);
+  }
+  db.prepare(`INSERT INTO user(id,account_id,username,email,role,property_access_mode,password_hash,salt,created_date,updated_date)
+    VALUES(?,?,?,?,?,?,?,?,?,?)`).run('owner','A_1','owner','owner@test.local','owner','all','hash','salt','2026-09-12','2026-09-12');
+  db.prepare(`INSERT INTO business_dataset(account_id,generation_id,status,schema_version,manifest_hash,manifest_json,
+    expected_chunks,expected_records,created_by,created_at,activated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
+    .run('A_1','gen-uuid','active',1,'manifest-hash','{}',1,2,'owner','2026-09-12','2026-09-12');
+  db.prepare('INSERT INTO business_dataset_pointer(account_id,active_generation_id,updated_at) VALUES(?,?,?)')
+    .run('A_1','gen-uuid','2026-09-12');
+  for (const [localId, canonical, code] of [[localA, 'P_A', 'A'], [localB, 'P_B', 'B']]) {
+    db.prepare(`INSERT INTO business_property_map(account_id,generation_id,property_key,server_property_id,property_code)
+      VALUES(?,?,?,?,?)`).run('A_1','gen-uuid',`s:36:${localId}`,canonical,code);
+  }
+  await localDb.Property.bulkPut([{ id: localA, name: 'Hotel A' }, { id: localB, name: 'Hotel B' }]);
+  const result = await executeBulkImport(scan(123.45), { ...meta('staging uuid'), propertyId: localA });
+  assertEqual(db.prepare('SELECT server_property_id FROM import_bundle_manifest WHERE id=?').get(result.bundle_id).server_property_id,
+    'P_A', 'D1 keeps canonical server authority');
+  assertEqual((await localDb.PaymentDay.where('import_id').equals(result.bundle_id).first())?.property_id,
+    localA, 'local ledger joins the exact Hotel A roster id');
+  assertEqual(await localDb.PaymentDay.where('property_id').equals(localB).count(), 0,
+    'Hotel B remains isolated');
 });
 await run.check('Identical file is property-scoped across properties and deduped within one property', async () => {
   await setup();

@@ -6,6 +6,7 @@ import Card from "@/components/ui-exec/Card";
 import { EmptyState, ErrorState } from "@/components/ui/status";
 
 import { useUploads, useProperties } from "@/lib/useHotelData";
+import { importPropertyLabel } from "@/lib/importHistory";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { num } from "@/lib/hotel";
 import { REPORT_TYPES, scanReport, importReport } from "@/lib/reportParsers";
@@ -337,6 +338,7 @@ export default function Import() {
   const [incompleteImports, setIncompleteImports] = useState([]);
   const [checkingImports, setCheckingImports] = useState(false);
   const [pendingRawArchives, setPendingRawArchives] = useState([]);
+  const [pendingBusinessDates, setPendingBusinessDates] = useState({});
   const [resumingArchiveId, setResumingArchiveId] = useState(null);
   const [replacementConflict, setReplacementConflict] = useState(null);
   const [replacementLoading, setReplacementLoading] = useState(false);
@@ -461,7 +463,13 @@ export default function Import() {
   }, [propertyId]);
 
   const handleResumePending = async (pendingItem) => {
-    setResumingArchiveId(pendingItem.raw_archive_id || pendingItem.id);
+    const archiveId = pendingItem.raw_archive_id || pendingItem.id;
+    const businessDate = pendingBusinessDates[archiveId] || '';
+    if (pendingItem.report_type === 'hotel_statistics' && !businessDate) {
+      alert('Choose the original statement date before resuming this archived Hotel Statistics report.');
+      return;
+    }
+    setResumingArchiveId(archiveId);
     try {
       const { buffer } = await downloadRawArchiveFromServer(pendingItem.raw_archive_id || pendingItem.id);
       let csvText = null;
@@ -475,6 +483,7 @@ export default function Import() {
         sourceFile: pendingItem.original_file_name,
         csvText,
         rawBytes: buffer,
+        businessDate,
       });
       try {
         await executeBulkImport(scan, {
@@ -482,13 +491,13 @@ export default function Import() {
           propertyName: selectedProperty?.name || "",
           importId: pendingItem.id,
           sourceFile: pendingItem.original_file_name,
-          forceImport: true,
+          forceImport: false,
           rawBytes: buffer,
           resumeManifest: pendingItem,
         });
         const updated = await fetchPendingRawArchives(pendingItem.server_property_id);
         setPendingRawArchives(updated || []);
-        refreshAggregates(pendingItem.server_property_id);
+        refreshAggregates(propertyId);
         refetch();
       } catch (innerErr) {
         if (innerErr.code === 'IMPORT_REPLACEMENT_REQUIRED') {
@@ -562,7 +571,7 @@ export default function Import() {
         propertyName: effPropertyName,
         importId: isResume ? (item.raw_archive_id || item.id) : item?.importId,
         sourceFile,
-        forceImport: true,
+        forceImport: !isResume,
         rawBytes,
         resumeManifest: isResume ? item : null,
         predecessors,
@@ -575,7 +584,7 @@ export default function Import() {
       setPendingRawArchives(updated || []);
 
       // Refresh aggregates and history
-      refreshAggregates(effPropertyId);
+      refreshAggregates(isResume ? propertyId : effPropertyId);
       refetch();
 
       // If it was in the upload queue, update the queue item
@@ -2008,19 +2017,29 @@ export default function Import() {
                 </p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {pendingRawArchives.map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() => handleResumePending(p)}
-                      disabled={resumingArchiveId === (p.raw_archive_id || p.id)}
-                      className="flex items-center gap-1.5 rounded-lg border border-[#00D4FF]/40 bg-[#00D4FF]/10 px-2.5 py-1 text-xs text-[#00D4FF] transition-colors hover:bg-[#00D4FF]/20 disabled:opacity-50"
-                    >
-                      {resumingArchiveId === (p.raw_archive_id || p.id) ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : (
-                        <RefreshCw className="h-3 w-3" />
+                    <div key={p.id} className="flex flex-wrap items-center gap-2">
+                      {p.report_type === 'hotel_statistics' && (
+                        <label className="flex items-center gap-2 text-xs text-slate-300">
+                          Original statement date
+                          <input type="date" value={pendingBusinessDates[p.raw_archive_id || p.id] || ''}
+                            onChange={(event) => setPendingBusinessDates((dates) => ({ ...dates,
+                              [p.raw_archive_id || p.id]: event.target.value }))}
+                            className="rounded-md border border-white/10 bg-[#0A1628] px-2 py-1 text-slate-200 outline-none focus:border-[#6C63FF]" />
+                        </label>
                       )}
-                      Resume {p.original_file_name} ({p.report_type})
-                    </button>
+                      <button
+                        onClick={() => handleResumePending(p)}
+                        disabled={resumingArchiveId === (p.raw_archive_id || p.id)}
+                        className="flex items-center gap-1.5 rounded-lg border border-[#00D4FF]/40 bg-[#00D4FF]/10 px-2.5 py-1 text-xs text-[#00D4FF] transition-colors hover:bg-[#00D4FF]/20 disabled:opacity-50"
+                      >
+                        {resumingArchiveId === (p.raw_archive_id || p.id) ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-3 w-3" />
+                        )}
+                        Resume {p.original_file_name} ({p.report_type})
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -2198,7 +2217,7 @@ export default function Import() {
                     <div className="min-w-0">
                       <p className="truncate text-sm text-white">{u.file_name}</p>
                       <p className="text-xs text-slate-500">
-                        {u.property_name || properties.find((p) => p.id === u.property_id)?.name || (accessibleProperties.length === 1 ? accessibleProperties[0].name : "—")} · {u.report_type} · {String(u.created_date || "").slice(0, 10)}
+                        {importPropertyLabel(u, accessibleProperties)} · {u.report_type} · {String(u.created_date || "").slice(0, 10)}
                       </p>
                     </div>
                   </div>

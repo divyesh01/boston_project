@@ -240,6 +240,23 @@ Verification:
 Remaining Risk: [Explicitly state unverified areas or "None within tested scope."]
 ```
 
+### 9.1 Precedence — Plan-First & Verification Protocol
+
+The global `~/.claude/CLAUDE.md` installs the **Autonomous Plan-First & Verification Protocol**, which requires a numbered `PLAN` block before acting, explicit milestone tracking during execution, a zero-assumption proof log, and the `🏁 Mission Complete` report as the final deliverable.
+
+In this repository, that report supersedes this template as the outer structure. The fields above are **not** dropped — they are carried inside the Phase 4 sections:
+
+| Phase 4 section | Must carry |
+|---|---|
+| 2. Verified Technical Changes | `Files Changed:` |
+| 3. Concrete Verification & Proof Log | `Verification:` (actual output, per Rule 2) |
+| 1. Executive Summary | `Result:` and `Root Cause:` |
+| 1. / 4. | `Fix:`, `Remaining Risk:` |
+
+The `FILES CHANGED / VERIFICATION / GOVERNANCE GATES / COMMIT / COMMIT HASH / PUSH / REMOTE / BRANCH / REMOTE HEAD VERIFIED` block from the global MANDATORY GIT COMPLETION LAW is emitted beneath the Phase 4 sections and is never omitted.
+
+Nothing in this section relaxes Rule 1 (Zero Blind Edits), Rule 2 (Absolute Evidence Requirement), the Definition of Done, `PROTECTED_FILES.md`, or any DIVYESH V3 gate.
+
 ---
 
 ## 10. CRITICAL CONSTRAINTS FOR HOTEL SYSTEM

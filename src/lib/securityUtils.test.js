@@ -156,8 +156,12 @@ describe("audit chain — createAuditEntry / verifyAuditChain", () => {
 
     const res = await verifyAuditChain();
     expect(res.valid).toBe(false);
-    expect(res.tamperedAt).toBe(inserted[2].id);
-    expect(res.reason).toMatch(/chain break/i);
+    // `brokenAt`, not `tamperedAt`: a deleted row is a break, not a forgery. The
+    // loose `/chain break/i` below used to let 'Chain break' pass while the UI
+    // branch that keys off the snake_case token stayed dead, so the reason is
+    // asserted exactly now.
+    expect(res.brokenAt).toBe(inserted[2].id);
+    expect(res.reason).toBe("chain_break");
     expect(res.expectedPrevious).toBe(inserted[0].hash);
     expect(res.actualPrevious).toBe(inserted[1].hash);
   });

@@ -631,12 +631,41 @@ export async function createAuditEntry(action, options = {}) {
 
 export async function verifyAuditChain() {
   try {
+    // The same constant createAuditEntry() roots every chain at, and the same
+    // value the server verifier names GENESIS (audit_verify/entry.js:184).
+    const GENESIS = '0'.repeat(64);
+
     // Raw localDb for the same reason as createAuditEntry: the integrity claim is
     // over every row in order. Verifying a filtered subset would report tampering
     // wherever a row was merely hidden, which is the opposite of useful.
     const logs = await localDb.AuditLog.orderBy('created_date').toArray();
-    let previousHash = '0'.repeat(64);
-    for (const log of logs) {
+
+    // Every row's own hash, collected BEFORE the walk. This set is what tells a
+    // concurrent write apart from a deleted row, and the distinction is the whole
+    // point of the linkage check below.
+    //
+    // A linkage failure — this row's stored previous_hash is not the row in front
+    // of it — has two completely different causes that look identical from inside
+    // the loop, and they carry opposite verdicts:
+    //
+    //   FORK.      Two writers read the same tip and both committed against it, so
+    //              two rows share one parent. Every row still hashes correctly, every
+    //              row was written by a legitimate caller, and NOTHING has been
+    //              removed or altered. Reporting this as tampering is the most
+    //              alarming verdict the tool can emit and it is, here, simply false.
+    //   DELETION.  A row was removed from the middle, so this row's parent no longer
+    //              exists. That IS a real integrity event and must stay loud.
+    //
+    // The discriminator is whether the parent is still in the table — the same test
+    // the server verifier makes, in the opposite order (audit_verify/entry.js:238
+    // builds the same knownHashes set and calls a miss a chain_break). Knowing the
+    // parent survived is what separates "the log legitimately has a branch here"
+    // from "somebody erased history".
+    const knownHashes = new Set(logs.map((l) => l.hash));
+
+    let previousHash = GENESIS;
+    for (let i = 0; i < logs.length; i++) {
+      const log = logs[i];
       // Rebuild the exact canonical payload that createAuditEntry hashed —
       // it was recorded in the DB with snake_case columns, so don't hash the
       // raw row (key naming would differ and the chain would always break).
@@ -656,11 +685,55 @@ export async function verifyAuditChain() {
       };
       const { hash, previous_hash } = log;
       const expectedHash = await hashEntry(entry, previous_hash);
+      // Hash drift. The row's stored hash no longer matches its own content, so
+      // somebody rewrote it in place after signing — the one verdict that really
+      // is tampering. `reason` is carried explicitly because the server sets the
+      // same token (audit_verify/entry.js:228) and AuditLog.jsx:389 keys off that
+      // exact string; without it that branch was unreachable and the banner fell
+      // through to a bare "— undefined".
       if (!constantTimeEqual(hash, expectedHash)) {
-        return { valid: false, tamperedAt: log.id, expected: expectedHash, actual: hash };
+        return {
+          valid: false,
+          tamperedAt: log.id,
+          index: i,
+          expected: expectedHash,
+          actual: hash,
+          reason: 'hash_mismatch',
+        };
       }
       if (!constantTimeEqual(previous_hash, previousHash)) {
-        return { valid: false, tamperedAt: log.id, reason: 'Chain break', expectedPrevious: previousHash, actualPrevious: previous_hash };
+        // Parent survived → a branch point, not a break. Kept valid:false on
+        // purpose: a concurrent write is not evidence of an attack, but a chain
+        // that is not linear has not been verified as linear, and a caller that
+        // checks only `valid` must still be told to look. Phase 0 stops at the
+        // first fork; the server's pass 3 (audit_verify/entry.js:284-321) collects
+        // every fork and reports them as advisory warnings instead, and that
+        // collection is deliberately NOT ported here.
+        if (previous_hash !== GENESIS && knownHashes.has(previous_hash)) {
+          return {
+            valid: false,
+            forkedAt: log.id,
+            index: i,
+            reason: 'concurrent_fork',
+            expectedPrevious: previousHash,
+            actualPrevious: previous_hash,
+          };
+        }
+        // Parent is gone → a row really was removed. The key is `brokenAt`, not
+        // `tamperedAt`: the server and the client-side mirror both name it that way
+        // (audit_verify/entry.js:37, base44Client.js:1345), and emitting
+        // `tamperedAt` here is what made a plain deletion render as "tampering
+        // detected" to an owner. `reason` is the snake_case token the server emits
+        // (audit_verify/entry.js:248) and the one AuditLog.jsx:390 tests; the old
+        // 'Chain break' matched neither, leaving that branch dead.
+        return {
+          valid: false,
+          brokenAt: log.id,
+          index: i,
+          reason: 'chain_break',
+          expectedPrevious: previousHash,
+          actualPrevious: previous_hash,
+        };
       }
       previousHash = hash;
     }

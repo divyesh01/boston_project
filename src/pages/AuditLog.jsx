@@ -388,6 +388,14 @@ export default function AuditLog() {
                       : chain.brokenAt ? ` — chain break at log #${chain.brokenAt}${typeof chain.index === "number" ? ` (row ${chain.index})` : ""} (a row was inserted, removed, or reordered)`
                       : chain.reason === "hash_mismatch" ? " — hash mismatch"
                       : chain.reason === "chain_break" ? " — chain break"
+                      // A fork is NOT tampering and must never read as it. Two audit
+                      // entries were written against the same parent, so writes
+                      // overlapped; every row still hashes correctly and the parent
+                      // is still in the table, which is exactly what separates this
+                      // from the "chain break" branch above. Naming it in the owner's
+                      // words beats letting it fall through to the raw
+                      // "concurrent_fork" token on the catch-all line.
+                      : chain.reason === "concurrent_fork" ? ` — concurrent writes forked at log #${chain.forkedAt}${typeof chain.index === "number" ? ` (row ${chain.index})` : ""} (two audit entries were written against the same parent, so writes overlapped in time — every row still verifies; nothing was altered or removed)`
                       : chain.error ? ` — ${chain.error}`
                       : chain.reason ? ` — ${chain.reason}`
                       : "."}

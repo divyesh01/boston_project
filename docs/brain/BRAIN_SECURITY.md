@@ -48,15 +48,37 @@ Client Rate Limits (Domain-Separated via src/lib/rateLimiters.js):
   - Operational Domain: Expenses, daily manual entry, routine settings updates (120 actions / 15m)
 ```
 
-### Audit Log (Tamper-Proof Blockchain-Style)
+### Audit Log (Hash-Linked Chain -- SEE CAVEAT BELOW)
 ```
 Each entry = SHA-256 HMAC of:
-  canonical payload + previous entry's hash + AUDIT_CHAIN_SECRET
+  canonical payload + previous entry's hash + a chain secret
 
 Result: Linked chain. If anyone edits or deletes a row,
-the chain breaks and audit_verify detects the tampering.
+the chain breaks and the verifier reports it.
 The audit_clear function ALWAYS returns 403 -- log can never be erased.
 ```
+
+> **READ THIS BEFORE RELYING ON THE CHAIN.** The description above is the
+> *design*. As deployed on Cloudflare Workers it is materially weaker, and this
+> is a known open remediation, not a defect introduced recently:
+>
+> - All 7 signers under `base44/functions/` import `base44:runtime` and
+>   `npm:@base44/sdk`, which **cannot execute on Cloudflare Workers**. They never
+>   run in the deployed app.
+> - There is **no audit table** in `worker/schema.sql` (50 tables, none audit)
+>   and no audit route in `worker/index.js`. There is no server-side audit
+>   storage at all.
+> - The only signer that actually runs is `createAuditEntry()` in
+>   `src/lib/securityUtils.js`, using a **hardcoded public salt**
+>   (`AUDIT_CHAIN_SALT`, present verbatim in the shipped bundle).
+> - Rows live in **per-browser IndexedDB**, so "log #16" is one browser's
+>   history, not an organization-wide trail.
+>
+> Net effect: tamper-**evident** against accidental edits; **not**
+> tamper-**resistant**. Anyone with devtools can re-sign a row. The
+> server-authoritative `audit_verify` (admin-gated, four-pass DAG) is the intended
+> answer and is **not deployed**. Tracked in
+> `docs/architecture/AUDIT-CHAIN-REMEDIATION-PLAN.md` (Phases 1-3).
 
 **The canonical payload, and why it exists 7 times.** The signed field set is:
 
@@ -65,7 +87,9 @@ AUDIT_CANONICAL_V1 = user_id, action, performed_by_id, performed_by,
                      property_id, result, detail, created_date, previous_hash
 ```
 
-hashed as `sha256(chainSecret + ":" + JSON.stringify(canonical))`. The Base44 host permits
+hashed as `sha256(chainSecret + ":" + JSON.stringify(canonical))`. **Note the
+live client path does not use `AUDIT_CHAIN_SECRET`** -- it uses the hardcoded
+`AUDIT_CHAIN_SALT`; see the caveat at the top of this section. The Base44 host permits
 no module sharing between functions (every import must be `npm:`, `node:` or
 `base44:runtime`), so this contract is duplicated across **6 writers + 1 verifier**:
 `audit_log`, `custom_user_admin`, `custom_auth_login`, `custom_auth_reset_password`,
@@ -89,6 +113,47 @@ Rules that are easy to break by accident:
 - A missing `AUDIT_CHAIN_SECRET` makes writers **skip the row, never write an unsigned one.**
   `audit_verify` reports a hashless row as tampered, so emitting one would make the entire
   healthy trail read as forged -- strictly worse than a missing row.
+
+**Verdict vocabulary (changed 2026-09-28).** `verifyAuditChain()` in
+`src/lib/securityUtils.js` returns one of four shapes, and the distinction is
+load-bearing -- it is what separates benign concurrency from evidence of an
+attack:
+
+| Verdict | Returned when | Key that is set |
+| --- | --- | --- |
+| `hash_mismatch` | A row's stored hash no longer matches its own content | `tamperedAt` |
+| `chain_break` | A row's `previous_hash` is **absent** from the table -- a row really was deleted | `brokenAt` |
+| `concurrent_fork` | A row's `previous_hash` is **present** but is not the previous row -- two writers shared a tip | `forkedAt` |
+| `valid` | Clean linear chain | `count` |
+
+The fork/deletion split is decided by a `Set` of every row's hash, built BEFORE
+the walk. Before this change the linkage branch returned `tamperedAt` with
+reason `'Chain break'` for both cases, so a concurrent write -- three people
+logging in at once -- rendered as **"tampering detected"**, and so did a genuine
+deletion. The reason token also disagreed with the UI, which tested
+`"chain_break"` (snake_case) while the verifier emitted `'Chain break'`, leaving
+that UI branch unreachable. **The word "tampering" now means hash drift and
+nothing else.** All four verdicts carry `index`, so the UI can render `row N`.
+
+`concurrent_fork` deliberately keeps `valid: false`. A caller that checks only
+`valid` must still be told the chain is not linear; the server verifier's
+advisory `warnings`-with-`valid: true` style is deliberately NOT mirrored here.
+
+Covered by `src/lib/auditChain.phase0.test.js` (9 tests, including a fork and a
+deletion differing ONLY in parent presence) and the deletion case in
+`securityUtils.test.js`.
+
+**What Phase 0 did NOT fix.** Parent-survival is necessary but not sufficient.
+Because `AUDIT_CHAIN_SALT` in `securityUtils.js` is a **public literal shipped in
+the client bundle**, an attacker able to write IndexedDB can re-sign any row, so
+deleting rows and re-signing the tip still yields `valid: true`; the same
+tampering on a non-tip row yields `chain_break`. This pre-dates Phase 0 (the old
+verifier missed the same case via hash drift) and is inherent to an unanchored
+chain. It is only fixed by moving signing server-side with a held secret plus
+real server-side storage -- planned, not implemented, in
+`docs/architecture/AUDIT-CHAIN-REMEDIATION-PLAN.md`. As deployed, this chain is
+**tamper-EVIDENT for accidental edits only**: rows are per-browser, and the salt
+is readable by anyone.
 
 ### Role-Based Access Control (RBAC)
 | Role | Can See | Can Do |

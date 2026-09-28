@@ -1,0 +1,228 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Red Roof Intelligence Architecture",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "core-flow",
+        "label": "Primary Request Path",
+        "focus": ["users", "spa", "edge", "worker", "d1"],
+        "note": "Follow front desk operations through Cloudflare Edge to the Worker API and D1 SQL database."
+      },
+      {
+        "id": "offline-resilience",
+        "label": "Offline Front Desk",
+        "focus": ["users", "spa", "localdb"],
+        "note": "Dexie IndexedDB provides local caching and sync so operations continue during network outages."
+      },
+      {
+        "id": "ingestion-and-audit",
+        "label": "Ingestion & Audit Trail",
+        "focus": ["pms", "webworker", "spa", "worker", "audit"],
+        "note": "Off-thread PMS CSV ingestion paired with a cryptographic HMAC hash-chained audit ledger."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "pms",
+      "type": "external",
+      "label": "HotelKey PMS",
+      "sublabel": "CSV & Night Audit",
+      "pos": [40, 120],
+      "size": [130, 60]
+    },
+    {
+      "id": "users",
+      "type": "external",
+      "label": "Front Desk Staff",
+      "sublabel": "Managers & Desk Clerks",
+      "pos": [40, 260],
+      "size": [130, 60]
+    },
+    {
+      "id": "webworker",
+      "type": "frontend",
+      "label": "Parser Worker",
+      "sublabel": "Off-thread CSV Parser",
+      "pos": [250, 120],
+      "size": [140, 60]
+    },
+    {
+      "id": "spa",
+      "type": "frontend",
+      "label": "React 18 SPA",
+      "sublabel": "Vite + Tailwind Frontend",
+      "brand": "react",
+      "pos": [250, 260],
+      "size": [140, 60]
+    },
+    {
+      "id": "localdb",
+      "type": "database",
+      "label": "Dexie IndexedDB",
+      "sublabel": "Offline Store & Sync",
+      "pos": [250, 400],
+      "size": [140, 60]
+    },
+    {
+      "id": "auth",
+      "type": "security",
+      "label": "Session Guard",
+      "sublabel": "PBKDF2 & HttpOnly Cookie",
+      "tag": "__Host-rri",
+      "pos": [470, 120],
+      "size": [140, 60]
+    },
+    {
+      "id": "edge",
+      "type": "cloud",
+      "label": "Cloudflare Edge",
+      "sublabel": "Single-Origin Gateway",
+      "brand": "cloudflare",
+      "pos": [470, 260],
+      "size": [140, 60]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "Cloudflare Worker",
+      "sublabel": "API & Business Sync",
+      "pos": [690, 260],
+      "size": [140, 60]
+    },
+    {
+      "id": "d1",
+      "type": "database",
+      "label": "Cloudflare D1",
+      "sublabel": "SQLite Entity Tables",
+      "pos": [910, 260],
+      "size": [140, 60]
+    },
+    {
+      "id": "audit",
+      "type": "security",
+      "label": "Audit Ledger",
+      "sublabel": "Cryptographic Hash Chain",
+      "tag": "HMAC / Chain",
+      "pos": [910, 400],
+      "size": [140, 60]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Client Browser Sandbox",
+      "wraps": ["webworker", "spa", "localdb"]
+    },
+    {
+      "kind": "region",
+      "label": "Cloudflare Serverless Platform",
+      "wraps": ["auth", "edge", "worker", "d1", "audit"]
+    },
+    {
+      "kind": "security-group",
+      "label": "D1 Storage & Audit Integrity",
+      "wraps": ["d1", "audit"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "pms-to-worker",
+      "from": "pms",
+      "to": "webworker",
+      "label": "CSV export",
+      "variant": "dashed"
+    },
+    {
+      "id": "worker-to-spa",
+      "from": "webworker",
+      "to": "spa",
+      "label": "parsed records",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "users-to-spa",
+      "from": "users",
+      "to": "spa",
+      "label": "desk operations",
+      "variant": "emphasis"
+    },
+    {
+      "id": "spa-to-localdb",
+      "from": "spa",
+      "to": "localdb",
+      "label": "offline cache",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "spa-to-edge",
+      "from": "spa",
+      "to": "edge",
+      "label": "HTTPS /api/*",
+      "variant": "emphasis"
+    },
+    {
+      "id": "edge-to-auth",
+      "from": "edge",
+      "to": "auth",
+      "label": "verify cookie",
+      "variant": "security"
+    },
+    {
+      "id": "edge-to-worker",
+      "from": "edge",
+      "to": "worker",
+      "label": "route API"
+    },
+    {
+      "id": "worker-to-d1",
+      "from": "worker",
+      "to": "d1",
+      "label": "D1 SQL"
+    },
+    {
+      "id": "worker-to-audit",
+      "from": "worker",
+      "to": "audit",
+      "label": "tamper-evident log",
+      "variant": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Client & Offline Resilience",
+      "items": [
+        "React 18 SPA with 34 operational and reporting pages",
+        "Dexie IndexedDB local cache preserves desk uptime when offline",
+        "WebWorker processes large HotelKey CSV files off the main thread"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Cloudflare Serverless Edge",
+      "items": [
+        "Single-origin routing delivers static SPA assets and /api endpoints",
+        "Cloudflare Worker handles business sync and entity reconciliation",
+        "Cloudflare D1 provides regional SQLite persistence"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Security & Audit Governance",
+      "items": [
+        "__Host-rri_session HttpOnly cookie with strict property isolation",
+        "Tamper-evident HMAC hash chain guarantees audit log integrity",
+        "Automated multi-suite verification gates prior to deployment"
+      ]
+    }
+  ]
+}

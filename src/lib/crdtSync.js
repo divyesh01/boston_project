@@ -227,7 +227,7 @@ export class ORMap {
     this.clock = clock;
   }
   static fromObject(obj, nodeId, clock) {
-    const map = new ORMap();
+    const map = new ORMap(new Map(), clock);
     for (const [k, v] of Object.entries(obj || {})) {
       if (v && typeof v === "object" && v.__type === "LWWRegister") {
         map.set(k, v, nodeId, clock);

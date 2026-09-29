@@ -196,7 +196,7 @@ These are the files in `src/lib/` -- the brains of the app. Grouped by what they
 | File | What It Does | If You Edit This... |
 |------|-------------|-------------------|
 | `query-client.js` | React Query config (data fetching cache) | ALL data fetching breaks. |
-| `crdtSync.js` | Hand-rolled LWW-Set / OR-Map / vector clocks. **Not Yjs** (that is `src/crdt.jsx`) and **unwired** — the only importer is `probe-crdt-convergence.mjs` | Nothing breaks. Multi-user editing runs on `src/crdt.jsx` (Yjs), which `App.jsx` wraps the whole app in. Editing this only affects that one probe. |
+| `crdtSync.js` | Hand-rolled LWW-Set / OR-Map / vector clocks. **Not Yjs** (that is `src/crdt.jsx`) and **unwired** — used by `probe-crdt-convergence.mjs` and `crdtSync.offlineVectorClock.test.js`. `ORMap.fromObject` shares the supplied clock so serialized maps and deltas carry their causal state; the test also checks restoration of a pre-fix snapshot with an empty map clock. | No live page uses this module. Multi-user editing runs on `src/crdt.jsx` (Yjs), which `App.jsx` wraps the whole app in. |
 | `ySync.js` | Yjs sync utilities | Real-time sync breaks. |
 | `realtime.js` | Real-time data subscription | Live updates stop. |
 | `settingsBus.js` | Settings event bus (BroadcastChannel) | Settings do not propagate across tabs. |

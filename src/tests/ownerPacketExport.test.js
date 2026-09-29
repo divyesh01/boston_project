@@ -295,5 +295,15 @@ describe('Monthly Owner Performance Packet Exporter', () => {
     expect(bosRow[3]).toBe(170); // Must be 170 rooms sold, NOT 0!
     expect(bosRow[5]).toBe(158.82); // ADR
     expect(bosRow[10]).toBe(6000); // 27000 - 21000 total variance
+
+    // Verify binary workbook export (valid ZIP/XLSX structure)
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    expect(buf).toBeDefined();
+    expect(buf.length).toBeGreaterThan(1000);
+    // Standard ZIP/XLSX magic number: 0x50, 0x4B, 0x03, 0x04 ("PK\x03\x04")
+    expect(buf[0]).toBe(0x50);
+    expect(buf[1]).toBe(0x4B);
+    expect(buf[2]).toBe(0x03);
+    expect(buf[3]).toBe(0x04);
   });
 });

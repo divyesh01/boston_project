@@ -231,8 +231,16 @@ async function logout(request, env) {
   if (!sameOriginMutation(request)) return json({ error: "forbidden" }, 403);
   const token = parseCookie(request);
   if (token) await env.DB.prepare("DELETE FROM app_session WHERE token_hash=?").bind(await sha256(token)).run();
-  return json({ success: true }, 200, { "set-cookie": expiredCookie(), "cache-control": "no-store" });
+  const headers = new Headers({
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+  });
+  headers.append("Set-Cookie", expiredCookie());
+  headers.append("Set-Cookie", "CF_Authorization=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax");
+  return new Response(JSON.stringify({ success: true }), { status: 200, headers });
 }
+
 
 /**
  * @returns {Promise<{ ok: false, serviceUnavailable?: boolean } | { ok: true, principal: import("./index.js").Principal }>}

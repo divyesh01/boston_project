@@ -168,11 +168,15 @@ export default function Layout() {
               <KeyRound className="h-3.5 w-3.5" /> Change Password
             </Link>
             <button
-              onClick={() => logout(true)}
+              onClick={async () => {
+                await logout(false);
+                window.location.href = "/cdn-cgi/access/logout";
+              }}
               className="flex items-center justify-center gap-2 rounded-xl border border-red-500/30 px-3 py-2 text-xs text-red-300 transition-colors hover:bg-red-500/10"
             >
               <LogOut className="h-3.5 w-3.5" /> Logout
-              </button>
+            </button>
+
           </div>
           <div className="flex items-center justify-center gap-3 border-t border-white/5 pt-3 text-[10px] text-slate-500">
             <Link to="/privacy" className="transition-colors hover:text-slate-300 hover:underline">Privacy Policy</Link>

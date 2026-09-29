@@ -8,7 +8,7 @@ import { money, money2, pct, perPropertyStats } from "@/lib/hotel";
 import { sumCents, fromCents } from "@/lib/decimal";
 import { decomposeRevenueVariance } from "@/lib/varianceDecomposition";
 
-export default function PropertyRanking({ occRows, properties, compareOccRows }) {
+export default function PropertyRanking({ occRows = [], properties = [], compareOccRows = [] }) {
   const [sortBy, setSortBy] = useState("revenue");
   const [selectedPropertyId, setSelectedPropertyId] = useState(null);
 
@@ -17,8 +17,6 @@ export default function PropertyRanking({ occRows, properties, compareOccRows })
     if (!compareOccRows || !compareOccRows.length) return [];
     return perPropertyStats(compareOccRows, properties);
   }, [compareOccRows, properties]);
-
-  if (!stats.length) return null;
 
   // Portfolio revenue is owner-facing money and must reconcile to the cent with
   // the per-property figures it sums. A float `reduce((a, s) => a + s.revenue)`
@@ -100,6 +98,8 @@ export default function PropertyRanking({ occRows, properties, compareOccRows })
         : `${selectedCurrent.property_name} is discounting below portfolio ADR (-${money2(portfolioAvgRate - selectedCurrent.adr)}).`,
     };
   }, [selectedCurrent, selectedPrior, portfolioAdr]);
+
+  if (!stats.length) return null;
 
   const getStatusBadge = (occ) => {
     if (occ >= 0.70) {

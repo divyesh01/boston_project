@@ -88,7 +88,7 @@ export function evaluatePropertyDataHealth({
   const missingPay = findMissingDates(payDates, from, to);
 
   const totalPossibleDays = from && to
-    ? Math.max(1, Math.round((new Date(to) - new Date(from)) / 86400000) + 1)
+    ? Math.max(1, Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86400000) + 1)
     : 1;
 
   const completeness = {

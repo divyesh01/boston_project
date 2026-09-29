@@ -113,6 +113,7 @@ export const CANONICAL_CHANNELS = [
  *   rawSource: string,
  *   rawCode: string,
  *   normalizedName: string,
+ *   canonicalName: string,
  *   group: string,
  *   isOta: boolean,
  *   isDirect: boolean,
@@ -130,6 +131,7 @@ export function normalizeChannel(rawSource = '', rawCode = '') {
       rawSource: '',
       rawCode: '',
       normalizedName: 'Unknown',
+      canonicalName: 'Unknown',
       group: CHANNEL_GROUPS.OTHER,
       isOta: false,
       isDirect: false,
@@ -145,6 +147,7 @@ export function normalizeChannel(rawSource = '', rawCode = '') {
           rawSource: sourceStr,
           rawCode: codeStr,
           normalizedName: channel.name,
+          canonicalName: channel.name,
           group: channel.group,
           isOta: channel.group === CHANNEL_GROUPS.OTA,
           isDirect: channel.group === CHANNEL_GROUPS.DIRECT,
@@ -157,10 +160,12 @@ export function normalizeChannel(rawSource = '', rawCode = '') {
 
   // Fallback for unclassified sources
   const isLikelyOta = /OTA|BOOKING|EXPEDIA|TRAVEL/i.test(fullText);
+  const fallbackName = sourceStr || codeStr || 'Other';
   return {
     rawSource: sourceStr,
     rawCode: codeStr,
-    normalizedName: sourceStr || codeStr || 'Other',
+    normalizedName: fallbackName,
+    canonicalName: fallbackName,
     group: isLikelyOta ? CHANNEL_GROUPS.OTA : CHANNEL_GROUPS.OTHER,
     isOta: isLikelyOta,
     isDirect: false,

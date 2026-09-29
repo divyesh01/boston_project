@@ -101,6 +101,27 @@ merely diff the JSON -- it EXECUTES every shipped rule against a 9-case access m
 | **Import Drive File** | `importDriveFile/` | Downloads from Drive via OAuth, IDOR defense (tenant property check) | Drive import breaks or cross-tenant leak |
 | **List Drive Files** | `listDriveFiles/` | Lists CSV/spreadsheet files from connected Google Drive | Drive file picker breaks |
 
+### Fixed 2026-09-29: property_access fail-open in importDriveFile
+
+`entry.ts` around line 60 used `!Array.isArray(user.property_access)` as part of the
+bypass guard. That expression is `true` for `undefined`, `null`, arbitrary strings, and
+plain objects — so any user whose `property_access` was missing or malformed silently
+became unrestricted (null allowlist) and could reach any property's Drive files without
+a grant.
+
+**Fix:** the bypass now requires an explicit one of three conditions:
+1. `user.role === 'owner'` — full platform access by design
+2. `user.role === 'admin'` — full platform access by design
+3. `user.property_access === 'all'` — explicit grant recorded at user creation
+
+All other values (including `undefined`, `null`, wrong strings, objects) produce an
+empty allowlist `[]`, so every `allowedPropertyIds.includes(...)` call fails closed.
+This matches the pattern in `custom_user_admin/entry.js:300-303` and
+`importGoogleSheet/entry.js:384-388`.
+
+Covered by 16 tests in `tests/backend/importDriveFile.test.js` (three groups:
+no-grant → 403, scoped-array-excludes → 403, authorized → 200).
+
 ### Fixed 2026-08-19: the `__B44_DB__` fake-database shim
 
 Seven of these functions (`aiAssistant`, `autoPayroll`, `backupToDrive`, `deleteAccount`,

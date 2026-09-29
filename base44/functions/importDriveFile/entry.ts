@@ -57,10 +57,29 @@ export default async function(req) {
     // belong to a property the caller can access and to match fileId); otherwise
     // require a property the caller can access. Without an authorization
     // context we refuse (fail closed).
-    const allowedPropertyIds =
-      user.property_access === 'all' || !Array.isArray(user.property_access)
-        ? null
-        : user.property_access.map(String);
+    //
+    // Fail-closed property access: null means "unrestricted" (bypass all
+    // property checks). Only three conditions earn that bypass:
+    //   1. owner role — full platform access by design.
+    //   2. admin role — full platform access by design.
+    //   3. property_access === 'all' — explicit grant recorded at user creation.
+    //
+    // Previously the guard was `!Array.isArray(user.property_access)`, which is
+    // true for undefined, null, arbitrary strings, and objects — every malformed
+    // or missing value silently became unrestricted. A user whose property_access
+    // was accidentally wiped or set to an unexpected value could reach any
+    // property's Drive files. The fix matches the pattern used in every other
+    // backend function in this repo (custom_user_admin entry.js:300-303,
+    // importGoogleSheet entry.js:384-388).
+    const isUnrestricted =
+      user.role === 'owner' ||
+      user.role === 'admin' ||
+      user.property_access === 'all';
+    const allowedPropertyIds: string[] | null = isUnrestricted
+      ? null
+      : Array.isArray(user.property_access)
+        ? user.property_access.map(String)
+        : []; // missing/malformed → empty allowlist → every property check fails
 
     const uploadedReportId = body.uploadedReportId;
     if (uploadedReportId) {

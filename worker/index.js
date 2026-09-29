@@ -28,6 +28,7 @@ import { handleUsersRequest } from "./users.js";
 import { handleBusinessSyncRequest } from "./business-sync.js";
 import { handleBulkImportRequest } from "./bulk-import.js";
 import { handleSettingsRequest } from "./settings.js";
+import { handleAggregatesRequest } from "./aggregates.js";
 import { appSessionCookiePresent, authenticateAppSession, handleAppAuthRequest, sameOriginMutation } from "./app-auth.js";
 import { permissionsForSession } from "./session-permissions.js";
 
@@ -366,6 +367,9 @@ async function handleRequest(request, env, _ctx) {
   }
   if (parts[1] === "settings") {
     return handleSettingsRequest(request, env, scoped.scope, url, parts);
+  }
+  if (parts[1] === "aggregates") {
+    return handleAggregatesRequest(request, env, scoped.scope, url, parts);
   }
   const isBusinessDataRoute = url.pathname === "/api/import"
     || url.pathname === "/api/properties"

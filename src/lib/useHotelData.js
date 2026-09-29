@@ -357,11 +357,12 @@ export function useMetricDates(propertyId) {
 }
 
 // Materialized daily financial aggregates (see src/lib/dailyAggregates.js).
-//
 // Reads the pre-summed DailyFinancialAggregate cache and reconstructs the
 // synthetic per-day rows CalculationService consumes, so the Dashboard loads
-// from a few hundred rows instead of scanning the raw ledgers. Returns null
-// when the cache is empty so callers can fall back to live computation.
+// from a few hundred rows instead of scanning the raw ledgers. First checks local
+// IndexedDB; if empty (fresh browser context), queries server /api/aggregates/daily
+// fast-path so the dashboard paints in <1s. Returns null when both are empty so
+// callers fall back to live computation.
 export function useDailyFinancialAggregates(dateRange, propertyId, enabled = true) {
   return useQuery({
     queryKey: ["daily-aggregates", dateRange?.from, dateRange?.to, Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
@@ -372,8 +373,28 @@ export function useDailyFinancialAggregates(dateRange, propertyId, enabled = tru
         from: dateRange?.from || "",
         to: dateRange?.to || "",
       });
-      if (!aggs.length) return null;
-      return buildSyntheticRows(aggs);
+      if (aggs.length) return buildSyntheticRows(aggs);
+
+      // Fast-path for clean browser contexts: query server-authoritative daily summaries
+      try {
+        const propParam = Array.isArray(propertyId) ? propertyId.join(",") : (propertyId || "all");
+        const url = new URL("/api/aggregates/daily", globalThis.location?.origin || "http://localhost");
+        if (propParam && propParam !== "all") url.searchParams.set("property_id", propParam);
+        if (dateRange?.from) url.searchParams.set("from", dateRange.from);
+        if (dateRange?.to) url.searchParams.set("to", dateRange.to);
+
+        const res = await fetch(url.toString(), { credentials: "same-origin" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.ok && Array.isArray(data.summaries) && data.summaries.length > 0) {
+            return buildSyntheticRows(data.summaries);
+          }
+        }
+      } catch {
+        // Fall back to null so caller renders from live ledgers
+      }
+
+      return null;
     },
     staleTime: 30 * 1000,
   });

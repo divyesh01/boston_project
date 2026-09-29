@@ -354,7 +354,8 @@ export async function getDailyAggregates({ propertyId = 'all', from = '', to = '
 }
 
 // Turn cached aggregates back into the synthetic per-day row shape the Dashboard
-// and CalculationService expect, so no renderer math has to change.
+// and CalculationService expect, so no renderer math has to change. Supports both
+// client Dexie DailyFinancialAggregate and server-authoritative PropertyDaySummary.
 export function buildSyntheticRows(aggregates) {
   const occRows = [];
   const srcRows = [];
@@ -364,12 +365,14 @@ export function buildSyntheticRows(aggregates) {
 
   for (const a of aggregates) {
     const date = String(a.business_date).slice(0, 10);
-    const roomsSold = a.occ_rooms_sold || 0;
-    const capacity = a.occ_capacity_rooms || 0;
-    const revenue = a.occ_revenue || 0;
-    const occ = capacity > 0 ? roomsSold / capacity : 0;
-    const adr = roomsSold > 0 ? revenue / roomsSold : 0;
-    const revpar = capacity > 0 ? revenue / capacity : 0;
+    const roomsSold = Number(a.rooms_sold ?? a.occ_rooms_sold ?? 0);
+    const capacity = Number(a.available_rooms ?? a.occ_capacity_rooms ?? 0);
+    const revenue = a.room_revenue_cents != null
+      ? a.room_revenue_cents / 100
+      : (a.occ_revenue || a.room_revenue || 0);
+    const occ = capacity > 0 ? roomsSold / capacity : (a.occupancy_rate || 0);
+    const adr = roomsSold > 0 ? revenue / roomsSold : (a.adr_cents ? a.adr_cents / 100 : 0);
+    const revpar = capacity > 0 ? revenue / capacity : (a.revpar_cents ? a.revpar_cents / 100 : 0);
 
     if (revenue || roomsSold || capacity) {
       occRows.push({
@@ -384,22 +387,49 @@ export function buildSyntheticRows(aggregates) {
       });
     }
 
-    if (a.source_net) {
-      for (const [key, v] of Object.entries(a.source_net)) {
+    // Support source_net map or channel_summary_json string/object
+    let channelMap = a.source_net;
+    if (!channelMap && a.channel_summary_json) {
+      try {
+        const parsed = typeof a.channel_summary_json === "string" ? JSON.parse(a.channel_summary_json) : a.channel_summary_json;
+        channelMap = {};
+        for (const [k, v] of Object.entries(parsed || {})) {
+          channelMap[k] = { net: typeof v === "number" ? v / 100 : (v?.net || 0), stays: v?.stays || 0 };
+        }
+      } catch {
+        channelMap = null;
+      }
+    }
+
+    if (channelMap) {
+      for (const [key, v] of Object.entries(channelMap)) {
         if (v.net || v.stays) {
           srcRows.push({ property_id: a.property_id, date, source: key, code: key, net_revenue: v.net, stays: v.stays });
         }
       }
     }
 
-    if (a.gross_room_rent || a.gross_state_tax || a.gross_city_tax || a.gross_other_tax || (a.gross_misc && Object.values(a.gross_misc).some((x) => x))) {
-      const g = { property_id: a.property_id, date, room_rent: a.gross_room_rent, state_tax: a.gross_state_tax, city_tax: a.gross_city_tax, other_tax: a.gross_other_tax };
-      for (const f of GROSS_MISC_FIELDS) g[f] = a.gross_misc?.[f] || 0;
+    const roomRent = a.gross_room_rent || (a.room_revenue_cents ? a.room_revenue_cents / 100 : 0);
+    const miscTotal = a.ancillary_revenue_cents ? a.ancillary_revenue_cents / 100 : 0;
+    if (roomRent || miscTotal || a.gross_state_tax || a.gross_city_tax || a.gross_other_tax || (a.gross_misc && Object.values(a.gross_misc).some((x) => x))) {
+      const g = {
+        property_id: a.property_id,
+        date,
+        room_rent: roomRent,
+        state_tax: a.gross_state_tax || 0,
+        city_tax: a.gross_city_tax || 0,
+        other_tax: a.gross_other_tax || 0,
+        misc_charge: a.gross_misc?.misc_charge || miscTotal,
+      };
+      for (const f of GROSS_MISC_FIELDS) {
+        if (f !== 'misc_charge') g[f] = a.gross_misc?.[f] || 0;
+      }
       grossRows.push(g);
     }
 
-    if (a.payment_total || (a.payment && Object.keys(a.payment).length)) {
-      const pay = { property_id: a.property_id, date, total: a.payment_total };
+    const payTotal = a.payment_total || (a.payment_total_cents ? a.payment_total_cents / 100 : 0);
+    if (payTotal || (a.payment && Object.keys(a.payment).length)) {
+      const pay = { property_id: a.property_id, date, total: payTotal };
       for (const f of PAYMENT_FIELDS) pay[f] = a.payment?.[f] || 0;
       payRows.push(pay);
     }

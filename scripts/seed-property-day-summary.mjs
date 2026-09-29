@@ -274,13 +274,7 @@ for (const date of dates) {
 }
 
 
-// Generate for HOTEL_B (80 rooms, scale 0.67)
-for (const date of dates) {
-  const day = dayMap.get(date);
-  sqlStatements.push(generateDaySummaryRow("ACCOUNT_A", "HOTEL_B", day, 0.67, 80));
-}
-
-console.log(`Generated ${sqlStatements.length} total SQL statements for HOTEL_A and HOTEL_B.`);
+console.log(`Generated ${sqlStatements.length} total SQL statements for HOTEL_A (manifest-backed).`);
 
 // Batch into files of 100 statements to stay within D1 batch limits
 const tempSqlPath = path.join(ROOT, "scripts", "temp_seed_aggregates.sql");

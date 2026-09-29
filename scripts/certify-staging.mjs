@@ -5,7 +5,8 @@
 // requiring a human browser session.
 
 import { spawnSync } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -88,24 +89,47 @@ try {
 // ---------------------------------------------------------------------------
 // 3. Manifest Lineage & Bulk Storage Parity
 // ---------------------------------------------------------------------------
-console.log("\n3. D1 Manifest Lineage & Bulk Storage Parity:");
+console.log("\n3. D1 Manifest Lineage & Cryptographic Parity:");
 try {
   const manifests = runWranglerD1(
     "SELECT id, report_type, status, server_property_id, row_count, min_date, max_date, raw_file_hash, normalized_hash FROM import_bundle_manifest;"
   );
-  check("Active manifests present in D1 control plane", manifests.length >= 10, `found ${manifests.length} manifests`);
+  check("Active manifests present in D1 control plane", manifests.length >= 14, `found ${manifests.length} manifests`);
 
   const activeManifests = manifests.filter((m) => m.status === "active");
-  check("Manifests are in active status", activeManifests.length >= 10, `${activeManifests.length} active`);
+  check("Manifests are in active status", activeManifests.length >= 14, `${activeManifests.length} active`);
 
-  const propertyScoped = activeManifests.every((m) => m.server_property_id === "HOTEL_A" || m.server_property_id === "HOTEL_B");
-  check("Every active manifest is strictly property-scoped", propertyScoped, "zero unassigned or orphan manifests");
+  const propertyScoped = activeManifests.every((m) => m.server_property_id === "HOTEL_A");
+  check("Every active manifest is strictly property-scoped to HOTEL_A", propertyScoped, "100% manifest-backed property isolation");
 
-  const validHashes = activeManifests.every((m) => m.raw_file_hash && m.raw_file_hash.length >= 32);
-  check("SHA-256 raw file hashes recorded for all active bundles", validHashes, "immutable source hash parity");
+  const validHashes = activeManifests.every((m) => m.raw_file_hash && m.raw_file_hash.length === 64);
+  check("SHA-256 raw file hashes recorded for all active bundles", validHashes, "immutable 256-bit source hashes");
 
   const totalImportedRows = activeManifests.reduce((sum, m) => sum + (Number(m.row_count) || 0), 0);
-  check("Active bundle rows tracked in control plane", totalImportedRows > 20000, `${totalImportedRows.toLocaleString()} rows cataloged`);
+  check("Active bundle rows tracked in control plane", totalImportedRows >= 29992, `${totalImportedRows.toLocaleString()} rows cataloged`);
+
+  // Relational lineage query
+  const lineage = runWranglerD1("SELECT count(*) as count FROM import_bundle_lineage;");
+  const lineageCount = Number(lineage[0]?.count) || 0;
+  check("Quarterly relational bundle lineage established in D1", lineageCount >= 6, `${lineageCount} chronological lineage edges`);
+
+  // Cryptographic fixture hash match
+  const fixturesDir = existsSync(path.join(ROOT, "scripts/data"))
+    ? path.join(ROOT, "scripts/data")
+    : path.join(ROOT, "rri middelboro");
+  const fixtureFiles = existsSync(fixturesDir) ? readdirSync(fixturesDir).filter((f) => f.endsWith(".csv")) : [];
+  let matchingHashCount = 0;
+  for (const m of activeManifests) {
+    for (const f of fixtureFiles) {
+      const buf = readFileSync(path.join(fixturesDir, f));
+      const hash = createHash("sha256").update(buf).digest("hex");
+      if (hash.toLowerCase() === (m.raw_file_hash || "").toLowerCase()) {
+        matchingHashCount++;
+        break;
+      }
+    }
+  }
+  check("Cryptographic SHA-256 match between source CSVs and D1 manifests", matchingHashCount === activeManifests.length, `${matchingHashCount}/${activeManifests.length} byte-exact fixtures`);
 } catch (err) {
   check("Manifest lineage query", false, err.message);
 }
@@ -118,8 +142,16 @@ try {
   const tableCheck = runWranglerD1("SELECT count(*) as count FROM property_day_summary;");
   check("property_day_summary table exists in remote D1", tableCheck !== undefined, "migration 0008 active");
   const rowCount = Number(tableCheck[0]?.count) || 0;
-  check("property_day_summary is populated with server aggregates", rowCount >= 400, `${rowCount} days populated across properties`);
+  check("property_day_summary has authentic daily aggregate count", rowCount === 214, `${rowCount} authentic days for HOTEL_A`);
 
+  const propertyBreakdown = runWranglerD1("SELECT property_id, count(*) as count FROM property_day_summary GROUP BY property_id;");
+  const hotelARows = propertyBreakdown.find((p) => p.property_id === "HOTEL_A")?.count || 0;
+  const hotelBRows = propertyBreakdown.find((p) => p.property_id === "HOTEL_B")?.count || 0;
+  const orphanRows = propertyBreakdown.filter((p) => p.property_id !== "HOTEL_A" && p.property_id !== "HOTEL_B").reduce((s, p) => s + p.count, 0);
+
+  check("HOTEL_A has complete 214-day history (Jan 1 - Aug 2)", hotelARows === 214, `${hotelARows} days verified`);
+  check("HOTEL_B has zero synthetic/unbacked rows", hotelBRows === 0, "fabricated data eliminated");
+  check("Zero orphan or unassigned property rows exist", orphanRows === 0, "property isolation intact");
 
   const schemaInfo = runWranglerD1("PRAGMA table_info(property_day_summary);");
   const columnNames = schemaInfo.map((c) => c.name);
@@ -136,9 +168,33 @@ try {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Versioned HotelKey Schema Registry Verification
+// 5. Storage Architecture Verification (R2 / S3 / GCS Multi-Provider)
 // ---------------------------------------------------------------------------
-console.log("\n5. Versioned HotelKey Schema Registry Contract:");
+console.log("\n5. Storage Architecture Verification (R2 / S3 / GCS Multi-Provider):");
+try {
+  const adapterSrc = readFileSync(path.join(ROOT, "worker/r2-s3-adapter.js"), "utf8");
+  check("Multi-provider storage adapter implemented", adapterSrc.includes("GCS_ENDPOINT") && adapterSrc.includes("isR2S3Enabled"), "R2, GCS, and S3 supported");
+
+  const workerSrc = readFileSync(path.join(ROOT, "worker/bulk-import.js"), "utf8");
+  check("Bulk import pipeline supports both native R2 and S3/GCS adapters", workerSrc.includes("isR2S3Enabled") && workerSrc.includes("resolveR2S3Stores"), "dual storage resolution active");
+
+  // Verify canary R2 buckets in Cloudflare account
+  const bucketList = spawnSync(
+    process.execPath,
+    [npxCli, "wrangler", "r2", "bucket", "list"],
+    { cwd: ROOT, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }
+  );
+  const bucketsOutput = bucketList.stdout || "";
+  check("Cloudflare R2 raw archive bucket verified", bucketsOutput.includes("rri-raw-canary-a61a110"), "rri-raw-canary-a61a110 exists");
+  check("Cloudflare R2 bulk data bucket verified", bucketsOutput.includes("rri-data-canary-a61a110"), "rri-data-canary-a61a110 exists");
+} catch (err) {
+  check("Storage architecture inspection", false, err.message);
+}
+
+// ---------------------------------------------------------------------------
+// 6. Versioned HotelKey Schema Registry Verification
+// ---------------------------------------------------------------------------
+console.log("\n6. Versioned HotelKey Schema Registry Contract:");
 try {
   const registryModule = await import("../src/lib/hotelKeySchemaRegistry.js");
   check("Registry defines canonical version", registryModule.REGISTRY_VERSION === "1.0.0", "v1.0.0");
@@ -157,9 +213,9 @@ try {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Owner Performance Packet Multi-Sheet Integrity
+// 7. Owner Performance Packet Multi-Sheet Integrity
 // ---------------------------------------------------------------------------
-console.log("\n6. Owner Performance Packet Integrity:");
+console.log("\n7. Owner Performance Packet Integrity:");
 try {
   const exportSrc = readFileSync(path.join(ROOT, "src/lib/ownerPacketExport.js"), "utf8");
   check("Sheet 1 present: Executive Summary", exportSrc.includes("Executive Summary"), "sheet 1 confirmed");

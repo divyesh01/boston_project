@@ -328,6 +328,8 @@ const AuthenticatedApp = () => {
             outside the catch-all so old bookmarks and post-login links recover
             without turning genuine unknown URLs into Dashboard redirects. */}
         <Route path="/dashboard" element={<Navigate to="/" replace />} />
+        <Route path="/ota-channels" element={<Navigate to="/ota" replace />} />
+        <Route path="/import" element={<Navigate to="/upload" replace />} />
         <Route path="/*" element={<ProtectedRoutes />} />
     </Routes>
   );

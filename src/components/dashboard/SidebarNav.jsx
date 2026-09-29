@@ -18,9 +18,20 @@ import {
   Database,
   BarChart3,
 } from 'lucide-react';
+import { useAuth } from '@/lib/AuthContext';
 
 export default function SidebarNav({ currentProperty = 'All Properties' }) {
   const location = useLocation();
+
+  let canAccess = (_path) => true;
+  try {
+    const auth = useAuth();
+    if (auth && typeof auth.canAccessRoute === 'function') {
+      canAccess = auth.canAccessRoute;
+    }
+  } catch {
+    canAccess = (_path) => true;
+  }
 
   const navSections = [
     {
@@ -49,6 +60,13 @@ export default function SidebarNav({ currentProperty = 'All Properties' }) {
     },
   ];
 
+  const canonicalRoute = (path) => {
+    if (path === '/dashboard') return '/';
+    if (path === '/ota-channels') return '/ota';
+    if (path === '/import') return '/upload';
+    return path;
+  };
+
   return (
     <nav className="flex flex-col space-y-6 px-3 py-4" aria-label="Sidebar Navigation">
       {/* Property Context Pill */}
@@ -61,20 +79,24 @@ export default function SidebarNav({ currentProperty = 'All Properties' }) {
       </div>
 
       {/* Nav Sections */}
-      {navSections.map((sec) => (
-        <div key={sec.title} className="space-y-1">
-          <div className="px-3 text-[10px] font-mono uppercase tracking-wider text-slate-500 font-semibold">
-            {sec.title}
-          </div>
-          <div className="mt-1 space-y-0.5">
-            {sec.items.map((item) => {
-              const Icon = item.icon;
-              const isActive = location.pathname === item.path;
+      {navSections.map((sec) => {
+        const visibleItems = sec.items.filter((item) => canAccess(canonicalRoute(item.path)));
+        if (visibleItems.length === 0) return null;
+        return (
+          <div key={sec.title} className="space-y-1">
+            <div className="px-3 text-[10px] font-mono uppercase tracking-wider text-slate-500 font-semibold">
+              {sec.title}
+            </div>
+            <div className="mt-1 space-y-0.5">
+              {visibleItems.map((item) => {
+                const Icon = item.icon;
+                const targetPath = canonicalRoute(item.path);
+                const isActive = location.pathname === targetPath || location.pathname === item.path;
 
               return (
                 <Link
                   key={item.path}
-                  to={item.path}
+                  to={targetPath}
                   className={`flex items-center justify-between rounded-xl px-3 py-2 text-xs font-medium transition-all ${
                     isActive
                       ? 'bg-gradient-to-r from-emerald-500/15 to-transparent text-emerald-400 font-semibold border-l-2 border-emerald-400'
@@ -96,7 +118,8 @@ export default function SidebarNav({ currentProperty = 'All Properties' }) {
             })}
           </div>
         </div>
-      ))}
-    </nav>
-  );
+      );
+    })}
+  </nav>
+);
 }

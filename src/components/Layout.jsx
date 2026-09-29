@@ -11,19 +11,125 @@ import CommandMenu from "@/components/CommandMenu";
 import { NAV, PRIMARY, MORE } from "@/lib/navigation";
 import { useRealtimeInvalidation, APP_SYNC_PREFIXES } from "@/lib/realtime";
 import { pullRemoteSettings } from "@/lib/settingsStore";
+import SidebarNav from "@/components/dashboard/SidebarNav";
+import { useFeatureFlag, FEATURE_FLAGS } from "@/lib/featureFlags";
 
 function SidebarBrand() {
+  const isLuxuryUi = useFeatureFlag(FEATURE_FLAGS.LUXURY_UI_ENABLED);
   const { property, properties } = useGlobalFilters();
   const isPortfolio = property === "all";
   const prop = isPortfolio ? null : properties.find((p) => p.id === property);
   const name = isPortfolio ? "Red Roof Portfolio" : (prop?.name || "Red Roof Executive");
   const detail = isPortfolio ? `${properties.length} properties` : `Code ${prop?.code || "—"} · ${prop?.rooms || 100} rooms`;
+  if (isLuxuryUi) {
+    return (
+      <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+        Executive BI & Provenance
+      </p>
+    );
+  }
   return (
     <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
       {name}
       <br />
       <span className="text-slate-600">{detail}</span>
     </p>
+  );
+}
+
+function SidebarContent({ coreVisible, moreVisible, showAllTools, setShowAllTools, pathname }) {
+  const isLuxuryUi = useFeatureFlag(FEATURE_FLAGS.LUXURY_UI_ENABLED);
+  const { property, properties } = useGlobalFilters();
+  const isPortfolio = property === "all";
+  const prop = isPortfolio ? null : properties.find((p) => p.id === property);
+  const currentProperty = isPortfolio ? "Portfolio (All Properties)" : (prop?.name || "Red Roof Executive");
+
+  if (isLuxuryUi) {
+    return (
+      <div className="mt-4 flex-1 overflow-y-auto pr-1">
+        <SidebarNav currentProperty={currentProperty} />
+        <div className="pt-4 border-t border-white/5 mt-4 px-3">
+          <button
+            onClick={() => setShowAllTools((prev) => !prev)}
+            className="flex w-full items-center justify-between py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 hover:text-slate-300 transition-colors"
+          >
+            <span>More Modules ({moreVisible.length})</span>
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showAllTools ? "rotate-180" : ""}`} />
+          </button>
+          {showAllTools && (
+            <div className="mt-1 space-y-0.5">
+              {moreVisible.map(({ to, label, icon: Icon }) => {
+                const a = pathname === to;
+                return (
+                  <Link
+                    key={to}
+                    to={to}
+                    className={`flex items-center gap-3 rounded-xl px-3 py-2 text-xs transition-all duration-200 ${
+                      a ? "bg-[#6C63FF]/15 text-white" : "text-slate-400 hover:bg-white/5 hover:text-slate-100"
+                    }`}
+                  >
+                    <Icon className={`h-3.5 w-3.5 ${a ? "text-[#00D4FF]" : ""}`} />
+                    {label}
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <nav className="mt-6 flex-1 space-y-1 overflow-y-auto pr-1">
+      <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+        Owner Intelligence
+      </p>
+      {coreVisible.map(({ to, label, icon: Icon }) => {
+        const a = pathname === to;
+        return (
+          <Link
+            key={to}
+            to={to}
+            className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200 ${
+              a ? "bg-[#6C63FF]/15 text-white font-medium" : "text-slate-400 hover:bg-white/5 hover:text-slate-100"
+            }`}
+          >
+            <Icon className={`h-4 w-4 ${a ? "text-[#00D4FF]" : ""}`} />
+            {label}
+          </Link>
+        );
+      })}
+
+      <div className="pt-4 border-t border-white/5 mt-4">
+        <button
+          onClick={() => setShowAllTools((prev) => !prev)}
+          className="flex w-full items-center justify-between px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 hover:text-slate-300 transition-colors"
+        >
+          <span>Operational Tools ({moreVisible.length})</span>
+          <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showAllTools ? "rotate-180" : ""}`} />
+        </button>
+        {showAllTools && (
+          <div className="mt-1 space-y-0.5">
+            {moreVisible.map(({ to, label, icon: Icon }) => {
+              const a = pathname === to;
+              return (
+                <Link
+                  key={to}
+                  to={to}
+                  className={`flex items-center gap-3 rounded-xl px-3 py-2 text-xs transition-all duration-200 ${
+                    a ? "bg-[#6C63FF]/15 text-white" : "text-slate-400 hover:bg-white/5 hover:text-slate-100"
+                  }`}
+                >
+                  <Icon className={`h-3.5 w-3.5 ${a ? "text-[#00D4FF]" : ""}`} />
+                  {label}
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </nav>
   );
 }
 
@@ -99,55 +205,13 @@ export default function Layout() {
           <span className="font-heading text-sm font-semibold tracking-wide text-white">RRI Executive</span>
         </div>
         <SidebarBrand />
-        <nav className="mt-6 flex-1 space-y-1 overflow-y-auto pr-1">
-          <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-            Owner Intelligence
-          </p>
-          {coreVisible.map(({ to, label, icon: Icon }) => {
-            const a = pathname === to;
-            return (
-              <Link
-                key={to}
-                to={to}
-                className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200 ${
-                  a ? "bg-[#6C63FF]/15 text-white font-medium" : "text-slate-400 hover:bg-white/5 hover:text-slate-100"
-                }`}
-              >
-                <Icon className={`h-4 w-4 ${a ? "text-[#00D4FF]" : ""}`} />
-                {label}
-              </Link>
-            );
-          })}
-
-          <div className="pt-4 border-t border-white/5 mt-4">
-            <button
-              onClick={() => setShowAllTools((prev) => !prev)}
-              className="flex w-full items-center justify-between px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 hover:text-slate-300 transition-colors"
-            >
-              <span>Operational Tools ({moreVisible.length})</span>
-              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showAllTools ? "rotate-180" : ""}`} />
-            </button>
-            {showAllTools && (
-              <div className="mt-1 space-y-0.5">
-                {moreVisible.map(({ to, label, icon: Icon }) => {
-                  const a = pathname === to;
-                  return (
-                    <Link
-                      key={to}
-                      to={to}
-                      className={`flex items-center gap-3 rounded-xl px-3 py-2 text-xs transition-all duration-200 ${
-                        a ? "bg-[#6C63FF]/15 text-white" : "text-slate-400 hover:bg-white/5 hover:text-slate-100"
-                      }`}
-                    >
-                      <Icon className={`h-3.5 w-3.5 ${a ? "text-[#00D4FF]" : ""}`} />
-                      {label}
-                    </Link>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </nav>
+        <SidebarContent
+          coreVisible={coreVisible}
+          moreVisible={moreVisible}
+          showAllTools={showAllTools}
+          setShowAllTools={setShowAllTools}
+          pathname={pathname}
+        />
         <div className="mt-auto pt-4 space-y-3">
           {user && (
             <div className="flex items-center gap-3 rounded-xl border border-white/5 bg-white/5 px-3 py-2.5">

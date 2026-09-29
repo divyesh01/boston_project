@@ -39,6 +39,7 @@
     }
   ],
 
+
   // Non-secret Access parameters. These are the AUDIENCE and TEAM DOMAIN the
   // Worker checks the injected Cf-Access JWT against — they are the public
   // identifiers of the Access application, not credentials, so they live here.

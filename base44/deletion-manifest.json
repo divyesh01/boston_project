@@ -73,8 +73,8 @@
 
   "stallGuard": {
     "maxIterations": 10000,
-    "consecutiveEmptyBeforeBreak": 3,
-    "note": "If 3 consecutive pages return 0 owned rows but the prior page was full, the loop is stalled (delete calls silently failing). Break with LOOP_STALLED to prevent 10k round trips."
+    "consecutiveNoProgressBeforeBreak": 3,
+    "note": "If 3 consecutive rounds make zero deletion progress while rows remain, the loop is stalled (delete calls repeatedly failing). Break with LOOP_STALLED to prevent 10k round trips."
   },
 
   "auditPreflight": {

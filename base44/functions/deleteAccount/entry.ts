@@ -79,7 +79,21 @@ export default async function(req) {
     let deleted = 0;
     let failedDeletes = 0;
 
+    // PRE-FLIGHT AUDIT CHECK: log a warning if AUDIT_CHAIN_SECRET is missing
+    // before starting the destructive loop. The wipe still proceeds — the
+    // user's data must be deletable even when audit is misconfigured — but the
+    // operator is informed. writeAudit() below skips the row when the secret is
+    // absent (fail-closed policy documented on the writeAudit function).
+    if (!secrets.get('AUDIT_CHAIN_SECRET')) {
+      console.error('[deleteAccount] AUDIT_CHAIN_SECRET is not configured — wipe will proceed but will not be recorded in the audit chain.');
+    }
+
     const PAGE = 500;
+    // STALL GUARD: if CONSECUTIVE_NO_PROGRESS_MAX consecutive rounds return
+    // records but delete 0 of them (e.g. repeated server rejections), the loop
+    // is stalled on undeletable records. Break and log rather than burning all
+    // remaining guard iterations. See deletion-manifest.json §stallGuard.
+    const CONSECUTIVE_NO_PROGRESS_MAX = 3;
     for (const entityName of entities) {
       try {
         // Re-fetch from offset 0 every round: deleting rows shifts the remainder
@@ -87,6 +101,7 @@ export default async function(req) {
         // already-seen positions. Restarting from 0 is safe because every
         // successfully deleted row is gone and will not re-appear.
         let guard = 0;
+        let consecutiveNoProgress = 0;
         while (guard++ < 10000) {
           // .filter() with created_by_id scoped server-side: other users' records
           // are never returned, so the loop is guaranteed to terminate once this
@@ -97,17 +112,33 @@ export default async function(req) {
             PAGE,
             0,
           );
-          if (!page || page.length === 0) break;
+          if (!page || page.length === 0) {
+            break; // all records for this entity are deleted, or none existed
+          }
+
+          let deletedInBatch = 0;
           for (const r of page) {
             try {
               await base44.entities[entityName].delete(r.id);
               deleted++;
+              deletedInBatch++;
             } catch {
               // A single failed delete must not abort the rest of the wipe.
               // Count failures so the audit entry and response are honest.
               failedDeletes++;
             }
           }
+
+          if (deletedInBatch === 0 && page.length > 0) {
+            consecutiveNoProgress++;
+            if (consecutiveNoProgress >= CONSECUTIVE_NO_PROGRESS_MAX) {
+              console.error(`[deleteAccount] LOOP_STALLED: ${CONSECUTIVE_NO_PROGRESS_MAX} consecutive rounds made zero deletion progress for ${entityName}. Breaking to prevent wasted iterations.`);
+              break;
+            }
+          } else {
+            consecutiveNoProgress = 0;
+          }
+
           // Fewer than a full page means this was the last page.
           if (page.length < PAGE) break;
         }

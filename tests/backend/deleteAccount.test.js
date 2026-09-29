@@ -84,6 +84,9 @@ function makeEntityDouble(name) {
       return rows.slice(0, limit ?? rows.length);
     },
     delete: async (id) => {
+      if (store.failAllDeletes) {
+        throw new Error(`Simulated delete failure for ${id}`);
+      }
       const before = (store[name] || []).length;
       store[name] = (store[name] || []).filter(r => r.id !== id);
       if (store[name].length === before) throw new Error(`No row with id=${id}`);
@@ -418,3 +421,26 @@ describe("deleteAccount — audit row written after wipe", () => {
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
   });
 });
+
+describe("deleteAccount — stall guard and resilience", () => {
+  it("breaks cleanly and logs error when delete calls stall with zero progress", async () => {
+    store.OccupancyDay = makeRecords("OccupancyDay", USER_ID, 500);
+    store.failAllDeletes = true;
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await deleteAccount(makeReq({ body: confirmBody() }));
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    expect(body.recordsDeleted).toBe(0);
+    // 500 records * 3 attempts before stall break = 1500 failed delete attempts
+    expect(body.recordsFailed).toBe(1500);
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("LOOP_STALLED: 3 consecutive rounds made zero deletion progress")
+    );
+    errorSpy.mockRestore();
+  });
+});
+

@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { money, money2, pct, perPropertyStats } from "@/lib/hotel";
-import { sumCents, fromCents } from "@/lib/decimal";
+import { sumCents, fromCents, toCents } from "@/lib/decimal";
 import { decomposeRevenueVariance } from "@/lib/varianceDecomposition";
 
 export default function PropertyRanking({ occRows = [], properties = [], compareOccRows = [] }) {
@@ -88,7 +88,7 @@ export default function PropertyRanking({ occRows = [], properties = [], compare
         {
           key: 'rate',
           label: 'Rate Premium / Discount vs Portfolio ADR',
-          amount: Math.round((selectedCurrent.revenue - expectedRev) * 100) / 100,
+          amount: fromCents(toCents(selectedCurrent.revenue - expectedRev)),
           description: `Achieving ${money2(selectedCurrent.adr)} vs portfolio average ${money2(portfolioAvgRate)} (${selectedCurrent.adr >= portfolioAvgRate ? '+' : ''}${money2(selectedCurrent.adr - portfolioAvgRate)}/room)`,
           isFavorable: selectedCurrent.adr >= portfolioAvgRate,
         },

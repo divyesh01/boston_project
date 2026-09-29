@@ -31,10 +31,18 @@ import { useQuery } from "@tanstack/react-query";
 import { db } from "@/api/base44Client";
 import WeatherPanel from "@/components/dashboard/WeatherPanel";
 import PricingPanel from "@/components/dashboard/PricingPanel";
+import SmartButtonGroup from "@/components/dashboard/SmartButtonGroup";
+import OTAShiftSimulator from "@/components/dashboard/OTAShiftSimulator";
+import ScheduleReportDialog from "@/components/dashboard/ScheduleReportDialog";
+import OwnerPacketPreview from "@/components/dashboard/OwnerPacketPreview";
+import { FEATURE_FLAGS, useFeatureFlag } from "@/lib/featureFlags";
 import { useRealtimeInvalidation } from "@/lib/realtime";
 import { ErrorState } from "@/components/ui/status";
 
 export default function Dashboard() {
+  const [isScheduleOpen, setIsScheduleOpen] = useState(false);
+  const luxuryUiEnabled = useFeatureFlag(FEATURE_FLAGS.LUXURY_UI_ENABLED);
+
   const { dateRange, property, properties, compareOn, compareDateRange, compareMonths, employee, paymentType, channel, months } = useGlobalFilters();
   const isPortfolio = property === "all" || Array.isArray(property);
   const selectedProp = isPortfolio ? null : properties.find((p) => p.id === property);
@@ -335,6 +343,21 @@ export default function Dashboard() {
     return reconcileFinancialTotals(finalReported, finalCalculated);
   }, [grossRows, occRows, srcRows, totalRev.dollars, revenue]);
 
+  const channelMetrics = useMemo(
+    () => CalculationService.calculateChannelMetrics(srcRows),
+    [srcRows]
+  );
+
+  const otaEconomics = useMemo(() => {
+    const otaChannels = channelMetrics.filter((c) => c.isOta);
+    const grossCents = sumCents(otaChannels.map((c) => c.gross || 0));
+    const commCents = sumCents(otaChannels.map((c) => c.commission || 0));
+    const grossDollars = fromCents(grossCents);
+    const commDollars = fromCents(commCents);
+    const rate = grossDollars > 0 ? commDollars / grossDollars : 0.16;
+    return { grossDollars, commDollars, rate };
+  }, [channelMetrics]);
+
   const handleExport = async () => {
     if (exporting || !contentRef.current) return;
     setExporting(true);
@@ -355,14 +378,13 @@ export default function Dashboard() {
           : properties
         : properties.filter((p) => p.id === property);
 
-      const channelMetrics = CalculationService.calculateChannelMetrics(srcRows);
       const propertyStats = CalculationService.calculatePerPropertyStats(occRows, packetProperties);
       const prevPropertyStats = alertPrevOcc.length > 0
         ? CalculationService.calculatePerPropertyStats(alertPrevOcc, packetProperties)
         : [];
 
       const otaChannels = channelMetrics.filter((c) => c.isOta);
-      const commissionTotalDollars = fromCents(sumCents(otaChannels.map((c) => c.commission)));
+      const commissionTotalDollars = otaEconomics.commDollars;
       const commissionRate = revenue > 0 ? commissionTotalDollars / revenue : 0;
 
       const directChannels = channelMetrics.filter((c) => c.isDirect);
@@ -396,8 +418,7 @@ export default function Dashboard() {
 
       toast.success('Downloaded Monthly Owner Performance Packet (.xlsx)');
     } catch (err) {
-      console.error('Failed to export owner packet:', err);
-      toast.error(`Export failed: ${err.message || 'Unknown error'}`);
+      toast.error(`Export failed: ${err?.message || 'Unknown error'}`);
     }
   };
 
@@ -458,29 +479,61 @@ export default function Dashboard() {
             the sm breakpoint this is a bare icon with no accessible name at all
             (WCAG 4.1.2). Mirroring means a screen-reader user is told
             "Generating…" at the same moment a sighted user reads it. */}
-        <div className="flex items-center gap-2">
-          <Button
-            variant="secondary"
-            size="lg"
-            onClick={handleExportPacket}
-            aria-label="Export Monthly Owner Packet (.xlsx)"
-            className="flex items-center gap-1.5 border-[#00E096]/30 text-[#00E096] hover:bg-[#00E096]/10"
-          >
-            <FileSpreadsheet className="h-4 w-4 text-[#00E096]" />
-            <span className="hidden sm:inline">Owner Packet (.xlsx)</span>
-          </Button>
+        {luxuryUiEnabled ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <SmartButtonGroup
+              onDownloadPacket={handleExportPacket}
+              onOpenSchedule={() => setIsScheduleOpen(true)}
+              onOpenSimulator={() => {
+                document.getElementById("ota-shift-section")?.scrollIntoView({ behavior: "smooth" });
+              }}
+              onClearCache={() => {
+                refOcc();
+                refSrc();
+                refClerk();
+                refGross();
+                refExpenses?.();
+                refPayroll?.();
+                toast.success("Refreshing data from server authority...");
+              }}
+              isExporting={exporting}
+            />
+            <Button
+              variant="primary"
+              size="lg"
+              onClick={handleExport}
+              disabled={exporting}
+              aria-label={exporting ? "Generating…" : "Export PDF"}
+            >
+              <FileDown className="h-4 w-4" />
+              <span className="hidden sm:inline">{exporting ? "Generating…" : "Export PDF"}</span>
+            </Button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="lg"
+              onClick={handleExportPacket}
+              aria-label="Export Monthly Owner Packet (.xlsx)"
+              className="flex items-center gap-1.5 border-[#00E096]/30 text-[#00E096] hover:bg-[#00E096]/10"
+            >
+              <FileSpreadsheet className="h-4 w-4 text-[#00E096]" />
+              <span className="hidden sm:inline">Owner Packet (.xlsx)</span>
+            </Button>
 
-          <Button
-            variant="primary"
-            size="lg"
-            onClick={handleExport}
-            disabled={exporting}
-            aria-label={exporting ? "Generating…" : "Export PDF"}
-          >
-            <FileDown className="h-4 w-4" />
-            <span className="hidden sm:inline">{exporting ? "Generating…" : "Export PDF"}</span>
-          </Button>
-        </div>
+            <Button
+              variant="primary"
+              size="lg"
+              onClick={handleExport}
+              disabled={exporting}
+              aria-label={exporting ? "Generating…" : "Export PDF"}
+            >
+              <FileDown className="h-4 w-4" />
+              <span className="hidden sm:inline">{exporting ? "Generating…" : "Export PDF"}</span>
+            </Button>
+          </div>
+        )}
       </header>
 
       {exportError && (
@@ -680,6 +733,24 @@ export default function Dashboard() {
           <OtaMatrix rows={srcRows} />
         </Suspense>
 
+        {luxuryUiEnabled && (
+          <div id="ota-shift-section" className="space-y-6">
+            <OTAShiftSimulator
+              grossOtaRevenue={otaEconomics.grossDollars}
+              otaCommissionRate={otaEconomics.rate}
+              periodDays={uniqueDays}
+            />
+            <OwnerPacketPreview
+              onDownloadPacket={handleExportPacket}
+              revenue={totalRev.dollars || revenue}
+              roomsSold={roomsSold}
+              occupancy={occupancy}
+              propertiesCount={isPortfolio ? properties.length : 1}
+              isExporting={exporting}
+            />
+          </div>
+        )}
+
         <WeatherPanel />
         <PricingPanel />
 
@@ -712,6 +783,12 @@ export default function Dashboard() {
         isOpen={isProvenanceOpen}
         onClose={() => setIsProvenanceOpen(false)}
         metric={provenanceMetric}
+      />
+
+      <ScheduleReportDialog
+        isOpen={isScheduleOpen}
+        onClose={() => setIsScheduleOpen(false)}
+        onSendTest={handleExportPacket}
       />
     </div>
   );

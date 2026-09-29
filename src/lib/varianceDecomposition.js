@@ -72,14 +72,16 @@ export function decomposeRevenueVariance(current, prior) {
   const adrA = roomsA > 0 ? revA / roomsA : 0;
   const adrB = roomsB > 0 ? revB / roomsB : 0;
 
-  const totalVariance = Math.round((revA - revB) * 100) / 100;
+  const revACents = toCents(revA);
+  const revBCents = toCents(revB);
+  const totalVariance = fromCents(revACents - revBCents);
   const pctChange = revB > 0 ? (revA - revB) / revB : 0;
 
   // 1. Volume Effect: (Rooms Sold A - Rooms Sold B) * ADR B
-  const volumeEffect = Math.round((roomsA - roomsB) * adrB * 100) / 100;
+  const volumeEffect = fromCents(Math.round((roomsA - roomsB) * adrB * 100));
 
   // 2. Rate Effect: (ADR A - ADR B) * Rooms Sold A
-  const rateEffect = Math.round((adrA - adrB) * roomsA * 100) / 100;
+  const rateEffect = fromCents(Math.round((adrA - adrB) * roomsA * 100));
 
   // Exact mathematical identity check: volumeEffect + rateEffect === totalVariance
   const isReconciled = Math.abs(volumeEffect + rateEffect - totalVariance) <= 0.05;
@@ -87,15 +89,15 @@ export function decomposeRevenueVariance(current, prior) {
   // 3. Commission Drag: -(Comm A - Comm B)
   const commA = Number(current?.otaCommission) || 0;
   const commB = Number(prior?.otaCommission) || 0;
-  const commissionDrag = Math.round(-(commA - commB) * 100) / 100;
+  const commissionDrag = fromCents(toCents(-(commA - commB)));
 
   // 4. Ancillary / Other Revenue: Other A - Other B
   const otherA = Number(current?.otherRevenue) || 0;
   const otherB = Number(prior?.otherRevenue) || 0;
-  const otherRevenueEffect = Math.round((otherA - otherB) * 100) / 100;
+  const otherRevenueEffect = fromCents(toCents(otherA - otherB));
 
   const roomsDiff = roomsA - roomsB;
-  const adrDiff = Math.round((adrA - adrB) * 100) / 100;
+  const adrDiff = fromCents(toCents(adrA - adrB));
 
   /** @type {VarianceDriver[]} */
   const drivers = [

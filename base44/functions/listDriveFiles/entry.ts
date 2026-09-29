@@ -19,6 +19,27 @@ export default async function(req) {
     const user = await base44.asServiceRole.entities.User.get(session.user_id);
     if (!user || !user.is_active || user.is_locked) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
+    // Authorization: listing Drive files connects to the organization's Google Drive.
+    // The caller must:
+    //   1. Be an active owner or admin (full access by design), OR
+    //   2. Have the import_reports permission (or default role permitting import), AND
+    //      have at least one authorized property assigned (fail-closed).
+    const isRoot = user.role === 'owner' || user.role === 'admin';
+    const hasImportPermission = isRoot || (
+      user.permissions?.import_reports === true ||
+      (user.permissions?.import_reports !== false && user.role !== 'read_only' && user.role !== 'accountant')
+    );
+    if (!hasImportPermission) {
+      return Response.json({ error: 'Forbidden: import permission required' }, { status: 403 });
+    }
+
+    const hasPropertyAccess = isRoot || user.property_access === 'all' || (
+      Array.isArray(user.property_access) && user.property_access.length > 0
+    );
+    if (!hasPropertyAccess) {
+      return Response.json({ error: 'Forbidden: no property access assigned' }, { status: 403 });
+    }
+
     const { accessToken } = await base44.asServiceRole.connectors.getConnection("googledrive");
 
     const url = new URL("https://www.googleapis.com/drive/v3/files");

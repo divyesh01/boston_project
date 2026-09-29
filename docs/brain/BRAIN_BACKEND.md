@@ -134,6 +134,20 @@ This matches the pattern in `custom_user_admin/entry.js:300-303` and
 Covered by 16 tests in `tests/backend/importDriveFile.test.js` (three groups:
 no-grant → 403, scoped-array-excludes → 403, authorized → 200).
 
+### Fixed 2026-09-29: Authorization hardening in listDriveFiles & Centralized Auth Probe
+
+`base44/functions/listDriveFiles/entry.ts` lacked permission and property-access verification:
+any authenticated user could list the organization's Google Drive files, even if their role
+prohibited report importing (e.g. `read_only`, `accountant`) or if they had zero property grants.
+
+**Fix:**
+1. Hardened `listDriveFiles/entry.ts` with explicit `import_reports` permission checks and fail-closed property access checks (`property_access === 'all'` or non-empty assigned property array required for non-root callers).
+2. Created `base44/utils/auth.js` providing centralized `resolvePropertyScope`, `isPropertyAuthorized`, `hasPermission`, and `validateCsrf`.
+3. Created static security analysis probe `scripts/probe-auth-uniformity.mjs` verifying all 19 serverless functions against fail-open anti-patterns, incomplete session checks, and missing CSRF on mutating endpoints (81 assertions).
+4. Documented authoritative security contracts in `docs/AUTHORIZATION.md`.
+
+Covered by 15 tests in `tests/backend/listDriveFiles.test.js`, 18 tests in `tests/backend/authUtils.test.js`, and 81 assertions in `scripts/probe-auth-uniformity.mjs`.
+
 ### Fixed 2026-08-19: the `__B44_DB__` fake-database shim
 
 Seven of these functions (`aiAssistant`, `autoPayroll`, `backupToDrive`, `deleteAccount`,

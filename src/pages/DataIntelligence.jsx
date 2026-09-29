@@ -553,28 +553,28 @@ export default function DataIntelligence() {
               value={`${portfolioHealth.portfolioScore}/100`}
               accent="#00E096"
               icon={Gauge}
-              subtext="Weighted average across all properties"
+              sub="Weighted average across all properties"
             />
             <KpiCard
               label="All Reports Current"
               value={`${portfolioHealth.healthyCount} Hotels`}
               accent="#00D4FF"
               icon={CheckCircle2}
-              subtext="100% daily night audit continuity"
+              sub="100% daily night audit continuity"
             />
             <KpiCard
               label="Partial Gaps Detected"
               value={`${portfolioHealth.warningCount} Hotels`}
               accent="#FFB547"
               icon={AlertTriangle}
-              subtext="1 to 5 missing daily report files"
+              sub="1 to 5 missing daily report files"
             />
             <KpiCard
               label="Missing Critical Data"
               value={`${portfolioHealth.criticalCount} Hotels`}
               accent="#FF6B6B"
               icon={AlertCircle}
-              subtext="Score below 70% or >5 days missing"
+              sub="Score below 70% or >5 days missing"
             />
           </div>
 
@@ -769,28 +769,28 @@ export default function DataIntelligence() {
               value={`$${financialReconciliation.reported.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
               accent="#6C63FF"
               icon={DollarSign}
-              subtext="Source: HotelKey Gross Revenue & Manager Flash"
+              sub="Source: HotelKey Gross Revenue & Manager Flash"
             />
             <KpiCard
               label="Channel Ledger Revenue"
               value={`$${financialReconciliation.calculated.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
               accent="#00D4FF"
               icon={Layers}
-              subtext="Source: Channel & Source Day Records"
+              sub="Source: Channel & Source Day Records"
             />
             <KpiCard
               label="Total Settled Payments"
               value={`$${financialReconciliation.payments.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
               accent="#00E096"
               icon={CheckCircle2}
-              subtext="Source: PaymentDay Settlement Records"
+              sub="Source: PaymentDay Settlement Records"
             />
             <KpiCard
               label="Unreconciled Difference"
               value={`$${financialReconciliation.difference.toFixed(2)}`}
               accent={financialReconciliation.isBalanced ? '#00E096' : '#FF6B6B'}
               icon={financialReconciliation.isBalanced ? ShieldCheck : AlertTriangle}
-              subtext={financialReconciliation.isBalanced ? '100% exact ledger match' : 'Requires audit investigation'}
+              sub={financialReconciliation.isBalanced ? '100% exact ledger match' : 'Requires audit investigation'}
             />
           </div>
 

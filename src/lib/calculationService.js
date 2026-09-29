@@ -130,11 +130,18 @@ export class CalculationService {
       // per-property table on the portfolio view under-reported occupancy for exactly
       // the same reason, while the portfolio total came from the other copy.
       const capacity = capacityCents(rows, () => fallbackRooms);
+      const propName = prop?.name || rows[0]?.property_name || 'Unknown';
+      const revDollars = fromCents(revenue);
+      const roomsSoldNum = fromCents(roomsSold);
       results.push({
         property_id: pid,
-        property_name: prop?.name || rows[0]?.property_name || 'Unknown',
-        revenue: fromCents(revenue),
-        roomsSold: fromCents(roomsSold),
+        propertyId: pid,
+        property_name: propName,
+        propertyName: propName,
+        revenue: revDollars,
+        roomRevenue: revDollars,
+        roomsSold: roomsSoldNum,
+        rooms_sold: roomsSoldNum,
         occupancy: capacity ? fromRate(divideRate(roomsSold, capacity)) : 0,
         adr: roomsSold ? fromCents(divide(revenue, roomsSold)) : 0,
         revpar: capacity ? fromCents(divide(revenue, capacity)) : 0,

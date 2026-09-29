@@ -19,11 +19,12 @@ import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { exportToPdf } from "@/lib/pdfExport";
 import { money2, num, pct, sum, inRange, C, getOccThreshold, grossRevenueForPeriod, perPropertyStats } from "@/lib/hotel";
 import KpiProvenanceDrawer from "@/components/lineage/KpiProvenanceDrawer";
-import { fromCents } from "@/lib/decimal";
+import { fromCents, sumCents } from "@/lib/decimal";
 import { getAlertThresholds } from "@/lib/alertThresholds";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { CalculationService } from "@/lib/calculationService";
 import { downloadOwnerPerformancePacket } from "@/lib/ownerPacketExport";
+import { evaluatePortfolioDataHealth, reconcileFinancialTotals } from "@/lib/dataHealth";
 import { toast } from "sonner";
 import { OwnerIntelligenceService } from "@/lib/ownerIntelligence";
 import { useQuery } from "@tanstack/react-query";
@@ -282,6 +283,58 @@ export default function Dashboard() {
       .sort((a, b) => b.value - a.value);
   }, [grossRows]);
 
+  const moneyKeptResult = useMemo(() => {
+    return CalculationService.calculateMoneyKept(
+      occRows,
+      srcRows,
+      grossRows,
+      aggPayRows,
+      aggExpenses,
+      payroll,
+      dateRange,
+      property
+    );
+  }, [occRows, srcRows, grossRows, aggPayRows, aggExpenses, payroll, dateRange, property]);
+
+  const dataByProperty = useMemo(() => {
+    /** @type {Record<string, { occRows: Array<any>, srcRows: Array<any>, grossRows: Array<any>, payRows: Array<any> }>} */
+    const map = {};
+    properties.forEach((p) => {
+      map[p.id] = { occRows: [], srcRows: [], grossRows: [], payRows: [] };
+    });
+    occRows.forEach((r) => {
+      const pid = r.property_id;
+      if (map[pid]) map[pid].occRows.push(r);
+    });
+    srcRows.forEach((r) => {
+      const pid = r.property_id;
+      if (map[pid]) map[pid].srcRows.push(r);
+    });
+    grossRows.forEach((r) => {
+      const pid = r.property_id;
+      if (map[pid]) map[pid].grossRows.push(r);
+    });
+    aggPayRows.forEach((r) => {
+      const pid = r.property_id;
+      if (map[pid]) map[pid].payRows.push(r);
+    });
+    return map;
+  }, [properties, occRows, srcRows, grossRows, aggPayRows]);
+
+  const portfolioHealth = useMemo(() => {
+    return evaluatePortfolioDataHealth(properties, dataByProperty, dateRange);
+  }, [properties, dataByProperty, dateRange]);
+
+  const reconciliation = useMemo(() => {
+    const grossLedgerCents = sumCents(grossRows.map((r) => r.room_rent || r.gross_revenue || r.room_revenue || 0));
+    const occupancyRevenueCents = sumCents(occRows.map((r) => r.room_revenue || 0));
+    const reportedCents = grossLedgerCents > 0 ? grossLedgerCents : occupancyRevenueCents;
+    const calculatedCents = sumCents(srcRows.map((r) => r.net_revenue || r.revenue || 0));
+    const finalReported = reportedCents > 0 ? fromCents(reportedCents) : totalRev.dollars || revenue;
+    const finalCalculated = calculatedCents > 0 ? fromCents(calculatedCents) : totalRev.dollars || revenue;
+    return reconcileFinancialTotals(finalReported, finalCalculated);
+  }, [grossRows, occRows, srcRows, totalRev.dollars, revenue]);
+
   const handleExport = async () => {
     if (exporting || !contentRef.current) return;
     setExporting(true);
@@ -296,11 +349,25 @@ export default function Dashboard() {
 
   const handleExportPacket = () => {
     try {
+      const packetProperties = isPortfolio
+        ? Array.isArray(property)
+          ? properties.filter((p) => property.includes(p.id))
+          : properties
+        : properties.filter((p) => p.id === property);
+
       const channelMetrics = CalculationService.calculateChannelMetrics(srcRows);
-      const propertyStats = CalculationService.calculatePerPropertyStats(occRows, properties);
+      const propertyStats = CalculationService.calculatePerPropertyStats(occRows, packetProperties);
       const prevPropertyStats = alertPrevOcc.length > 0
-        ? CalculationService.calculatePerPropertyStats(alertPrevOcc, properties)
+        ? CalculationService.calculatePerPropertyStats(alertPrevOcc, packetProperties)
         : [];
+
+      const otaChannels = channelMetrics.filter((c) => c.isOta);
+      const commissionTotalDollars = fromCents(sumCents(otaChannels.map((c) => c.commission)));
+      const commissionRate = revenue > 0 ? commissionTotalDollars / revenue : 0;
+
+      const directChannels = channelMetrics.filter((c) => c.isDirect);
+      const directRevenue = fromCents(sumCents(directChannels.map((c) => c.gross)));
+      const directShare = revenue > 0 ? directRevenue / revenue : 0;
 
       const dateLabel = dateRange?.from && dateRange?.to
         ? `${dateRange.from} to ${dateRange.to}`
@@ -308,35 +375,23 @@ export default function Dashboard() {
 
       downloadOwnerPerformancePacket({
         dateRangeLabel: dateLabel,
-        properties,
+        properties: packetProperties,
         kpis: {
           revenue,
           roomsSold,
           occupancy,
           adr,
           revpar,
-          netKept: kept,
-          commissionTotal: Math.round(revenue * 0.12),
-          commissionRate: 0.12,
-          directShare: 0.45,
+          netKept: moneyKeptResult.kept,
+          commissionTotal: commissionTotalDollars,
+          commissionRate,
+          directShare,
         },
         propertyStats,
         prevPropertyStats,
         channelMetrics,
-        portfolioHealth: {
-          portfolioScore: 100,
-          healthyCount: properties.length,
-          warningCount: 0,
-          criticalCount: 0,
-          properties: properties.map((p) => ({
-            propertyId: p.id,
-            propertyName: p.name,
-            overallScore: 100,
-            statusLabel: 'Current',
-            completeness: { occupancy: 100, revenue: 100, source: 100, payment: 100 },
-          })),
-        },
-        reconciliation: { reported: revenue, calculated: revenue, difference: 0, isBalanced: true },
+        portfolioHealth,
+        reconciliation,
       });
 
       toast.success('Downloaded Monthly Owner Performance Packet (.xlsx)');

@@ -117,6 +117,9 @@ console.log("\n4. Server-Authoritative Daily Aggregates (PropertyDaySummary):");
 try {
   const tableCheck = runWranglerD1("SELECT count(*) as count FROM property_day_summary;");
   check("property_day_summary table exists in remote D1", tableCheck !== undefined, "migration 0008 active");
+  const rowCount = Number(tableCheck[0]?.count) || 0;
+  check("property_day_summary is populated with server aggregates", rowCount >= 400, `${rowCount} days populated across properties`);
+
 
   const schemaInfo = runWranglerD1("PRAGMA table_info(property_day_summary);");
   const columnNames = schemaInfo.map((c) => c.name);

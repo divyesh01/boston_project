@@ -87,9 +87,26 @@ export function evaluatePropertyDataHealth({
   const missingGross = findMissingDates(grossDates, from, to);
   const missingPay = findMissingDates(payDates, from, to);
 
+  const hasAnyData = occRows.length > 0 || srcRows.length > 0 || grossRows.length > 0 || payRows.length > 0;
+
+  if (!hasAnyData) {
+    return {
+      propertyId,
+      propertyName,
+      overallScore: 0,
+      completeness: { occupancy: 0, source: 0, revenue: 0, payment: 0 },
+      missingDates: { occupancy: [], source: [], revenue: [], payment: [] },
+      status: 'critical',
+      badgeColor: '#FF6B6B',
+      statusLabel: 'No Data Ingested',
+      uploadedReportsCount: uploadedReports.length,
+      provenanceHashes: [],
+    };
+  }
+
   const totalPossibleDays = from && to
     ? Math.max(1, Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86400000) + 1)
-    : 1;
+    : Math.max(1, occDates.length, srcDates.length, grossDates.length, payDates.length);
 
   const completeness = {
     occupancy: Math.round(((totalPossibleDays - missingOcc.length) / totalPossibleDays) * 100),
@@ -179,7 +196,7 @@ export function evaluatePortfolioDataHealth(properties = [], dataByProperty = {}
   const criticalCount = propertyHealths.filter((p) => p.status === 'critical').length;
 
   const totalScore = propertyHealths.reduce((acc, p) => acc + p.overallScore, 0);
-  const portfolioScore = propertyHealths.length > 0 ? Math.round(totalScore / propertyHealths.length) : 100;
+  const portfolioScore = propertyHealths.length > 0 ? Math.round(totalScore / propertyHealths.length) : 0;
 
   return {
     portfolioScore,

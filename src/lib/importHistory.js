@@ -15,11 +15,15 @@ export function mergeImportHistory(legacyRows, manifests) {
     created_date: manifest.activated_at || manifest.created_at,
   }));
   const keys = new Set(active.map(historyKey));
+  const activeBundleIds = new Set(active.map(row => row.bulk_import_id));
   // Prefer the first successful legacy import: its session owns the rows and
   // Undo ledger. A later duplicate history entry may own no data at all.
   const legacy = [...legacyRows].sort((a, b) => String(a.created_date || '').localeCompare(String(b.created_date || '')));
   const merged = [...active];
   for (const row of legacy) {
+    // Hydrated history uses the roster's typed local property ID. Its bundle
+    // ID still identifies the same authoritative import across those aliases.
+    if (row.bulk_import_id && activeBundleIds.has(row.bulk_import_id)) continue;
     const key = historyKey(row);
     if (key && keys.has(key)) continue;
     if (key) keys.add(key);

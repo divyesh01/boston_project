@@ -510,7 +510,16 @@ export class GcsJsonClient {
       const metadataResponse = await this.authorized(metadataUrl, { method: "GET" });
       if (!metadataResponse.ok) return metadataResponse;
       const object = await metadataResponse.json();
-      const mediaResponse = await this.authorized(`${metadataUrl}?alt=media`, { method: "GET" });
+      // GCS otherwise transparently decompresses gzip objects. The object-store
+      // contract (and browser bundle decoder) requires the stored bytes intact.
+      const mediaHeaders = object.contentEncoding === "gzip" ? { "accept-encoding": "gzip" } : {};
+      const mediaResponse = await this.authorized(`${metadataUrl}?alt=media`, {
+        method: "GET",
+        headers: mediaHeaders,
+        // Workers also decodes Content-Encoding by default, independently of
+        // GCS transcoding. Preserve the archive bytes through both boundaries.
+        encodeResponseBody: "manual",
+      });
       if (!mediaResponse.ok) return mediaResponse;
       return new Response(mediaResponse.body, {
         status: mediaResponse.status,

@@ -1036,11 +1036,35 @@ async function getManifest(url, env, scope) {
   sql += ` ORDER BY revision ASC, id ASC LIMIT 200`;
   const manifests = await queryAll(env, sql, params);
 
+  // Historical bundle rows retain the import-time local property id. Only
+  // publish aliases proven by this account's current authoritative mapping.
+  const pointer = await queryFirst(env,
+    "SELECT active_generation_id FROM business_dataset_pointer WHERE account_id = ?", [scope.accountId]);
+  const mappings = pointer?.active_generation_id ? await queryAll(env,
+    "SELECT property_key, server_property_id FROM business_property_map WHERE account_id = ? AND generation_id = ?",
+    [scope.accountId, pointer.active_generation_id]) : [];
+  const aliases = new Map();
+  for (const mapping of mappings) {
+    const key = String(mapping.property_key);
+    const value = key.startsWith('n:') ? Number(key.slice(2)) : key.slice(key.indexOf(':', 2) + 1);
+    try {
+      if (typedRecordKey(value) !== key) continue;
+      const canonicalId = resolvePropertyKeyFromMappings(mappings, key);
+      if (!scope.propertyIds.includes(canonicalId)) continue;
+      const values = aliases.get(canonicalId) || [];
+      values.push(value);
+      // Import headers stringify numeric local ids; validate that form too.
+      if (resolvePropertyKeyFromMappings(mappings, typedRecordKey(String(value))) === canonicalId) values.push(String(value));
+      aliases.set(canonicalId, values);
+    } catch { /* Missing or ambiguous aliases grant no compatibility. */ }
+  }
+
   return Response.json({
     scope: `${scope.accountId}:${[...scope.propertyIds].sort().join(",")}`,
     manifests: manifests.map((m) => ({
       ...m,
       entity_counts: JSON.parse(m.entity_counts_json || "{}"),
+      property_aliases: [...new Set(aliases.get(m.server_property_id) || [])],
     })),
   });
 }

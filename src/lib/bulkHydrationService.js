@@ -45,14 +45,15 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
         if (!res.ok) throw new Error(`Bundle download failed: ${res.status}`);
         const bytes = await res.arrayBuffer();
         const text = await decompressPayloadGzip(bytes);
-        const items = parseBundle(text, manifest.server_property_id);
+        const items = parseBundle(text, manifest.server_property_id, manifest.property_aliases || []);
         const hash = await contentHash(Number(manifest.identity_version) === 2 ? normalizedContent(items) : text);
         if (hash !== manifest.normalized_hash || items.length !== Number(manifest.row_count)) throw new Error('Bundle hash or count mismatch');
         const counts = items.reduce((out, item) => { out[item.entity] = (out[item.entity] || 0) + 1; return out; }, {});
         if (JSON.stringify(Object.entries(counts).sort()) !== JSON.stringify(Object.entries(manifest.entity_counts || {}).sort())) throw new Error('Entity counts mismatch');
         payloads.set(manifest.id, items);
       }
-      const tables = [...BULK_ENTITIES.map(name => localDb[name]), localDb.UploadedReport, localDb.BusinessSyncState];
+      const tables = [...BULK_ENTITIES.map(name => localDb[name]), localDb.UploadedReport, localDb.BusinessSyncState,
+        localDb.Property, localDb.DailyFinancialAggregate];
       try {
         await localDb.transaction('rw', tables, async () => {
           // All/property syncs and other tabs share this transactional commit fence.
@@ -66,26 +67,35 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
           for (const manifest of manifests) {
             const items = payloads.get(manifest.id);
             if (!items) continue;
+            // The local roster may still use a typed migration-era id (e.g. 1).
+            // Match only aliases verified by the server, and retain the roster's
+            // exact type so filters and property rankings join these rows.
+            const propertyIds = [...new Set([manifest.server_property_id, ...(manifest.property_aliases || [])])];
+            const localProperties = await localDb.Property.where('id').anyOf(propertyIds).toArray();
+            if (localProperties.length > 1) throw new Error('Ambiguous local property identity');
+            const localPropertyId = localProperties[0]?.id ?? manifest.server_property_id;
+            const obsoleteIds = propertyIds.filter(id => id !== localPropertyId);
+            if (obsoleteIds.length) await localDb.DailyFinancialAggregate.where('property_id').anyOf(obsoleteIds).delete();
             const groups = {};
             items.forEach((item, index) => {
               (groups[item.entity] ||= []).push({ ...item.row,
                 id: generateDeterministicRowId(manifest.id, item.entity, index),
-                property_id: manifest.server_property_id, import_id: manifest.id, bulk_import_id: manifest.id });
+                property_id: localPropertyId, import_id: manifest.id, bulk_import_id: manifest.id });
             });
             for (const [entity, rows] of Object.entries(groups)) {
               // R2 is authoritative for this report's covered dates. Remove overlapping legacy cache rows.
               const dates = new Set(rows.map(row => String(row.date || row.business_date || row.shift_date || '').slice(0, 10)));
-              await localDb[entity].where('property_id').equals(manifest.server_property_id)
+              await localDb[entity].where('property_id').anyOf(propertyIds)
                 .filter(row => !row.bulk_import_id && dates.has(String(row.date || row.business_date || row.shift_date || '').slice(0, 10))).delete();
               await localDb[entity].where('import_id').equals(manifest.id).delete();
               await localDb[entity].bulkPut(rows);
             }
             await localDb.UploadedReport.put({ id: manifest.id, import_id: manifest.id, bulk_import_id: manifest.id, raw_archive_id: manifest.raw_archive_id || manifest.id,
-              property_id: manifest.server_property_id, report_type: manifest.report_type, file_name: manifest.original_file_name,
+              property_id: localPropertyId, report_type: manifest.report_type, file_name: manifest.original_file_name,
               file_hash: manifest.raw_file_hash, status: 'completed', rows_imported: manifest.row_count, raw_rows: [],
               created_date: manifest.activated_at || manifest.created_at });
             const report = await localDb.UploadedReport.get(manifest.id);
-            if (!report || report.property_id !== manifest.server_property_id || Number(report.rows_imported) !== Number(manifest.row_count)) {
+            if (!report || report.property_id !== localPropertyId || Number(report.rows_imported) !== Number(manifest.row_count)) {
               throw new Error(`Active report manifest ${manifest.id} was not materialized locally`);
             }
             for (const [entity, expected] of Object.entries(manifest.entity_counts || {})) {

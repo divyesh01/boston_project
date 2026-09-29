@@ -765,7 +765,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
           <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-4">
             <p className="text-[10px] uppercase tracking-widest text-slate-500" title="Sum of every deduction category shown below">Total Deductions</p>
             <CountUp as="p" value={`-${money2(totalDeductions)}`} className="mt-1 font-heading text-2xl font-semibold text-[#FFB547]" />
-            <p className="mt-1 text-xs text-slate-500">{gross > 0 ? `${pct(totalDeductions / gross)} of revenue` : "No deductions"} · {items.length} categories</p>
+            <p className="mt-1 text-xs text-slate-500">{totalDeductions === 0 ? "No deductions" : gross > 0 ? `${pct(totalDeductions / gross)} of revenue` : "Deductions recorded; no revenue in this period"} · {items.length} {items.length === 1 ? "category" : "categories"}</p>
           </div>
         </div>
       </div>
@@ -781,7 +781,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
               <span className="text-sm font-medium text-slate-200">{grossTitle}</span>
               <span className="font-heading text-sm tabular-nums text-white">
                 {money2(gross)}
-                <span className="ml-1.5 text-xs text-slate-500">(100%)</span>
+                {gross > 0 && <span className="ml-1.5 text-xs text-slate-500">(100%)</span>}
               </span>
             </button>
 
@@ -807,7 +807,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
                         separately and labelled — it used to be printed in this
                         slot, which made the list and the pie disagree on the
                         same dollar figure. */}
-                    <span className="ml-1.5 text-xs text-slate-500">({pct(i.amount / (gross || 1))})</span>
+                    <span className="ml-1.5 text-xs text-slate-500">{gross > 0 ? `(${pct(i.amount / gross)})` : "(—)"}</span>
                     {i.rate !== undefined && (
                       <span className="ml-1 text-xs text-slate-600">· {pct(i.rate, 2)} rate</span>
                     )}

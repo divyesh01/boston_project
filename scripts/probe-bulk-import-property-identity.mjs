@@ -38,6 +38,10 @@ import {
   scopeSpecific,
 } from "./_worker-testkit.mjs";
 import worker from "../worker/index.js";
+import 'fake-indexeddb/auto';
+import localDb from '../src/api/localDb.js';
+import { syncBulkBundles } from '../src/lib/bulkHydrationService.js';
+import { parseBundle } from '../worker/bulk-contract.js';
 import { handleBulkImportRequest } from "../worker/bulk-import.js";
 import { clearMockStore, getMockStore, testR2Binding } from "./_r2-testkit.mjs";
 import {
@@ -452,6 +456,41 @@ await run.check("full flow via alias: raw-upload, raw-archive, pending, upload, 
   const manifestData = await manifestRes.json();
   assertEqual(manifestData.manifests.length, 1, "alias-filtered manifest feed finds the canonical row");
   assertEqual(manifestData.manifests[0].server_property_id, CANON);
+  const propertyAliases = manifestData.manifests[0].property_aliases;
+  assert(propertyAliases.includes(1) && propertyAliases.includes('1'), 'feed proves numeric and string historical aliases');
+  assert(!propertyAliases.includes('2'), 'other property alias is excluded');
+  for (const wrong of ['2', OTHER, '01', '+1', '1.0']) {
+    let rejected = false;
+    try { parseBundle(JSON.stringify({ entity: 'OccupancyDay', row: { property_id: wrong } }), CANON, propertyAliases); }
+    catch { rejected = true; }
+    assert(rejected, `unproven property ${wrong} remains rejected`);
+  }
+  const savedFetch = globalThis.fetch;
+  const savedLocation = globalThis.location;
+  try {
+    await localDb.delete();
+    await localDb.open();
+    await localDb.Property.put({ id: 1, name: 'Middleboro', code: 'RRI1416' });
+    await localDb.DailyFinancialAggregate.add({ property_id: CANON, business_date: '2026-01-01' });
+    globalThis.location = { origin: 'http://localhost' };
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input), 'http://localhost');
+      return handleBulkImportRequest(new Request(url, init), s.env, s.owner, url, url.pathname.split('/').filter(Boolean));
+    };
+    const restored = await syncBulkBundles({ force: true });
+    assert(restored.verified, 'historical alias bundle passes hash/count checks and hydrates');
+    assertEqual(await localDb.OccupancyDay.where('property_id').equals(1).count(), bundle.totalRowCount,
+      'restored rows use the exact local roster id and type');
+    assertEqual(await localDb.DailyFinancialAggregate.where('property_id').equals(CANON).count(), 0,
+      'obsolete canonical cache aggregates cannot duplicate the remapped property');
+    assertEqual((await localDb.UploadedReport.toArray())[0].property_id, 1, 'history joins the same local property');
+    assertEqual(await localDb.OccupancyDay.where('property_id').equals(RAW_ALIAS).count(), 0,
+      'no local restored rows retain the legacy alias');
+  } finally {
+    globalThis.fetch = savedFetch;
+    globalThis.location = savedLocation;
+    await localDb.delete();
+  }
 
   // (g) duplicate lookup via alias must find the canonical-stored bundle
   const dupRes = await bulkReq("check-duplicate", {

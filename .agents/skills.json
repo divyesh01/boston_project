@@ -1,0 +1,21 @@
+{
+  "_comment": "Links to global skills for boston_project. Project-specific skills (Base44, UI/UX) are in .agents/skills/",
+  "globalSkillsPath": "C:\\Users\\Divyesh\\.gemini\\config\\skills",
+  "skills": [
+    { "path": "C:\\Users\\Divyesh\\.gemini\\config\\skills\\archify\\SKILL.md" },
+    { "path": "C:\\Users\\Divyesh\\.gemini\\config\\skills\\memory-brain\\SKILL.md" },
+    { "path": "C:\\Users\\Divyesh\\.gemini\\config\\skills\\code-review\\SKILL.md" },
+    { "path": "C:\\Users\\Divyesh\\.gemini\\config\\skills\\python-project\\SKILL.md" },
+    { "path": "C:\\Users\\Divyesh\\.gemini\\config\\skills\\git-workflow\\SKILL.md" },
+    { "path": "C:\\Users\\Divyesh\\.gemini\\config\\skills\\debug-session\\SKILL.md" },
+    { "path": "C:\\Users\\Divyesh\\.gemini\\config\\skills\\api-design\\SKILL.md" },
+    { "path": "C:\\Users\\Divyesh\\.gemini\\config\\skills\\sql-query\\SKILL.md" },
+    { "path": "C:\\Users\\Divyesh\\.gemini\\config\\skills\\docker-deploy\\SKILL.md" },
+    { "path": "C:\\Users\\Divyesh\\.gemini\\config\\skills\\data-analysis\\SKILL.md" },
+    { "path": "C:\\Users\\Divyesh\\.gemini\\config\\skills\\web-scraping\\SKILL.md" },
+    { "path": "C:\\Users\\Divyesh\\.gemini\\config\\skills\\security-audit\\SKILL.md" },
+    { "path": "C:\\Users\\Divyesh\\.gemini\\config\\skills\\morning-briefing\\SKILL.md" },
+    { "path": "C:\\Users\\Divyesh\\.gemini\\config\\skills\\academic-assignment\\SKILL.md" },
+    { "path": "C:\\Users\\Divyesh\\.gemini\\config\\skills\\personal-tools\\SKILL.md" }
+  ]
+}

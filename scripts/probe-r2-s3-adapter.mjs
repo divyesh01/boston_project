@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { gzipSync, gunzipSync } from "node:zlib";
 import { AwsClient } from "aws4fetch";
 import {
   isR2S3Enabled,
@@ -1308,7 +1309,10 @@ for (const operation of ["head", "get"]) {
 
       if (method === "GET") {
         if (url.searchParams.get("alt") === "media") {
-          return new Response(object.bytes, {
+          const transcode = object.contentEncoding === "gzip"
+            && (!new Headers(init.headers).get("accept-encoding")?.split(/\s*,\s*/).includes("gzip")
+              || init.encodeResponseBody !== "manual");
+          return new Response(transcode ? gunzipSync(object.bytes) : object.bytes, {
             status: 200,
             headers: {
               "content-type": object.contentType || "application/octet-stream",
@@ -1407,7 +1411,8 @@ for (const operation of ["head", "get"]) {
 
   // B. Normalized Gzip Bundle Upload & Metadata Verification
   {
-    const bundlePayload = new Uint8Array([31, 139, 8, 0, 1, 2, 3, 4, 5, 6]); // synthetic gzip
+    const bundleText = '{"entity":"daily_revenue","amount":12345}\n';
+    const bundlePayload = gzipSync(bundleText);
     const normHash = createHash("sha256").update(bundlePayload).digest("hex");
     const bundleKey = `rri-bulk/acc_corp/prop_hotel_1/v1/${normHash}.ndjson.gz`;
     const bundleMetadata = {
@@ -1446,6 +1451,11 @@ for (const operation of ["head", "get"]) {
     check(headBundle?.customMetadata?.row_count === "150", "GCS bundle head preserves row_count");
     check(headBundle?.customMetadata?.identity_version === "2", "GCS bundle head preserves identity_version");
     check(headBundle?.customMetadata?.entity_counts_json === '{"daily_revenue":150}', "GCS bundle head preserves entity_counts_json");
+
+    const downloadedBundle = await gcsStores.bulkStore.get(bundleKey);
+    const downloadedBytes = new Uint8Array(await downloadedBundle.arrayBuffer());
+    check(Buffer.from(downloadedBytes).equals(bundlePayload), "GCS bundle download preserves compressed bytes without transcoding");
+    check(gunzipSync(downloadedBytes).toString() === bundleText, "GCS bundle download remains valid gzip for browser hydration");
 
     const duplicateBundlePut = await gcsStores.bulkStore.put(bundleKey, bundlePayload, {
       customMetadata: bundleMetadata,

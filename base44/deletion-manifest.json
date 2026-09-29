@@ -1,0 +1,88 @@
+{
+  "_comment": "DELETION MANIFEST v1 — edited by humans only. Never auto-generated.",
+  "_schema": "deletion-manifest/v1",
+
+  "rules": {
+    "DELETE": {
+      "description": "Every record where created_by_id === user.id is permanently removed.",
+      "entities": [
+        {
+          "name": "OccupancyDay",
+          "reason": "Daily occupancy rows created during normal hotel operations. No shared state."
+        },
+        {
+          "name": "SourceDay",
+          "reason": "Source-level daily revenue rows. Owned per user, no cross-user references."
+        },
+        {
+          "name": "GrossRevenueDay",
+          "reason": "Gross revenue aggregates. Owned per user, no cross-user references."
+        },
+        {
+          "name": "ClerkShiftRecord",
+          "reason": "Shift records created by the account being deleted. Not referenced by payroll rows after creation."
+        },
+        {
+          "name": "UploadedReport",
+          "reason": "File references uploaded by this user. Drive files themselves are external; only the metadata row is deleted."
+        }
+      ]
+    },
+
+    "RETAIN": {
+      "description": "Records that must never be touched during an account wipe.",
+      "entities": [
+        {
+          "name": "AuditLog",
+          "reason": "Forensic evidence — append-only by design. audit_clear/entry.js enforces this as a hard 403."
+        },
+        {
+          "name": "PayrollRun",
+          "reason": "Financial records with legal retention requirements. Deleting them would corrupt payroll history."
+        },
+        {
+          "name": "Staff",
+          "reason": "Staff records are property-scoped, not user-scoped. Removing them would affect all admins of that property."
+        },
+        {
+          "name": "Property",
+          "reason": "Property records are shared across all users with access. Cannot be deleted by a single user."
+        },
+        {
+          "name": "Session",
+          "reason": "Sessions are invalidated by revoking (is_revoked=true), not by deletion. Deleting them would prevent logout detection."
+        },
+        {
+          "name": "User",
+          "reason": "The User row itself is not deleted here — account deactivation (is_active=false) is a separate administrative action."
+        }
+      ]
+    }
+  },
+
+  "pagination": {
+    "pageSize": 500,
+    "strategy": "filter_scoped",
+    "note": "Use .filter({created_by_id: userId}, sort, PAGE, 0) — never .list(). Restart from offset 0 after each delete batch because rows shift forward. Exit when page.length === 0 or page.length < PAGE."
+  },
+
+  "partialFailure": {
+    "policy": "continue",
+    "note": "A single failed delete must not abort the rest of the wipe. Count failedDeletes and surface in response.recordsFailed and audit detail."
+  },
+
+  "stallGuard": {
+    "maxIterations": 10000,
+    "consecutiveEmptyBeforeBreak": 3,
+    "note": "If 3 consecutive pages return 0 owned rows but the prior page was full, the loop is stalled (delete calls silently failing). Break with LOOP_STALLED to prevent 10k round trips."
+  },
+
+  "auditPreflight": {
+    "required": true,
+    "note": "Check AUDIT_CHAIN_SECRET is configured BEFORE starting the destructive loop. If the secret is missing, the wipe still proceeds but a pre-wipe audit entry cannot be written — log a warning and continue. Do not block the wipe on audit failure."
+  },
+
+  "version": "1.0.0",
+  "lastUpdated": "2026-09-29",
+  "authorizedBy": "Repository Owner (Divyesh)"
+}

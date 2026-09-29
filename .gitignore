@@ -125,6 +125,9 @@ fix_user.py
 # Local DIVYESH V3 task/evidence state. Canonical schemas are committed under docs/.
 /.divyesh/runtime/
 
+# Temporary test/playwright scratch
+/.tmp/
+
 # Rendered visual-check output for the standalone architecture doc. The source
 # HTML is committed (it embeds its own WOFF2 fonts, so it renders standalone),
 # but the screenshots, the check wrapper and the machine-written report are

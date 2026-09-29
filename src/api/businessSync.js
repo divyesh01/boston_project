@@ -455,12 +455,10 @@ export function createBusinessSyncClient({
           }
         }
         publish('dataset', 'hydrate', { generation_id: snapshot.generation_id });
-        try {
-          const { rebuildDailyAggregates } = await import('../lib/dailyAggregates.js');
-          await rebuildDailyAggregates();
-        } catch (e) {
-          // Non-blocking in headless/test environments
-        }
+        // Aggregate reads use the entity proxy, which waits for this hydration
+        // to finish. Awaiting a rebuild here therefore waits on ourselves forever.
+        // Startup rebuilds after hydration AND bundle restoration have completed
+        // (hydrateAuthenticatedData); imports rebuild after their own commit.
         const state = await localDb.BusinessSyncState.get(SYNC_STATE_KEY);
         const applied = await applyFeed(state);
         if (applied.rebuild) {

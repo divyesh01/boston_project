@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { mergeImportHistory } from './importHistory.js';
 
 describe('authoritative import history', () => {
+  it('shows a hydrated bundle once even when its local roster ID and report type differ', () => {
+    const rows = mergeImportHistory([{ id: 'gross-1', bulk_import_id: 'gross-1', property_id: 1,
+      report_type: 'gross_revenue', file_hash: 'same-file' }], [{ id: 'gross-1', status: 'active',
+      server_property_id: 'property-1', property_aliases: [1, '1'], report_type: 'gross_revenue',
+      raw_file_hash: 'same-file' }]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ bulk_import_id: 'gross-1', property_id: 'property-1', report_type: 'gross' });
+  });
+
   it('shows a server success even when this browser has no local history', () => {
     const rows = mergeImportHistory([], [{ id: 'source-1', status: 'active', server_property_id: 'property-1',
       report_type: 'source', original_file_name: 'Source Summary.csv', raw_file_hash: 'hash-1',

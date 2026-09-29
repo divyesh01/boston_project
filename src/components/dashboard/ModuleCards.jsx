@@ -2,10 +2,10 @@ import React, { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, ClipboardList, BedDouble, Gauge } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { useOccupancy } from "@/lib/useHotelData";
+import { useOccupancy, useGrossRevenue } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { db } from "@/api/base44Client";
-import { money, num, inRange } from "@/lib/hotel";
+import { money, num, inRange, grossRevenueForPeriod } from "@/lib/hotel";
 import { sumCommittedPay } from "@/lib/payrollCalc";
 
 const THEMES = {
@@ -106,6 +106,7 @@ export default function ModuleCards() {
   // passes it, so in Multi-Month mode these three tiles summed the whole
   // envelope range while the KPIs above them summed only the picked months.
   const { data: occ = [], isLoading } = useOccupancy(dateRange, property, months);
+  const { data: gross = [], isLoading: grossLoading } = useGrossRevenue(dateRange, property, months);
 
   // Payroll used to be an unscoped `list(..., 500)`: it ignored both the
   // property selection and the period, so the tile reported every run ever
@@ -130,15 +131,17 @@ export default function ModuleCards() {
 
   const stats = useMemo(() => {
     const rowsSold = occ.reduce((a, r) => a + (Number(r.rooms_sold) || 0), 0);
-    const revenue = occ.reduce((a, r) => a + (Number(r.room_revenue) || 0), 0);
+    const revenue = grossRevenueForPeriod({ occRows: occ, grossRows: gross });
+    const revenueDays = new Set([...occ, ...gross].map((r) => String(r.date).slice(0, 10))).size;
     const approved = payroll.filter((p) => p.payroll_status === "approved").length;
+    const paid = payroll.filter((p) => p.payroll_status === "paid").length;
     // Card headline shows committed cost, matching Money Kept rather than the
     // gross of every draft.
     const totalPay = sumCommittedPay(payroll);
     return {
       payroll: {
-        statLabel: "Approved Run",
-        statValue: approved ? `${num(approved)} approved` : "No runs in period",
+        statLabel: "Payroll Runs",
+        statValue: approved ? `${num(approved)} approved` : paid ? `${num(paid)} paid` : payroll.length ? "No approved runs" : "No runs in period",
         statSub: payroll.length
           ? `${num(payroll.length)} runs · ${money(totalPay)} total`
           : "no payroll runs in this date range",
@@ -149,12 +152,12 @@ export default function ModuleCards() {
         statSub: occ.length ? `${num(occ.length)} days tracked` : "no data yet",
       },
       revenue: {
-        statLabel: "Gross Revenue",
-        statValue: isLoading ? "—" : money(revenue),
-        statSub: occ.length ? `${num(occ.length)} days tracked` : "no data yet",
+        statLabel: revenue.basis === "total" ? "Gross Revenue" : "Room Revenue",
+        statValue: isLoading || grossLoading ? "—" : money(revenue.dollars),
+        statSub: revenueDays ? `${num(revenueDays)} days tracked` : "no revenue reports in this period",
       },
     };
-  }, [occ, payroll, isLoading]);
+  }, [occ, gross, payroll, isLoading, grossLoading]);
 
   return (
     <section className="space-y-3">

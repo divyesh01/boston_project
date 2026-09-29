@@ -565,6 +565,7 @@ export function perPropertyStats(occRows = [], properties = []) {
       property_name: prop?.name || rows[0]?.property_name || "Unknown",
       revenue: fromCents(revenue),
       roomsSold: fromCents(roomsSold),
+      capacity: capacity / 100,
       occupancy: capacity ? fromRate(divideRate(roomsSold, capacity)) : 0,
       adr: roomsSold ? fromCents(divide(revenue, roomsSold)) : 0,
       revpar: capacity ? fromCents(divide(revenue, capacity)) : 0,

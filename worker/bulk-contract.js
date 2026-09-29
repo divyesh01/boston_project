@@ -17,12 +17,13 @@ export async function contentHash(text) {
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
 }
-export function parseBundle(text, propertyId) {
+export function parseBundle(text, propertyId, propertyAliases = []) {
   if (!text.trim()) throw new Error('Empty bundle');
   const items = text.split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
   for (const item of items) {
     if (!BULK_ENTITIES.includes(item?.entity) || !item.row || Array.isArray(item.row) ||
-        typeof item.row !== 'object' || item.row.property_id !== propertyId) throw new Error('Invalid bundle row or property');
+        typeof item.row !== 'object' || (item.row.property_id !== propertyId &&
+          !propertyAliases.includes(item.row.property_id))) throw new Error('Invalid bundle row or property');
   }
   return items;
 }

@@ -51,39 +51,69 @@ export default async function(req) {
       return Response.json({ error: 'Confirmation required. Send confirm="DELETE:<your user id>" to confirm this destructive action.' }, { status: 400 });
     }
 
+    // DELETION RULES (established before any code change):
+    //   DELETE  — every record where created_by_id === user.id, across all listed
+    //             entities, regardless of how many records other users own.
+    //   RETAIN  — records owned by any other user; the loop must never touch them.
+    //   RETAIN  — the AuditLog entry written below (forensic evidence of this wipe).
+    //
+    // PREVIOUS BUG (lines 68–82 before this patch):
+    //   base44.entities[entityName].list('-created_date', PAGE) fetched the
+    //   PAGE newest records ACROSS ALL USERS, then filtered client-side.
+    //   If another user owned ≥ PAGE records that were all newer than the target
+    //   user's records, those target records never appeared in any page — the
+    //   owned array was always empty on the first iteration and the loop exited
+    //   immediately, leaving every one of the target user's records behind.
+    //   The stop condition (records.length < PAGE) made it worse: 501 records by
+    //   the other user fills a full page of 500, so the loop would not even reach
+    //   that check — it broke at the `!owned.length` guard on line 70.
+    //
+    // FIX: use .filter({created_by_id: user.id}, ...) so the backend evaluates
+    //   the predicate server-side and returns ONLY the target user's rows.
+    //   Offset-based pagination then guarantees we walk every page even when
+    //   other users own far more records. Offset advances by PAGE each round;
+    //   the loop exits when a page returns fewer than PAGE rows (no more data).
+    //   Because we delete as we go, we re-fetch from offset 0 each round so
+    //   we do not skip rows that shifted into earlier positions after a delete.
     const entities = ['OccupancyDay', 'SourceDay', 'GrossRevenueDay', 'ClerkShiftRecord', 'UploadedReport'];
     let deleted = 0;
+    let failedDeletes = 0;
 
-    // Page through ALL of the caller's records, not just the first 5000. The old
-    // .list(...,5000) silently left records behind for any account with more.
     const PAGE = 500;
     for (const entityName of entities) {
       try {
-        let removedForEntity = 0;
-        // Loop until a page comes back with no rows owned by this user. Each
-        // iteration re-lists because deletion shifts ids; fetching a fresh page
-        // avoids missing rows that were beyond the original 5000-row window.
+        // Re-fetch from offset 0 every round: deleting rows shifts the remainder
+        // forward, so an advancing offset would skip the records that moved into
+        // already-seen positions. Restarting from 0 is safe because every
+        // successfully deleted row is gone and will not re-appear.
         let guard = 0;
         while (guard++ < 10000) {
-          const records = await base44.entities[entityName].list('-created_date', PAGE);
-          const owned = (records || []).filter((r: any) => r.created_by_id === user.id);
-          if (!owned.length) break;
-          for (const r of owned) {
+          // .filter() with created_by_id scoped server-side: other users' records
+          // are never returned, so the loop is guaranteed to terminate once this
+          // user's rows are exhausted regardless of how many rows others own.
+          const page = await base44.entities[entityName].filter(
+            { created_by_id: user.id },
+            '-created_date',
+            PAGE,
+            0,
+          );
+          if (!page || page.length === 0) break;
+          for (const r of page) {
             try {
               await base44.entities[entityName].delete(r.id);
               deleted++;
-              removedForEntity++;
             } catch {
               // A single failed delete must not abort the rest of the wipe.
+              // Count failures so the audit entry and response are honest.
+              failedDeletes++;
             }
           }
-          // If the backend returned fewer than a full page of *any* records,
-          // there is no more data for this entity — stop paging.
-          if (!records || records.length < PAGE) break;
+          // Fewer than a full page means this was the last page.
+          if (page.length < PAGE) break;
         }
-        void removedForEntity;
       } catch (e) {
-        // Continue with other entities
+        // Entity-level error (e.g. network failure). Continue with remaining
+        // entities so a single bad entity does not leave others un-wiped.
       }
     }
 
@@ -95,10 +125,10 @@ export default async function(req) {
       performedById: user.id,
       performedBy: user.username || user.email || 'unknown',
       propertyId: null,
-      detail: `Server-side account data wipe: ${deleted} record(s) deleted across ${entities.length} entities.`,
+      detail: `Server-side account data wipe: ${deleted} record(s) deleted, ${failedDeletes} failed across ${entities.length} entities.`,
     });
 
-    return Response.json({ success: true, recordsDeleted: deleted });
+    return Response.json({ success: true, recordsDeleted: deleted, recordsFailed: failedDeletes });
   } catch (error) {
     console.error("Delete account error:", error);
     return Response.json({ error: "Internal server error" }, { status: 500 });

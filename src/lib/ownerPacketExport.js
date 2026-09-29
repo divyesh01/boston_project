@@ -10,7 +10,7 @@
  */
 
 import * as XLSX from 'xlsx';
-import { formatCents, toCents, formatNumber } from '@/lib/decimal';
+import { formatCents, toCents, fromCents, formatNumber } from '@/lib/decimal';
 import { decomposeRevenueVariance } from '@/lib/varianceDecomposition';
 import { normalizeChannel, CHANNEL_GROUPS, calculateDirectShiftOpportunity } from '@/lib/channelDictionary';
 import { reconcileFinancialTotals } from '@/lib/dataHealth';
@@ -126,12 +126,12 @@ export function buildOwnerPerformancePacketWorkbook({
       currRevenue,
       currRoomsSold,
       Number(((curr.occupancy || 0) * 100).toFixed(1)),
-      Number((currAdr || 0).toFixed(2)),
-      Number((curr.revpar || 0).toFixed(2)),
+      fromCents(toCents(currAdr || 0)),
+      fromCents(toCents(curr.revpar || 0)),
       curr.statusLabel || (curr.occupancy >= 0.7 ? 'On Target' : 'Caution'),
-      Number(variance.volumeEffect.toFixed(2)),
-      Number(variance.rateEffect.toFixed(2)),
-      Number(variance.totalVariance.toFixed(2)),
+      fromCents(toCents(variance.volumeEffect)),
+      fromCents(toCents(variance.rateEffect)),
+      fromCents(toCents(variance.totalVariance)),
       primaryDriver,
     ];
   });
@@ -169,24 +169,26 @@ export function buildOwnerPerformancePacketWorkbook({
 
   const channelDataRows = enrichedMetrics.map((ch) => {
     const isOta = ch.isOta;
-    const directShiftGain = isOta ? Math.round((ch.commission || 0) * 0.15 * 100) / 100 : 0;
+    const directShiftGain = isOta
+      ? fromCents(Math.round(toCents(ch.commission || 0) * 0.15))
+      : 0;
 
     const netContribution = ch.netContribution !== undefined
       ? ch.netContribution
       : (ch.gross || 0) - (ch.commission || 0) - (ch.paymentFee || 0);
 
-    const marginPct = (ch.gross || 0) > 0 ? (netContribution / ch.gross) * 100 : 100;
+    const marginPct = (ch.gross || 0) > 0 ? Number(((netContribution / ch.gross) * 100).toFixed(1)) : 100;
 
     return [
       ch.channel || ch.source,
       ch.canonicalName,
       ch.group,
-      Number((ch.gross || 0).toFixed(2)),
+      fromCents(toCents(ch.gross || 0)),
       ch.stays || 0,
-      Number((ch.commission || 0).toFixed(2)),
-      Number((ch.paymentFee || 0).toFixed(2)),
-      Number(netContribution.toFixed(2)),
-      Number(marginPct.toFixed(1)),
+      fromCents(toCents(ch.commission || 0)),
+      fromCents(toCents(ch.paymentFee || 0)),
+      fromCents(toCents(netContribution)),
+      marginPct,
       directShiftGain,
     ];
   });

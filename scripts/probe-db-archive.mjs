@@ -765,6 +765,8 @@ console.log("\n9. Invariants that live in another file");
     "src/lib/app-params.js": "skipped — dead module (no importers) writing a URL param cache",
     "src/components/Layout.jsx": "not localStorage — rri_tab_history in sessionStorage, transient",
     "src/pages/Setup.jsx": "not localStorage — setup_attempts in sessionStorage, transient",
+    "src/lib/featureFlags.js": "skipped — rri_feature_flags, local client-side UI progressive rollout toggles",
+    "src/components/dashboard/ScheduleReportDialog.jsx": "skipped — scheduled_report_config, client-side email delivery preference",
   };
   const writers = [];
   const walk = (dir) => {

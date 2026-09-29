@@ -156,7 +156,7 @@ for (const g of grossRows) {
       roomRevenueCents: 0,
       ancillaryRevenueCents: 0,
       roomsSold: 0,
-      availableRooms: 120,
+      availableRooms: 100,
       otaGrossCents: 0,
       directGrossCents: 0,
       refundCents: 0,
@@ -184,7 +184,7 @@ for (const o of occRows) {
   if (!date || !dayMap.has(date)) continue;
   const d = dayMap.get(date);
   const sold = parseFloat(o["total sold rooms"] || "0") || 0;
-  const avail = parseFloat(o["total rooms"] || "120") || 120;
+  const avail = parseFloat(o["total rooms"] || "100") || 100;
   d.roomsSold = sold;
   d.availableRooms = avail;
 }
@@ -267,11 +267,12 @@ function generateDaySummaryRow(accountId, propertyId, day, scale = 1.0, availRoo
   );`;
 }
 
-// Generate for HOTEL_A (120 rooms)
+// Generate for HOTEL_A (100 rooms from CSV)
 for (const date of dates) {
   const day = dayMap.get(date);
-  sqlStatements.push(generateDaySummaryRow("ACCOUNT_A", "HOTEL_A", day, 1.0, 120));
+  sqlStatements.push(generateDaySummaryRow("ACCOUNT_A", "HOTEL_A", day, 1.0, day.availableRooms || 100));
 }
+
 
 // Generate for HOTEL_B (80 rooms, scale 0.67)
 for (const date of dates) {

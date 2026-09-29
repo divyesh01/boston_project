@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   findMissingDates,
   evaluatePropertyDataHealth,
+  evaluatePortfolioDataHealth,
   reconcileFinancialTotals,
 } from '@/lib/dataHealth';
 import {
@@ -66,7 +67,28 @@ describe('Data Health & Completeness Engine', () => {
     expect(discrepancy.difference).toBe(13.91);
     expect(discrepancy.status).toBe('discrepancy');
   });
+
+  it('correctly evaluates empty property data and empty portfolio without defaulting to 100', () => {
+    const emptyPropHealth = evaluatePropertyDataHealth({
+      propertyId: 'EMPTY',
+      propertyName: 'Empty Property',
+      occRows: [],
+      srcRows: [],
+      grossRows: [],
+      payRows: [],
+      dateRange: { from: '', to: '' },
+    });
+
+    expect(emptyPropHealth.overallScore).toBe(0);
+    expect(emptyPropHealth.status).toBe('critical');
+    expect(emptyPropHealth.statusLabel).toBe('No Data Ingested');
+
+    const emptyPortfolioHealth = evaluatePortfolioDataHealth([], {});
+    expect(emptyPortfolioHealth.portfolioScore).toBe(0);
+    expect(emptyPortfolioHealth.properties).toHaveLength(0);
+  });
 });
+
 
 describe('Universal Hotel Data Adapter Interface', () => {
   it('creates appropriate adapter types via factory', () => {

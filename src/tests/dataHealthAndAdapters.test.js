@@ -76,7 +76,9 @@ describe('Data Health & Completeness Engine', () => {
       srcRows: [],
       grossRows: [],
       payRows: [],
+      dateRange: { from: '', to: '' },
     });
+
     expect(emptyPropHealth.overallScore).toBe(0);
     expect(emptyPropHealth.status).toBe('critical');
     expect(emptyPropHealth.statusLabel).toBe('No Data Ingested');

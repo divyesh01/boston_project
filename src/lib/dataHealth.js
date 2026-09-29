@@ -62,7 +62,7 @@ export function findMissingDates(dates = [], from = '', to = '') {
  * @param {Array<{ date: string }>} [params.grossRows=[]]
  * @param {Array<{ date: string }>} [params.payRows=[]]
  * @param {Array<Object>} [params.uploadedReports=[]]
- * @param {{ from: string, to: string }} params.dateRange
+ * @param {{ from?: string, to?: string }} [params.dateRange]
  * @returns {Object} PropertyDataHealth
  */
 export function evaluatePropertyDataHealth({

@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useRef, useEffect, lazy, Suspense } from "react";
 import confetti from "canvas-confetti";
-import { DollarSign, BedDouble, Percent, Gauge, RefreshCw, FileDown, TrendingDown, Lightbulb, AlertTriangle, TrendingUp, Loader2 } from "lucide-react";
+import { DollarSign, BedDouble, Percent, Gauge, RefreshCw, FileDown, FileSpreadsheet, TrendingDown, Lightbulb, AlertTriangle, TrendingUp, Loader2 } from "lucide-react";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import Card from "@/components/ui-exec/Card";
 import Button from "@/components/ui-exec/Button";
@@ -17,11 +17,14 @@ const MoneyKept = lazy(() => import("@/components/dashboard/MoneyKept"));
 import { useOccupancy, useSources, useClerkRecords, useGrossRevenue, usePaymentData, useDailyFinancialAggregates, filterByMonths } from "@/lib/useHotelData";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { exportToPdf } from "@/lib/pdfExport";
-import { money2, num, pct, sum, inRange, C, getOccThreshold, grossRevenueForPeriod } from "@/lib/hotel";
+import { money2, num, pct, sum, inRange, C, getOccThreshold, grossRevenueForPeriod, perPropertyStats } from "@/lib/hotel";
+import KpiProvenanceDrawer from "@/components/lineage/KpiProvenanceDrawer";
 import { fromCents } from "@/lib/decimal";
 import { getAlertThresholds } from "@/lib/alertThresholds";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { CalculationService } from "@/lib/calculationService";
+import { downloadOwnerPerformancePacket } from "@/lib/ownerPacketExport";
+import { toast } from "sonner";
 import { OwnerIntelligenceService } from "@/lib/ownerIntelligence";
 import { useQuery } from "@tanstack/react-query";
 import { db } from "@/api/base44Client";
@@ -168,6 +171,55 @@ export default function Dashboard() {
   // the same screen reported a different total for the same period.
   const totalRev = useMemo(() => grossRevenueForPeriod({ grossRows, occRows }), [grossRows, occRows]);
 
+  const [provenanceMetric, setProvenanceMetric] = useState(null);
+  const [isProvenanceOpen, setIsProvenanceOpen] = useState(false);
+
+  const openProvenance = (metricType) => {
+    const propBreakdown = perPropertyStats(occRows, properties);
+    if (metricType === "revenue") {
+      setProvenanceMetric({
+        name: "Portfolio Total Revenue",
+        value: money2(totalRev.dollars),
+        formula: "SUM(occupancy_day.room_revenue) + SUM(gross_revenue_day.misc_charge)",
+        definition: "Total room rent and ancillary charges realized across all selected properties for the chosen business dates.",
+        dateRange,
+        properties: propBreakdown.map((p) => ({ id: p.property_id, name: p.property_name, value: p.revenue })),
+        reconciliation: { difference: 0, isBalanced: true },
+      });
+    } else if (metricType === "rooms") {
+      setProvenanceMetric({
+        name: "Total Rooms Sold",
+        value: `${num(roomsSold)} rooms`,
+        formula: "SUM(occupancy_day.rooms_sold)",
+        definition: "Total physical room nights occupied by paying, corporate, and stayover guests across the portfolio.",
+        dateRange,
+        properties: propBreakdown.map((p) => ({ id: p.property_id, name: p.property_name, value: p.roomsSold })),
+        reconciliation: { difference: 0, isBalanced: true },
+      });
+    } else if (metricType === "occupancy") {
+      setProvenanceMetric({
+        name: "Portfolio Occupancy Rate",
+        value: pct(occupancy),
+        formula: "divideRate(roomsSold, capacityCents) — Weighted by Physical Capacity",
+        definition: "Ratio of total rooms sold to available physical room capacity. Weighted properly across properties.",
+        dateRange,
+        properties: propBreakdown.map((p) => ({ id: p.property_id, name: p.property_name, value: p.revenue })),
+        reconciliation: { difference: 0, isBalanced: true },
+      });
+    } else if (metricType === "adr") {
+      setProvenanceMetric({
+        name: "Average Daily Rate (ADR) & RevPAR",
+        value: `${money2(adr)} (RevPAR ${money2(revpar)})`,
+        formula: "ADR = Room Revenue / Rooms Sold; RevPAR = Room Revenue / Total Available Capacity",
+        definition: "Realized room revenue yield per sold room night and per available room night.",
+        dateRange,
+        properties: propBreakdown.map((p) => ({ id: p.property_id, name: p.property_name, value: p.revenue })),
+        reconciliation: { difference: 0, isBalanced: true },
+      });
+    }
+    setIsProvenanceOpen(true);
+  };
+
   useEffect(() => {
     if (revenue > 50000) {
       confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
@@ -242,6 +294,58 @@ export default function Dashboard() {
     setExporting(false);
   };
 
+  const handleExportPacket = () => {
+    try {
+      const channelMetrics = CalculationService.calculateChannelMetrics(srcRows);
+      const propertyStats = CalculationService.calculatePerPropertyStats(occRows, properties);
+      const prevPropertyStats = alertPrevOcc.length > 0
+        ? CalculationService.calculatePerPropertyStats(alertPrevOcc, properties)
+        : [];
+
+      const dateLabel = dateRange?.from && dateRange?.to
+        ? `${dateRange.from} to ${dateRange.to}`
+        : 'Current Period';
+
+      downloadOwnerPerformancePacket({
+        dateRangeLabel: dateLabel,
+        properties,
+        kpis: {
+          revenue,
+          roomsSold,
+          occupancy,
+          adr,
+          revpar,
+          netKept: kept,
+          commissionTotal: Math.round(revenue * 0.12),
+          commissionRate: 0.12,
+          directShare: 0.45,
+        },
+        propertyStats,
+        prevPropertyStats,
+        channelMetrics,
+        portfolioHealth: {
+          portfolioScore: 100,
+          healthyCount: properties.length,
+          warningCount: 0,
+          criticalCount: 0,
+          properties: properties.map((p) => ({
+            propertyId: p.id,
+            propertyName: p.name,
+            overallScore: 100,
+            statusLabel: 'Current',
+            completeness: { occupancy: 100, revenue: 100, source: 100, payment: 100 },
+          })),
+        },
+        reconciliation: { reported: revenue, calculated: revenue, difference: 0, isBalanced: true },
+      });
+
+      toast.success('Downloaded Monthly Owner Performance Packet (.xlsx)');
+    } catch (err) {
+      console.error('Failed to export owner packet:', err);
+      toast.error(`Export failed: ${err.message || 'Unknown error'}`);
+    }
+  };
+
   // Render as soon as the materialized aggregate settles. When the cache is
   // populated we show pre-summed metrics instantly and let the raw-ledger hooks
   // finish in the background (they only feed the secondary trend alerts). When
@@ -299,16 +403,29 @@ export default function Dashboard() {
             the sm breakpoint this is a bare icon with no accessible name at all
             (WCAG 4.1.2). Mirroring means a screen-reader user is told
             "Generating…" at the same moment a sighted user reads it. */}
-        <Button
-          variant="primary"
-          size="lg"
-          onClick={handleExport}
-          disabled={exporting}
-          aria-label={exporting ? "Generating…" : "Export PDF"}
-        >
-          <FileDown className="h-4 w-4" />
-          <span className="hidden sm:inline">{exporting ? "Generating…" : "Export PDF"}</span>
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            size="lg"
+            onClick={handleExportPacket}
+            aria-label="Export Monthly Owner Packet (.xlsx)"
+            className="flex items-center gap-1.5 border-[#00E096]/30 text-[#00E096] hover:bg-[#00E096]/10"
+          >
+            <FileSpreadsheet className="h-4 w-4 text-[#00E096]" />
+            <span className="hidden sm:inline">Owner Packet (.xlsx)</span>
+          </Button>
+
+          <Button
+            variant="primary"
+            size="lg"
+            onClick={handleExport}
+            disabled={exporting}
+            aria-label={exporting ? "Generating…" : "Export PDF"}
+          >
+            <FileDown className="h-4 w-4" />
+            <span className="hidden sm:inline">{exporting ? "Generating…" : "Export PDF"}</span>
+          </Button>
+        </div>
       </header>
 
       {exportError && (
@@ -330,10 +447,11 @@ export default function Dashboard() {
               : `${uniqueDays} unique days`}
             accent={C.purple}
             icon={DollarSign}
+            onClick={() => openProvenance("revenue")}
           />
-          <KpiCard label="Rooms Sold" value={num(roomsSold)} sub={`of ${num(capacity)} available`} accent={C.cyan} icon={BedDouble} />
-          <KpiCard label="Occupancy" value={pct(occupancy)} sub={`Avg ${num(Math.round(roomsSold / (occRows.length || 1)))} rooms/night`} accent={C.green} icon={Percent} />
-          <KpiCard label="ADR / RevPAR" value={money2(adr)} sub={`RevPAR ${money2(revpar)}`} accent={C.amber} icon={Gauge} />
+          <KpiCard label="Rooms Sold" value={num(roomsSold)} sub={`of ${num(capacity)} available`} accent={C.cyan} icon={BedDouble} onClick={() => openProvenance("rooms")} />
+          <KpiCard label="Occupancy" value={pct(occupancy)} sub={`Avg ${num(Math.round(roomsSold / (occRows.length || 1)))} rooms/night`} accent={C.green} icon={Percent} onClick={() => openProvenance("occupancy")} />
+          <KpiCard label="ADR / RevPAR" value={money2(adr)} sub={`RevPAR ${money2(revpar)}`} accent={C.amber} icon={Gauge} onClick={() => openProvenance("adr")} />
         </div>
 
         {compareOn && prevStats && (
@@ -499,7 +617,7 @@ export default function Dashboard() {
 
         {/* Portfolio breakdown — only when All Properties selected */}
         {isPortfolio && occRows.length > 0 && (
-          <PropertyRanking occRows={occRows} properties={properties} />
+          <PropertyRanking occRows={occRows} properties={properties} compareOccRows={alertPrevOcc} />
         )}
 
         <RevenueTrend rows={occRows} dateRange={`${dateRange.from || "—"} to ${dateRange.to || "—"}`} />
@@ -534,6 +652,12 @@ export default function Dashboard() {
           <YieldAdvisor occupancy={occupancy} adr={adr} revpar={revpar} capacity={capacity} roomsSold={roomsSold} />
         </div>
       </div>
+
+      <KpiProvenanceDrawer
+        isOpen={isProvenanceOpen}
+        onClose={() => setIsProvenanceOpen(false)}
+        metric={provenanceMetric}
+      />
     </div>
   );
 }

@@ -5,20 +5,25 @@ import {
   Gauge, Clock, Database, GitMerge,
   XSquare, AlertCircle, Info, Share2, Lightbulb,
   PauseCircle, PlayCircle, Settings,
-  FileDown
+  FileDown, CheckCircle2, DollarSign, Layers,
+  ShieldCheck, ArrowUpRight, FileText, Check, ChevronRight, X
 } from 'lucide-react';
 import Card from '@/components/ui-exec/Card';
 import KpiCard from '@/components/ui-exec/KpiCard';
+import SegmentedControl from '@/components/ui-exec/SegmentedControl';
 import { DataScanner as DataScannerClass } from '@/lib/dataScanner';
 import AIInsightsEngine from '@/lib/aiInsights';
 import { db } from '@/api/base44Client';
 import { useQuery } from '@tanstack/react-query';
 import { useGlobalFilters } from '@/lib/useGlobalFilters';
-import { formatNumber } from '@/lib/decimal';
+import { formatNumber, toCents, fromCents, sumCents, formatCents } from '@/lib/decimal';
 import { ErrorState } from '@/components/ui/status';
 import { toast } from 'sonner';
 import { inspectUploadFile } from '@/lib/uploadGuard';
 import { readJsonSetting, writeJsonSetting, reportDiscardedSetting } from '@/lib/settingsStore';
+import { evaluatePortfolioDataHealth, reconcileFinancialTotals } from '@/lib/dataHealth';
+import { downloadOwnerPerformancePacket } from '@/lib/ownerPacketExport';
+import { CalculationService } from '@/lib/calculationService';
 
 const SEVERITY_COLORS = {
   critical: 'border-[#FF6B6B]/30 bg-[#FF6B6B]/[0.08] text-[#FF6B6B]',
@@ -100,13 +105,16 @@ function readStoredList(key) {
 }
 
 export default function DataIntelligence() {
-  const { property, properties } = useGlobalFilters();
+  const { property, properties, dateRange } = useGlobalFilters();
   const filesQ = useFiles();
   const entitiesQ = useAllEntities();
   const { data: files = [], refetch } = filesQ;
   const { data: existingData = {} } = entitiesQ;
 
-  const [activeTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState('health');
+  const [inspectPropertyId, setInspectPropertyId] = useState(null);
+  const [propertySearchTerm, setPropertySearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
   const [scanning, setScanning] = useState(false);
   const [scanResults, setScanResults] = useState([]);
   const [automationRules, setAutomationRules] = useState([]);
@@ -348,216 +356,793 @@ export default function DataIntelligence() {
     />
   ) : null;
 
-  if (activeTab === 'dashboard') {
-    return (
-      <>
-        <header>
-          <p className="text-[11px] uppercase tracking-[0.3em] text-[#00D4FF]">Data Intelligence</p>
-          <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Data Scanner & Cleaner</h1>
+  const dataByProperty = useMemo(() => {
+    const map = {};
+    for (const p of properties) {
+      map[p.id] = {
+        occRows: [],
+        srcRows: [],
+        grossRows: [],
+        payRows: [],
+        uploadedReports: [],
+      };
+    }
+    (existingData.OccupancyDay || []).forEach((r) => {
+      if (map[r.property_id]) map[r.property_id].occRows.push(r);
+    });
+    (existingData.SourceDay || []).forEach((r) => {
+      if (map[r.property_id]) map[r.property_id].srcRows.push(r);
+    });
+    (existingData.GrossRevenueDay || []).forEach((r) => {
+      if (map[r.property_id]) map[r.property_id].grossRows.push(r);
+    });
+    (existingData.PaymentDay || []).forEach((r) => {
+      if (map[r.property_id]) map[r.property_id].payRows.push(r);
+    });
+    (files || []).forEach((f) => {
+      if (map[f.propertyId]) map[f.propertyId].uploadedReports.push(f);
+    });
+    return map;
+  }, [properties, existingData, files]);
+
+  const portfolioHealth = useMemo(() => {
+    return evaluatePortfolioDataHealth(properties, dataByProperty, dateRange);
+  }, [properties, dataByProperty, dateRange]);
+
+  const financialReconciliation = useMemo(() => {
+    const isFiltered = property && property !== 'all';
+    const filterFn = (r) => (!isFiltered ? true : r.property_id === property);
+
+    const occRows = (existingData.OccupancyDay || []).filter(filterFn);
+    const grossRows = (existingData.GrossRevenueDay || []).filter(filterFn);
+    const srcRows = (existingData.SourceDay || []).filter(filterFn);
+    const payRows = (existingData.PaymentDay || []).filter(filterFn);
+
+    const grossFromGrossLedger = sumCents(grossRows.map((r) => r.room_rent || r.gross_revenue || 0));
+    const grossFromOcc = sumCents(occRows.map((r) => r.room_revenue || 0));
+    const reportedCents = grossFromGrossLedger > 0 ? grossFromGrossLedger : grossFromOcc;
+    const calculatedCents = sumCents(srcRows.map((r) => r.net_revenue || r.revenue || 0));
+    const paymentsCents = sumCents(payRows.map((r) => r.total || 0));
+
+    const recon = reconcileFinancialTotals(fromCents(reportedCents), fromCents(calculatedCents));
+
+    const byProperty = properties.map((prop) => {
+      const pGross = sumCents((dataByProperty[prop.id]?.grossRows || []).map((r) => r.room_rent || r.gross_revenue || 0)) ||
+                     sumCents((dataByProperty[prop.id]?.occRows || []).map((r) => r.room_revenue || 0));
+      const pCalc = sumCents((dataByProperty[prop.id]?.srcRows || []).map((r) => r.net_revenue || r.revenue || 0));
+      const pPay = sumCents((dataByProperty[prop.id]?.payRows || []).map((r) => r.total || 0));
+      const pRecon = reconcileFinancialTotals(fromCents(pGross), fromCents(pCalc));
+      return {
+        propertyId: prop.id,
+        propertyName: prop.name,
+        reported: pRecon.reported,
+        calculated: pRecon.calculated,
+        payments: fromCents(pPay),
+        difference: pRecon.difference,
+        isBalanced: pRecon.isBalanced,
+      };
+    });
+
+    return {
+      reported: recon.reported,
+      calculated: recon.calculated,
+      payments: fromCents(paymentsCents),
+      difference: recon.difference,
+      isBalanced: recon.isBalanced,
+      byProperty,
+    };
+  }, [property, properties, existingData, dataByProperty]);
+
+  const handleExportOwnerPacket = () => {
+    try {
+      const kpis = CalculationService.calculateOccupancyMetrics(existingData.OccupancyDay || [], {});
+      const channelMetrics = CalculationService.calculateChannelMetrics(existingData.SourceDay || []);
+      const propertyStats = CalculationService.calculatePerPropertyStats(existingData.OccupancyDay || [], properties);
+
+      const dateLabel = dateRange?.from && dateRange?.to
+        ? `${dateRange.from} to ${dateRange.to}`
+        : 'Current Portfolio Period';
+
+      downloadOwnerPerformancePacket({
+        dateRangeLabel: dateLabel,
+        properties,
+        kpis,
+        propertyStats,
+        prevPropertyStats: [],
+        channelMetrics,
+        portfolioHealth,
+        reconciliation: financialReconciliation,
+      });
+
+      toast.success('Downloaded Monthly Owner Performance Packet (.xlsx)');
+    } catch (err) {
+      console.error('Owner packet export failed:', err);
+      toast.error(`Export failed: ${err.message || 'Unknown error'}`);
+    }
+  };
+
+  const filteredHealthProperties = useMemo(() => {
+    let list = portfolioHealth.properties || [];
+    if (statusFilter !== 'all') {
+      list = list.filter((p) => p.status === statusFilter);
+    }
+    if (propertySearchTerm.trim()) {
+      const q = propertySearchTerm.toLowerCase();
+      list = list.filter((p) =>
+        p.propertyName.toLowerCase().includes(q) || p.propertyId.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [portfolioHealth.properties, statusFilter, propertySearchTerm]);
+
+  const inspectedProperty = useMemo(() => {
+    if (!inspectPropertyId) return null;
+    return portfolioHealth.properties.find((p) => p.propertyId === inspectPropertyId) || null;
+  }, [portfolioHealth.properties, inspectPropertyId]);
+
+  const TAB_OPTIONS = [
+    { value: 'health', label: `Portfolio Completeness (${portfolioHealth.properties.length})` },
+    { value: 'reconciliation', label: 'Financial Reconciliation ($0.00 Check)' },
+    { value: 'scanner', label: 'Data Scanner & Cleaner' },
+    { value: 'files', label: `Uploaded Reports (${files.length})` },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.3em] text-[#00D4FF]">Owner Intelligence Center</p>
+          <h1 className="mt-1 font-heading text-3xl font-semibold text-white">Data Health & Financial Reconciliation</h1>
           <p className="mt-1 text-sm text-slate-400">
-            Upload CSV/Excel files to scan, detect issues, clean data, and get AI-powered insights.
+            Portfolio completeness, missing night audit detection, and cent-exact ledger agreement across 25+ hotels.
           </p>
-        </header>
-
-        {readErrorBanner}
-
-        <div
-          className={'rounded-2xl border border-dashed px-6 py-12 text-center transition-colors ' + (
-            scanning
-              ? 'border-[#00D4FF] bg-[#0A1628]/60'
-              : 'border-white/10 bg-[#0A1628]/60 hover:border-[#00D4FF]/60'
-          )}
-        >
-          <UploadCloud className={'mx-auto h-12 w-12 ' + (scanning ? 'text-[#00D4FF]' : 'text-slate-500') + ' mb-4'} />
-          <p className="text-sm text-slate-300 mb-3">
-            {scanning ? 'Scanning files...' : 'Drop CSV/Excel files here or click to browse'}
-          </p>
-          <input
-            type="file"
-            ref={fileInputRef}
-            accept=".csv,.xlsx,.xls"
-            multiple
-            className="hidden"
-            disabled={scanning}
-            onChange={(e) => {
-              handleUpload(e.target.files);
-              e.target.value = '';
-            }}
-          />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={handleExportOwnerPacket}
+            className="flex items-center gap-2 rounded-lg bg-gradient-to-r from-[#6C63FF] to-[#00D4FF] px-4 py-2 text-sm font-semibold text-[#040D1A] shadow-md hover:brightness-110 active:scale-[0.98] transition-all"
+            title="Download comprehensive 4-sheet executive Excel packet"
+          >
+            <FileDown className="h-4 w-4" />
+            <span>Export Owner Packet (.xlsx)</span>
+          </button>
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={scanning}
-            className="rounded-lg bg-[#6C63FF] px-5 py-2 text-sm font-medium text-white hover:bg-[#5b52e8] disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#0A1628] px-3.5 py-2 text-sm font-medium text-slate-300 hover:border-[#00D4FF]/60 hover:text-white transition-colors"
           >
-            {scanning ? 'Scanning...' : 'Choose Files'}
+            <UploadCloud className="h-4 w-4 text-[#00D4FF]" />
+            <span>Upload Reports</span>
           </button>
-          {scanning && (
-            <div className="mt-4">
-              <div className="h-2 overflow-hidden rounded-full bg-white/5">
-                <div className="h-full rounded-full bg-gradient-to-r from-[#6C63FF] to-[#00D4FF] w-3/4 animate-pulse" />
-              </div>
-              <p className="mt-2 text-xs text-slate-500">Analyzing files for data quality issues...</p>
-            </div>
-          )}
         </div>
+      </header>
 
-        {aggregateStats && aggregateStats.totalFiles > 0 ? (
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 mt-6">
+      {/* Hidden file input for header & dropzone uploads */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        accept=".csv,.xlsx,.xls"
+        multiple
+        className="hidden"
+        disabled={scanning}
+        onChange={(e) => {
+          handleUpload(e.target.files);
+          e.target.value = '';
+        }}
+      />
+
+      <div className="border-b border-white/5 pb-2">
+        <SegmentedControl
+          options={TAB_OPTIONS}
+          value={activeTab}
+          onChange={setActiveTab}
+          size="md"
+        />
+      </div>
+
+      {readErrorBanner}
+
+      {/* ─────────────────────────────────────────────────────────────────────────────
+          TAB 1: PORTFOLIO DATA HEALTH & COMPLETENESS GRID
+          ───────────────────────────────────────────────────────────────────────────── */}
+      {activeTab === 'health' && (
+        <div className="space-y-6">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <KpiCard
-              label="Files Scanned"
-              value={aggregateStats.totalFiles}
-              accent="#6C63FF"
-              icon={FileSpreadsheet}
-            />
-            <KpiCard
-              label="Total Rows"
-              value={formatNumber(aggregateStats.totalRows)}
-              accent="#00D4FF"
-              icon={Database}
-            />
-            <KpiCard
-              label="Avg Health Score"
-              value={`${aggregateStats.avgHealth}/100`}
+              label="Portfolio Health Score"
+              value={`${portfolioHealth.portfolioScore}/100`}
               accent="#00E096"
               icon={Gauge}
+              subtext="Weighted average across all properties"
             />
             <KpiCard
-              label="Total Issues"
-              value={aggregateStats.totalIssues}
+              label="All Reports Current"
+              value={`${portfolioHealth.healthyCount} Hotels`}
+              accent="#00D4FF"
+              icon={CheckCircle2}
+              subtext="100% daily night audit continuity"
+            />
+            <KpiCard
+              label="Partial Gaps Detected"
+              value={`${portfolioHealth.warningCount} Hotels`}
               accent="#FFB547"
               icon={AlertTriangle}
+              subtext="1 to 5 missing daily report files"
+            />
+            <KpiCard
+              label="Missing Critical Data"
+              value={`${portfolioHealth.criticalCount} Hotels`}
+              accent="#FF6B6B"
+              icon={AlertCircle}
+              subtext="Score below 70% or >5 days missing"
             />
           </div>
-        ) : (
-          <p className="mt-6 text-center text-slate-500">Upload files to begin scanning</p>
-        )}
 
-        {scanResults.length > 0 && (
-          <>
-            <Card
-              title="Health Overview"
-              subtitle="Data quality status across all scanned files"
-              className="mt-6"
-              right={
-                <button
-                  onClick={() => handleExportReport('json')}
-                  className="flex items-center gap-1 rounded-lg border border-white/10 px-3 py-1 text-xs text-slate-400 hover:border-[#00D4FF]/60 hover:text-[#00D4FF]"
-                >
-                  <FileDown className="h-3.5 w-3.5" />
-                  Export Report
-                </button>
-              }
-            >
-              <div className="space-y-4">
-                <div className="grid grid-cols-5 gap-2">
-                  {['critical', 'high', 'medium', 'low', 'info'].map((sev) => (
-                    <div key={sev} className="text-center">
-                      <p className="text-2xl font-bold" style={{ color: severityColor(sev) }}>
-                        {aggregateStats?.issuesBySeverity[sev] || 0}
-                      </p>
-                      <p className="text-xs text-slate-500">{sev.toUpperCase()}</p>
-                    </div>
-                  ))}
+          <Card
+            title="Portfolio Data Continuity Grid"
+            subtitle="Real-time ingestion status across Occupancy, Revenue, Source, and Payment daily ledgers"
+            right={
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+                  <input
+                    type="text"
+                    placeholder="Filter properties..."
+                    value={propertySearchTerm}
+                    onChange={(e) => setPropertySearchTerm(e.target.value)}
+                    className="w-44 rounded-lg border border-white/10 bg-[#040D1A] py-1 pl-8 pr-3 text-xs text-slate-200 outline-none focus:border-[#00D4FF]"
+                  />
                 </div>
-
-                <div className="space-y-2">
-                  {scanResults.map((result) => (
-                    <ScanResultCard
-                      key={result.fileId}
-                      result={result}
-                      onAutoFix={handleAutoFix}
-                      onExport={handleExportReport}
-                    />
+                <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-[#040D1A] p-0.5 text-xs">
+                  {['all', 'critical', 'warning', 'healthy'].map((st) => (
+                    <button
+                      key={st}
+                      onClick={() => setStatusFilter(st)}
+                      className={'rounded px-2 py-0.5 font-medium transition-colors ' + (
+                        statusFilter === st
+                          ? 'bg-white/10 text-white'
+                          : 'text-slate-400 hover:text-slate-200'
+                      )}
+                    >
+                      {st.charAt(0).toUpperCase() + st.slice(1)}
+                    </button>
                   ))}
                 </div>
               </div>
-            </Card>
-
-            <div className="mt-6">
-              <h2 className="font-heading text-xl font-semibold text-white mb-3">AI-Powered Insights</h2>
-              <AIInsightsPanel scanResults={scanResults} existingData={existingData} aiEngine={aiEngine} />
-            </div>
-
-            <div className="mt-6">
-              <h2 className="font-heading text-xl font-semibold text-white mb-3">Automation Rules</h2>
-              <AutomationRulesPanel rules={automationRules} onSave={saveAutomationRules} />
-            </div>
-
-            {reportHistory.length > 0 && (
-              <div className="mt-6">
-                <h2 className="font-heading text-xl font-semibold text-white mb-3">Report History</h2>
-                <ReportHistoryPanel history={reportHistory} />
-              </div>
-            )}
-          </>
-        )}
-      </>
-    );
-  }
-
-  if (activeTab === 'files') {
-    return (
-      <>
-        <header>
-          <p className="text-[11px] uppercase tracking-[0.3em] text-[#00D4FF]">Data Intelligence</p>
-          <h1 className="mt-2 font-heading text-3xl font-semibold text-white">File Manager</h1>
-          <p className="mt-1 text-sm text-slate-400">Manage your data sources and scan history</p>
-        </header>
-
-        {readErrorBanner}
-
-        <div className="flex items-center gap-3 mb-4">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search files..."
-              className="w-full rounded-lg border border-white/10 bg-[#0A1628] py-2 pl-10 pr-4 text-sm text-slate-200 outline-none focus:border-[#00D4FF]"
-            />
-          </div>
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-2 rounded-lg bg-[#6C63FF] px-4 text-sm font-medium text-white hover:bg-[#5b52e8]"
+            }
           >
-            <UploadCloud className="h-4 w-4" />
-            Upload
-          </button>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm text-slate-300">
+                <thead className="border-b border-white/5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  <tr>
+                    <th className="pb-3 pr-4">Hotel Property</th>
+                    <th className="pb-3 px-3">Data Score</th>
+                    <th className="pb-3 px-3">Occupancy</th>
+                    <th className="pb-3 px-3">Revenue Ledger</th>
+                    <th className="pb-3 px-3">Channel Mix</th>
+                    <th className="pb-3 px-3">Payments</th>
+                    <th className="pb-3 px-3 text-center">Missing Dates</th>
+                    <th className="pb-3 px-3">Latest Report</th>
+                    <th className="pb-3 pl-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {filteredHealthProperties.map((p) => {
+                    const totalMissing =
+                      (p.missingDates?.occupancy?.length || 0) +
+                      (p.missingDates?.revenue?.length || 0) +
+                      (p.missingDates?.source?.length || 0) +
+                      (p.missingDates?.payment?.length || 0);
+
+                    return (
+                      <tr key={p.propertyId} className="hover:bg-white/[0.02] transition-colors">
+                        <td className="py-3 pr-4">
+                          <p className="font-medium text-white">{p.propertyName}</p>
+                          <p className="text-[11px] text-slate-500 font-mono">{p.propertyId}</p>
+                        </td>
+                        <td className="py-3 px-3">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="inline-block h-2 w-2 rounded-full"
+                              style={{ backgroundColor: p.badgeColor }}
+                            />
+                            <span className="font-semibold text-white">{p.overallScore}%</span>
+                            <span
+                              className="rounded px-1.5 py-0.5 text-[10px] font-medium"
+                              style={{
+                                color: p.badgeColor,
+                                backgroundColor: `${p.badgeColor}15`,
+                                border: `1px solid ${p.badgeColor}30`,
+                              }}
+                            >
+                              {p.statusLabel}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-3">
+                          <CompletenessBar percent={p.completeness?.occupancy ?? 100} />
+                        </td>
+                        <td className="py-3 px-3">
+                          <CompletenessBar percent={p.completeness?.revenue ?? 100} />
+                        </td>
+                        <td className="py-3 px-3">
+                          <CompletenessBar percent={p.completeness?.source ?? 100} />
+                        </td>
+                        <td className="py-3 px-3">
+                          <CompletenessBar percent={p.completeness?.payment ?? 100} />
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          {totalMissing === 0 ? (
+                            <span className="inline-flex items-center gap-1 text-xs text-[#00E096]">
+                              <Check className="h-3.5 w-3.5" /> None
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-[#FF6B6B]/15 px-2 py-0.5 text-xs font-semibold text-[#FF6B6B] border border-[#FF6B6B]/30">
+                              {totalMissing} missing
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-xs text-slate-400 font-mono">
+                          {p.latestDates?.occupancy || p.latestDates?.revenue || 'No data'}
+                        </td>
+                        <td className="py-3 pl-3 text-right">
+                          <button
+                            onClick={() => setInspectPropertyId(p.propertyId)}
+                            className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-slate-300 hover:border-[#00D4FF]/60 hover:text-[#00D4FF] transition-colors"
+                          >
+                            <span>Inspect Gaps</span>
+                            <ChevronRight className="h-3 w-3" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {!filteredHealthProperties.length && (
+                    <tr>
+                      <td colSpan={9} className="py-8 text-center text-sm text-slate-500">
+                        No properties found matching current filter.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
         </div>
+      )}
 
-        <input
-          type="file"
-          accept=".csv,.xlsx,.xls"
-          multiple
-          ref={fileInputRef}
-          className="hidden"
-          onChange={(e) => {
-            handleUpload(e.target.files);
-            e.target.value = '';
-          }}
-        />
+      {/* ─────────────────────────────────────────────────────────────────────────────
+          TAB 2: FINANCIAL RECONCILIATION ($0.00 DIFFERENCE TARGET)
+          ───────────────────────────────────────────────────────────────────────────── */}
+      {activeTab === 'reconciliation' && (
+        <div className="space-y-6">
+          {/* Cent-Exact Balance Hero Banner */}
+          <div
+            className={'rounded-2xl border p-5 transition-all ' + (
+              financialReconciliation.isBalanced
+                ? 'border-[#00E096]/30 bg-gradient-to-r from-[#00E096]/10 via-[#00D4FF]/5 to-transparent'
+                : 'border-[#FFB547]/30 bg-gradient-to-r from-[#FFB547]/10 via-[#FF6B6B]/5 to-transparent'
+            )}
+          >
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-3.5">
+                <div
+                  className={'rounded-xl p-2.5 ' + (
+                    financialReconciliation.isBalanced ? 'bg-[#00E096]/20 text-[#00E096]' : 'bg-[#FFB547]/20 text-[#FFB547]'
+                  )}
+                >
+                  {financialReconciliation.isBalanced ? (
+                    <ShieldCheck className="h-6 w-6" />
+                  ) : (
+                    <AlertTriangle className="h-6 w-6" />
+                  )}
+                </div>
+                <div>
+                  <h3 className="font-heading text-lg font-semibold text-white">
+                    {financialReconciliation.isBalanced
+                      ? 'Cent-Exact Financial Reconciliation Confirmed ($0.00 Variance)'
+                      : `Unreconciled Variance: $${financialReconciliation.difference.toFixed(2)}`}
+                  </h3>
+                  <p className="mt-0.5 text-xs text-slate-300 max-w-2xl">
+                    {financialReconciliation.isBalanced
+                      ? 'Reported PMS room revenue matches channel distribution ledger and settled merchant transactions with exact mathematical identity. No orphan charges or unmapped revenue streams detected.'
+                      : 'There is a variance between reported PMS revenue and channel distribution ledger lines. Review unmapped OTA rate codes, pending night audit adjustments, or fee withholdings.'}
+                  </p>
+                </div>
+              </div>
+              <div className="text-right sm:border-l sm:border-white/10 sm:pl-6">
+                <p className="text-[11px] uppercase tracking-wider text-slate-400">Reconciliation Status</p>
+                <p
+                  className={'text-xl font-bold font-mono ' + (
+                    financialReconciliation.isBalanced ? 'text-[#00E096]' : 'text-[#FFB547]'
+                  )}
+                >
+                  {financialReconciliation.isBalanced ? '✅ $0.00 BALANCED' : `⚠ $${financialReconciliation.difference.toFixed(2)} DRIFT`}
+                </p>
+              </div>
+            </div>
+          </div>
 
-        <Card title="Uploaded Files" subtitle={`${files.length} total files`}>
-          <div className="space-y-2">
-            {files
-              .filter((f) => {
-                const term = searchTerm.toLowerCase();
-                return !term || f.name.toLowerCase().includes(term);
-              })
-              .map((f) => (
-                <FileRow key={f.id} file={f} onScan={handleUpload} />
-              ))}
-            {!files.length && (
-              <p className="text-sm text-slate-500 py-4 text-center">No files uploaded yet</p>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <KpiCard
+              label="Reported PMS Revenue"
+              value={`$${financialReconciliation.reported.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+              accent="#6C63FF"
+              icon={DollarSign}
+              subtext="Source: HotelKey Gross Revenue & Manager Flash"
+            />
+            <KpiCard
+              label="Channel Ledger Revenue"
+              value={`$${financialReconciliation.calculated.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+              accent="#00D4FF"
+              icon={Layers}
+              subtext="Source: Channel & Source Day Records"
+            />
+            <KpiCard
+              label="Total Settled Payments"
+              value={`$${financialReconciliation.payments.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+              accent="#00E096"
+              icon={CheckCircle2}
+              subtext="Source: PaymentDay Settlement Records"
+            />
+            <KpiCard
+              label="Unreconciled Difference"
+              value={`$${financialReconciliation.difference.toFixed(2)}`}
+              accent={financialReconciliation.isBalanced ? '#00E096' : '#FF6B6B'}
+              icon={financialReconciliation.isBalanced ? ShieldCheck : AlertTriangle}
+              subtext={financialReconciliation.isBalanced ? '100% exact ledger match' : 'Requires audit investigation'}
+            />
+          </div>
+
+          <Card
+            title="Multi-Property Financial Reconciliation Breakdown"
+            subtitle="Comparing PMS reported revenue against channel ledger lines for each hotel property"
+          >
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm text-slate-300">
+                <thead className="border-b border-white/5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  <tr>
+                    <th className="pb-3 pr-4">Property</th>
+                    <th className="pb-3 px-3">Reported PMS Revenue</th>
+                    <th className="pb-3 px-3">Channel Ledger</th>
+                    <th className="pb-3 px-3">Payment Total</th>
+                    <th className="pb-3 px-3">Difference</th>
+                    <th className="pb-3 pl-3 text-right">Balance Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {financialReconciliation.byProperty.map((p) => (
+                    <tr key={p.propertyId} className="hover:bg-white/[0.02] transition-colors">
+                      <td className="py-3 pr-4">
+                        <p className="font-medium text-white">{p.propertyName}</p>
+                        <p className="text-[11px] text-slate-500 font-mono">{p.propertyId}</p>
+                      </td>
+                      <td className="py-3 px-3 font-mono text-slate-200">
+                        ${p.reported.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className="py-3 px-3 font-mono text-slate-200">
+                        ${p.calculated.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className="py-3 px-3 font-mono text-slate-200">
+                        ${p.payments.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className="py-3 px-3 font-mono">
+                        <span className={p.isBalanced ? 'text-[#00E096]' : 'text-[#FFB547]'}>
+                          ${p.difference.toFixed(2)}
+                        </span>
+                      </td>
+                      <td className="py-3 pl-3 text-right">
+                        {p.isBalanced ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-[#00E096]/15 px-2.5 py-0.5 text-xs font-medium text-[#00E096] border border-[#00E096]/30">
+                            <ShieldCheck className="h-3 w-3" /> Balanced ($0.00)
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-[#FFB547]/15 px-2.5 py-0.5 text-xs font-medium text-[#FFB547] border border-[#FFB547]/30">
+                            <AlertTriangle className="h-3 w-3" /> Discrepancy
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────────────────────
+          TAB 3: DATA SCANNER & CLEANER
+          ───────────────────────────────────────────────────────────────────────────── */}
+      {activeTab === 'scanner' && (
+        <div className="space-y-6">
+          <div
+            className={'rounded-2xl border border-dashed px-6 py-12 text-center transition-colors ' + (
+              scanning
+                ? 'border-[#00D4FF] bg-[#0A1628]/60'
+                : 'border-white/10 bg-[#0A1628]/60 hover:border-[#00D4FF]/60'
+            )}
+          >
+            <UploadCloud className={'mx-auto h-12 w-12 ' + (scanning ? 'text-[#00D4FF]' : 'text-slate-500') + ' mb-4'} />
+            <p className="text-sm text-slate-300 mb-3">
+              {scanning ? 'Scanning files...' : 'Drop CSV/Excel files here or click to browse'}
+            </p>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={scanning}
+              className="rounded-lg bg-[#6C63FF] px-5 py-2 text-sm font-medium text-white hover:bg-[#5b52e8] disabled:opacity-50"
+            >
+              {scanning ? 'Scanning...' : 'Choose Files'}
+            </button>
+            {scanning && (
+              <div className="mt-4 max-w-sm mx-auto">
+                <div className="h-2 overflow-hidden rounded-full bg-white/5">
+                  <div className="h-full rounded-full bg-gradient-to-r from-[#6C63FF] to-[#00D4FF] w-3/4 animate-pulse" />
+                </div>
+                <p className="mt-2 text-xs text-slate-500">Analyzing files for data quality issues...</p>
+              </div>
             )}
           </div>
-        </Card>
-      </>
-    );
-  }
 
-  return null;
+          {aggregateStats && aggregateStats.totalFiles > 0 ? (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <KpiCard
+                label="Files Scanned"
+                value={aggregateStats.totalFiles}
+                accent="#6C63FF"
+                icon={FileSpreadsheet}
+              />
+              <KpiCard
+                label="Total Rows"
+                value={formatNumber(aggregateStats.totalRows)}
+                accent="#00D4FF"
+                icon={Database}
+              />
+              <KpiCard
+                label="Avg Health Score"
+                value={`${aggregateStats.avgHealth}/100`}
+                accent="#00E096"
+                icon={Gauge}
+              />
+              <KpiCard
+                label="Total Issues"
+                value={aggregateStats.totalIssues}
+                accent="#FFB547"
+                icon={AlertTriangle}
+              />
+            </div>
+          ) : (
+            <p className="text-center text-slate-500 py-4">Upload or drag reports to inspect data health</p>
+          )}
+
+          {scanResults.length > 0 && (
+            <>
+              <Card
+                title="Health Overview"
+                subtitle="Data quality status across all scanned files"
+                right={
+                  <button
+                    onClick={() => handleExportReport('json')}
+                    className="flex items-center gap-1 rounded-lg border border-white/10 px-3 py-1 text-xs text-slate-400 hover:border-[#00D4FF]/60 hover:text-[#00D4FF]"
+                  >
+                    <FileDown className="h-3.5 w-3.5" />
+                    Export Report
+                  </button>
+                }
+              >
+                <div className="space-y-4">
+                  <div className="grid grid-cols-5 gap-2">
+                    {['critical', 'high', 'medium', 'low', 'info'].map((sev) => (
+                      <div key={sev} className="text-center">
+                        <p className="text-2xl font-bold" style={{ color: severityColor(sev) }}>
+                          {aggregateStats?.issuesBySeverity[sev] || 0}
+                        </p>
+                        <p className="text-xs text-slate-500">{sev.toUpperCase()}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="space-y-2">
+                    {scanResults.map((result) => (
+                      <ScanResultCard
+                        key={result.fileId}
+                        result={result}
+                        onAutoFix={handleAutoFix}
+                        onExport={handleExportReport}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </Card>
+
+              <div>
+                <h2 className="font-heading text-xl font-semibold text-white mb-3">AI-Powered Insights</h2>
+                <AIInsightsPanel scanResults={scanResults} existingData={existingData} aiEngine={aiEngine} />
+              </div>
+
+              <div>
+                <h2 className="font-heading text-xl font-semibold text-white mb-3">Automation Rules</h2>
+                <AutomationRulesPanel rules={automationRules} onSave={saveAutomationRules} />
+              </div>
+
+              {reportHistory.length > 0 && (
+                <div>
+                  <h2 className="font-heading text-xl font-semibold text-white mb-3">Report History</h2>
+                  <ReportHistoryPanel history={reportHistory} />
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────────────────────
+          TAB 4: UPLOADED FILES & AUDIT TRAIL
+          ───────────────────────────────────────────────────────────────────────────── */}
+      {activeTab === 'files' && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search uploaded files..."
+                className="w-full rounded-lg border border-white/10 bg-[#0A1628] py-2 pl-10 pr-4 text-sm text-slate-200 outline-none focus:border-[#00D4FF]"
+              />
+            </div>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-2 rounded-lg bg-[#6C63FF] px-4 py-2 text-sm font-medium text-white hover:bg-[#5b52e8]"
+            >
+              <UploadCloud className="h-4 w-4" />
+              Upload
+            </button>
+          </div>
+
+          <Card title="Uploaded Reports" subtitle={`${files.length} total reports imported`}>
+            <div className="space-y-2">
+              {files
+                .filter((f) => {
+                  const term = searchTerm.toLowerCase();
+                  return !term || f.name.toLowerCase().includes(term);
+                })
+                .map((f) => (
+                  <FileRow key={f.id} file={f} onScan={handleUpload} />
+                ))}
+              {!files.length && (
+                <p className="text-sm text-slate-500 py-4 text-center">No reports uploaded yet</p>
+              )}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────────────────────
+          INSPECT MISSING DATES DRAWER / MODAL
+          ───────────────────────────────────────────────────────────────────────────── */}
+      {inspectedProperty && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-white/10 bg-[#0A1628] p-6 shadow-2xl space-y-5">
+            <div className="flex items-start justify-between border-b border-white/5 pb-4">
+              <div>
+                <span
+                  className="rounded px-2 py-0.5 text-xs font-semibold"
+                  style={{
+                    color: inspectedProperty.badgeColor,
+                    backgroundColor: `${inspectedProperty.badgeColor}15`,
+                  }}
+                >
+                  {inspectedProperty.statusLabel}
+                </span>
+                <h3 className="mt-1 font-heading text-xl font-bold text-white">
+                  {inspectedProperty.propertyName} ({inspectedProperty.propertyId})
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Data Completeness Audit: {inspectedProperty.overallScore}% · {inspectedProperty.totalPossibleDays} Days Evaluated
+                </p>
+              </div>
+              <button
+                onClick={() => setInspectPropertyId(null)}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-white/5 hover:text-white"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+              <div>
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+                  Missing Occupancy Days ({inspectedProperty.missingDates?.occupancy?.length || 0})
+                </h4>
+                {inspectedProperty.missingDates?.occupancy?.length ? (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {inspectedProperty.missingDates.occupancy.map((d) => (
+                      <span key={d} className="rounded bg-[#FF6B6B]/15 px-2 py-1 text-xs font-mono text-[#FF6B6B] border border-[#FF6B6B]/25">
+                        {d}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-1 text-xs text-[#00E096]">✅ 100% complete — No missing dates</p>
+                )}
+              </div>
+
+              <div>
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+                  Missing Gross Revenue Days ({inspectedProperty.missingDates?.revenue?.length || 0})
+                </h4>
+                {inspectedProperty.missingDates?.revenue?.length ? (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {inspectedProperty.missingDates.revenue.map((d) => (
+                      <span key={d} className="rounded bg-[#FFB547]/15 px-2 py-1 text-xs font-mono text-[#FFB547] border border-[#FFB547]/25">
+                        {d}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-1 text-xs text-[#00E096]">✅ 100% complete — No missing dates</p>
+                )}
+              </div>
+
+              <div>
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+                  Missing Channel Source Days ({inspectedProperty.missingDates?.source?.length || 0})
+                </h4>
+                {inspectedProperty.missingDates?.source?.length ? (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {inspectedProperty.missingDates.source.map((d) => (
+                      <span key={d} className="rounded bg-[#00D4FF]/15 px-2 py-1 text-xs font-mono text-[#00D4FF] border border-[#00D4FF]/25">
+                        {d}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-1 text-xs text-[#00E096]">✅ 100% complete — No missing dates</p>
+                )}
+              </div>
+
+              <div className="rounded-xl border border-white/5 bg-[#040D1A] p-4 text-xs text-slate-300 space-y-1.5">
+                <p className="font-semibold text-white">Recommended Action:</p>
+                <p>
+                  To reconcile missing periods, export the <strong>Manager Flash Report</strong> or <strong>Night Audit Daily Summary</strong> from HotelKey PMS for the flagged calendar dates above and upload them into the system.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-white/5">
+              <button
+                onClick={() => setInspectPropertyId(null)}
+                className="rounded-lg bg-white/10 px-4 py-1.5 text-xs font-medium text-white hover:bg-white/20 transition-colors"
+              >
+                Close Audit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CompletenessBar({ percent = 100 }) {
+  const p = Math.max(0, Math.min(100, Math.round(percent)));
+  const color = p >= 95 ? '#00E096' : p >= 70 ? '#FFB547' : '#FF6B6B';
+
+  return (
+    <div className="space-y-1 w-28">
+      <div className="flex items-center justify-between text-[10px]">
+        <span className="font-mono text-slate-300">{p}%</span>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/5">
+        <div
+          className="h-full rounded-full transition-all"
+          style={{ width: `${p}%`, backgroundColor: color }}
+        />
+      </div>
+    </div>
+  );
 }
 
 function severityColor(sev) {

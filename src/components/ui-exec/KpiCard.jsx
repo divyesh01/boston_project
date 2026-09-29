@@ -29,9 +29,10 @@ export default function KpiCard(
    *   deltaTone?: 'positive' | 'negative' | 'warning' | 'neutral';
    *   deltaTitle?: string;
    *   series?: Array<number>;
+   *   onClick?: () => void;
    * }} */
   { label, value, sub, accent = "var(--brand)", icon: Icon, countUp = true,
-    delta, deltaTone, deltaTitle, series }) {
+    delta, deltaTone, deltaTitle, series, onClick }) {
   // The app's signature moment: the figure rolls up from 0 on first paint and
   // re-rolls whenever it actually changes, so a new date range or a changed
   // credit-card fee rate visibly moves the money instead of silently swapping
@@ -51,8 +52,12 @@ export default function KpiCard(
 
   return (
     <div
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
       className={cn(
         "fx-enter group relative overflow-hidden rounded-2xl p-5",
+        onClick && "cursor-pointer hover:border-[var(--brand)]/50",
         // The `shadow:` type hint is not decoration. Tailwind 3.4 reads a bare
         // var() in an arbitrary shadow value as a shadow COLOUR, so this class
         // emitted --tw-shadow-color and NO box-shadow at all: the KPI row was

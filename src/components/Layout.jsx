@@ -1,7 +1,7 @@
 import React, { useState, useEffect, lazy, Suspense } from "react";
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Building2, MoreHorizontal, X, ArrowLeft, LogOut, KeyRound } from "lucide-react";
+import { Building2, MoreHorizontal, X, ArrowLeft, LogOut, KeyRound, ChevronDown } from "lucide-react";
 import { DURATION, EASE_OUT, fadeOnly } from "@/lib/motion";
 const AIAssistant = lazy(() => import("@/components/AIAssistant"));
 import { GlobalFiltersProvider, useGlobalFilters } from "@/lib/useGlobalFilters";
@@ -41,6 +41,12 @@ export default function Layout() {
   const active = NAV.find((n) => n.to === pathname);
   const isPrimary = PRIMARY.some((n) => n.to === pathname && canAccessRoute(n.to));
   const inMore = MORE.some((n) => n.to === pathname && canAccessRoute(n.to));
+  const [showAllTools, setShowAllTools] = useState(inMore);
+  useEffect(() => {
+    if (inMore) setShowAllTools(true);
+  }, [inMore]);
+  const coreVisible = PRIMARY.filter((n) => canAccessRoute(n.to));
+  const moreVisible = MORE.filter((n) => canAccessRoute(n.to));
   const reduceMotion = useReducedMotion();
 
   // Reconcile cloud settings (taxes, commissions, fees) with local storage on load
@@ -93,15 +99,18 @@ export default function Layout() {
           <span className="font-heading text-sm font-semibold tracking-wide text-white">RRI Executive</span>
         </div>
         <SidebarBrand />
-        <nav className="mt-8 flex-1 space-y-1 overflow-y-auto">
-          {visibleNav.map(({ to, label, icon: Icon }) => {
+        <nav className="mt-6 flex-1 space-y-1 overflow-y-auto pr-1">
+          <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+            Owner Intelligence
+          </p>
+          {coreVisible.map(({ to, label, icon: Icon }) => {
             const a = pathname === to;
             return (
               <Link
                 key={to}
                 to={to}
                 className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200 ${
-                  a ? "bg-[#6C63FF]/15 text-white" : "text-slate-400 hover:bg-white/5 hover:text-slate-100"
+                  a ? "bg-[#6C63FF]/15 text-white font-medium" : "text-slate-400 hover:bg-white/5 hover:text-slate-100"
                 }`}
               >
                 <Icon className={`h-4 w-4 ${a ? "text-[#00D4FF]" : ""}`} />
@@ -109,6 +118,35 @@ export default function Layout() {
               </Link>
             );
           })}
+
+          <div className="pt-4 border-t border-white/5 mt-4">
+            <button
+              onClick={() => setShowAllTools((prev) => !prev)}
+              className="flex w-full items-center justify-between px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 hover:text-slate-300 transition-colors"
+            >
+              <span>Operational Tools ({moreVisible.length})</span>
+              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showAllTools ? "rotate-180" : ""}`} />
+            </button>
+            {showAllTools && (
+              <div className="mt-1 space-y-0.5">
+                {moreVisible.map(({ to, label, icon: Icon }) => {
+                  const a = pathname === to;
+                  return (
+                    <Link
+                      key={to}
+                      to={to}
+                      className={`flex items-center gap-3 rounded-xl px-3 py-2 text-xs transition-all duration-200 ${
+                        a ? "bg-[#6C63FF]/15 text-white" : "text-slate-400 hover:bg-white/5 hover:text-slate-100"
+                      }`}
+                    >
+                      <Icon className={`h-3.5 w-3.5 ${a ? "text-[#00D4FF]" : ""}`} />
+                      {label}
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </nav>
         <div className="mt-auto pt-4 space-y-3">
           {user && (

@@ -8,6 +8,7 @@ import { getEffectiveTaxRates, getTaxSettings } from '@/lib/taxSettings';
 import { getCcFeeRate, getCcFeeOnRefunds } from '@/lib/commissionRates';
 import { CARD_METHODS, refundTotal, refundTotalFromTotals } from '@/lib/paymentNorm';
 import { filterCommittedPay } from '@/lib/payrollCalc';
+import { normalizeChannel } from '@/lib/channelDictionary';
 // One shared deduction vocabulary, imported by this service and by
 // src/components/dashboard/MoneyKept.jsx, so the two cannot disagree about which
 // expense rows have a derived twin. See the note in that module.
@@ -148,7 +149,7 @@ export class CalculationService {
     return results.sort((a, b) => b.revenue - a.revenue);
   }
 
-  static calculateChannelMetrics(srcRows = [], propertyId = "*") {
+  static calculateChannelMetrics(srcRows = [], propertyId = "*", options = {}) {
     // Gross accumulates in integer CENTS and the commission is applied with
     // multiply() (2026-08-20). Both mattered: the previous float `cur.gross +=`
     // followed by a float `c.gross * info.rate` meant the commission for a channel
@@ -159,16 +160,23 @@ export class CalculationService {
     const map = new Map();
     srcRows.forEach((r) => {
       const key = r.source || r.code || 'UNKNOWN';
-      const cur = map.get(key) || { source: key, grossCents: 0, stays: 0 };
+      const cur = map.get(key) || { source: key, code: r.code || '', grossCents: 0, stays: 0, refundsCents: 0 };
+      if (!cur.code && r.code) cur.code = r.code;
       cur.grossCents += toCents(r.net_revenue);
       cur.stays += Number(r.stays) || 0;
+      if (r.refunds || r.refund_amount) {
+        cur.refundsCents += toCents(r.refunds || r.refund_amount || 0);
+      }
       map.set(key, cur);
     });
+
+    const ccFeeRate = options.ccFeeRate ?? getCcFeeRate(propertyId);
 
     return [...map.values()]
       .filter((c) => c.grossCents > 0 || c.stays > 0)
       .map((c) => {
         const info = commissionFor(c.source, propertyId);
+        const norm = normalizeChannel(c.source, c.code);
         const gross = fromCents(c.grossCents);
         let commissionCents = 0;
         if (info.type === 'percentage') commissionCents = multiply(gross, info.rate);
@@ -179,16 +187,39 @@ export class CalculationService {
         else if (info.type === 'actual') commissionCents = toCents(info.rate);
         const commission = fromCents(commissionCents);
         const netCents = c.grossCents - commissionCents;
+
+        // Payment processing fees (e.g. card interchange/gateway on OTA or card channels)
+        const applyPaymentFee = options.applyPaymentFee ?? (norm.isOta || options.allChannelsCardFee);
+        const paymentFeeCents = applyPaymentFee ? multiply(gross, ccFeeRate) : 0;
+        const paymentFee = fromCents(paymentFeeCents);
+
+        const refundsCents = c.refundsCents || 0;
+        const refunds = fromCents(refundsCents);
+
+        const netContributionCents = Math.max(0, netCents - paymentFeeCents - refundsCents);
+        const netContribution = fromCents(netContributionCents);
+        const netPerRoom = c.stays > 0 ? fromCents(Math.round(netContributionCents / c.stays)) : 0;
+        const contributionMargin = c.grossCents ? fromRate(divideRate(netContribution, gross)) : 0;
+
         // grossCents is an internal accumulator and is deliberately NOT spread into
         // the result: a cents-scaled field sitting next to dollar fields is exactly
         // how a consumer ends up rendering a number 100x too large.
         return {
           source: c.source,
+          normalized: norm.normalizedName,
+          group: norm.group,
+          isOta: norm.isOta,
+          isDirect: norm.isDirect,
           stays: c.stays,
           ...info,
           gross,
           commission,
+          paymentFee,
+          refunds,
           net: fromCents(netCents),
+          netContribution,
+          netPerRoom,
+          contributionMargin,
           margin: c.grossCents ? fromRate(divideRate(fromCents(netCents), gross)) : 0,
         };
       })

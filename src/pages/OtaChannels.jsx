@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useRef } from "react";
-import { DollarSign, Percent, TrendingDown, FileDown, Lightbulb, Plus, Trash2 } from "lucide-react";
+import { DollarSign, Percent, TrendingDown, TrendingUp, FileDown, Lightbulb, Plus, Trash2 } from "lucide-react";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import Card from "@/components/ui-exec/Card";
 import PaymentMethodChart from "@/components/dashboard/PaymentMethodChart";
@@ -11,6 +11,7 @@ import { C, money, money2, pct, num, inRange } from "@/lib/hotel";
 import { CalculationService } from "@/lib/calculationService";
 import { sumCents, fromCents } from "@/lib/decimal";
 import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, COMMISSION_TYPES } from "@/lib/commissionRates";
+import { calculateOtaDependence, calculateDirectShiftOpportunity, CHANNEL_GROUPS } from "@/lib/channelDictionary";
 import { ErrorState } from "@/components/ui/status";
 import { useSettingsVersion } from "@/hooks/useSettingsVersion";
 import { useEffect } from "react";
@@ -68,7 +69,19 @@ export default function OtaChannels() {
 
   const totalGross = fromCents(sumCents(channels.map((c) => c.gross)));
   const totalCommission = fromCents(sumCents(channels.map((c) => c.commission)));
+  const totalPaymentFee = fromCents(sumCents(channels.map((c) => c.paymentFee || 0)));
   const totalNet = fromCents(sumCents(channels.map((c) => c.net)));
+  const totalNetContribution = fromCents(sumCents(channels.map((c) => c.netContribution ?? c.net)));
+
+  const otaGross = fromCents(sumCents(channels.filter((c) => c.isOta).map((c) => c.gross)));
+  const otaDependence = useMemo(
+    () => calculateOtaDependence(otaGross, totalGross),
+    [otaGross, totalGross]
+  );
+  const shiftOpportunity = useMemo(
+    () => calculateDirectShiftOpportunity(channels, 0.10),
+    [channels]
+  );
 
   const updateRate = (source, field, value) => {
     const updated = { ...rates };
@@ -178,11 +191,47 @@ export default function OtaChannels() {
       )}
 
       <div ref={contentRef} className="space-y-6">
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <KpiCard label="Total Gross Revenue" value={money(totalGross)} sub={`${channels.length} active channels`} accent={C.purple} icon={DollarSign} />
           <KpiCard label="Total Commission Paid" value={money(totalCommission)} sub={`${pct(totalGross ? totalCommission / totalGross : 0, 1)} of gross`} accent={C.coral} icon={TrendingDown} />
-          <KpiCard label="Total Net Revenue" value={money(totalNet)} sub={`${pct(totalGross ? totalNet / totalGross : 0)} net margin`} accent={C.green} icon={Percent} />
+          <KpiCard label="Owner Net Kept" value={money(totalNetContribution)} sub={`${pct(totalGross ? totalNetContribution / totalGross : 0)} net margin`} accent={C.green} icon={Percent} />
+          <div className="rounded-2xl border border-white/5 bg-[#0D1B2E] p-5 shadow-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-xs uppercase tracking-wider text-slate-400">OTA Dependence</span>
+              <span
+                className="h-2.5 w-2.5 rounded-full"
+                style={{ backgroundColor: otaDependence.color }}
+              />
+            </div>
+            <p className="mt-2 font-heading text-2xl font-semibold text-white">
+              {otaDependence.percentage}%
+            </p>
+            <p className="mt-1 text-xs font-medium" style={{ color: otaDependence.color }}>
+              {otaDependence.level} Dependence · {otaDependence.description}
+            </p>
+          </div>
         </div>
+
+        {shiftOpportunity.potentialSavings > 0 && (
+          <div className="flex flex-col gap-2 rounded-xl border border-[#00E096]/20 bg-[#00E096]/[0.05] p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="rounded-lg bg-[#00E096]/15 p-2 text-[#00E096]">
+                <TrendingUp className="h-4 w-4" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-white">Direct Shift Opportunity</p>
+                <p className="text-xs text-slate-300">
+                  Moving 10% of high-commission OTA bookings ({shiftOpportunity.roomsShifted} rooms) to Direct Website or Walk-in saves{' '}
+                  <span className="font-semibold text-[#00E096]">+{money(shiftOpportunity.potentialSavings)}</span> in commission directly to profit.
+                </p>
+              </div>
+            </div>
+            <div className="text-right">
+              <span className="text-[10px] uppercase tracking-wider text-slate-400">Potential Profit Gain</span>
+              <p className="text-base font-bold text-[#00E096]">+{money(shiftOpportunity.potentialSavings)}</p>
+            </div>
+          </div>
+        )}
 
         <Card title="Channel Performance Matrix" subtitle="Edit commission rates inline — changes save to browser and reflect instantly">
           {saveError === "rates" ? writeRefusedBanner : null}

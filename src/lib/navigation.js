@@ -5,34 +5,44 @@ import {
   BrainCircuit, Receipt, Gauge, BedDouble, Star,
 } from "lucide-react";
 
-export const NAV = [
-  { to: "/", label: "Executive Hub", icon: LayoutDashboard, short: "Dashboard" },
-  { to: "/action-center", label: "Owner Action Center", icon: Target, short: "Action" },
+/**
+ * 6 Core Owner Intelligence Modules (Primary Navigation)
+ */
+export const CORE_OWNER_NAV = [
+  { to: "/", label: "Executive Hub", icon: LayoutDashboard, short: "Executive" },
+  { to: "/statistics", label: "Revenue & Occupancy", icon: Gauge, short: "Rev & Occ" },
+  { to: "/ota", label: "OTA & Channels", icon: Radio, short: "Channels" },
+  { to: "/payments", label: "Profit & Cash", icon: CreditCard, short: "Profit/Cash" },
+  { to: "/compare", label: "Properties & Variance", icon: GitCompareArrows, short: "Properties" },
+  { to: "/data-intelligence", label: "Data Center & Lineage", icon: BrainCircuit, short: "Data Center" },
+];
+
+/**
+ * Secondary Operational & Specialized Modules
+ */
+export const SECONDARY_NAV = [
+  { to: "/action-center", label: "Action Center", icon: Target, short: "Action" },
   { to: "/upload", label: "Import Reports", icon: Upload, short: "Upload" },
   { to: "/mtd", label: "MTD Growth", icon: TrendingUp, short: "MTD" },
   { to: "/calendar", label: "Monthly Calendar", icon: CalendarDays, short: "Calendar" },
-  { to: "/compare", label: "Period Compare", icon: GitCompareArrows, short: "Compare" },
-  { to: "/data-intelligence", label: "Data Intelligence", icon: BrainCircuit, short: "Data AI" },
-  { to: "/rooms", label: "Room Board", icon: Grid3x3, short: "Rooms" },
-  { to: "/housekeeping", label: "Housekeeping", icon: BedDouble, short: "Clean" },
-  { to: "/reviews", label: "Guest Reviews", icon: Star, short: "Reviews" },
   { to: "/pricing", label: "Dynamic Pricing", icon: TrendingUp, short: "Pricing" },
-  { to: "/employees", label: "Clerk Audit", icon: Users, short: "Employees" },
-  { to: "/payments", label: "Payments", icon: CreditCard, short: "Payments" },
-  { to: "/transactions", label: "Transactions", icon: Receipt, short: "Txns" },
-  { to: "/statistics", label: "Statistics", icon: Gauge, short: "Stats" },
-  { to: "/ota", label: "OTA Channels", icon: Radio, short: "OTA" },
-  { to: "/channel-manager", label: "Channel Manager", icon: SettingsIcon, short: "Channel Manager" },
-  { to: "/charts", label: "Chart Builder", icon: BarChart3, short: "Charts" },
+  { to: "/forecasting", label: "Forecasting", icon: LineChart, short: "Forecast" },
   { to: "/expenses", label: "Expenses", icon: Wallet, short: "Expenses" },
   { to: "/payroll", label: "Payroll", icon: ClipboardList, short: "Payroll" },
+  { to: "/rooms", label: "Room Board", icon: Grid3x3, short: "Rooms" },
+  { to: "/housekeeping", label: "Housekeeping", icon: BedDouble, short: "Clean" },
+  { to: "/employees", label: "Clerk Shift Audit", icon: Users, short: "Employees" },
+  { to: "/transactions", label: "Transactions Ledger", icon: Receipt, short: "Txns" },
+  { to: "/reviews", label: "Guest Reviews", icon: Star, short: "Reviews" },
+  { to: "/charts", label: "Chart Builder", icon: BarChart3, short: "Charts" },
+  { to: "/channel-manager", label: "Channel Manager", icon: SettingsIcon, short: "Channel Mgr" },
   { to: "/manual-entry", label: "Manual Entry", icon: Table2, short: "Manual" },
-  { to: "/forecasting", label: "Forecasting", icon: LineChart, short: "Forecast" },
   { to: "/data-template", label: "Data Template", icon: FileSpreadsheet, short: "Template" },
   { to: "/users", label: "User Management", icon: ShieldCheck, short: "Users" },
   { to: "/audit-log", label: "Audit Log", icon: ScrollText, short: "Audit Log" },
   { to: "/settings", label: "Settings", icon: SettingsIcon, short: "Settings" },
 ];
 
-export const PRIMARY = NAV.slice(0, 4);
-export const MORE = NAV.slice(4);
+export const NAV = [...CORE_OWNER_NAV, ...SECONDARY_NAV];
+export const PRIMARY = CORE_OWNER_NAV;
+export const MORE = SECONDARY_NAV;

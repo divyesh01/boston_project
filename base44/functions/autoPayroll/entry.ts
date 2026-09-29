@@ -137,11 +137,15 @@ function reconcileTimecards(punches: any[]): any[] {
     if (!employeeKey) continue;
     const bounds = weekBounds(date, 0);
     if (!bounds) continue;
-    const key = `${employeeKey.toLowerCase()}||${bounds.weekStart}`;
+    const propertyKey = String(p.property_id || "");
+    const employeeId = String(p.employee_id || "").trim();
+    const key = JSON.stringify([propertyKey, employeeId ? "id" : "name", employeeId || employeeKey.toLowerCase(), bounds.weekStart]);
     let row = rows.get(key);
     if (!row) {
       row = {
         employeeKey: employeeKey.toLowerCase(),
+        employeeId,
+        propertyKey,
         paid_minutes: 0,
         regular_minutes: 0,
         overtime_minutes: 0,
@@ -209,13 +213,27 @@ function reconcileTimecards(punches: any[]): any[] {
   return out;
 }
 
+// Base44 entity reads are paged. The default first page is not enough for an
+// idempotency check: an older run past that page would look missing.
+async function loadAll(entity: any, query: any): Promise<any[]> {
+  const pageSize = 5000;
+  const rows: any[] = [];
+  for (let skip = 0; ; skip += pageSize) {
+    const page = await entity.filter(query, "id", pageSize, skip);
+    if (!Array.isArray(page)) throw new Error("Entity lookup did not return a list");
+    rows.push(...page);
+    if (page.length < pageSize) return rows;
+  }
+}
+
 // Automate Payroll — runs on the final calendar day of every month.
 // The cron trigger fires daily on the 28th–31st (cron can't express "last day"),
 // so this function dynamically computes the true final day of the current month
 // (handling 28 / 29 / 30 / 31-day months) and only executes when it matches.
-// Every active staff member gets an auto-generated PayrollRun with the default
-// status "Approved". Runs are idempotent: a staff member is never processed twice
-// for the same pay period.
+// Every eligible active staff member gets a pending PayrollRun. Sequential
+// reruns skip records already present for the same property, person, and period.
+// No atomic unique-key write is configured here, so concurrent invocations
+// still require a storage-level guard.
 //
 // Optional body:
 //   { force: true }          — run even if today is not the final day
@@ -276,8 +294,11 @@ export default async function runAutoPayroll(req) {
           force: raw.force === true,
           year: typeof raw.year === 'number' ? raw.year : undefined,
           month: typeof raw.month === 'number' ? raw.month : undefined,
-          propertyId: typeof raw.propertyId === 'string' ? raw.propertyId : undefined
+          propertyId: typeof raw.propertyId === 'string' ? raw.propertyId.trim() : undefined
         };
+        if (Object.hasOwn(raw, 'propertyId') && !body.propertyId) {
+          return Response.json({ error: "propertyId must be a non-empty string" }, { status: 400 });
+        }
       }
     } catch (e) { /* empty body ok */ }
 
@@ -302,8 +323,12 @@ export default async function runAutoPayroll(req) {
     const periodStart = `${year}-${pad(month + 1)}-01`;
     const periodEnd = `${year}-${pad(month + 1)}-${pad(lastDay)}`;
 
-    // 1. Load all active staff
-    const staff = await base44.asServiceRole.entities.Staff.filter({ active: true });
+    // 1. Load active staff; a property request must never include another property.
+    const staffQuery = body.propertyId ? { active: true, property_id: body.propertyId } : { active: true };
+    const loadedStaff = await loadAll(base44.asServiceRole.entities.Staff, staffQuery);
+    const staff = body.propertyId
+      ? loadedStaff.filter((s: any) => s.property_id === body.propertyId)
+      : loadedStaff;
     if (!staff || staff.length === 0) {
       return Response.json({
         status: "ok",
@@ -316,15 +341,29 @@ export default async function runAutoPayroll(req) {
     }
 
     // 2. Load existing payroll runs for this pay period so we never run twice
-    let existing = [];
-    try {
-      existing = await base44.asServiceRole.entities.PayrollRun.filter({ pay_period_end: periodEnd }) || [];
-    } catch (err) {
-      existing = [];
+    // If this read fails, stop. Treating it as an empty list could pay everyone twice.
+    const existingQuery = body.propertyId
+      ? { pay_period_end: periodEnd, property_id: body.propertyId }
+      : { pay_period_end: periodEnd };
+    const existing = await loadAll(base44.asServiceRole.entities.PayrollRun, existingQuery);
+    const runKey = (propertyId: any, kind: string, identity: string) =>
+      JSON.stringify([String(propertyId || ""), periodStart, periodEnd, kind, identity]);
+    const nameOf = (row: any) => String(row.employee_name || "").trim().toLowerCase();
+    const identityOf = (row: any) => {
+      const staffId = String(row.staff_id || "").trim();
+      if (staffId) return ["staff", staffId];
+      const employeeId = String(row.employee_id || "").trim();
+      return employeeId ? ["employee", employeeId] : ["name", nameOf(row)];
+    };
+    const paidKeys = new Set<string>();
+    const legacyNameKeys = new Set<string>();
+    for (const r of existing) {
+      if (r.pay_period_start && r.pay_period_start !== periodStart) continue;
+      const [kind, identity] = identityOf(r);
+      const key = runKey(r.property_id, kind, identity);
+      paidKeys.add(key);
+      if (kind === "name") legacyNameKeys.add(key);
     }
-    const paidKeys = new Set(
-      existing.map((r) => `${r.property_id || "all"}::${String(r.employee_name || "").toLowerCase()}`)
-    );
 
     // 2b. Reconcile clock-in/out punches for this period into per-employee
     // weekly hours. When punches cover the period for a person, the
@@ -336,7 +375,10 @@ export default async function runAutoPayroll(req) {
       // Base44's entity filter takes object equality predicates; range filters
       // aren't reliably supported, so load the punches and scope by period/
       // property in JS (punch volume is bounded — one row per shift).
-      const allPunches = await base44.asServiceRole.entities.TimecardPunch.filter({}) || [];
+      const allPunches = await loadAll(
+        base44.asServiceRole.entities.TimecardPunch,
+        body.propertyId ? { property_id: body.propertyId } : {}
+      );
       const punches = allPunches.filter(
         (p: any) =>
           (!body.propertyId || p.property_id === body.propertyId) &&
@@ -344,16 +386,27 @@ export default async function runAutoPayroll(req) {
           String(p.shift_date || "").slice(0, 10) <= periodEnd
       );
       if (punches.length) {
-        const staffNames = new Set(staff.map((s: any) => String(s.employee_name).trim().toLowerCase()));
-        timecardWeeks = reconcileTimecards(punches).filter((w) => staffNames.has(String(w.employeeKey || "").toLowerCase()));
+        timecardWeeks = reconcileTimecards(punches);
       }
     } catch (err) {
       // TimecardPunch may not be deployed yet, or the filter isn't supported —
       // fall back to Staff.hours silently rather than failing the whole run.
       timecardWeeks = [];
     }
-    const byEmployee = (low: string) => {
-      const weeks = timecardWeeks.filter((w) => String(w.employeeKey || "").toLowerCase() === low);
+    const staffNameCounts = new Map<string, number>();
+    for (const s of staff) {
+      const key = JSON.stringify([String(s.property_id || ""), nameOf(s)]);
+      staffNameCounts.set(key, (staffNameCounts.get(key) || 0) + 1);
+    }
+    const byEmployee = (s: any) => {
+      const low = nameOf(s);
+      const sharedName = staffNameCounts.get(JSON.stringify([String(s.property_id || ""), low])) > 1;
+      const weeks = timecardWeeks.filter((w) =>
+        w.propertyKey === String(s.property_id || "") &&
+        (s.employee_id && w.employeeId
+          ? String(s.employee_id).trim() === w.employeeId
+          : !sharedName && !w.employeeId && String(w.employeeKey || "").toLowerCase() === low)
+      );
       if (!weeks.length) return null;
       // Sum the MINUTES, then divide once. Summing the per-week `hours` quotients
       // instead would drift: five 8h shifts summed as hours came out as
@@ -377,8 +430,14 @@ export default async function runAutoPayroll(req) {
     const created = [];
     const skipped = [];
     for (const s of staff) {
-      const key = `${s.property_id || "all"}::${String(s.employee_name || "").toLowerCase()}`;
-      if (paidKeys.has(key)) {
+      const staffId = String(s.id || "").trim();
+      const employeeId = String(s.employee_id || "").trim();
+      const [kind, identity] = staffId
+        ? ["staff", staffId]
+        : employeeId ? ["employee", employeeId] : ["name", nameOf(s)];
+      const key = runKey(s.property_id, kind, identity);
+      const legacyNameKey = runKey(s.property_id, "name", nameOf(s));
+      if (paidKeys.has(key) || legacyNameKeys.has(legacyNameKey)) {
         skipped.push({ employee_name: s.employee_name, reason: "already processed for this period" });
         continue;
       }
@@ -389,7 +448,7 @@ export default async function runAutoPayroll(req) {
       const baseRate = Number(s.base_rate) || 0;
       // Timecard-derived hours win when punches cover the period for this person;
       // otherwise fall back to the hand-typed Staff record.
-      const tc = byEmployee(String(s.employee_name || "").toLowerCase());
+      const tc = byEmployee(s);
       const hours = tc ? Number(tc.hours) || 0 : Number(s.hours) || 0;
       const otHours = tc ? Number(tc.overtime_hours) || 0 : Number(s.overtime_hours) || 0;
       const otRate = Number(s.overtime_rate) || baseRate * OT_MULTIPLIER;
@@ -414,6 +473,9 @@ export default async function runAutoPayroll(req) {
       const record = {
         property_id: s.property_id || "",
         property_name: s.property_name || "",
+        staff_id: staffId,
+        employee_id: employeeId,
+        run_identity_key: key,
         employee_name: s.employee_name,
         department: s.department || "",
         pay_type: s.pay_type || "hourly",
@@ -435,6 +497,7 @@ export default async function runAutoPayroll(req) {
       };
 
       await base44.asServiceRole.entities.PayrollRun.create(record);
+      paidKeys.add(key);
       created.push(record);
     }
 

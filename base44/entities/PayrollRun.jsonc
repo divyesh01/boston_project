@@ -8,6 +8,17 @@
     "property_name": {
       "type": "string"
     },
+    "staff_id": {
+      "type": "string",
+      "description": "Source Staff record ID for a generated run."
+    },
+    "employee_id": {
+      "type": "string"
+    },
+    "run_identity_key": {
+      "type": "string",
+      "description": "Deterministic property, period, and staff identity for duplicate detection."
+    },
     "employee_name": {
       "type": "string"
     },

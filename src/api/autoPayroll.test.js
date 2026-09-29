@@ -196,4 +196,78 @@ describe("autoPayroll timecard integration (local path)", () => {
     expect(runs).toHaveLength(1);
     expect(runs[0].employee_name).toBe("P1Only");
   });
+
+  it("creates one run when two local invocations overlap", async () => {
+    await seedStaff("Concurrent", 15, 8);
+    const [first, second] = await Promise.all([
+      db.functions.invoke("autoPayroll", { ...PINNED, force: true }),
+      db.functions.invoke("autoPayroll", { ...PINNED, force: true }),
+    ]);
+    expect(first.data.createdCount + second.data.createdCount).toBe(1);
+    expect(await localDb.PayrollRun.count()).toBe(1);
+  });
+
+  it("uses Staff IDs when two people share a name", async () => {
+    const firstId = await localDb.Staff.add({ employee_name: "Same Name", employee_id: "E1", active: true, property_id: "P1", base_rate: 15, hours: 8 });
+    await localDb.Staff.add({ employee_name: "Same Name", employee_id: "E2", active: true, property_id: "P1", base_rate: 15, hours: 8 });
+    await localDb.PayrollRun.add({ staff_id: String(firstId), property_id: "P1", employee_name: "Same Name", pay_period_start: "2026-03-01", pay_period_end: "2026-03-31" });
+    const result = await db.functions.invoke("autoPayroll", { ...PINNED, force: true, propertyId: "P1" });
+    expect(result.data.createdCount).toBe(1);
+    const runs = await localDb.PayrollRun.toArray();
+    expect(runs).toHaveLength(2);
+    expect(runs[1].staff_id).not.toBe(String(firstId));
+  });
+
+  it("keeps same-name timecards separate by property", async () => {
+    await localDb.Staff.add({ employee_name: "Shared", active: true, property_id: "P1", base_rate: 10, hours: 0 });
+    await localDb.Staff.add({ employee_name: "Shared", active: true, property_id: "P2", base_rate: 10, hours: 0 });
+    await localDb.TimecardPunch.add({ employee_name: "Shared", property_id: "P1", shift_date: "2026-03-03", clock_in: "08:00", clock_out: "12:00" });
+    await localDb.TimecardPunch.add({ employee_name: "Shared", property_id: "P2", shift_date: "2026-03-03", clock_in: "08:00", clock_out: "16:00" });
+    await db.functions.invoke("autoPayroll", { ...PINNED, force: true });
+    const runs = await localDb.PayrollRun.toArray();
+    expect(runs.find((run) => run.property_id === "P1")?.total_pay).toBe(40);
+    expect(runs.find((run) => run.property_id === "P2")?.total_pay).toBe(75);
+  });
+
+  it("does not create a second run after a Staff name change", async () => {
+    const staffId = await localDb.Staff.add({ employee_name: "New Name", active: true, property_id: "P1", base_rate: 15, hours: 8 });
+    await localDb.PayrollRun.add({ staff_id: String(staffId), property_id: "P1", employee_name: "Old Name", pay_period_start: "2026-03-01", pay_period_end: "2026-03-31" });
+    const result = await db.functions.invoke("autoPayroll", { ...PINNED, force: true });
+    expect(result.data.createdCount).toBe(0);
+    expect(await localDb.PayrollRun.count()).toBe(1);
+  });
+
+  it("honors older name-only runs", async () => {
+    await seedStaff("Legacy", 15, 8);
+    await localDb.PayrollRun.add({ property_id: "P1", employee_name: "Legacy", pay_period_start: "2026-03-01", pay_period_end: "2026-03-31" });
+    const result = await db.functions.invoke("autoPayroll", { ...PINNED, force: true });
+    expect(result.data.createdCount).toBe(0);
+    expect(await localDb.PayrollRun.count()).toBe(1);
+  });
+
+  it("rejects an empty property selector instead of running all properties", async () => {
+    await seedStaff("Scoped", 15, 8);
+    await expect(db.functions.invoke("autoPayroll", { ...PINNED, force: true, propertyId: " " }))
+      .rejects.toThrow("propertyId must be a non-empty string");
+    expect(await localDb.PayrollRun.count()).toBe(0);
+  });
+
+  it("rolls back all local runs when a later create fails", async () => {
+    await seedStaff("First", 15, 8);
+    await seedStaff("Second", 15, 8);
+    // Intercept one Dexie method to make the second write fail inside the transaction.
+    const table = /** @type {any} */ (localDb.PayrollRun);
+    const originalAdd = table.add.bind(table);
+    table.add = async (...args) => {
+      if (args[0].employee_name === "Second") throw new Error("create failed");
+      return originalAdd(...args);
+    };
+    try {
+      await expect(db.functions.invoke("autoPayroll", { ...PINNED, force: true }))
+        .rejects.toThrow("create failed");
+    } finally {
+      table.add = originalAdd;
+    }
+    expect(await localDb.PayrollRun.count()).toBe(0);
+  });
 });

@@ -448,11 +448,9 @@ check(
 // ---------------------------------------------------------------------------
 console.log("\n--- 11. the protected payroll path inherits the fix ---");
 //
-// src/api/base44Client.js is item 1 in PROTECTED_FILES.md and must not be
-// edited. It does not need to be: it imports this module's reconciler, so
-// runLocalAutoPayroll — the path Payroll.jsx actually calls — gets the corrected
-// durations without a line changing. If that import is ever replaced by a local
-// copy, these assertions fail and the fix has to be re-landed there.
+// src/api/base44Client.js is item 1 in PROTECTED_FILES.md. The owner authorized
+// a one-time payroll edit, but this check still ensures the local path uses the
+// shared reconciler rather than a divergent copy of its shift math.
 
 const clientCode = src("src/api/base44Client.js");
 check(
@@ -461,7 +459,7 @@ check(
 );
 check(
   "runLocalAutoPayroll calls it rather than reimplementing it",
-  () => /reconcileTimecards\(punches\)/.test(clientCode) && !/function\s+minutesBetween/.test(clientCode)
+  () => /reconcileTimecards\((?:punches|group\.punches)\)/.test(clientCode) && !/function\s+minutesBetween/.test(clientCode)
 );
 check(
   "base44Client.js is still listed as protected",

@@ -1529,6 +1529,11 @@ const integrations = {
 // backend logic: runs only on the final day of the month unless forced, is
 // idempotent per pay period, and defaults generated runs to "approved".
 async function runLocalAutoPayroll(params = {}) {
+  if (Object.hasOwn(params, "propertyId") &&
+      (typeof params.propertyId !== "string" || !params.propertyId.trim())) {
+    throw new Error("propertyId must be a non-empty string");
+  }
+  const propertyId = params.propertyId?.trim();
   const now = new Date();
   const year = Number.isInteger(params.year) ? params.year : now.getFullYear();
   const month = Number.isInteger(params.month) ? params.month : now.getMonth();
@@ -1549,106 +1554,162 @@ async function runLocalAutoPayroll(params = {}) {
   }
 
   let staff = await localDb.Staff.filter((s) => s.active !== false).toArray();
-  if (params.propertyId) staff = staff.filter((s) => s.property_id === params.propertyId);
+  if (propertyId) staff = staff.filter((s) => s.property_id === propertyId);
   if (staff.length === 0) {
     return { data: { status: "ok", message: "No active staff found — nothing to process.", periodStart, periodEnd, createdCount: 0, skippedCount: 0 } };
   }
 
-  const existing = await localDb.PayrollRun.filter((r) => r.pay_period_end === periodEnd).toArray();
-  const paidKeys = new Set(existing.map((r) => `${r.property_id || "all"}::${String(r.employee_name || "").toLowerCase()}`));
-
-  let timecardWeeks = [];
-  try {
-    const allPunches = await localDb.TimecardPunch.toArray() || [];
-    const punches = allPunches.filter(
-      (p) =>
-        (!params.propertyId || p.property_id === params.propertyId) &&
-        String(p.shift_date || "").slice(0, 10) >= periodStart &&
-        String(p.shift_date || "").slice(0, 10) <= periodEnd
-    );
-    if (punches.length) {
-      const staffNames = new Set(staff.map((s) => String(s.employee_name).trim().toLowerCase()));
-      timecardWeeks = reconcileTimecards(punches).filter((w) => staffNames.has(String(w.employeeKey || "").toLowerCase()));
-    }
-  } catch (err) {
-    timecardWeeks = [];
-  }
-
-  const byEmployee = (low) => {
-    const weeks = timecardWeeks.filter((w) => String(w.employeeKey || "").toLowerCase() === low);
-    if (!weeks.length) return null;
-    return weeks.reduce(
-      (acc, w) => ({
-        hours: acc.hours + (Number(w.hours) || 0),
-        overtime_hours: acc.overtime_hours + (Number(w.overtime_hours) || 0),
-      }),
-      { hours: 0, overtime_hours: 0 }
-    );
-  };
-
-  const created = [];
-  const skipped = [];
-  for (const s of staff) {
-    const key = `${s.property_id || "all"}::${String(s.employee_name || "").toLowerCase()}`;
-    if (paidKeys.has(key)) {
-      skipped.push({ employee_name: s.employee_name, reason: "already processed for this period" });
-      continue;
-    }
-    if (!s.employee_name || !(Number(s.base_rate) > 0)) {
-      skipped.push({ employee_name: s.employee_name, reason: "missing pay configuration" });
-      continue;
-    }
-    const baseRate = Number(s.base_rate) || 0;
-    const tc = byEmployee(String(s.employee_name || "").toLowerCase());
-    const hours = tc ? Number(tc.hours) || 0 : Number(s.hours) || 0;
-    const otHours = tc ? Number(tc.overtime_hours) || 0 : Number(s.overtime_hours) || 0;
-    const otRate = Number(s.overtime_rate) || baseRate * 1.5;
-    const bonus = Number(s.bonus) || 0;
-    const deductions = Number(s.deductions) || 0;
-    
-    const baseRateCents = toCents(baseRate);
-    const regularPayCents = s.pay_type === "salary" ? baseRateCents : Math.round(baseRateCents * hours);
-    const overtimePayCents = Math.round(toCents(otRate) * otHours);
-    const totalPayCents = regularPayCents + overtimePayCents + toCents(bonus) - toCents(deductions);
-
-    const record = {
-      property_id: s.property_id || "",
-      property_name: s.property_name || "",
-      employee_name: s.employee_name,
-      department: s.department || "",
-      pay_type: s.pay_type || "hourly",
-      base_rate: baseRate,
-      hours,
-      regular_pay: fromCents(regularPayCents),
-      overtime_hours: otHours,
-      overtime_rate: otRate,
-      overtime_pay: fromCents(overtimePayCents),
-      bonus,
-      deductions,
-      total_pay: fromCents(totalPayCents),
-      pay_period_start: periodStart,
-      pay_period_end: periodEnd,
-      payroll_date: periodEnd,
-      payroll_status: "approved",
-      timecard_derived: !!tc,
-      auto_generated: true,
+  // Keep the read and all writes in one IndexedDB write transaction. Two local
+  // invocations then cannot both read "missing" before either creates the run.
+  return localDb.transaction("rw", localDb.PayrollRun, localDb.TimecardPunch, async () => {
+    const existing = await localDb.PayrollRun.filter((r) => r.pay_period_end === periodEnd).toArray();
+    const runKey = (property, kind, identity) =>
+      JSON.stringify([String(property || ""), periodStart, periodEnd, kind, identity]);
+    const nameOf = (row) => String(row.employee_name || "").trim().toLowerCase();
+    const identityOf = (row) => {
+      const staffId = String(row.staff_id || "").trim();
+      if (staffId) return ["staff", staffId];
+      const employeeId = String(row.employee_id || "").trim();
+      return employeeId ? ["employee", employeeId] : ["name", nameOf(row)];
     };
-    await localDb.PayrollRun.add({ ...record, created_date: now.toISOString(), updated_date: now.toISOString() });
-    created.push(record);
-  }
+    const paidKeys = new Set();
+    const legacyNameKeys = new Set();
+    for (const r of existing) {
+      if (r.pay_period_start && r.pay_period_start !== periodStart) continue;
+      const [kind, identity] = identityOf(r);
+      const key = runKey(r.property_id, kind, identity);
+      paidKeys.add(key);
+      if (kind === "name") legacyNameKeys.add(key);
+    }
 
-  return {
-    data: {
-      status: "ok",
-      message: `Payroll executed for ${created.length} active staff member(s) and marked as Approved.`,
-      periodStart,
-      periodEnd,
-      createdCount: created.length,
-      skippedCount: skipped.length,
-      created,
-      skipped,
-    },
-  };
+    let timecardWeeks = [];
+    try {
+      const allPunches = await localDb.TimecardPunch.toArray() || [];
+      const punches = allPunches.filter(
+        (p) =>
+          (!propertyId || p.property_id === propertyId) &&
+          String(p.shift_date || "").slice(0, 10) >= periodStart &&
+          String(p.shift_date || "").slice(0, 10) <= periodEnd
+      );
+      if (punches.length) {
+        const groups = new Map();
+        for (const p of punches) {
+          const propertyKey = String(p.property_id || "");
+          const employeeId = String(p.employee_id || "").trim();
+          const name = String(p.employee_name || "").trim().toLowerCase();
+          if (!name) continue;
+          const key = JSON.stringify([propertyKey, employeeId ? "id" : "name", employeeId || name]);
+          if (!groups.has(key)) groups.set(key, { propertyKey, employeeId, punches: [] });
+          groups.get(key).punches.push(p);
+        }
+        timecardWeeks = [...groups.values()].flatMap((group) =>
+          reconcileTimecards(group.punches).map((week) => ({
+            ...week, propertyKey: group.propertyKey, employeeId: group.employeeId,
+          }))
+        );
+      }
+    } catch (err) {
+      timecardWeeks = [];
+    }
+
+    const staffNameCounts = new Map();
+    for (const s of staff) {
+      const key = JSON.stringify([String(s.property_id || ""), nameOf(s)]);
+      staffNameCounts.set(key, (staffNameCounts.get(key) || 0) + 1);
+    }
+    const byEmployee = (s) => {
+      const low = nameOf(s);
+      const sharedName = staffNameCounts.get(JSON.stringify([String(s.property_id || ""), low])) > 1;
+      const weeks = timecardWeeks.filter((w) =>
+        w.propertyKey === String(s.property_id || "") &&
+        (s.employee_id && w.employeeId
+          ? String(s.employee_id).trim() === w.employeeId
+          : !sharedName && !w.employeeId && String(w.employeeKey || "").toLowerCase() === low)
+      );
+      if (!weeks.length) return null;
+      return weeks.reduce(
+        (acc, w) => ({
+          hours: acc.hours + (Number(w.hours) || 0),
+          overtime_hours: acc.overtime_hours + (Number(w.overtime_hours) || 0),
+        }),
+        { hours: 0, overtime_hours: 0 }
+      );
+    };
+
+    const created = [];
+    const skipped = [];
+    for (const s of staff) {
+      const staffId = String(s.id || "").trim();
+      const employeeId = String(s.employee_id || "").trim();
+      const [kind, identity] = staffId
+        ? ["staff", staffId]
+        : employeeId ? ["employee", employeeId] : ["name", nameOf(s)];
+      const key = runKey(s.property_id, kind, identity);
+      const legacyNameKey = runKey(s.property_id, "name", nameOf(s));
+      if (paidKeys.has(key) || legacyNameKeys.has(legacyNameKey)) {
+        skipped.push({ employee_name: s.employee_name, reason: "already processed for this period" });
+        continue;
+      }
+      if (!s.employee_name || !(Number(s.base_rate) > 0)) {
+        skipped.push({ employee_name: s.employee_name, reason: "missing pay configuration" });
+        continue;
+      }
+      const baseRate = Number(s.base_rate) || 0;
+      const tc = byEmployee(s);
+      const hours = tc ? Number(tc.hours) || 0 : Number(s.hours) || 0;
+      const otHours = tc ? Number(tc.overtime_hours) || 0 : Number(s.overtime_hours) || 0;
+      const otRate = Number(s.overtime_rate) || baseRate * 1.5;
+      const bonus = Number(s.bonus) || 0;
+      const deductions = Number(s.deductions) || 0;
+
+      const baseRateCents = toCents(baseRate);
+      const regularPayCents = s.pay_type === "salary" ? baseRateCents : Math.round(baseRateCents * hours);
+      const overtimePayCents = Math.round(toCents(otRate) * otHours);
+      const totalPayCents = regularPayCents + overtimePayCents + toCents(bonus) - toCents(deductions);
+
+      const record = {
+        property_id: s.property_id || "",
+        property_name: s.property_name || "",
+        staff_id: staffId,
+        employee_id: employeeId,
+        run_identity_key: key,
+        employee_name: s.employee_name,
+        department: s.department || "",
+        pay_type: s.pay_type || "hourly",
+        base_rate: baseRate,
+        hours,
+        regular_pay: fromCents(regularPayCents),
+        overtime_hours: otHours,
+        overtime_rate: otRate,
+        overtime_pay: fromCents(overtimePayCents),
+        bonus,
+        deductions,
+        total_pay: fromCents(totalPayCents),
+        pay_period_start: periodStart,
+        pay_period_end: periodEnd,
+        payroll_date: periodEnd,
+        payroll_status: "approved",
+        timecard_derived: !!tc,
+        auto_generated: true,
+      };
+      await localDb.PayrollRun.add({ ...record, created_date: now.toISOString(), updated_date: now.toISOString() });
+      paidKeys.add(key);
+      created.push(record);
+    }
+
+    return {
+      data: {
+        status: "ok",
+        message: `Payroll executed for ${created.length} active staff member(s) and marked as Approved.`,
+        periodStart,
+        periodEnd,
+        createdCount: created.length,
+        skippedCount: skipped.length,
+        created,
+        skipped,
+      },
+    };
+  });
 }
 
 // ─── Local auth helpers (browser-only, no backend required) ───

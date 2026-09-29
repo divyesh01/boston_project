@@ -94,10 +94,19 @@ merely diff the JSON -- it EXECUTES every shipped rule against a 9-case access m
 | **Delete Account** | `deleteAccount/` | Requires explicit "DELETE:<userId>" confirmation, wipes data across 5 entities | Accidental mass data deletion |
 | **Get Weather** | `getWeather/` | Proxy to OpenWeather API (hides API key from browser) | Weather widget breaks |
 
-Auto Payroll checks for an existing run using the property ID and employee name. A missing
-property ID uses `all` in both the lookup and the new-run check, so a second run of the
-same month skips that employee even when `force` is set. Runs for different property
-IDs remain separate. `scripts/probe-auto-payroll-idempotency.mjs` checks these cases.
+Auto Payroll checks the property, pay period, and Staff record ID before creating a run.
+Older runs without a Staff ID still block a matching name in that property and period.
+A failed lookup stops payroll; a retry after a partial write creates only missing runs.
+Entity reads walk every page so a run beyond the default page is still found.
+Property-scoped requests load only that property's staff and punches. The backend stores
+`run_identity_key` for detection, but Base44's entity API has no documented unique
+constraint or transaction, so simultaneous invocations still need a storage-level guard.
+The offline path uses one IndexedDB write transaction for its lookup and creates, so
+overlapping local calls serialize; its generated runs use the same Staff identity.
+`scripts/probe-auto-payroll-idempotency.mjs` checks the handler. To inspect a JSON export
+of PayrollRun records without changing data, run
+`node scripts/report-duplicate-payroll.mjs <payroll-runs.json>`; exit code 2 means it
+found exact duplicates or older name-only rows needing review.
 
 ### External Integrations (3 functions)
 | Function | Folder | What It Does | If You Edit This... |

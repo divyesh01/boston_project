@@ -94,6 +94,11 @@ merely diff the JSON -- it EXECUTES every shipped rule against a 9-case access m
 | **Delete Account** | `deleteAccount/` | Requires explicit "DELETE:<userId>" confirmation, wipes data across 5 entities | Accidental mass data deletion |
 | **Get Weather** | `getWeather/` | Proxy to OpenWeather API (hides API key from browser) | Weather widget breaks |
 
+Auto Payroll checks for an existing run using the property ID and employee name. A missing
+property ID uses `all` in both the lookup and the new-run check, so a second run of the
+same month skips that employee even when `force` is set. Runs for different property
+IDs remain separate. `scripts/probe-auto-payroll-idempotency.mjs` checks these cases.
+
 ### External Integrations (3 functions)
 | Function | Folder | What It Does | If You Edit This... |
 |----------|--------|-------------|-------------------|

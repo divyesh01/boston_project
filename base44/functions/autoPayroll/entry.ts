@@ -377,7 +377,7 @@ export default async function runAutoPayroll(req) {
     const created = [];
     const skipped = [];
     for (const s of staff) {
-      const key = `${s.property_id || "r"}::${String(s.employee_name || "").toLowerCase()}`;
+      const key = `${s.property_id || "all"}::${String(s.employee_name || "").toLowerCase()}`;
       if (paidKeys.has(key)) {
         skipped.push({ employee_name: s.employee_name, reason: "already processed for this period" });
         continue;

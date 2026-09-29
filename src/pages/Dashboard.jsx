@@ -326,12 +326,14 @@ export default function Dashboard() {
   }, [properties, dataByProperty, dateRange]);
 
   const reconciliation = useMemo(() => {
-    const calculatedGross = totalRev.dollars || revenue;
-    const reportedGross = grossRows.length > 0
-      ? fromCents(sumCents(grossRows.map((r) => r.total_revenue || r.room_revenue || 0)))
-      : calculatedGross;
-    return reconcileFinancialTotals(reportedGross, calculatedGross);
-  }, [totalRev.dollars, revenue, grossRows]);
+    const grossLedgerCents = sumCents(grossRows.map((r) => r.room_rent || r.gross_revenue || r.room_revenue || 0));
+    const occupancyRevenueCents = sumCents(occRows.map((r) => r.room_revenue || 0));
+    const reportedCents = grossLedgerCents > 0 ? grossLedgerCents : occupancyRevenueCents;
+    const calculatedCents = sumCents(srcRows.map((r) => r.net_revenue || r.revenue || 0));
+    const finalReported = reportedCents > 0 ? fromCents(reportedCents) : totalRev.dollars || revenue;
+    const finalCalculated = calculatedCents > 0 ? fromCents(calculatedCents) : totalRev.dollars || revenue;
+    return reconcileFinancialTotals(finalReported, finalCalculated);
+  }, [grossRows, occRows, srcRows, totalRev.dollars, revenue]);
 
   const handleExport = async () => {
     if (exporting || !contentRef.current) return;
@@ -347,10 +349,16 @@ export default function Dashboard() {
 
   const handleExportPacket = () => {
     try {
+      const packetProperties = isPortfolio
+        ? Array.isArray(property)
+          ? properties.filter((p) => property.includes(p.id))
+          : properties
+        : properties.filter((p) => p.id === property);
+
       const channelMetrics = CalculationService.calculateChannelMetrics(srcRows);
-      const propertyStats = CalculationService.calculatePerPropertyStats(occRows, properties);
+      const propertyStats = CalculationService.calculatePerPropertyStats(occRows, packetProperties);
       const prevPropertyStats = alertPrevOcc.length > 0
-        ? CalculationService.calculatePerPropertyStats(alertPrevOcc, properties)
+        ? CalculationService.calculatePerPropertyStats(alertPrevOcc, packetProperties)
         : [];
 
       const otaChannels = channelMetrics.filter((c) => c.isOta);
@@ -367,7 +375,7 @@ export default function Dashboard() {
 
       downloadOwnerPerformancePacket({
         dateRangeLabel: dateLabel,
-        properties,
+        properties: packetProperties,
         kpis: {
           revenue,
           roomsSold,

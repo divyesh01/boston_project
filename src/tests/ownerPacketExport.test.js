@@ -138,6 +138,7 @@ describe('Monthly Owner Performance Packet Exporter', () => {
       'Property Performance',
       'OTA & Channel Economics',
       'Data Health & Audit',
+      'Data Provenance',
     ]);
 
     // 1. Verify Sheet 1: Executive Summary
@@ -222,6 +223,20 @@ describe('Monthly Owner Performance Packet Exporter', () => {
     const reconStatusRow = rows4.find((r) => r[0] === 'Reconciliation Balance Status:');
     expect(reconStatusRow).toBeDefined();
     expect(reconStatusRow[1]).toBe('BALANCED ($0.00 Difference)');
+
+    // 5. Verify Sheet 5: Data Provenance & Audit Controls
+    const ws5 = wb.Sheets['Data Provenance'];
+    expect(ws5).toBeDefined();
+    const rows5 = XLSX.utils.sheet_to_json(ws5, { header: 1 });
+    expect(rows5[0][0]).toBe('PORTFOLIO DATA PROVENANCE & AUDIT CONTROLS');
+    expect(rows5[1][0]).toBe('Packet Schema Version:');
+    expect(rows5[1][1]).toBe('owner-packet-v2.1');
+    expect(rows5[6][0]).toBe('Total Portfolio Room Revenue:');
+    expect(rows5[6][1]).toBe('$125,000.00');
+    expect(rows5[9][0]).toBe('Reconciliation Status:');
+    expect(rows5[9][1]).toBe('BALANCED ($0.00 Difference)');
+    expect(rows5[11][0]).toBe('Data Health Gate Status:');
+    expect(rows5[11][1]).toBe('READY / AUDITED');
   });
 
   it('correctly integrates with CalculationService.calculatePerPropertyStats output (camelCase roomsSold)', () => {

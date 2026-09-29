@@ -16,6 +16,7 @@
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc -p ./jsconfig.json",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "ws": "node backend/websocket.js",
     "test:watch": "vitest",
     "preview": "vite preview",
@@ -31,7 +32,6 @@
     "verify:v3": "node scripts/verify-divyesh-v3.mjs"
   },
   "dependencies": {
-    "aws4fetch": "^1.0.20",
     "@base44/sdk": "^0.8.41",
     "@base44/vite-plugin": "^1.0.30",
     "@hello-pangea/dnd": "^17.0.0",
@@ -67,6 +67,7 @@
     "@stripe/stripe-js": "^5.2.0",
     "@tanstack/react-query": "^5.84.1",
     "@tanstack/react-virtual": "^3.14.9",
+    "aws4fetch": "^1.0.20",
     "canvas-confetti": "^1.9.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -119,6 +120,7 @@
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
     "@vitejs/plugin-react": "^4.3.4",
+    "@vitest/coverage-v8": "^4.1.10",
     "autoprefixer": "^10.4.20",
     "baseline-browser-mapping": "^2.8.32",
     "eslint": "^9.19.0",

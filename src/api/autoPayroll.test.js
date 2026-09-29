@@ -196,4 +196,71 @@ describe("autoPayroll timecard integration (local path)", () => {
     expect(runs).toHaveLength(1);
     expect(runs[0].employee_name).toBe("P1Only");
   });
-});
+
+  it("regression: two-property payroll selects only target property timecards and creates no other property runs", async () => {
+    // Seed staff for Property 1 and Property 2
+    await seedStaff("WorkerA", 20, 0); // Property P1
+    await localDb.Staff.add({
+      employee_name: "WorkerB",
+      employee_id: "pin-b",
+      active: true,
+      pay_type: "hourly",
+      base_rate: 25,
+      hours: 0,
+      property_id: "P2",
+      property_name: "Property 2",
+    });
+
+    // Punches for WorkerA at P1 (5 days x 8.5h net = 42.5h -> 40 reg + 2.5 OT)
+    for (const d of ["2026-03-01", "2026-03-02", "2026-03-03", "2026-03-04", "2026-03-05"]) {
+      await localDb.TimecardPunch.add({
+        property_id: "P1",
+        employee_name: "WorkerA",
+        shift_date: d,
+        clock_in: "08:00",
+        clock_out: "17:00",
+      });
+    }
+
+    // Punches for WorkerB at P2 (4 days x 7.5h net = 30h)
+    for (const d of ["2026-03-01", "2026-03-02", "2026-03-03", "2026-03-04"]) {
+      await localDb.TimecardPunch.add({
+        property_id: "P2",
+        employee_name: "WorkerB",
+        shift_date: d,
+        clock_in: "08:00",
+        clock_out: "16:00",
+      });
+    }
+
+    // Request payroll for Property P1 only
+    const resP1 = await db.functions.invoke("autoPayroll", { ...PINNED, force: true, propertyId: "P1" });
+    expect(resP1.data.status).toBe("ok");
+    expect(resP1.data.createdCount).toBe(1);
+
+    const runsP1 = await localDb.PayrollRun.toArray();
+    expect(runsP1).toHaveLength(1);
+    expect(runsP1[0].property_id).toBe("P1");
+    expect(runsP1[0].employee_name).toBe("WorkerA");
+    expect(runsP1[0].timecard_derived).toBe(true);
+    expect(runsP1[0].hours).toBe(40);
+    expect(runsP1[0].overtime_hours).toBe(2.5);
+    expect(runsP1[0].regular_pay).toBe(800);
+    expect(runsP1[0].overtime_pay).toBe(75);
+
+    // Request payroll for Property P2 only
+    const resP2 = await db.functions.invoke("autoPayroll", { ...PINNED, force: true, propertyId: "P2" });
+    expect(resP2.data.status).toBe("ok");
+    expect(resP2.data.createdCount).toBe(1);
+
+    const runsAll = await localDb.PayrollRun.toArray();
+    expect(runsAll).toHaveLength(2);
+    const runP2 = runsAll.find((r) => r.property_id === "P2");
+    expect(runP2).toBeDefined();
+    expect(runP2.employee_name).toBe("WorkerB");
+    expect(runP2.timecard_derived).toBe(true);
+    expect(runP2.hours).toBe(30);
+    expect(runP2.overtime_hours).toBe(0);
+    expect(runP2.regular_pay).toBe(750);
+  });
+});

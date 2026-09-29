@@ -137,11 +137,13 @@ function reconcileTimecards(punches: any[]): any[] {
     if (!employeeKey) continue;
     const bounds = weekBounds(date, 0);
     if (!bounds) continue;
-    const key = `${employeeKey.toLowerCase()}||${bounds.weekStart}`;
+    const propKey = String(p.property_id || "").trim();
+    const key = `${propKey}||${employeeKey.toLowerCase()}||${bounds.weekStart}`;
     let row = rows.get(key);
     if (!row) {
       row = {
         employeeKey: employeeKey.toLowerCase(),
+        property_id: propKey,
         paid_minutes: 0,
         regular_minutes: 0,
         overtime_minutes: 0,
@@ -276,7 +278,7 @@ export default async function runAutoPayroll(req) {
           force: raw.force === true,
           year: typeof raw.year === 'number' ? raw.year : undefined,
           month: typeof raw.month === 'number' ? raw.month : undefined,
-          propertyId: typeof raw.propertyId === 'string' ? raw.propertyId : undefined
+          propertyId: typeof raw.propertyId === 'string' && raw.propertyId.trim() ? raw.propertyId.trim() : (typeof raw.propertyId === 'number' ? String(raw.propertyId) : undefined)
         };
       }
     } catch (e) { /* empty body ok */ }
@@ -302,8 +304,13 @@ export default async function runAutoPayroll(req) {
     const periodStart = `${year}-${pad(month + 1)}-01`;
     const periodEnd = `${year}-${pad(month + 1)}-${pad(lastDay)}`;
 
-    // 1. Load all active staff
-    const staff = await base44.asServiceRole.entities.Staff.filter({ active: true });
+    // 1. Load active staff (scoped to target property if specified)
+    const staffFilter: any = { active: true };
+    if (body.propertyId) staffFilter.property_id = body.propertyId;
+    let staff = (await base44.asServiceRole.entities.Staff.filter(staffFilter)) || [];
+    if (body.propertyId) {
+      staff = staff.filter((s: any) => s.property_id === body.propertyId);
+    }
     if (!staff || staff.length === 0) {
       return Response.json({
         status: "ok",
@@ -318,7 +325,9 @@ export default async function runAutoPayroll(req) {
     // 2. Load existing payroll runs for this pay period so we never run twice
     let existing = [];
     try {
-      existing = await base44.asServiceRole.entities.PayrollRun.filter({ pay_period_end: periodEnd }) || [];
+      const runFilter: any = { pay_period_end: periodEnd };
+      if (body.propertyId) runFilter.property_id = body.propertyId;
+      existing = await base44.asServiceRole.entities.PayrollRun.filter(runFilter) || [];
     } catch (err) {
       existing = [];
     }
@@ -336,7 +345,9 @@ export default async function runAutoPayroll(req) {
       // Base44's entity filter takes object equality predicates; range filters
       // aren't reliably supported, so load the punches and scope by period/
       // property in JS (punch volume is bounded — one row per shift).
-      const allPunches = await base44.asServiceRole.entities.TimecardPunch.filter({}) || [];
+      const punchFilter: any = {};
+      if (body.propertyId) punchFilter.property_id = body.propertyId;
+      const allPunches = await base44.asServiceRole.entities.TimecardPunch.filter(punchFilter) || [];
       const punches = allPunches.filter(
         (p: any) =>
           (!body.propertyId || p.property_id === body.propertyId) &&
@@ -352,8 +363,12 @@ export default async function runAutoPayroll(req) {
       // fall back to Staff.hours silently rather than failing the whole run.
       timecardWeeks = [];
     }
-    const byEmployee = (low: string) => {
-      const weeks = timecardWeeks.filter((w) => String(w.employeeKey || "").toLowerCase() === low);
+    const byEmployee = (low: string, propId?: string) => {
+      const weeks = timecardWeeks.filter((w) => {
+        if (String(w.employeeKey || "").toLowerCase() !== low) return false;
+        if (propId && w.property_id && w.property_id !== propId) return false;
+        return true;
+      });
       if (!weeks.length) return null;
       // Sum the MINUTES, then divide once. Summing the per-week `hours` quotients
       // instead would drift: five 8h shifts summed as hours came out as
@@ -377,7 +392,10 @@ export default async function runAutoPayroll(req) {
     const created = [];
     const skipped = [];
     for (const s of staff) {
-      const key = `${s.property_id || "r"}::${String(s.employee_name || "").toLowerCase()}`;
+      if (body.propertyId && s.property_id !== body.propertyId) {
+        continue;
+      }
+      const key = `${s.property_id || "all"}::${String(s.employee_name || "").toLowerCase()}`;
       if (paidKeys.has(key)) {
         skipped.push({ employee_name: s.employee_name, reason: "already processed for this period" });
         continue;
@@ -389,7 +407,7 @@ export default async function runAutoPayroll(req) {
       const baseRate = Number(s.base_rate) || 0;
       // Timecard-derived hours win when punches cover the period for this person;
       // otherwise fall back to the hand-typed Staff record.
-      const tc = byEmployee(String(s.employee_name || "").toLowerCase());
+      const tc = byEmployee(String(s.employee_name || "").toLowerCase(), s.property_id);
       const hours = tc ? Number(tc.hours) || 0 : Number(s.hours) || 0;
       const otHours = tc ? Number(tc.overtime_hours) || 0 : Number(s.overtime_hours) || 0;
       const otRate = Number(s.overtime_rate) || baseRate * OT_MULTIPLIER;

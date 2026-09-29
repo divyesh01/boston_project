@@ -101,6 +101,18 @@ merely diff the JSON -- it EXECUTES every shipped rule against a 9-case access m
 | **Import Drive File** | `importDriveFile/` | Downloads from Drive via OAuth, IDOR defense (tenant property check) | Drive import breaks or cross-tenant leak |
 | **List Drive Files** | `listDriveFiles/` | Lists CSV/spreadsheet files from connected Google Drive | Drive file picker breaks |
 
+### Fixed 2026-09-29: Property isolation and timecard selection in autoPayroll
+
+In `base44/functions/autoPayroll/entry.ts`, active staff were loaded globally without property scoping, and runs were created without applying `body.propertyId`. As a result, a request for Property A could create payroll runs for Property B staff using hand-typed hours, and timecards were not properly scoped by property.
+
+**Fix:**
+1. Scoped staff query and memory filter by `body.propertyId` when provided.
+2. Scoped `TimecardPunch` and `PayrollRun` queries by property ID.
+3. Scoped `reconcileTimecards` grouping and `byEmployee` lookup by property ID so timecard punches are strictly matched to the employee at that specific property.
+4. Added an explicit property boundary check in the run creation loop ensuring runs are only created for the requested property.
+
+Covered by two-property regression tests in `tests/backend/autoPayroll.test.js` and `src/api/autoPayroll.test.js`.
+
 ### Fixed 2026-09-29: property_access fail-open in importDriveFile
 
 `entry.ts` around line 60 used `!Array.isArray(user.property_access)` as part of the

@@ -429,7 +429,7 @@ export default async function runAutoPayroll(req) {
         pay_period_start: periodStart,
         pay_period_end: periodEnd,
         payroll_date: periodEnd,
-        payroll_status: "pending",
+        payroll_status: "pending_review",
         auto_generated: true,
         timecard_derived: !!tc,
       };
@@ -439,7 +439,7 @@ export default async function runAutoPayroll(req) {
     }
 
     // Server-side audit (#9): record who generated payroll, the period, and the
-    // outcome. Generated runs are intentionally "pending" so a second human
+    // outcome. Generated runs are intentionally "pending_review" so a second human
     // approval is required; the audit entry makes the generation traceable in a
     // way the client-side (forgeable) chain cannot guarantee.
     await writeAudit(base44, {
@@ -449,12 +449,12 @@ export default async function runAutoPayroll(req) {
       performedById: user ? user.id : null,
       performedBy: (user && (user.username || user.email)) || "system",
       propertyId: body.propertyId || null,
-      detail: `Generated ${created.length} pending payroll run(s) for ${periodStart} → ${periodEnd}${body.force ? " (forced)" : ""}${body.propertyId ? ` · property ${body.propertyId}` : ""}`,
+      detail: `Generated ${created.length} pending review payroll run(s) for ${periodStart} → ${periodEnd}${body.force ? " (forced)" : ""}${body.propertyId ? ` · property ${body.propertyId}` : ""}`,
     });
 
     return Response.json({
       status: "ok",
-      message: `Payroll executed for ${created.length} active staff member(s) and marked as Pending.`,
+      message: `Payroll executed for ${created.length} active staff member(s) and marked as Pending Review.`,
       periodStart,
       periodEnd,
       createdCount: created.length,

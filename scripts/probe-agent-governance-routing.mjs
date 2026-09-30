@@ -50,23 +50,39 @@ for (const adapter of adapters) {
   check(`${adapter} routes to canonical policy`, text.includes(canonicalPath));
 }
 
-for (const adapter of [
+const v3Adapters = [
   "AGENTS.md",
   "CLAUDE.md",
   "GEMINI.md",
   ".agents/agents.md",
   ".agents/skills/divyesh-v3-router/SKILL.md",
   ".claude/skills/divyesh-v3-router/SKILL.md",
-]) {
+];
+
+for (const adapter of v3Adapters) {
   const text = read(adapter);
-  check(`${adapter} keeps DIVYESH V3 bootstrap`, text.includes("DIVYESH V3"));
+  check(
+    `${adapter} keeps DIVYESH V3 identity`,
+    /DIVYESH(?:-| )V3/i.test(text) || /divyesh-v3-router/i.test(text),
+  );
+  check(`${adapter} keeps canonical manifest routing`, text.includes("docs/divyesh-v3/manifest.json"));
+}
+
+// User-facing adapters name the executable commands directly. Router skills stay thin:
+// they route to the canonical engineering policy instead of duplicating command policy.
+const commandAdapters = ["AGENTS.md", "CLAUDE.md", "GEMINI.md", ".cursorrules", ".windsurfrules"];
+for (const adapter of commandAdapters) {
+  const text = read(adapter);
   check(`${adapter} requires verify:v3`, text.includes("npm run verify:v3"));
   check(`${adapter} names the correct typecheck command`, text.includes("npm run typecheck"));
 }
 
 check(
-  "provider adapters no longer recommend bare npx tsc",
-  ["AGENTS.md", "CLAUDE.md", "GEMINI.md"].every((file) => !read(file).includes("npx tsc --noEmit\n")),
+  "user-facing adapters prohibit bare npx tsc as the command",
+  commandAdapters.every((file) => {
+    const text = read(file);
+    return /do not use|never substitute/i.test(text) && text.includes("npx tsc --noEmit");
+  }),
 );
 
 console.log(`${failed ? "FAILED" : "PASSED"}: ${passed} passed, ${failed} failed`);

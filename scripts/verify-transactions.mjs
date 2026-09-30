@@ -1,3 +1,6 @@
+import { requireLocalFixtures } from "./_require-local-fixtures.mjs";
+requireLocalFixtures("verify-transactions.mjs", ["All Transactions.csv","All Transactions (1).csv","All Transactions (2).csv"]);
+
 // End-to-end verification of the transaction ingestion path.
 //
 // Runs the REAL shipped code (scanReport -> importReport) over the three real

@@ -1,3 +1,6 @@
+import { requireLocalFixtures } from "./_require-local-fixtures.mjs";
+requireLocalFixtures("verify-timecard.mjs", ["timecard-sample.csv"]);
+
 // End-to-end verification of the timecard ingestion + reconciliation path.
 //
 // Runs the real shipped code (scanReport -> importReport) against a synthetic

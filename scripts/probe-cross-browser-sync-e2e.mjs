@@ -1,3 +1,6 @@
+import { requireLocalFixtures } from "./_require-local-fixtures.mjs";
+requireLocalFixtures("probe-cross-browser-sync-e2e.mjs", ["All Transactions.csv","All Transactions (1).csv","All Transactions (2).csv","Hotel Statistics (1).csv","Occupancy Summary midelboro.csv"]);
+
 // scripts/probe-cross-browser-sync-e2e.mjs
 // =============================================================================
 // STANDING ADVERSARIAL PROBE: CROSS-BROWSER ACCOUNT DATA SYNCHRONIZATION

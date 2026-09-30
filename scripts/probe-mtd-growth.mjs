@@ -1,3 +1,6 @@
+import { requireLocalFixtures } from "./_require-local-fixtures.mjs";
+requireLocalFixtures("probe-mtd-growth.mjs", ["Occupancy Summary midelboro.csv","Gross Revenue Report midelboro.csv"]);
+
 // Probe: the MTD Growth page must state a revenue figure that exists, and compare
 // it against the right number of prior days.
 //

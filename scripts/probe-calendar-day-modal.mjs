@@ -102,10 +102,12 @@ const buggy = (d) => new Date(d).toLocaleDateString("en-US", LABEL_OPTS);
 console.log(`     new Date("2026-08-06") -> "${buggy("2026-08-06")}"   (cell clicked: 6)`);
 console.log(`     new Date("2026-08-01") -> "${buggy("2026-08-01")}"   (cell clicked: 1)`);
 
+const hostOffsetMinutes = new Date("2026-08-06T12:00:00Z").getTimezoneOffset();
+const expectedBuggyLabel = hostOffsetMinutes > 0 ? "Wednesday, August 5" : "Thursday, August 6";
 check(
-  'the buggy expression mislabels 2026-08-06 (reproduces the screenshot)',
-  () => buggy("2026-08-06") === "Wednesday, August 5",
-  `got "${buggy("2026-08-06")}" — expected the defect to yield "Wednesday, August 5"; if this fails the host is not behind UTC and section 2 is the real test`
+  "the buggy expression behaves exactly as this host timezone predicts",
+  () => buggy("2026-08-06") === expectedBuggyLabel,
+  `got "${buggy("2026-08-06")}", expected "${expectedBuggyLabel}" for offset ${hostOffsetMinutes} minutes; section 2 is the product regression test`
 );
 
 // ---------------------------------------------------------------------------

@@ -91,6 +91,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify committed HotelKey fixture corpus
+        run: npx vitest run src/lib/hotelKeyParserFixtures.test.js src/lib/hotelKeyImportFixtures.test.js
+
       - name: Build production bundle
         run: npm run build
         env:
@@ -125,6 +128,29 @@ jobs:
           if [ -f /tmp/boston-vite.pid ]; then
             kill "$(cat /tmp/boston-vite.pid)" 2>/dev/null || true
           fi
+
+  browser_probes:
+    name: Browser synchronization probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run three-browser synchronization probe
+        run: node --import ./scripts/_loader-boot.mjs scripts/probe-three-browser-sync.mjs
 
   mutations:
     name: Mutation safety net
@@ -166,6 +192,7 @@ jobs:
       - protocol
       - suites
       - environment_probes
+      - browser_probes
       - mutations
     steps:
       - name: Require every deep-verification job
@@ -174,12 +201,13 @@ jobs:
           PROTOCOL: ${{ needs.protocol.result }}
           SUITES: ${{ needs.suites.result }}
           ENVIRONMENT_PROBES: ${{ needs.environment_probes.result }}
+          BROWSER_PROBES: ${{ needs.browser_probes.result }}
           MUTATIONS: ${{ needs.mutations.result }}
         run: |
-          printf 'protocol=%s\nsuites=%s\nenvironment_probes=%s\nmutations=%s\n' \
-            "$PROTOCOL" "$SUITES" "$ENVIRONMENT_PROBES" "$MUTATIONS"
+          printf 'protocol=%s\nsuites=%s\nenvironment_probes=%s\nbrowser_probes=%s\nmutations=%s\n' \
+            "$PROTOCOL" "$SUITES" "$ENVIRONMENT_PROBES" "$BROWSER_PROBES" "$MUTATIONS"
 
-          for result in "$PROTOCOL" "$SUITES" "$ENVIRONMENT_PROBES" "$MUTATIONS"; do
+          for result in "$PROTOCOL" "$SUITES" "$ENVIRONMENT_PROBES" "$BROWSER_PROBES" "$MUTATIONS"; do
             if [ "$result" != "success" ]; then
               echo "Deep verification did not complete successfully."
               exit 1

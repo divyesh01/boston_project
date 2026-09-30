@@ -1,3 +1,6 @@
+import { requireLocalFixtures } from "./_require-local-fixtures.mjs";
+requireLocalFixtures("probe-import-rollback-id.mjs", ["Occupancy Summary midelboro.csv"]);
+
 // Probe for the "mid-import rollback is a guaranteed silent no-op" defect (B7).
 //
 // The rollback ledger (ImportRecordIds) is keyed by the id that

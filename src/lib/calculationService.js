@@ -6,7 +6,7 @@ import { commissionFor, grossRevenueForPeriod } from '@/lib/hotel';
 import { getTaxConfig, TAX_SOURCES } from '@/lib/taxConfig';
 import { getEffectiveTaxRates, getTaxSettings } from '@/lib/taxSettings';
 import { getCcFeeRate, getCcFeeOnRefunds } from '@/lib/commissionRates';
-import { CARD_METHODS, refundTotal, refundTotalFromTotals } from '@/lib/paymentNorm';
+import { CARD_METHODS, refundTotal, refundTotalFromTotals, refundOf as refundTotalSigned } from '@/lib/paymentNorm';
 import { filterCommittedPay } from '@/lib/payrollCalc';
 import { normalizeChannel } from '@/lib/channelDictionary';
 // One shared deduction vocabulary, imported by this service and by
@@ -328,18 +328,30 @@ export class CalculationService {
     return {cardTotalCents,cardTotal:fromCents(cardTotalCents),feeCents,fee:fromCents(feeCents),rate:rate ?? getCcFeeRate(),daily,methodFeeCents};
   }
 
+  static calculateRefunds(payRows = []) {
+    const groups = new Map();
+    for (const row of payRows) {const id=row.property_id || '*';const group=groups.get(id)||{id,days:new Map(),signed:0};const date=String(row.date||'').slice(0,10);const signed=toCents(refundTotalSigned(row));group.signed+=signed;group.days.set(date,(group.days.get(date)||0)+signed);groups.set(id,group);}
+    let refundsCents=0,feeCents=0; const daily=[];
+    for (const group of groups.values()) {const total=Math.abs(group.signed);const fee=getCcFeeOnRefunds(group.id)?multiply(fromCents(total),getCcFeeRate(group.id)):0;refundsCents+=total;feeCents+=fee;
+      const rows=[...group.days].map(([date,signed])=>({date,refundsCents:group.signed?Math.round(total*signed/group.signed):-signed,feeCents:group.signed?Math.round(fee*signed/group.signed):(getCcFeeOnRefunds(group.id)?multiply(fromCents(-signed),getCcFeeRate(group.id)):0)}));
+      if(rows.length){rows.at(-1).refundsCents+=total-rows.reduce((n,r)=>n+r.refundsCents,0);rows.at(-1).feeCents+=fee-rows.reduce((n,r)=>n+r.feeCents,0);} daily.push(...rows);
+    }
+    return {refundsCents,feeCents,daily};
+  }
+
   static calculateTaxLiability(srcRows = [], grossRows = [], propertyId = null, dateRange = { from: '', to: '' }, occupancyRows = []) {
+    if (propertyId === 'all' || Array.isArray(propertyId)) propertyId = null;
     const sourceDays = new Set(srcRows.map(row=>String(row.property_id || '*')+':'+String(row.date).slice(0,10)));
-    srcRows = [...srcRows,...occupancyRows.filter(row=>!sourceDays.has(String(row.property_id || '*')+':'+String(row.date).slice(0,10))).map(row=>({...row,source:'Walk-in',net_revenue:row.room_revenue}))];
+    srcRows = [...srcRows,...occupancyRows.filter(row=>!sourceDays.has(String(row.property_id || '*')+':'+String(row.date).slice(0,10))).map(row=>({...row,source:'__ROOM_REVENUE_ESTIMATE__',tax_basis_fallback:true,net_revenue:row.room_revenue}))];
     const propertyIds = [...new Set([...srcRows,...grossRows].map(row=>row.property_id || '*'))];
-    if (!propertyId && propertyIds.length > 1) {
+    if (propertyIds.length > 1) {
       const totals = {state:0,city:0,other:0,total:0,imported:0,estimated:0};
       for (const id of propertyIds) {const part = this.calculateTaxLiability(srcRows.filter(r=>(r.property_id||'*')===id),grossRows.filter(r=>(r.property_id||'*')===id),id,dateRange); for (const key of Object.keys(totals)) totals[key] = fromCents(toCents(totals[key])+toCents(part[key]));}
       return totals;
     }
     propertyId = propertyId || propertyIds[0] || '*';
     const taxConfig = getTaxConfig(propertyId);
-    if (!taxConfig.taxEnabled) {
+    if (!taxConfig.taxEnabled && !grossRows.length) {
       // Every key the enabled path returns, so a caller reading `.estimated` or
       // `.imported` gets 0 rather than undefined — which would become NaN the
       // moment it reached toCents() and poison the whole deduction total.
@@ -352,10 +364,10 @@ export class CalculationService {
     // were collapsed by the daily-aggregate cache.
     const taxBase = new Map();
     srcRows.forEach((r) => {
-      const src = taxConfig.sources.find((s) => s.key === classifySource(r));
+      const src = r.tax_basis_fallback ? {taxable:true} : taxConfig.sources.find((s) => s.key === classifySource(r));
       // Also respect per-source taxExempt from commission rate settings
       const info = commissionFor(r.source || r.code, r.property_id || propertyId);
-      if (!src || !src.taxable || info.taxExempt) return;
+      if (!src || !src.taxable || (!r.tax_basis_fallback && info.taxExempt)) return;
       const d = String(r.date).slice(0, 10);
       taxBase.set(d, (taxBase.get(d) || 0) + toCents(r.net_revenue));
     });
@@ -399,7 +411,7 @@ export class CalculationService {
         cityCents += imp.city;
         otherCents += imp.other;
         importedCents += imp.state + imp.city + imp.other;
-      } else {
+      } else if (taxConfig.taxEnabled) {
         const base = fromCents(taxBase.get(d) || 0);
         const r = getEffectiveTaxRates(propertyId, d);
         const s = multiply(base, r.state);
@@ -425,6 +437,17 @@ export class CalculationService {
   }
 
   static calculateMoneyKept(occRows = [], srcRows = [], grossRows = [], payRows = [], expenses = [], payroll = [], dateRange = { from: '', to: '' }, propertyId = null) {
+    const ledgers = [occRows, srcRows, grossRows, payRows, expenses, payroll];
+    const propertyIds = [...new Set(ledgers.flat().map(r => String(r.property_id ?? '')))];
+    if (propertyIds.length > 1) {
+      const parts = propertyIds.map(id => {const rows=ledgers.map(rows => rows.filter(r => String(r.property_id ?? '') === id));return this.calculateMoneyKept(rows[0],rows[1],rows[2],rows[3],rows[4],rows[5],dateRange,id || null);});
+      const result = {};
+      for (const key of ['gross','otaCommissions','ccFees','refundFees','refunds','totalPayroll','operatingExpenses','estimatedTaxes','passThroughTaxes','totalDeductions','kept']) result[key] = fromCents(parts.reduce((n,p) => n + toCents(p[key]),0));
+      result.keepRate = result.gross - result.refunds > 0 ? result.kept / (result.gross - result.refunds) : 0;
+      result.basis = Object.fromEntries(['ota','cc','tax'].map(key => [key,new Set(parts.map(p=>p.basis[key])).size===1 ? parts[0].basis[key] : 'mixed']));
+      result.grossBasis = grossRevenueForPeriod({grossRows,occRows});
+      return result;
+    }
     // Gross comes from the SAME helper the dashboard widget uses, not from a
     // second local rule.
     //
@@ -455,10 +478,7 @@ export class CalculationService {
 
     const { cardTotalCents, feeCents: ccFeesCents } = this.calculateCardFees(payRows);
 
-    const refundsDollars = refundTotal(payRows);
-    const refundsCents = toCents(refundsDollars);
-    let refundFeesCents = 0;
-    for (const row of payRows) {const id=row.property_id || "*";if(getCcFeeOnRefunds(id)) refundFeesCents += multiply(refundTotal([row]),getCcFeeRate(id));}
+    const {refundsCents,feeCents:refundFeesCents} = this.calculateRefunds(payRows);
 
     const expInPeriod = expenses.filter(e => inRange(e.expense_date, dateRange.from, dateRange.to));
     // Approved/paid only (COMMITTED_PAYROLL_STATUSES in src/lib/payrollCalc.js) —
@@ -497,6 +517,7 @@ export class CalculationService {
     const actualCentsFor = (bucket) => bucketedCents.get(bucket) || 0;
 
     const otaLeg = chooseActualOrEstimate({
+      actualPresent: expInPeriod.some(e=>expenseBucket(e.category)==='ota'),
       actualCents: actualCentsFor('ota'),
       estimateCents: otaCommissionsCents,
       // With no SourceDay rows there is no rate card to estimate from, and a $0
@@ -505,6 +526,7 @@ export class CalculationService {
     });
 
     const ccLeg = chooseActualOrEstimate({
+      actualPresent: expInPeriod.some(e=>expenseBucket(e.category)==='credit_card_fees'),
       actualCents: actualCentsFor('credit_card_fees'),
       estimateCents: ccFeesCents,
     });
@@ -519,6 +541,7 @@ export class CalculationService {
     // passThroughTaxes so it stays visible instead of disappearing.
     const passThroughTaxesCents = toCents(taxLiability.imported);
     const taxLeg = chooseActualOrEstimate({
+      actualPresent: expInPeriod.some(e=>expenseBucket(e.category)==='taxes'),
       actualCents: actualCentsFor('taxes'),
       estimateCents: toCents(taxLiability.estimated),
     });
@@ -550,7 +573,7 @@ export class CalculationService {
     // Imported tax needs no subtraction here: it is not inside grossCents at all.
     // GROSS_ANCILLARY_COMPONENTS in hotel.js lists the revenue columns, and the
     // state/city/other tax columns are not among them.
-    const keepableBaseCents = grossCents - refundsCents - estimatedTaxesCents;
+    const keepableBaseCents = grossCents - refundsCents;
 
     return {
       gross: fromCents(grossCents),

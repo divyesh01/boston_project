@@ -3,23 +3,141 @@
   "owner_request": "Take over Gemini's production-readiness patch and finish the job",
   "owner_contract": {
     "success": "Correct the remaining financial, security and operational defects; verify the complete patch and provide an evidence-based release decision",
-    "non_goals": ["Unrelated redesign", "Unapproved production mutations", "Bypass protected files"],
-    "acceptance_scenarios": ["Fresh and hydrated dashboards agree to the cent", "Property A cannot alter Property B", "Missing data never becomes verified zero", "Owner exports match selected dates and properties", "Current pricing and actions tell the truth"]
+    "non_goals": [
+      "Unrelated redesign",
+      "Unapproved production mutations",
+      "Bypass protected files"
+    ],
+    "acceptance_scenarios": [
+      "Fresh and hydrated dashboards agree to the cent",
+      "Property A cannot alter Property B",
+      "Missing data never becomes verified zero",
+      "Owner exports match selected dates and properties",
+      "Current pricing and actions tell the truth"
+    ]
   },
-  "current_phase": "review-and-repair",
+  "current_phase": "complete-local-repair",
   "risk": 3,
   "compute_mode": "DEEP",
   "agents_used": 3,
   "why_this_depth_was_sufficient": "Three independent read-only reviewers cover worker security/atomicity, finance/owner outputs, and dependency/operations paths. Root is sole writer; adequacy will be reassessed after tests and review.",
   "writer": "root",
-  "role_packs": ["commander", "nisarg-1-architecture", "nisarg-2-risk", "nisarg-3-owner", "editor", "vansh", "tester", "independent-attacker", "owner-agent"],
-  "domain_packs": ["finance", "property-isolation", "imports-ingestion", "auth-security", "ui-accessibility", "deployment-operations"],
-  "workflows": ["high-risk-change"],
-  "invariants": ["Protected files untouched without explicit file-specific authorization", "Integer cents and valid zeros preserved", "Missing is not zero", "One coherent published aggregate revision", "Scope every property read/write/export"],
-  "claims": [],
-  "evidence": [{"id":"BASELINE-01","origin":"OBSERVED","detail":"V3 PASS; original Gemini patch preserved at D:/Caches/temp/rri-gemini-baseline-Hwo0lZ"}],
-  "rejected_claims": ["Gemini's claim all critical and high-priority repairs are complete"],
-  "test_results": [],
-  "deferred_items": [],
-  "final_status": null
+  "role_packs": [
+    "commander",
+    "nisarg-1-architecture",
+    "nisarg-2-risk",
+    "nisarg-3-owner",
+    "editor",
+    "vansh",
+    "tester",
+    "independent-attacker",
+    "owner-agent"
+  ],
+  "domain_packs": [
+    "finance",
+    "property-isolation",
+    "imports-ingestion",
+    "auth-security",
+    "ui-accessibility",
+    "deployment-operations"
+  ],
+  "workflows": [
+    "high-risk-change"
+  ],
+  "invariants": [
+    "Protected files untouched without explicit file-specific authorization",
+    "Integer cents and valid zeros preserved",
+    "Missing is not zero",
+    "One coherent published aggregate revision",
+    "Scope every property read/write/export"
+  ],
+  "claims": [
+    {
+      "origin": "OBSERVED",
+      "claim": "Local financial, aggregate, cache, workbook and operational repairs implemented; protected files unchanged."
+    }
+  ],
+  "evidence": [
+    {
+      "id": "BASELINE-01",
+      "origin": "OBSERVED",
+      "detail": "V3 PASS; original Gemini patch preserved at D:/Caches/temp/rri-gemini-baseline-Hwo0lZ"
+    },
+    {
+      "id": "CONCURRENT-COMMIT",
+      "origin": "OBSERVED",
+      "detail": "968b1bc appeared during work, not created by root; preserved concurrent owner edits"
+    },
+    {
+      "id": "FINAL-REPAIR-REGRESSIONS",
+      "origin": "OBSERVED",
+      "detail": "734 tests, 201 unique probes passing across broad sweep and corrected targeted reruns; one running-backend probe unverified. Strict full release gate remains blocked."
+    }
+  ],
+  "rejected_claims": [
+    "Gemini's claim all critical and high-priority repairs are complete"
+  ],
+  "test_results": [
+    {
+      "check": "npm test",
+      "result": "PASS",
+      "files": 86,
+      "tests": 734,
+      "log": "D:/Caches/temp/rri-final-tests4.log"
+    },
+    {
+      "check": "final affected probes",
+      "result": "PASS",
+      "aggregate": 16,
+      "decimal": 49,
+      "pricing": 37,
+      "buildChunks": 11
+    },
+    {
+      "check": "full strict 202 probe sweep",
+      "result": "FAIL",
+      "passed": 198,
+      "failed": 3,
+      "skipped": 1,
+      "log": "D:/Caches/temp/rri-final-probes.json"
+    },
+    {
+      "check": "three failed finance probes rerun",
+      "result": "PASS",
+      "note": "201 unique probes passing across sweep and targeted reruns; backend probe remains unverified"
+    },
+    {
+      "check": "npm audit:gate",
+      "result": "PASS",
+      "vulnerabilities": 0
+    },
+    {
+      "check": "Final build/lint/typecheck",
+      "result": "PASS",
+      "exit_code": 0,
+      "logs": [
+        "D:/Caches/temp/rri-final-build5.log",
+        "D:/Caches/temp/rri-final-lint6.log",
+        "D:/Caches/temp/rri-final-typecheck7.log"
+      ]
+    },
+    {
+      "check": "Final governance/map",
+      "result": "PASS",
+      "exit_code": 0
+    },
+    {
+      "check": "Own diff whitespace",
+      "result": "PASS",
+      "note": "Preserved unrelated owner AI_CORE_RULES.md trailing blank-line warning"
+    }
+  ],
+  "deferred_items": [
+    "Running-backend error-response probe",
+    "Actual deployment configuration and source lineage trace",
+    "Staging restore and release acceptance",
+    "Automated delivery is unavailable, not implemented",
+    "CI workflow publication: current OAuth token lacks workflow scope; preserved locally and in codex/production-takeover-with-workflow"
+  ],
+  "final_status": "LOCAL_REPAIR_COMPLETE_PRODUCTION_SIGNOFF_BLOCKED"
 }

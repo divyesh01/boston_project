@@ -42,7 +42,7 @@ export default function WeatherPanel() {
   const date = new Intl.DateTimeFormat("en-CA", {timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
 
   const { data, isLoading } = useQuery({
-    queryKey: ["weather-load", propertyId, date, locationVersion, (snapshots || []).length],
+    queryKey: ["weather-load", propertyId, date, locationVersion],
     queryFn: async () => {
       const cfg = getWeatherConfig(propertyId);
       if (isPortfolio) {
@@ -59,7 +59,8 @@ export default function WeatherPanel() {
         }),
         persistFn: async (rows) => {
           const existing = await db.entities.WeatherSnapshot.filter({ property_id: propertyId }, "date", 100000);
-          const stale = existing.filter((r) => String(r.date).slice(0, 10) === date);
+          const keys = new Set(rows.map(r => `${String(r.date).slice(0,10)}|${r.kind}`));
+          const stale = existing.filter(r => keys.has(`${String(r.date).slice(0,10)}|${r.kind}`));
           if (stale.length) {
             for (const s of stale) await db.entities.WeatherSnapshot.delete(s.id);
           }

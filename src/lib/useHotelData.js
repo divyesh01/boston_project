@@ -2,7 +2,7 @@ import { db } from '@/api/base44Client';
 
 import { useQuery } from "@tanstack/react-query";
 import { purgeExpiredUploadedReportRawRows } from '@/lib/uploadRetention';
-import { getDailyAggregates, buildSyntheticRows } from '@/lib/dailyAggregates';
+import { getDailyAggregates, buildSyntheticRows, DAILY_AGGREGATE_VERSION } from '@/lib/dailyAggregates';
 import { mergeImportHistory } from '@/lib/importHistory';
 import { fetchActiveManifests } from '@/lib/bulkImportPipeline';
 
@@ -365,7 +365,7 @@ export function useMetricDates(propertyId) {
 // callers fall back to live computation.
 export function useDailyFinancialAggregates(dateRange, propertyId, enabled = true) {
   return useQuery({
-    queryKey: ["daily-aggregates", dateRange?.from, dateRange?.to, Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
+    queryKey: ["daily-aggregates", DAILY_AGGREGATE_VERSION, dateRange?.from, dateRange?.to, Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
     enabled,
     queryFn: async () => {
       const aggs = await getDailyAggregates({
@@ -389,7 +389,7 @@ export function useDailyFinancialAggregates(dateRange, propertyId, enabled = tru
           if (data?.ok && Array.isArray(data.summaries) && data.summaries.length > 0) {
             const complete = data.summaries.every(row => {
               try { const meta = JSON.parse(row.channel_summary_json || '{}')._meta;
-                return meta && ['occupancy','revenue','source','payment'].every(type=>meta.coverage?.includes(type));
+                return row.refund_cents === 0 && meta && ['occupancy','revenue','source','payment'].every(type=>meta.coverage?.includes(type));
               } catch {return false;}
             });
             if (complete && data.source === 'property_day_summary' && data.stale !== true) return buildSyntheticRows(data.summaries);

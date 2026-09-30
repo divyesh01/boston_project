@@ -118,8 +118,8 @@ console.log("\n=== 7. Disabled / unconfigured tax returns an all-zero object ===
 {
   setTaxConfig({ taxRate: RATES.state, taxEnabled: false });
   const off = CalculationService.calculateTaxLiability(SRC, GROSS, "", RANGE);
-  T("every key is 0 when tax is disabled",
-    ["state", "city", "other", "total", "imported", "estimated"].every((k) => off[k] === 0),
+  T("disabling estimates preserves reported guest tax liability",
+    off.imported === 117 && off.total === 117 && off.estimated === 0,
     JSON.stringify(off));
   setTaxConfig({ taxRate: RATES.state, taxEnabled: true }); // restore
 }

@@ -590,3 +590,11 @@ daily/revenue scanner → adjustments/refunds → the remaining report-specific 
 `reportImport.js`. `TECH_DEBT.md` section 3 carries the register.
 
 ---
+
+## Production takeover corrections (2026-09-30)
+
+CalculationService.calculateMoneyKept chooses actual versus estimated costs separately for each property before adding portfolio totals. Expense record presence preserves actual zero and negative rebates. Card, commission and refund calculations use shared integer-cent rules; refund reversals retain their business-day timing. Imported tax liability remains visible when estimating taxes is disabled.
+
+aggregateDays and buildSyntheticRows preserve zero-ledger presence, source refunds and unavailable rooms. Missing server dimensions decline the cache fast path, and Dashboard retains actual expense records. MoneyKept uses the canonical service for property-specific deductions and tax drilldowns.
+
+Regression coverage: src/tests/productionTakeover.test.js, the finance probes, and probe-aggregate-rebuild.mjs. Final local application suite passed 734 tests; build, lint, typecheck, audit, V3 and map passed. docs/PRODUCTION_TAKEOVER_REPORT.md records the 201 passing probe results across sweep/reruns, the unverified running-backend check, scheduling containment, and staging/rollback requirements. A local green application suite does not authorize production sign-off.

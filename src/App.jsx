@@ -183,18 +183,19 @@ const RequireAuth = ({ children }) => {
   }
 
   if (!isAuthenticated) return null;
-  return <AuthoritativeDataGate userId={user?.id}>{children}</AuthoritativeDataGate>;
+  return <AuthoritativeDataGate userId={user?.id} scopeKey={JSON.stringify([user?.account_id,user?.role,user?.property_access,user?.property_access_mode,user?.permissions])}>{children}</AuthoritativeDataGate>;
 };
 
-const AuthoritativeDataGate = ({ children, userId }) => {
+const AuthoritativeDataGate = ({ children, userId, scopeKey }) => {
   const queryClient = useQueryClient();
   const [attempt, setAttempt] = useState(0);
-  const [state, setState] = useState({ userId: null, status: 'loading', error: null });
+  const [state, setState] = useState({ userId: null, scopeKey: null, status: 'loading', error: null });
 
   useEffect(() => {
     if (!userId) return undefined;
     let cancelled = false;
-    setState({ userId, status: 'loading', error: null });
+    queryClient.clear();
+    setState({ userId, scopeKey, status: 'loading', error: null });
     Promise.all([
       import('@/api/base44Client'),
       import('@/lib/bulkHydrationService'),
@@ -205,14 +206,14 @@ const AuthoritativeDataGate = ({ children, userId }) => {
       rebuildDailyAggregates: aggregates.rebuildDailyAggregates,
       invalidateQueries: (filters) => queryClient.invalidateQueries(filters),
     })).then(() => {
-      if (!cancelled) setState({ userId, status: 'ready', error: null });
+      if (!cancelled) setState({ userId, scopeKey, status: 'ready', error: null });
     }).catch((error) => {
-      if (!cancelled) setState({ userId, status: 'error', error });
+      if (!cancelled) setState({ userId, scopeKey, status: 'error', error });
     });
     return () => { cancelled = true; };
-  }, [userId, attempt, queryClient]);
+  }, [userId, scopeKey, attempt, queryClient]);
 
-  if (state.userId !== userId || state.status === 'loading') {
+  if (state.userId !== userId || state.scopeKey !== scopeKey || state.status === 'loading') {
     return (
       <div role="status" aria-live="polite" className="fixed inset-0 flex items-center justify-center bg-[#040D1A] text-slate-300">
         Preparing your hotel data…

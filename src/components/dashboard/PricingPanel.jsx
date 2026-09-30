@@ -18,6 +18,8 @@ export default function PricingPanel() {
   useRealtimeInvalidation(["rooms", "reservations", "weather"]);
   const {
     forecast,
+    availabilityMessage,
+    freshnessNotice,
     config,
     enabled,
     isError,
@@ -28,12 +30,7 @@ export default function PricingPanel() {
   } = usePricingForecast(14);
 
   const today = forecast[0] || null;
-  const baseAdrCents = today
-    ? Math.round(
-        Object.values(today.types).reduce((s, t) => s + t.baseCents, 0) /
-          Math.max(1, Object.values(today.types).filter((t) => t.baseCents > 0).length)
-      )
-    : 0;
+  const baseAdrCents = today?.baseAdrCents ?? 0;
   // Every figure this panel derives is integer cents, because that is all the
   // pricing engine emits. The names carry the unit so the guard in
   // scripts/probe-cents-unit-mismatch.mjs can see them: these were `recAdr`,
@@ -68,7 +65,7 @@ export default function PricingPanel() {
         enabled
           ? isHistoricalSimulation
             ? `Historical simulation anchored at ${forecastStartDate}`
-            : "Recommended rates from live demand signals"
+            : freshnessNotice
           : "Pricing engine is disabled"
       }
       right={
@@ -148,7 +145,7 @@ export default function PricingPanel() {
           )}
         </div>
       ) : (
-        <p className="text-sm text-slate-400">No room register yet. Build one on the Room Board to see recommendations.</p>
+        <p className="text-sm text-slate-400">{availabilityMessage}</p>
       )}
     </Card>
   );

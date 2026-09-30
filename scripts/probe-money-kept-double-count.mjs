@@ -117,7 +117,7 @@ saveTaxSettings([
 const RANGE = { from: '2026-01-01', to: '2026-01-02' };
 
 // One taxable, commissionable source day. EXPEDIA_HC is taxable in TAX_SOURCES.
-const SRC = [{ date: '2026-01-01', source: 'EXPEDIA HOTEL COLLECT', net_revenue: 1000, stays: 10, property_id: '' }];
+const SRC = [{ date: '2026-01-01', source: 'EXPEDIA HOTEL COLLECT', net_revenue: 1000, stays: 10, property_id: '' }, { date:'2026-01-02',source:'EXPEDIA HOTEL COLLECT',net_revenue:0,stays:0,property_id:'' }];
 const OCC = [
   { date: '2026-01-01', room_revenue: 1000, rooms_sold: 10, property_id: '' },
   { date: '2026-01-02', room_revenue: 1000, rooms_sold: 10, property_id: '' },
@@ -331,7 +331,7 @@ console.log('\n[9] money figures render cents, axis ticks excepted');
   ok('the kept headline renders cents', /money2\(Math\.abs\(kept\)\)/.test(widget));
   ok('the deductions headline renders cents', /money2\(totalDeductions\)/.test(widget));
   ok('the gross headline renders cents', /money2\(gross\)/.test(widget));
-  ok('each deduction line renders cents', /-\$?\{money2\(i\.amount\)\}/.test(widget));
+  ok('each deduction line renders signed cents', widget.includes('money2(Math.abs(i.amount))') && widget.includes("i.amount < 0 ? '+' : '-'"));
   ok('the tax split renders cents', /money2\(tax\.passThrough\)/.test(widget) && /money2\(tax\.estimated\)/.test(widget));
 }
 

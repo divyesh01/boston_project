@@ -119,7 +119,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       if (!base || e.recurring === false || freq === "one_time") return;
       const key = `${String(e.expense_name || "").trim().toLowerCase()}|${e.category || "other"}|${e.property_id || ""}`;
       const s = seriesMap.get(key) || { entries: [] };
-      s.entries.push({ date: base, amount: Number(e.amount) || 0, freq, category: e.category || "other", name: e.expense_name || "Recurring Expense" });
+      s.entries.push({ property_id:e.property_id, date: base, amount: Number(e.amount) || 0, freq, category: e.category || "other", name: e.expense_name || "Recurring Expense" });
       seriesMap.set(key, s);
     });
     seriesMap.forEach((s) => {
@@ -142,7 +142,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       let guard = 0;
       while (date <= (projEnd || effectiveFrom) && guard++ < 2000) {
         if (date >= effectiveFrom && !entered.has(date)) {
-          extras.push({ expense_name: first.name, vendor: "Recurring", category: first.category, expense_date: date, amount: first.amount });
+          extras.push({ property_id:first.property_id, expense_name: first.name, vendor: "Recurring", category: first.category, expense_date: date, amount: first.amount });
         }
         date = addPeriod(date, first.freq);
       }
@@ -201,24 +201,16 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     // headline reads total revenue would mis-allocate every lump deduction.
     // Room from the occupancy leg, ancillary from the charge ledger — the same
     // two halves grossRevenueForPeriod adds up.
-    occRows.forEach((r) => bump(String(r.date).slice(0, 10), "gross", Number(r.room_revenue) || 0));
+    if (occRows.length) occRows.forEach((r) => bump(String(r.date).slice(0, 10), "gross", Number(r.room_revenue) || 0));
+    else grossInPeriod.forEach(r=>bump(String(r.date).slice(0,10),"gross",Number(r.room_rent)||0));
     grossInPeriod.forEach((r) => bump(String(r.date).slice(0, 10), "gross", fromCents(rowAncillaryRevenueCents(r))));
     const channels = CalculationService.calculateChannelMetrics(srcRows);
     channels.forEach(c=>c.dailyCommission.forEach(d=>bump(d.date,"commission",fromCents(d.cents))));
     const cardFees = CalculationService.calculateCardFees(payRows);
     cardFees.daily.forEach(r=>bump(r.date,"ccFee",fromCents(r.feeCents)));
-    payRows.forEach((r) => {
-      const date = String(r.date).slice(0, 10);
-      const card = CARD_METHODS.reduce((a, k) => a + (Number(r[k]) || 0), 0);
+    const refundSummary = CalculationService.calculateRefunds(payRows);
+    refundSummary.daily.forEach(r=>{bump(r.date,"refunds",fromCents(r.refundsCents));bump(r.date,"refundFee",fromCents(r.feeCents));});
 
-      const refund = Math.abs(refundOf(r));
-      bump(date, "refunds", refund);
-      if (getCcFeeOnRefunds(r.property_id || "*")) bump(date, "refundFee", fromCents(multiply(refund, getCcFeeRate(r.property_id || "*"))));
-    });
-
-    // ── Tax estimate base: net revenue of taxable booking sources per day/property.
-    // Only taxable sources (hotel-collect OTAs, walk-in, direct/property bookings) form
-    // the base; imported PMS tax lines (below) always take precedence when present.
     const dayTotals = [...dayMap.values()].sort((a,b)=>a.date.localeCompare(b.date)).map(day=>{
       const source=srcRows.filter(r=>String(r.date).slice(0,10)===day.date);
       const grossDay=grossInPeriod.filter(r=>String(r.date).slice(0,10)===day.date);
@@ -289,9 +281,9 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     const otaRecords = channels.filter(c=>c.gross>0 || c.commission>0).map(c=>({name:c.source,detail:`Gross ${money2(c.gross)} @ ${pct(c.rate,1)} commission`,amount:c.commission}));
 
 
-    const ccRecords = cardFees.daily.map(r=>({name:r.date,detail:`Card volume ${money2(fromCents(r.cardTotalCents))} @ ${pct(r.rate,2)}`,amount:fromCents(r.feeCents)})).filter(r=>r.amount>0);
+    const ccRecords = cardFees.daily.map(r=>({name:r.date,detail:`Card volume ${money2(fromCents(r.cardTotalCents))} @ ${pct(r.rate,2)}`,amount:fromCents(r.feeCents)})).filter(r=>r.amount!==0);
 
-    const refundRecords = dayTotals.filter((d) => d.refunds > 0).map((d) => ({
+    const refundRecords = dayTotals.filter((d) => d.refunds !== 0).map((d) => ({
       name: d.date,
       detail: "Closed balance folio + loyalty discount",
       amount: d.refunds,
@@ -301,16 +293,16 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     // denominator because money returned to the guest was never truly "kept".
     const refundsTotal = refundRecords.reduce((a, x) => a + x.amount, 0);
 
-    const refundFeeRecords = dayTotals.filter((d) => d.refundFee > 0).map((d) => ({
+    const refundFeeRecords = dayTotals.filter((d) => d.refundFee !== 0).map((d) => ({
       name: d.date,
-      detail: `Refund ${money2(d.refunds)} @ ${pct(ccFee, 2)} refund fee`,
+      detail: `Refund ${money2(d.refunds)} ? configured property refund fee`,
       amount: d.refundFee,
     }));
 
     // ── Deduction items ──
     const items = [];
     const pushItem = (key, label, amount, records, rate) => {
-      if (amount > 0.004) items.push({ key, label, amount: Math.round(amount * 100) / 100, records: records || [], rate: Number.isFinite(rate) ? rate : undefined });
+      if (Math.abs(amount) > 0.004) items.push({ key, label, amount: Math.round(amount * 100) / 100, records: records || [], rate: Number.isFinite(rate) ? rate : undefined });
     };
 
     // OTA commission — actual invoices beat the rate-card estimate.
@@ -321,58 +313,35 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     // wins. It decides in integer cents, which is the same threshold the old
     // `> 0.004` dollar comparison expressed; the amounts pushed below stay in the
     // dollars this component displays.
-    const otaActual = expAmt("ota");
-    const otaEstimated = otaRecords.reduce((a, x) => a + x.amount, 0);
-    const otaLeg = chooseActualOrEstimate({
-      actualCents: toCents(otaActual),
-      estimateCents: toCents(otaEstimated),
-      // No SourceDay rows means no rate card to estimate from.
-      estimateApplies: !!otaFromSources,
+    // Select actual versus estimated deductions inside each property, then sum.
+    const costLedgers = [occRows, srcRows, grossInPeriod, payRows, [...expInPeriod, ...recurringExtras]];
+    const ids = [...new Set(costLedgers.flat().map(r=>String(r.property_id ?? '')))];
+    const costs = ids.map(id=>{
+      const [occ,source,gross,pay,exp] = costLedgers.map(rows=>rows.filter(r=>String(r.property_id ?? '')===id));
+      const value = CalculationService.calculateMoneyKept(occ,source,gross,pay,exp,[],{from,to},id || null);
+      return {id,exp,source,gross,value};
     });
-    if (otaLeg.basis === "actual") {
-      pushItem("ota", "OTA Commissions (actual)", otaActual, expRows("ota").map(expRecord));
-    } else if (otaLeg.basis === "estimated") {
-      pushItem("ota", "OTA Commissions (estimated)", otaEstimated, otaRecords);
-    }
-
-    // Card processing fees — a real merchant statement beats the derived fee.
-    const ccActual = expAmt("credit_card_fees");
-    const ccTotal = ccRecords.reduce((a, x) => a + x.amount, 0);
-    const ccLeg = chooseActualOrEstimate({
-      actualCents: toCents(ccActual),
-      estimateCents: toCents(ccTotal),
-    });
-    if (ccLeg.basis === "actual") {
-      pushItem("credit_card_fees", "Credit Card Processing Fees (actual)", ccActual, expRows("credit_card_fees").map(expRecord));
-    } else {
-      pushItem("cc", "Credit Card Processing Fees (estimated)", ccTotal, ccRecords);
-      // The statement already contains what the processor charged on refunds, so
-      // the derived refund fee rides with the estimate only.
-      if (refundFeeRecords.length) {
-        pushItem("refund_fee", "CC Fee on Refunds", refundFeeRecords.reduce((a, x) => a + x.amount, 0), refundFeeRecords);
+    const labelBasis = key => new Set(costs.map(c=>c.value.basis[key])).size===1 ? costs[0]?.value.basis[key] : 'mixed actual/estimated';
+    const costTotal = key => fromCents(costs.reduce((n,c)=>n+toCents(c.value[key]),0));
+    const recordsFor = (bucket,key,basisKey) => costs.flatMap(c=>c.value.basis[basisKey]==='actual'
+      ? c.exp.filter(e=>expenseBucket(e.category)===bucket).map(expRecord)
+      : [{name:c.id || 'Property',detail:'Estimated at configured property rates',amount:c.value[key]}]);
+    pushItem('ota', 'OTA Commissions ('+labelBasis('ota')+')', costTotal('otaCommissions'), recordsFor('ota','otaCommissions','ota'));
+    pushItem('cc', 'Credit Card Processing Fees ('+labelBasis('cc')+')', costTotal('ccFees'), recordsFor('credit_card_fees','ccFees','cc'));
+    pushItem('refund_fee', 'CC Fee on Refunds', costTotal('refundFees'), costs.map(c=>({name:c.id || 'Property',detail:'Configured property refund fee',amount:c.value.refundFees})));
+    const estimatedTaxFromRates = costTotal('estimatedTaxes');
+    const taxIsActual = labelBasis('tax') === 'actual';
+    const effectiveTaxRate = undefined;
+    pushItem('taxes','Business Taxes ('+labelBasis('tax')+')',costTotal('estimatedTaxes'),recordsFor('taxes','estimatedTaxes','tax'));
+    const liability = {state:0,city:0,other:0};
+    for (const c of costs) {
+      const imported = CalculationService.calculateTaxLiability([],c.gross,c.id || null,{from,to});
+      const full = CalculationService.calculateTaxLiability(c.source,c.gross,c.id || null,{from,to},occRows.filter(r=>String(r.property_id ?? '')===c.id));
+      for (const [key,category] of [['state','state_taxes'],['city','city_taxes'],['other','taxes']]) {
+        const amount = c.value.basis.tax==='actual' ? imported[key] + c.exp.filter(e=>e.category===category).reduce((n,e)=>n+Number(e.amount || 0),0) : full[key];
+        liability[key] = fromCents(toCents(liability[key])+toCents(amount));
       }
     }
-
-    // Taxes — imported PMS tax is guest-collected pass-through and is never a
-    // cost to the owner. Of the remaining two, an actual tax payment beats the
-    // estimate derived from configured rates.
-    const estimatedTaxFromRates = dayTotals.reduce((a, d) => a + d.deductTax, 0);
-    const estimatedTaxBase = dayTotals.reduce((a, d) => a + (d.taxBase || 0), 0);
-    const taxLeg = chooseActualOrEstimate({
-      actualCents: toCents(manualTaxAmt),
-      estimateCents: toCents(estimatedTaxFromRates),
-    });
-    const taxIsActual = taxLeg.basis === "actual";
-    const taxTotal = taxIsActual ? manualTaxAmt : estimatedTaxFromRates;
-    const effectiveTaxRate = !taxIsActual && estimatedTaxBase > 0 ? estimatedTaxFromRates / estimatedTaxBase : undefined;
-    const estimatedTaxRecords = taxIsActual
-      ? [...manualState, ...manualCity, ...manualOtherTax].map(expRecord)
-      : dayTotals.filter((d) => d.deductTax > 0).map((d) => ({
-          name: d.date,
-          detail: "Estimated at configured tax rates",
-          amount: d.deductTax,
-        }));
-    pushItem("taxes", taxIsActual ? "Business Taxes (actual)" : "Business Taxes (estimated)", taxTotal, estimatedTaxRecords, effectiveTaxRate);
 
     pushItem("payroll", "Payroll", sum(payInPeriod, "total_pay") + expAmt("payroll"), [
       ...payInPeriod.map((p) => ({
@@ -418,9 +387,9 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     const impDays = dayTotals.filter((d) => d.passTax > 0.004);
     const estDays = dayTotals.filter((d) => d.deductTax > 0.004);
     const sumOn = (rows, k) => rows.reduce((a, d) => a + d[k], 0);
-    const liabState = sumOn(dayTotals, "impState") + (taxIsActual ? manualStateAmt : sumOn(dayTotals, "state") - sumOn(dayTotals,"impState"));
-    const liabCity = sumOn(dayTotals, "impCity") + (taxIsActual ? manualCityAmt : sumOn(dayTotals, "city") - sumOn(dayTotals,"impCity"));
-    const liabOther = sumOn(dayTotals, "impOther") + (taxIsActual ? manualOtherTaxAmt : sumOn(dayTotals, "other") - sumOn(dayTotals,"impOther"));
+    const liabState = liability.state;
+    const liabCity = liability.city;
+    const liabOther = liability.other;
     const passThrough = sumOn(impDays, "passTax");
 
     const dayImpImported = (d) => {
@@ -428,23 +397,22 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       return imp?.present === true;
     };
 
-    const taxRecords = {
-      "State Tax": dayTotals.filter((d) => d.state > 0).map((d) => ({
-        name: d.date,
-        detail: dayImpImported(d) ? "Imported (PMS)" : "Estimated at configured rate",
-        amount: d.state,
-      })),
-      "City/Local Tax": dayTotals.filter((d) => d.city > 0).map((d) => ({
-        name: d.date,
-        detail: dayImpImported(d) ? "Imported (PMS)" : "Estimated at configured rate",
-        amount: d.city,
-      })),
-      "Other Taxes": dayTotals.filter((d) => d.other > 0).map((d) => ({
-        name: d.date,
-        detail: dayImpImported(d) ? "Imported (PMS)" : "Estimated at configured rate",
-        amount: d.other,
-      })),
-    };
+    const taxRecords = {};
+    for (const [label,key,category] of [['State Tax','state','state_taxes'],['City/Local Tax','city','city_taxes'],['Other Taxes','other','taxes']]) {
+      taxRecords[label] = costs.flatMap(c=>{
+        const records = [];
+        const dates = [...new Set([...c.source,...c.gross,...occRows.filter(r=>String(r.property_id ?? '')===c.id)].map(r=>String(r.date).slice(0,10)))];
+        for (const date of dates) {
+          const gross = c.gross.filter(r=>String(r.date).slice(0,10)===date);
+          const source = c.value.basis.tax==='actual' ? [] : c.source.filter(r=>String(r.date).slice(0,10)===date);
+          const occupancy = c.value.basis.tax==='actual' ? [] : occRows.filter(r=>String(r.property_id ?? '')===c.id && String(r.date).slice(0,10)===date);
+          const value = CalculationService.calculateTaxLiability(source,gross,c.id || null,{from:date,to:date},occupancy);
+          if (value[key]) records.push({name:date,detail:c.id+' ? imported/estimated tax liability',amount:value[key]});
+        }
+        if(c.value.basis.tax==='actual') records.push(...c.exp.filter(e=>e.category===category).map(expRecord));
+        return records;
+      });
+    }
 
     // Tax object consumed by the UI: per-jurisdiction liability amounts, the
     // matching line-item records, the imported pass-through, and the estimated
@@ -584,7 +552,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
   // Integer cents for the same reason as `kept` above: this is the denominator
   // of the displayed keep rate, so a residue here moves a percentage the owner
   // reads against a target.
-  const netRevenueBase = fromCents(toCents(gross) - toCents(refundsTotal) - toCents(passThrough));
+  const netRevenueBase = fromCents(toCents(gross) - toCents(refundsTotal));
   const keepRate = netRevenueBase > 0 ? kept / netRevenueBase : (gross > 0 ? kept / gross : 0);
   const periodLabel = `${from || "—"} → ${to || "—"}`;
   const taxTotal = tax.state + tax.city + tax.other;
@@ -692,7 +660,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
                     {i.label}
                   </span>
                   <span className="text-sm tabular-nums text-slate-200">
-                    -{money2(i.amount)}
+                    {i.amount < 0 ? '+' : '-'}{money2(Math.abs(i.amount))}
                     {/* Always share OF GROSS, so every row in this column and
                         every slice in the pie are measuring the same thing. The
                         configured rate (e.g. a 11.70% tax rate) is a different

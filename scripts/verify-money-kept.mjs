@@ -182,7 +182,7 @@ console.log('\n6. The headline figure is computed in integer cents');
     /const kept = fromCents\(toCents\(gross\) - totalDeductionsCents\)/.test(src),
     'expected `const kept = fromCents(toCents(gross) - totalDeductionsCents)`');
   check('MoneyKept computes the keep-rate denominator from cents',
-    /const netRevenueBase = fromCents\(toCents\(gross\) - toCents\(refundsTotal\) - toCents\(passThrough\)\)/.test(src),
+    /const netRevenueBase = fromCents\(toCents\(gross\) - toCents\(refundsTotal\)\)/.test(src),
     'expected netRevenueBase to route through toCents/fromCents');
   // Anchored on the assignment, not on the substring: a comment that *explains*
   // the old float expression must not be able to fail this.

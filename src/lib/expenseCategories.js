@@ -162,11 +162,11 @@ export function expenseBucket(cat) {
  * rate-card estimate to fall back on, and inventing a $0 "estimated" line would
  * claim a measurement that was never made.
  *
- * @param {{actualCents?: number, estimateCents?: number, estimateApplies?: boolean}} params
+ * @param {{actualCents?: number, estimateCents?: number, estimateApplies?: boolean, actualPresent?: boolean}} params
  * @returns {{cents: number, basis: "actual"|"estimated"|"none"}}
  */
-export function chooseActualOrEstimate({ actualCents = 0, estimateCents = 0, estimateApplies = true } = {}) {
-  if (actualCents > 0) return { cents: actualCents, basis: "actual" };
+export function chooseActualOrEstimate({ actualCents = 0, estimateCents = 0, estimateApplies = true, actualPresent = false } = {}) {
+  if (actualPresent || actualCents !== 0) return { cents: actualCents, basis: "actual" };
   if (estimateApplies) return { cents: estimateCents, basis: "estimated" };
   return { cents: 0, basis: "none" };
 }

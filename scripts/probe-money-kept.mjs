@@ -21,6 +21,11 @@ register(new URL("./resolve-alias.mjs", import.meta.url));
 
 const { CalculationService } = await import("../src/lib/calculationService.js");
 
+// This probe isolates gross/expense cent arithmetic; tax behavior has dedicated probes.
+const storage = new Map();
+globalThis.localStorage = {getItem:k=>storage.get(k) ?? null,setItem:(k,v)=>storage.set(k,String(v)),removeItem:k=>storage.delete(k)};
+const {setTaxConfig} = await import('../src/lib/taxConfig.js');
+setTaxConfig({taxEnabled:false});
 const RANGE = { from: "2026-08-01", to: "2026-08-31" };
 const moneyKept = ({ occ = [], gross = [], exp = [] }) =>
   CalculationService.calculateMoneyKept(occ, [], gross, [], exp, [], RANGE);

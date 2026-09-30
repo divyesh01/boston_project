@@ -186,7 +186,7 @@ export async function fetchOpenWeatherForecast({ lat, lon, invoke }) {
 
 // High-level loader used by the dashboard panel: uses cached rows when fresh,
 // otherwise fetches via the server proxy (if a connector is provided) and
-// persists rows, otherwise returns the demo forecast flagged as demo. Needs the
+// persists measured rows, otherwise reports unavailable. Needs the
 // Dexie table + owner write permissions, so callers pass `{ fetchFn, persistFn }`.
 /**
  * @param {{
@@ -208,7 +208,7 @@ export async function loadWeather({ propertyId, date, cacheRows, fetchFn, persis
       if (persistFn) await persistFn(rows);
       return { rows, source: "api" };
     } catch (e) {
-      // Fall through to demo rather than leave the panel broken.
+      // An unavailable provider must not become measured weather.
       return { rows: [], source: "unavailable", error: e.message };
     }
   }

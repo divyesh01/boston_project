@@ -272,6 +272,7 @@ export function buildPricingForecast({ rooms, reservations, weatherByDate = {}, 
     let remaining = Math.round(occupancy * rooms.length) - allocation.reduce((n,t)=>n+t.sold,0);
     for (const item of [...allocation].sort((a,b)=>b.fraction-a.fraction)) {if(remaining>0 && item.sold<item.count){item.sold++;remaining--;}}
     const types = {};
+    let baseAdrNum = 0;
     let adrNum = 0;
     let adrDen = 0;
     let projectedRevenue = 0;
@@ -279,6 +280,7 @@ export function buildPricingForecast({ rooms, reservations, weatherByDate = {}, 
     let projectedRoomNights = 0;
     for (const type of presentTypes) {
       const base = cfg.baseRates[type] || 0;
+      baseAdrNum += base * rooms.filter(r => r.room_type === type).length;
       const rec = recommendRate({ baseCents: base, occupancy, isWeekend: weekend, weatherCondition: condition, config: cfg });
       types[type] = rec;
       if (rec.recommendedCents > 0) {
@@ -315,6 +317,7 @@ export function buildPricingForecast({ rooms, reservations, weatherByDate = {}, 
       occupancy,
       weatherCondition: condition,
       types,
+      baseAdrCents: Math.round(baseAdrNum / rooms.length),
       adrCents: adrDen ? Math.round(adrNum / adrDen) : 0,
       projectedRoomNights,
       projectedRevenueCents: projectedRevenue,

@@ -119,7 +119,9 @@ async function fetchLedger(name, propertyId, from, to) {
  * @property {number} occ_revenue cents
  * @property {number} occ_rooms_sold count
  * @property {number} occ_capacity_rooms count
- * @property {Record<string, { net: number, stays: number }>} source_net net in cents
+ * @property {number} occ_out_of_order
+ * @property {{occupancy:boolean,revenue:boolean,payment:boolean}} ledger_presence
+ * @property {Record<string, { net: number, stays: number, refunds?:number }>} source_net net in cents
  * @property {number} gross_state_tax cents
  * @property {number} gross_city_tax cents
  * @property {number} gross_other_tax cents
@@ -150,8 +152,9 @@ function newDay(pid, date) {
   return {
     property_id: pid,
     business_date: date,
-    occ_revenue: 0, occ_rooms_sold: 0, occ_capacity_rooms: 0,
+    occ_revenue: 0, occ_rooms_sold: 0, occ_capacity_rooms: 0, occ_out_of_order:0,
     source_net: Object.create(null), gross_state_tax: 0, gross_city_tax: 0, gross_other_tax: 0, gross_room_rent: 0, gross_tax_fields_present:false, gross_misc: {},
+    ledger_presence: {occupancy:false,revenue:false,payment:false},
     payment: {}, payment_total: 0, expense_by_category: {},
   };
 }
@@ -184,18 +187,20 @@ function finalizeDay(d) {
     for (const [k, v] of Object.entries(obj || {})) out[k] = fromCents(v);
     return out;
   };
-  /** @type {Record<string, { net: number, stays: number }>} */
-  const sourceNet = {};
+  /** @type {Record<string, { net: number, stays: number, refunds?:number }>} */
+  const sourceNet = Object.create(null);
   for (const [k, v] of Object.entries(d.source_net || {})) {
-    sourceNet[k] = { net: fromCents(v.net), stays: v.stays };
+    sourceNet[k] = { net: fromCents(v.net), stays: v.stays, refunds:fromCents(v.refunds || 0) };
   }
   return {
+    ledger_presence: d.ledger_presence,
     aggregate_version: DAILY_AGGREGATE_VERSION,
     property_id: d.property_id,
     business_date: d.business_date,
     occ_revenue: fromCents(d.occ_revenue),
     occ_rooms_sold: d.occ_rooms_sold,
     occ_capacity_rooms: d.occ_capacity_rooms,
+    occ_out_of_order: d.occ_out_of_order,
     source_net: sourceNet,
     gross_state_tax: fromCents(d.gross_state_tax),
     gross_city_tax: fromCents(d.gross_city_tax),
@@ -239,8 +244,10 @@ export function aggregateDays({ occ = [], src = [], gross = [], pay = [], exp = 
 
   for (const r of occ) {
     const d = ensure(r.property_id, String(r.date).slice(0, 10));
+    d.ledger_presence.occupancy = true;
     d.occ_revenue += toCents(r.room_revenue);
     d.occ_rooms_sold += Number(r.rooms_sold) || 0;
+    d.occ_out_of_order += Number(r.out_of_order ?? r.down_rooms ?? r.ooo_rooms ?? 0);
     d.occ_capacity_rooms += Number(r.total_rooms) || 0;
   }
 
@@ -248,7 +255,8 @@ export function aggregateDays({ occ = [], src = [], gross = [], pay = [], exp = 
     const date = String(r.date).slice(0, 10);
     const d = ensure(r.property_id, date);
     const key = r.source || r.code || 'UNKNOWN';
-    const cur = d.source_net[key] || { net: 0, stays: 0 };
+    const cur = d.source_net[key] || { net: 0, stays: 0, refunds:0 };
+    cur.refunds += toCents(r.refunds || r.refund_amount || 0);
     cur.net += toCents(r.net_revenue);
     cur.stays += Number(r.stays) || 0;
     d.source_net[key] = cur;
@@ -256,6 +264,7 @@ export function aggregateDays({ occ = [], src = [], gross = [], pay = [], exp = 
 
   for (const r of gross) {
     const d = ensure(r.property_id, String(r.date).slice(0, 10));
+    d.ledger_presence.revenue = true;
     d.gross_tax_fields_present ||= ["state_tax","city_tax","other_tax"].some(key=>r[key]!=null);
     d.gross_state_tax += toCents(r.state_tax);
     d.gross_city_tax += toCents(r.city_tax);
@@ -268,6 +277,7 @@ export function aggregateDays({ occ = [], src = [], gross = [], pay = [], exp = 
 
   for (const r of pay) {
     const d = ensure(r.property_id, String(r.date).slice(0, 10));
+    d.ledger_presence.payment = true;
     for (const f of PAYMENT_FIELDS) {
       d.payment[f] = (d.payment[f] || 0) + toCents(r[f]);
     }
@@ -368,6 +378,8 @@ export function buildSyntheticRows(aggregates) {
 
   for (const a of aggregates) {
     const date = String(a.business_date).slice(0, 10);
+    let meta = null;
+    try {meta=(typeof a.channel_summary_json==='string' ? JSON.parse(a.channel_summary_json) : a.channel_summary_json)?._meta || null;} catch { /* Raw ledgers remain available for invalid summaries. */ }
     const roomsSold = Number(a.rooms_sold ?? a.occ_rooms_sold ?? 0);
     const capacity = Number(a.available_rooms ?? a.occ_capacity_rooms ?? 0);
     const revenue = a.room_revenue_cents != null
@@ -377,13 +389,14 @@ export function buildSyntheticRows(aggregates) {
     const adr = roomsSold > 0 ? revenue / roomsSold : (a.adr_cents ? a.adr_cents / 100 : 0);
     const revpar = capacity > 0 ? revenue / capacity : (a.revpar_cents ? a.revpar_cents / 100 : 0);
 
-    if (revenue || roomsSold || capacity) {
+    if (a.ledger_presence?.occupancy || revenue || roomsSold || capacity) {
       occRows.push({
         property_id: a.property_id,
         date,
         room_revenue: revenue,
         rooms_sold: roomsSold,
         total_rooms: capacity,
+        out_of_order:a.occ_out_of_order ?? meta?.out_of_order ?? 0,
         occupancy: occ,
         adr,
         revpar,
@@ -392,7 +405,6 @@ export function buildSyntheticRows(aggregates) {
 
     // Support source_net map or channel_summary_json string/object with structured _meta (R06)
     let channelMap = a.source_net;
-    let meta = null;
     if (a.channel_summary_json) {
       try {
         const parsed = typeof a.channel_summary_json === "string" ? JSON.parse(a.channel_summary_json) : a.channel_summary_json;
@@ -405,6 +417,7 @@ export function buildSyntheticRows(aggregates) {
                 channelMap[ch] = {
                   net: typeof info.net === "number" ? fromCents(info.net) : (info.net || 0),
                   stays: Number(info.stays) || 0,
+                  refunds:fromCents(info.refunds || 0),
                 };
               }
             } else {
@@ -425,8 +438,8 @@ export function buildSyntheticRows(aggregates) {
 
     if (channelMap) {
       for (const [key, v] of Object.entries(channelMap)) {
-        if (v.net || v.stays) {
-          srcRows.push({ property_id: a.property_id, date, source: key, code: key, net_revenue: v.net, stays: v.stays });
+        if (v && typeof v === "object") {
+          srcRows.push({ property_id: a.property_id, date, source: key, code: key, net_revenue: v.net, stays: v.stays, refunds:v.refunds || 0 });
         }
       }
     }
@@ -440,7 +453,7 @@ export function buildSyntheticRows(aggregates) {
     const bar = a.gross_misc?.bar ?? (meta?.ancillary?.bar_cents != null ? fromCents(meta.ancillary.bar_cents) : 0);
     const miscCharge = a.gross_misc?.misc_charge ?? (meta?.ancillary?.misc_charge_cents != null ? fromCents(meta.ancillary.misc_charge_cents) : (meta?.ancillary?.misc_cents != null ? fromCents(meta.ancillary.misc_cents) : (meta?.ancillary ? 0 : miscTotal)));
 
-    if (roomRent || miscTotal || stateTax || cityTax || otherTax || (a.gross_misc && Object.values(a.gross_misc).some((x) => x))) {
+    if (a.ledger_presence?.revenue || meta?.coverage?.includes('revenue') || meta?.tax_fields_present || a.gross_tax_fields_present || roomRent || miscTotal || stateTax || cityTax || otherTax || (a.gross_misc && Object.values(a.gross_misc).some((x) => x))) {
       const g = {
         property_id: a.property_id,
         date,

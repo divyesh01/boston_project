@@ -104,13 +104,14 @@ export function installDomShims({ userAgent = 'harness' } = {}) {
  * only property lost is running off the main thread, which no assertion depends on.
  *
  * Limitation, stated rather than hidden: `self.onmessage` is a single global slot,
- * so this supports one worker script at a time. The repo has exactly one.
+ * so this supports one worker script at a time. Worker calls are serialized and each module handler is captured separately.
  */
 export function installWorkerShim() {
   if (typeof globalThis.Worker !== 'undefined') return;
 
   if (typeof globalThis.self === 'undefined') globalThis.self = globalThis;
   let sink = null;
+  let queue = Promise.resolve();
   globalThis.postMessage = (msg) => { if (sink) sink(msg); };
   const loaded = new Map();
 
@@ -122,15 +123,18 @@ export function installWorkerShim() {
     }
 
     postMessage(data) {
-      if (!loaded.has(this._url)) loaded.set(this._url, import(this._url));
-      loaded.get(this._url).then(() => {
-        const handler = globalThis.self.onmessage;
+      queue = queue.then(async () => {
+        if (!loaded.has(this._url)) {
+          await import(this._url);
+          loaded.set(this._url, globalThis.self.onmessage);
+        }
+        const handler = loaded.get(this._url);
         if (typeof handler !== 'function') {
           throw new Error(`harness Worker: ${this._url} never assigned self.onmessage`);
         }
         // Point postMessage at THIS instance for the duration of the (sync) call.
         sink = (msg) => { if (this.onmessage) this.onmessage({ data: msg }); };
-        try { handler({ data }); } finally { sink = null; }
+        try { await handler({ data }); } finally { sink = null; }
       }).catch((err) => {
         if (this.onerror) this.onerror(err);
         else throw err;

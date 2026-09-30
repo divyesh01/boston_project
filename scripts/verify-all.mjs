@@ -27,6 +27,7 @@
 //   npm run verify:all -- --filter audit     only names containing "audit"
 //   npm run verify:all -- --list             list what would run, run nothing
 //   npm run verify:all -- --bail             stop at the first failure
+//   npm run verify:all -- --require-all      fail on skipped or partial checks
 //   npm run verify:all -- --json             machine-readable summary
 //   npm run verify:all -- --timeout 300      per-suite timeout in seconds
 //   npm run verify:all -- --shard 2/7        run the 2nd of 7 slices of the list
@@ -681,4 +682,5 @@ if (AS_JSON) {
   );
 }
 
-process.exit(notPassing.length || bucketed !== results.length ? 1 : 0);
+const requiredChecksDeclined = flag('require-all') && (skipped.length || diagnostics.length || passedPartial.length);
+process.exit(notPassing.length || requiredChecksDeclined || bucketed !== results.length ? 1 : 0);

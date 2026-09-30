@@ -421,6 +421,6 @@ await r.check('duplicate daily sections add consistently with the raw ledger',as
  const {res,db}=await rebuildFixture([occupancy('2026-01-01'),occupancy('2026-01-01',{room_revenue:150})]);assertEqual(res.status,200);const row=db.prepare('SELECT * FROM property_day_summary').get();assertEqual(row.room_revenue_cents,25000);assertEqual(row.available_rooms,20);
 });
 
-r.done();
+try { r.done(); } catch (error) { console.error(error); process.exit(1); }
 console.log('PASSED: aggregate rebuild checks completed');
 process.exit(0);

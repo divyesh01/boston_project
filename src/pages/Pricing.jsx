@@ -54,6 +54,8 @@ export default function Pricing() {
 
   const {
     forecast,
+    availabilityMessage,
+    freshnessNotice,
     enabled,
     isError: forecastError,
     error: forecastErr,
@@ -81,12 +83,8 @@ export default function Pricing() {
   const updateBaseRate = (type, dollars) => update({ baseRates: { ...cfg.baseRates, [type]: toCentsFromDollars(dollars) } });
 
   const today = forecast[0];
-  const avgBaseCents = today
-    ? Math.round(Object.values(today.types).reduce((s, t) => s + t.baseCents, 0) / Math.max(1, Object.values(today.types).filter((t) => t.baseCents > 0).length))
-    : 0;
-  const avgRecCents = today
-    ? Math.round(Object.values(today.types).reduce((s, t) => s + t.recommendedCents, 0) / Math.max(1, Object.values(today.types).filter((t) => t.baseCents > 0).length))
-    : 0;
+  const avgBaseCents = today?.baseAdrCents ?? 0;
+  const avgRecCents = today?.adrCents ?? 0;
   const occ = today ? today.occupancy : 0;
 
   // Both legs come from buildPricingForecast, so they value the SAME room nights.
@@ -329,7 +327,8 @@ export default function Pricing() {
           </div>
         )}
         {rooms.length === 0 ? (
-          <p className="mt-2 text-sm text-slate-400">No room register yet. Create one on the Room Board to drive per-type recommendations.</p>
+          <div><p className="mt-2 text-sm text-slate-400">{availabilityMessage}</p>
+          <p className="mt-2 text-xs text-slate-500">{freshnessNotice}</p></div>
         ) : expanded ? (
           <div className="mt-2 overflow-x-auto">
             <table className="w-full min-w-[640px] text-sm">

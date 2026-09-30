@@ -9,7 +9,7 @@ const authState = vi.hoisted(() => ({
   user: { id: "owner-1", username: "owner", role: "owner" },
   navigateToLogin: vi.fn(),
 }));
-const queryClientStub = vi.hoisted(() => ({ invalidateQueries: vi.fn() }));
+const queryClientStub = vi.hoisted(() => ({ clear: vi.fn(), invalidateQueries: vi.fn() }));
 const hydrationMock = vi.hoisted(() => ({ run: vi.fn(async () => ({})) }));
 
 vi.mock("@/lib/AuthContext", () => ({

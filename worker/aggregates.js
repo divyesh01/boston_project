@@ -36,7 +36,7 @@ function getStorageStore(env) {
  */
 function toCents(val) {
   if (val == null || val === "") return 0;
-  const num = typeof val === "number" ? val : parseFloat(String(val).replace(/[^0-9.-]/g, ""));
+  const num = typeof val === "number" ? val : Number(String(val).replace(/[$,\s]/g, ""));
   if (!Number.isFinite(num) || !Number.isSafeInteger(Math.round(num * 100))) throw new Error("Invalid monetary value");
   return Math.round(num * 100);
 }
@@ -406,6 +406,9 @@ async function rebuildSummariesFromBundles(request, env, scope) {
         const revCents = toCents(row.room_revenue);
         const sold = Number(row.rooms_sold), capacity = Number(row.total_rooms);
         if (row.rooms_sold == null || row.total_rooms == null || ![sold,capacity].every(n=>Number.isSafeInteger(n)&&n>=0) || sold>capacity) return Response.json({error:"Invalid room counts"},{status:422});
+        const ooo = Number(row.out_of_order ?? row.down_rooms ?? row.ooo_rooms ?? 0);
+        if (!Number.isSafeInteger(ooo) || ooo<0 || ooo>capacity) return Response.json({error:'Invalid unavailable room count'},{status:422});
+        b.out_of_order = (b.out_of_order || 0) + ooo;
         b.room_revenue_cents += revCents; b.rooms_sold += sold; b.available_rooms += capacity;
       } else if (item.entity === "GrossRevenueDay") {
         b.reportTypes.add("revenue");
@@ -423,8 +426,9 @@ async function rebuildSummariesFromBundles(request, env, scope) {
         if (!Number.isSafeInteger(stays) || stays < 0) return Response.json({error:"Invalid source stays"},{status:422});
         const ch = String(row.source || row.code || "Direct");
         if (!b.channels[ch]) {
-          b.channels[ch] = { net: 0, stays: 0 };
+          b.channels[ch] = { net: 0, stays: 0, refunds:0 };
         }
+        b.channels[ch].refunds += toCents(row.refunds || row.refund_amount || 0);
         b.channels[ch].net += netCents;
         b.channels[ch].stays += stays;
 
@@ -487,7 +491,7 @@ async function rebuildSummariesFromBundles(request, env, scope) {
   for (const b of dayBuckets.values()) {
     if (!b.reportTypes.has("occupancy")) b.room_revenue_cents = b.gross_room_rent_cents ?? 0;
     if (![b.room_revenue_cents,b.ancillary_revenue_cents,b.rooms_sold,b.available_rooms,b.refund_cents,b.payment_total_cents].every(Number.isSafeInteger)) return Response.json({error:"Aggregate exceeds safe integer range"},{status:422});
-    const totalRev = (b.gross_room_rent_cents ?? b.room_revenue_cents) + b.ancillary_revenue_cents;
+    const totalRev = b.room_revenue_cents + b.ancillary_revenue_cents;
     const occRate = b.available_rooms > 0 ? (b.rooms_sold / b.available_rooms) : 0;
     const adrCents = b.rooms_sold > 0 ? Math.round(b.room_revenue_cents / b.rooms_sold) : 0;
     const revparCents = b.available_rooms > 0 ? Math.round(b.room_revenue_cents / b.available_rooms) : 0;
@@ -504,6 +508,7 @@ async function rebuildSummariesFromBundles(request, env, scope) {
     }
     // Also include structured dimensions (R06)
     channelSummary._meta = {
+      out_of_order: b.out_of_order || 0,
       channelsWithStays: b.channels,
       taxes: b.taxes,
       tax_fields_present:b.tax_fields_present,

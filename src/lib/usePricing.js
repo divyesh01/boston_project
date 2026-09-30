@@ -27,7 +27,7 @@ function weatherByDate(snapshots) {
 // Compute a pricing forecast for the active property using live data.
 //   days — how many days ahead (default 14)
 export function usePricingForecast(days = 14) {
-  const { property } = useGlobalFilters();
+  const { property, latestDate } = useGlobalFilters();
   const roomsQ = useRooms(property);
   const reservationsQ = useReservations(null, property);
   const snapshotsQ = useWeatherSnapshots(property);
@@ -72,6 +72,8 @@ export function usePricingForecast(days = 14) {
   };
 
   return {
+    availabilityMessage: property === "all" || Array.isArray(property) ? "Select one property for pricing recommendations." : roomsQ.isPending || reservationsQ.isPending ? "Loading room inventory and reservations?" : "No room register yet. Create one on the Room Board.",
+    freshnessNotice: latestDate && latestDate < calendarToday ? `Imported financial data ends ${latestDate}. Rates are model estimates from the stored room register and reservation book; confirm current bookings before use.` : "Rates are model estimates from the stored room register and reservation book.",
     forecast,
     config,
     enabled: Boolean(config.enabled),

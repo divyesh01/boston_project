@@ -1,18 +1,28 @@
-# DIVYESH V3 Auto-Bootstrap
+# GEMINI.md — Gemini / Antigravity Adapter
 
-SYSTEM: DIVYESH-V3  
-BOOTSTRAP_SCHEMA: 1.0.0  
+> Canonical engineering policy: [`docs/engineering/AGENT_RULES.md`](./docs/engineering/AGENT_RULES.md)
+>
+> Do not create a Gemini-specific fork of repository governance.
+
+SYSTEM: DIVYESH-V3
+VERSION: 3.0.0
+BOOTSTRAP_SCHEMA: 1.0.0
 CANONICAL_MANIFEST: docs/divyesh-v3/manifest.json
 
 @./docs/divyesh-v3/KERNEL.md
 @./docs/divyesh-v3/ROUTER.md
+@./docs/divyesh-v3/QUALITY_FIRST_COMPUTE.md
+@./docs/engineering/AGENT_RULES.md
 
-Before substantive work, verify the canonical manifest, classify the task, load only
-the selected role/domain/workflow packs, establish structured task state, and continue
-through required gates. If verification fails, set `SYSTEM_DRIFT = BLOCKED`.
+Before substantive work:
 
-For complex or high-risk work, load the canonical
-`docs/divyesh-v3/QUALITY_FIRST_COMPUTE.md` pack. Do not copy its rules here.
+1. Read `PROTECTED_FILES.md`.
+2. Run `npm run verify:v3`.
+3. Classify the task with the V3 router and load only the selected packs.
+4. Apply `docs/engineering/AGENT_RULES.md`.
+5. Start from `BRAIN.md` and the relevant spoke rather than scanning unrelated code.
 
-Do not create a Gemini-specific version of governance. Platform capabilities may
-differ; project governance may not.
+If verification fails, set `SYSTEM_DRIFT = BLOCKED`.
+
+Use `npm run typecheck`; do not use bare `npx tsc --noEmit`. Platform capabilities
+may differ; project governance may not.

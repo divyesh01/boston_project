@@ -1,20 +1,14 @@
-# BOSTON PROJECT — WINDSURF CASCADE RULES (DIVYESH-V3)
-# Protocol: INSPECT → PROBE → TRACE → PLAN → EDIT → VERIFY → REVIEW → REPORT
+# BOSTON PROJECT — WINDSURF ADAPTER (DIVYESH-V3)
 
-# 🔒 CRITICAL: PROTECTED FILES
-# NEVER modify, delete, rename, or overwrite files listed in PROTECTED_FILES.md:
-# - src/api/base44Client.js, src/lib/AuthContext.jsx, src/lib/security.js
-# - src/lib/securityUtils.js, src/lib/permissions.js, src/lib/validator.js
-# - src/pages/Login.jsx, src/pages/Setup.jsx, src/pages/ForgotPassword.jsx, src/pages/ResetPassword.jsx
-# - AGENTS.md, CLAUDE.md, PROTECTED_FILES.md, .agents/rules/no-modify-protected.md
+Canonical engineering policy:
+- docs/engineering/AGENT_RULES.md
 
-# Architecture & Tech Stack
-- Frontend: Vite + React 18 + Tailwind CSS + Lucide Icons + Recharts
-- Edge Backend: Cloudflare Workers (Wrangler) + Supabase PostgreSQL
-- State: React Context + TanStack Query
+Startup:
+- Read PROTECTED_FILES.md.
+- Run `npm run verify:v3`.
+- Read BRAIN.md and only the relevant spoke.
+- Follow the V3 router and selected packs.
+- Use `npm run typecheck`; do not substitute bare `npx tsc --noEmit`.
 
-# Engineering Rules
-- Always run `npm run verify:v3` or targeted tests before claiming work is complete.
-- Be surgically precise: fix root cause, never patch symptoms or add blind try/catches.
-- Token Economy: Do not rewrite unchanged code. Use `...` for omitted lines.
-- Think step-by-step and verify every terminal output.
+This file is an adapter only. Do not duplicate architecture, security, business, or
+verification policy here; those contracts live in the canonical repository documents.

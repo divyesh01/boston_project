@@ -1,8 +1,8 @@
 # Tech Debt — Large-File Decomposition Register
 
-Ranked by **danger and confusion**, not by line count. Every measurement here was taken
-with `wc -l` against tracked files on 2026-09-03 and is Observed. Nothing in this file
-has been decomposed — this is the register, not the change.
+Ranked by **danger and confusion**, not by line count. The original register was measured
+2026-09-03; rows are updated when later repository evidence materially changes the risk or
+status. This is a planning register, not permission to refactor opportunistically.
 
 **Do not act on a P0/P1 row opportunistically.** Each row is a project with its own
 failing-first proof obligation. Read `PROJECT_MAP.md` first, and `PROTECTED_FILES.md`
@@ -72,57 +72,48 @@ owner's to authorize; drafting one here would invite an unauthorized edit.
 
 **Estimated benefit.** Deferred to the owner.
 
-### 3. `src/lib/reportParsers.js` — 1,839 lines
+### 3. `src/lib/reportParsers.js` — 1,331 lines (remeasured 2026-09-30)
 
-**Responsibility today.** The whole HotelKey ingestion contract: the report-type registry
-(`REPORT_TYPES`, `ENTITY`), row plumbing (`mapRow`, `addMeta`), four independent
-per-report scanners
-(`splitTransactionSections`, `scanClerkReport`, `scanAdjustmentsRefunds`, `scanTimecard`),
-and the persistence path (`existingTxnDedupeKeys`, `importReport`). Type detection
-(`detectReportType`) and two pure row helpers (`dedupByKey`, `withLazyObjects`) moved out
-to `src/lib/reportGrid.js` in extraction 1; this file imports them back.
+**Status changed since the original 2026-09-03 register.** Several safe extractions have
+already landed:
 
-**Why it is hard to maintain.** Detection, parsing, dedup and persistence are four
-concerns with one shared mutable notion of a "row". Dedup keys are defined here *and* in
-`src/lib/transactionNorm.js`, so the invariant "re-importing the same report must not
-double-count" is enforced across a file boundary that nothing documents. Every scanner is
-several hundred lines of positional and state-machine logic against vendor report shapes.
+- `src/lib/reportGrid.js` owns report detection and shared grid helpers.
+- `src/lib/parsers/transactions.js` owns the transaction scanner.
+- `src/lib/parsers/hotelStatistics.js` owns the hotel-statistics scanner.
+- `src/lib/parsers/adjustmentsRefunds.js` owns adjustments/refunds scanning.
+- `src/lib/__fixtures__/hotelkey/` is now a committed **synthetic-only** regression
+  corpus, exercised by `hotelKeyParserFixtures.test.js`,
+  `hotelKeyImportFixtures.test.js`, and the HotelKey mutation harness.
 
-**Safe future boundaries.** Extraction 1 is done: `reportGrid.js` now owns
-`detectReportType`, `dedupByKey` and `withLazyObjects`. What remains, in the order the
-owner set: one module per scanner under `src/lib/parsers/` (transactions, then
-daily/revenue, then adjustments/refunds, then the rest), and `reportImport.js`
-(`importReport`, `existingTxnDedupeKeys`). The scanners are the safest to move: each has
-one entry point and no shared state with its siblings. `mapRow` cannot move — its
-`COLUMN_MAP` is pinned inside this file by the source-text assertions in
-`probe-mtd-growth.mjs` and `probe-monthly-calendar.mjs`, so moving it would need those
-probes edited in the same commit as the code they guard.
+The old statement that "a committed in-repo fixture corpus does not exist yet" is
+therefore obsolete and must not be used as a blocker or as a reason to recreate the same
+fixtures elsewhere.
 
-`reportGrid.js` is deliberately **not** in the HotelKey row of `docs/AI_REPO_GUIDE.md`:
-that row is at 4 of its 5 permitted files, the module is one `import` hop from the
-already-listed `reportParsers.js#parseReport`, and the last slot is worth more to the
-transaction scanner. Its invariant is pinned in `docs/MODULE_CONTRACTS.md` instead, which
-has no such budget.
+**Responsibility still remaining here.** The central registry/row plumbing, clerk and
+timecard scanning, shared scan dispatch, dedupe/persistence behavior, and import
+orchestration still make this a high-consequence ingestion file. It remains easy to
+change one report path while accidentally changing another because the dispatch and
+persistence contracts converge here.
 
-**Dependencies and risk.** HIGH — the user's standing constraint is that HotelKey parsing
-behavior must be preserved exactly, and the coverage that protects it is **the probe
-corpus, not a unit-test file**. Measured 2026-09-03: 27 files under `scripts/` reference
-`reportParsers`, but only four exercise a scanner by name — `probe-adjustments.mjs`,
-`probe-clerk-fraud-filter.mjs`, `probe-timecard-date-guard.mjs`, and
-`scripts/test-parser.mjs`. The last of those is the only one that drives a full parse over
-a real vendor CSV, and it reads that CSV from a transient per-session AI upload directory
-outside the repository, so it cannot run in CI or on a second machine (see
-`LAUNCH_READINESS_CHECKLIST.md`).
+**Coverage reality.** The committed corpus is real protection, but it does **not** mean
+every historical local-data probe became portable. Real PMS exports under
+`scripts/data/*.csv` are intentionally gitignored and may contain business/guest data.
+Clean-clone CI must use the committed synthetic corpus; workstation-only probes that need
+private exports must declare an honest `SKIP:` when those files are absent. Never commit
+real hotel exports to make a probe green.
 
-That is the real blocker for this row: **a scanner split needs a committed in-repo fixture
-corpus that does not exist yet.** Build the fixture first, prove it fails when a scanner is
-perturbed, and only then move code. Do not rely on
-`src/lib/hotelKeyRegression.test.js` — despite the name it imports
-`financialReconciliation`, `yieldOptimizer` and `fraudScoringEngine`, and touches no
-parser at all.
+**Next safe boundaries.** Expand synthetic parser fixtures for any remaining report shape
+before moving that shape, then extract the clerk and timecard scanners under
+`src/lib/parsers/`. Move import orchestration only after its dedupe/idempotency behavior
+is pinned independently. `mapRow` / `COLUMN_MAP` still have source-contract probes, so
+moving them requires updating those guards in the same verified change.
 
-**Estimated benefit.** High. This is the file future agents most often need to change and
-least safely can.
+**Risk.** HIGH. HotelKey behavior must remain byte/semantic-equivalent for accepted
+inputs, malformed rows must still fail or quarantine the same way, re-import must remain
+idempotent, and no real PMS data may enter git.
+
+**Estimated benefit.** High, but the remaining work is now incremental decomposition,
+not "build fixture coverage from scratch."
 
 ---
 

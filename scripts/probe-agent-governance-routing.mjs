@@ -25,7 +25,17 @@ function read(rel) {
 
 const canonicalPath = "docs/engineering/AGENT_RULES.md";
 const canonical = read(canonicalPath);
-const adapters = ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "AI_CORE_RULES.md"];
+const adapters = [
+  "AGENTS.md",
+  "CLAUDE.md",
+  "GEMINI.md",
+  "AI_CORE_RULES.md",
+  ".agents/agents.md",
+  ".agents/skills/divyesh-v3-router/SKILL.md",
+  ".claude/skills/divyesh-v3-router/SKILL.md",
+  ".cursorrules",
+  ".windsurfrules",
+];
 
 check("canonical policy exists", canonical.length > 1000);
 check("canonical policy names protected-file authority", canonical.includes("PROTECTED_FILES.md"));
@@ -40,7 +50,14 @@ for (const adapter of adapters) {
   check(`${adapter} routes to canonical policy`, text.includes(canonicalPath));
 }
 
-for (const adapter of ["AGENTS.md", "CLAUDE.md", "GEMINI.md"]) {
+for (const adapter of [
+  "AGENTS.md",
+  "CLAUDE.md",
+  "GEMINI.md",
+  ".agents/agents.md",
+  ".agents/skills/divyesh-v3-router/SKILL.md",
+  ".claude/skills/divyesh-v3-router/SKILL.md",
+]) {
   const text = read(adapter);
   check(`${adapter} keeps DIVYESH V3 bootstrap`, text.includes("DIVYESH V3"));
   check(`${adapter} requires verify:v3`, text.includes("npm run verify:v3"));

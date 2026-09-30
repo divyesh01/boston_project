@@ -29,7 +29,8 @@
     "mutate:all": "npm run map:mutate && npm run hotelkey:crashsafe && npm run hotelkey:mutate",
     "audit:gate": "node scripts/audit-gate.mjs",
     "verify:all": "node scripts/verify-all.mjs",
-    "verify:v3": "node scripts/verify-divyesh-v3.mjs"
+    "verify:v3": "node scripts/verify-divyesh-v3.mjs",
+    "verify:lineage": "node scripts/verify-data-lineage.mjs"
   },
   "dependencies": {
     "@base44/sdk": "^0.8.41",

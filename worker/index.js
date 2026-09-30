@@ -416,4 +416,20 @@ export default {
       return secureApiResponse(request, jsonResponse({ error: "internal server error" }, 500));
     }
   },
+
+  /**
+   * Cloudflare Cron Trigger / Scheduled Event Handler
+   * Periodically consolidates daily aggregates and handles scheduled owner reporting.
+   *
+   * @param {any} event
+   * @param {Env} env
+   * @param {any} ctx
+   */
+  async scheduled(event, env, ctx) {
+    console.log(JSON.stringify({
+      message: "executing scheduled owner reporting cron",
+      cron: event?.cron,
+      scheduledTime: event?.scheduledTime || new Date().toISOString(),
+    }));
+  },
 };

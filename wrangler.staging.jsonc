@@ -50,6 +50,10 @@
     "ACCESS_AUD": "67befe0c14f5acc168e10af9e93ad7a58880875d5251f3d87497a86c2f019128"
   },
 
+  "triggers": {
+    "crons": ["0 6 * * 1"]
+  },
+
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1,

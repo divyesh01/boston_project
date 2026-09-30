@@ -1,0 +1,187 @@
+name: Deep Verification
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 8 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deep-verification-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  protocol:
+    name: DIVYESH V3 protocol
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify DIVYESH V3
+        run: npm run verify:v3
+
+  suites:
+    name: Verification shard ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - "1/12"
+          - "2/12"
+          - "3/12"
+          - "4/12"
+          - "5/12"
+          - "6/12"
+          - "7/12"
+          - "8/12"
+          - "9/12"
+          - "10/12"
+          - "11/12"
+          - "12/12"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run verification shard
+        run: npm run verify:all -- --shard "${{ matrix.shard }}"
+
+  environment_probes:
+    name: Environment-dependent probes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build production bundle
+        run: npm run build
+        env:
+          NODE_ENV: production
+          VITE_USE_SERVER_AUTH: "true"
+          VITE_USE_D1_API: "false"
+
+      - name: Verify built bundle probe
+        run: node --import ./scripts/_loader-boot.mjs scripts/probe-build-chunks.mjs
+
+      - name: Start local Vite server
+        shell: bash
+        run: |
+          npm run dev -- --host 127.0.0.1 > /tmp/boston-vite.log 2>&1 &
+          echo $! > /tmp/boston-vite.pid
+          for attempt in {1..60}; do
+            if curl --fail --silent --show-error http://127.0.0.1:5173/ > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/boston-vite.log
+          exit 1
+
+      - name: Verify runtime exposure probe
+        run: node --import ./scripts/_loader-boot.mjs scripts/probe-config-exposure.mjs
+
+      - name: Stop local Vite server
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/boston-vite.pid ]; then
+            kill "$(cat /tmp/boston-vite.pid)" 2>/dev/null || true
+          fi
+
+  mutations:
+    name: Mutation safety net
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run mutation harnesses
+        run: npm run mutate:all
+
+      - name: Assert mutation harnesses restored the checkout
+        shell: bash
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Mutation harness left tracked or untracked residue:"
+            git status --short
+            git diff -- .
+            exit 1
+          fi
+
+  gate:
+    name: Deep Verification Gate
+    if: always()
+    runs-on: ubuntu-latest
+    needs:
+      - protocol
+      - suites
+      - environment_probes
+      - mutations
+    steps:
+      - name: Require every deep-verification job
+        shell: bash
+        env:
+          PROTOCOL: ${{ needs.protocol.result }}
+          SUITES: ${{ needs.suites.result }}
+          ENVIRONMENT_PROBES: ${{ needs.environment_probes.result }}
+          MUTATIONS: ${{ needs.mutations.result }}
+        run: |
+          printf 'protocol=%s\nsuites=%s\nenvironment_probes=%s\nmutations=%s\n' \
+            "$PROTOCOL" "$SUITES" "$ENVIRONMENT_PROBES" "$MUTATIONS"
+
+          for result in "$PROTOCOL" "$SUITES" "$ENVIRONMENT_PROBES" "$MUTATIONS"; do
+            if [ "$result" != "success" ]; then
+              echo "Deep verification did not complete successfully."
+              exit 1
+            fi
+          done

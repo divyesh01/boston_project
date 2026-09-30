@@ -170,6 +170,6 @@ if (failed > 0) {
   console.error('Edit base44/deletion-manifest.json or base44/functions/deleteAccount/entry.ts to reconcile them.');
   process.exit(1);
 } else {
-  console.log('PASS: manifest and code are in sync.');
+  console.log('PASSED: manifest and code are in sync.');
   process.exit(0);
 }

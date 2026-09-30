@@ -24,6 +24,7 @@ import { readJsonSetting, writeJsonSetting, reportDiscardedSetting } from '@/lib
 import { evaluatePortfolioDataHealth, reconcileFinancialTotals } from '@/lib/dataHealth';
 import { downloadOwnerPerformancePacket } from '@/lib/ownerPacketExport';
 import { CalculationService } from '@/lib/calculationService';
+import { buildSyntheticRows } from '@/lib/dailyAggregates';
 
 const SEVERITY_COLORS = {
   critical: 'border-[#FF6B6B]/30 bg-[#FF6B6B]/[0.08] text-[#FF6B6B]',
@@ -71,15 +72,62 @@ function useAllEntities() {
   return useQuery({
     queryKey: ['all-entities'],
     queryFn: async () => {
-      const result = {};
+      const result = {
+        OccupancyDay: [],
+        SourceDay: [],
+        GrossRevenueDay: [],
+        PaymentDay: [],
+        ClerkShiftRecord: [],
+      };
+      const errors = {};
       const tables = ['OccupancyDay', 'SourceDay', 'GrossRevenueDay', 'PaymentDay', 'ClerkShiftRecord'];
+      let successfulReads = 0;
+
       for (const table of tables) {
         try {
-          result[table] = await db.entities[table].filter({}, '-created_date', 5000);
-        } catch {
+          // Read up to 200,000 rows to ensure complete coverage for large portfolios
+          const rows = await db.entities[table].filter({}, '-created_date', 200000);
+          result[table] = Array.isArray(rows) ? rows : [];
+          if (result[table].length >= 200000) errors[table] = new Error("Ledger exceeds complete-read limit; audit unavailable");
+          successfulReads += 1;
+        } catch (err) {
+          console.warn(`[DataIntelligence] Failed to read entity ${table}:`, err);
+          errors[table] = err;
           result[table] = [];
         }
       }
+
+      // Check if local tables are completely empty (clean browser context).
+      // If so, fall back to server-authoritative daily aggregates fast path (/api/aggregates/daily)
+      // so DataIntelligence can display the ingested property day data.
+      const totalLocalRows = Object.values(result).reduce((acc, rows) => acc + (Array.isArray(rows) ? rows.length : 0), 0);
+      if (totalLocalRows === 0 && Object.keys(errors).length === 0) {
+        try {
+          const url = new URL("/api/aggregates/daily", globalThis.location?.origin || "http://localhost");
+          const res = await fetch(url.toString(), { credentials: "same-origin" });
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.ok && Array.isArray(data.summaries) && data.summaries.length > 0) {
+              const complete = data.source === "property_day_summary" && data.summaries.every(r=>{try {const m=JSON.parse(r.channel_summary_json || "{}")._meta; return ["occupancy","revenue","source","payment"].every(t=>m?.coverage?.includes(t));} catch{return false;}});
+              if (!complete) throw new Error("Incomplete server summary coverage");
+              const synthetic = buildSyntheticRows(data.summaries);
+              result.OccupancyDay = synthetic.occRows || [];
+              result.SourceDay = synthetic.srcRows || [];
+              result.GrossRevenueDay = synthetic.grossRows || [];
+              result.PaymentDay = synthetic.payRows || [];
+            }
+          }
+        } catch (fetchErr) {
+          errors.aggregates = fetchErr;
+          console.warn("[DataIntelligence] Aggregate fast-path fetch error:", fetchErr);
+        }
+      }
+
+      if (Object.keys(errors).length === tables.length && successfulReads === 0) {
+        throw new Error('All entity ledger reads failed. Check database connectivity.');
+      }
+
+      result._errors = errors;
       return result;
     },
   });
@@ -109,7 +157,7 @@ export default function DataIntelligence() {
   const filesQ = useFiles();
   const entitiesQ = useAllEntities();
   const { data: files = [], refetch } = filesQ;
-  const { data: existingData = {} } = entitiesQ;
+  const existingData = /** @type {Record<string, any>} */ (entitiesQ.data || {});
 
   const [activeTab, setActiveTab] = useState('health');
   const [inspectPropertyId, setInspectPropertyId] = useState(null);
@@ -391,53 +439,115 @@ export default function DataIntelligence() {
 
   const financialReconciliation = useMemo(() => {
     const isFiltered = property && property !== 'all';
-    const filterFn = (r) => (!isFiltered ? true : r.property_id === property);
+    const matchesProperty = (propId) => {
+      if (!isFiltered) return true;
+      if (Array.isArray(property)) {
+        return property.includes(propId);
+      }
+      return propId === property;
+    };
+
+    const matchesDate = (row) => {
+      if (!dateRange?.from || !dateRange?.to) return true;
+      const d = String(row.date || row.business_date || row.shift_date || '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
+      return d >= dateRange.from && d <= dateRange.to;
+    };
+
+    const filterFn = (r) => matchesProperty(r.property_id) && matchesDate(r);
 
     const occRows = (existingData.OccupancyDay || []).filter(filterFn);
     const grossRows = (existingData.GrossRevenueDay || []).filter(filterFn);
     const srcRows = (existingData.SourceDay || []).filter(filterFn);
     const payRows = (existingData.PaymentDay || []).filter(filterFn);
 
-    const grossFromGrossLedger = sumCents(grossRows.map((r) => r.room_rent || r.gross_revenue || 0));
+    const grossFromGrossLedger = sumCents(grossRows.map((r) => r.room_rent ?? r.gross_revenue ?? 0));
     const grossFromOcc = sumCents(occRows.map((r) => r.room_revenue || 0));
-    const reportedCents = grossFromGrossLedger > 0 ? grossFromGrossLedger : grossFromOcc;
+    const reportedCents = grossRows.length ? grossFromGrossLedger : grossFromOcc;
     const calculatedCents = sumCents(srcRows.map((r) => r.net_revenue || r.revenue || 0));
     const paymentsCents = sumCents(payRows.map((r) => r.total || 0));
 
-    const recon = reconcileFinancialTotals(fromCents(reportedCents), fromCents(calculatedCents));
+    const hasData = occRows.length > 0 || grossRows.length > 0 || srcRows.length > 0 || payRows.length > 0;
+    const hasFailed = Boolean(existingData._errors && Object.keys(existingData._errors).length > 0);
 
-    const byProperty = properties.map((prop) => {
-      const pGross = sumCents((dataByProperty[prop.id]?.grossRows || []).map((r) => r.room_rent || r.gross_revenue || 0)) ||
-                     sumCents((dataByProperty[prop.id]?.occRows || []).map((r) => r.room_revenue || 0));
-      const pCalc = sumCents((dataByProperty[prop.id]?.srcRows || []).map((r) => r.net_revenue || r.revenue || 0));
-      const pPay = sumCents((dataByProperty[prop.id]?.payRows || []).map((r) => r.total || 0));
-      const pRecon = reconcileFinancialTotals(fromCents(pGross), fromCents(pCalc));
-      return {
-        propertyId: prop.id,
-        propertyName: prop.name,
-        reported: pRecon.reported,
-        calculated: pRecon.calculated,
-        payments: fromCents(pPay),
-        difference: pRecon.difference,
-        isBalanced: pRecon.isBalanced,
-      };
-    });
+    const recon = reconcileFinancialTotals(
+      fromCents(reportedCents),
+      fromCents(calculatedCents),
+      {
+        hasData,
+        reportedCount: grossRows.length || occRows.length,
+        calculatedCount: srcRows.length,
+        paymentsTotal: payRows.length > 0 ? fromCents(paymentsCents) : null,
+        channelLedgerPresent: srcRows.length > 0,
+        isFailed: hasFailed,
+      }
+    );
+
+    const byProperty = properties
+      .filter((prop) => matchesProperty(prop.id))
+      .map((prop) => {
+        const propData = dataByProperty[prop.id] || {};
+        const pOcc = (propData.occRows || []).filter(matchesDate);
+        const pGrossRows = (propData.grossRows || []).filter(matchesDate);
+        const pSrcRows = (propData.srcRows || []).filter(matchesDate);
+        const pPayRows = (propData.payRows || []).filter(matchesDate);
+
+        const pGross = pGrossRows.length ? sumCents(pGrossRows.map(r=>r.room_rent ?? r.gross_revenue ?? 0)) : sumCents(pOcc.map(r=>r.room_revenue ?? 0));
+        const pCalc = sumCents(pSrcRows.map((r) => r.net_revenue || r.revenue || 0));
+        const pPay = sumCents(pPayRows.map((r) => r.total || 0));
+
+        const pHasData = pOcc.length > 0 || pGrossRows.length > 0 || pSrcRows.length > 0 || pPayRows.length > 0;
+        const pRecon = reconcileFinancialTotals(
+          fromCents(pGross),
+          fromCents(pCalc),
+          {
+            hasData: pHasData,
+            reportedCount: pGrossRows.length || pOcc.length,
+            calculatedCount: pSrcRows.length,
+            paymentsTotal: pPayRows.length > 0 ? fromCents(pPay) : null,
+            channelLedgerPresent: pSrcRows.length > 0,
+            isFailed: hasFailed,
+          }
+        );
+
+        return {
+          propertyId: prop.id,
+          propertyName: prop.name,
+          reported: pRecon.reported,
+          calculated: pRecon.calculated,
+          payments: fromCents(pPay),
+          difference: pRecon.difference,
+          isBalanced: pRecon.isBalanced,
+          status: pRecon.status,
+          paymentsMatch: pRecon.paymentsMatch,
+          paymentsStatus: pRecon.paymentsStatus,
+        };
+      });
 
     return {
       reported: recon.reported,
       calculated: recon.calculated,
-      payments: fromCents(paymentsCents),
+      payments: recon.payments != null ? recon.payments : fromCents(paymentsCents),
       difference: recon.difference,
       isBalanced: recon.isBalanced,
+      status: recon.status,
+      paymentsMatch: recon.paymentsMatch,
+      paymentsStatus: recon.paymentsStatus,
+      paymentsDifference: recon.paymentsDifference,
+      hasData,
       byProperty,
     };
-  }, [property, properties, existingData, dataByProperty]);
+  }, [property, properties, existingData, dataByProperty, dateRange]);
 
   const handleExportOwnerPacket = () => {
     try {
-      const kpis = CalculationService.calculateOccupancyMetrics(existingData.OccupancyDay || [], {});
-      const channelMetrics = CalculationService.calculateChannelMetrics(existingData.SourceDay || []);
-      const propertyStats = CalculationService.calculatePerPropertyStats(existingData.OccupancyDay || [], properties);
+      const selectedProperties = properties.filter(p=>!property || property==='all' || (Array.isArray(property)?property.includes(p.id):property===p.id));
+      const allowed = new Set(selectedProperties.map(p=>p.id));
+      const selected = rows => (rows || []).filter(r=>allowed.has(r.property_id) && (!dateRange?.from || String(r.date || '').slice(0,10)>=dateRange.from) && (!dateRange?.to || String(r.date || '').slice(0,10)<=dateRange.to));
+      const occupancy = selected(existingData.OccupancyDay);
+      const kpis = CalculationService.calculateOccupancyMetrics(occupancy, {});
+      const channelMetrics = CalculationService.calculateChannelMetrics(selected(existingData.SourceDay));
+      const propertyStats = CalculationService.calculatePerPropertyStats(occupancy, selectedProperties);
 
       const dateLabel = dateRange?.from && dateRange?.to
         ? `${dateRange.from} to ${dateRange.to}`
@@ -445,12 +555,12 @@ export default function DataIntelligence() {
 
       downloadOwnerPerformancePacket({
         dateRangeLabel: dateLabel,
-        properties,
+        properties: selectedProperties,
         kpis,
         propertyStats,
         prevPropertyStats: [],
         channelMetrics,
-        portfolioHealth,
+        portfolioHealth: evaluatePortfolioDataHealth(selectedProperties,dataByProperty,dateRange),
         reconciliation: financialReconciliation,
       });
 
@@ -719,33 +829,59 @@ export default function DataIntelligence() {
           {/* Cent-Exact Balance Hero Banner */}
           <div
             className={'rounded-2xl border p-5 transition-all ' + (
-              financialReconciliation.isBalanced
+              financialReconciliation.status === 'reconciled'
                 ? 'border-[#00E096]/30 bg-gradient-to-r from-[#00E096]/10 via-[#00D4FF]/5 to-transparent'
-                : 'border-[#FFB547]/30 bg-gradient-to-r from-[#FFB547]/10 via-[#FF6B6B]/5 to-transparent'
+                : financialReconciliation.status === 'no_data'
+                ? 'border-slate-700/50 bg-slate-900/60'
+                : financialReconciliation.status === 'incomplete'
+                ? 'border-[#FFB547]/30 bg-gradient-to-r from-[#FFB547]/10 via-[#FF6B6B]/5 to-transparent'
+                : 'border-[#FF6B6B]/30 bg-gradient-to-r from-[#FF6B6B]/10 via-[#FFB547]/5 to-transparent'
             )}
           >
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-3.5">
                 <div
                   className={'rounded-xl p-2.5 ' + (
-                    financialReconciliation.isBalanced ? 'bg-[#00E096]/20 text-[#00E096]' : 'bg-[#FFB547]/20 text-[#FFB547]'
+                    financialReconciliation.status === 'reconciled'
+                      ? 'bg-[#00E096]/20 text-[#00E096]'
+                      : financialReconciliation.status === 'no_data'
+                      ? 'bg-slate-700/30 text-slate-400'
+                      : financialReconciliation.status === 'incomplete'
+                      ? 'bg-[#FFB547]/20 text-[#FFB547]'
+                      : 'bg-[#FF6B6B]/20 text-[#FF6B6B]'
                   )}
                 >
-                  {financialReconciliation.isBalanced ? (
+                  {financialReconciliation.status === 'reconciled' ? (
                     <ShieldCheck className="h-6 w-6" />
+                  ) : financialReconciliation.status === 'no_data' ? (
+                    <Info className="h-6 w-6" />
                   ) : (
                     <AlertTriangle className="h-6 w-6" />
                   )}
                 </div>
                 <div>
                   <h3 className="font-heading text-lg font-semibold text-white">
-                    {financialReconciliation.isBalanced
+                    {financialReconciliation.status === 'reconciled'
                       ? 'Cent-Exact Financial Reconciliation Confirmed ($0.00 Variance)'
+                      : financialReconciliation.status === 'no_data'
+                      ? 'No Data Available for Reconciliation'
+                      : financialReconciliation.status === 'incomplete'
+                      ? 'Incomplete Ledger Coverage (Missing Channel Ledger)'
+                      : financialReconciliation.status === 'failed'
+                      ? 'Ledger Read Failed'
                       : `Unreconciled Variance: $${financialReconciliation.difference.toFixed(2)}`}
                   </h3>
                   <p className="mt-0.5 text-xs text-slate-300 max-w-2xl">
-                    {financialReconciliation.isBalanced
-                      ? 'Reported PMS room revenue matches channel distribution ledger and settled merchant transactions with exact mathematical identity. No orphan charges or unmapped revenue streams detected.'
+                    {financialReconciliation.status === 'reconciled'
+                      ? (financialReconciliation.paymentsMatch
+                          ? 'The reported revenue, channel ledger and payment totals match to the cent. Record-level lineage and timing differences require separate review.'
+                          : `Reported PMS room revenue matches channel distribution ledger ($0.00 variance). Settled payment transactions total $${(financialReconciliation.payments || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} (settlement variance: $${(financialReconciliation.paymentsDifference || 0).toFixed(2)}).`)
+                      : financialReconciliation.status === 'no_data'
+                      ? 'Zero ledger records found for the selected properties and date range. Financial reconciliation cannot be verified without ingested data.'
+                      : financialReconciliation.status === 'incomplete'
+                      ? 'Channel distribution ledger lines are missing or zero while room revenue is reported. Re-upload Source/Channel report to complete reconciliation.'
+                      : financialReconciliation.status === 'failed'
+                      ? 'One or more financial ledger queries failed. Unable to verify ledger balance.'
                       : 'There is a variance between reported PMS revenue and channel distribution ledger lines. Review unmapped OTA rate codes, pending night audit adjustments, or fee withholdings.'}
                   </p>
                 </div>
@@ -754,10 +890,24 @@ export default function DataIntelligence() {
                 <p className="text-[11px] uppercase tracking-wider text-slate-400">Reconciliation Status</p>
                 <p
                   className={'text-xl font-bold font-mono ' + (
-                    financialReconciliation.isBalanced ? 'text-[#00E096]' : 'text-[#FFB547]'
+                    financialReconciliation.status === 'reconciled'
+                      ? 'text-[#00E096]'
+                      : financialReconciliation.status === 'no_data'
+                      ? 'text-slate-400'
+                      : financialReconciliation.status === 'incomplete'
+                      ? 'text-[#FFB547]'
+                      : 'text-[#FF6B6B]'
                   )}
                 >
-                  {financialReconciliation.isBalanced ? '✅ $0.00 BALANCED' : `⚠ $${financialReconciliation.difference.toFixed(2)} DRIFT`}
+                  {financialReconciliation.status === 'reconciled'
+                    ? '✅ $0.00 BALANCED'
+                    : financialReconciliation.status === 'no_data'
+                    ? '⚪ NO DATA'
+                    : financialReconciliation.status === 'incomplete'
+                    ? '⚠ INCOMPLETE'
+                    : financialReconciliation.status === 'failed'
+                    ? '❌ FAILED'
+                    : `⚠ $${financialReconciliation.difference.toFixed(2)} DRIFT`}
                 </p>
               </div>
             </div>
@@ -780,7 +930,7 @@ export default function DataIntelligence() {
             />
             <KpiCard
               label="Total Settled Payments"
-              value={`$${financialReconciliation.payments.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+              value={`$${(financialReconciliation.payments ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
               accent="#00E096"
               icon={CheckCircle2}
               sub="Source: PaymentDay Settlement Records"
@@ -788,9 +938,29 @@ export default function DataIntelligence() {
             <KpiCard
               label="Unreconciled Difference"
               value={`$${financialReconciliation.difference.toFixed(2)}`}
-              accent={financialReconciliation.isBalanced ? '#00E096' : '#FF6B6B'}
-              icon={financialReconciliation.isBalanced ? ShieldCheck : AlertTriangle}
-              sub={financialReconciliation.isBalanced ? '100% exact ledger match' : 'Requires audit investigation'}
+              accent={
+                financialReconciliation.status === 'reconciled'
+                  ? '#00E096'
+                  : financialReconciliation.status === 'no_data'
+                  ? '#94A3B8'
+                  : '#FF6B6B'
+              }
+              icon={
+                financialReconciliation.status === 'reconciled'
+                  ? ShieldCheck
+                  : financialReconciliation.status === 'no_data'
+                  ? Info
+                  : AlertTriangle
+              }
+              sub={
+                financialReconciliation.status === 'reconciled'
+                  ? (financialReconciliation.paymentsMatch ? '100% exact ledger match' : 'Revenue matched; payments vary')
+                  : financialReconciliation.status === 'no_data'
+                  ? 'No records ingested'
+                  : financialReconciliation.status === 'incomplete'
+                  ? 'Incomplete ledger data'
+                  : 'Requires audit investigation'
+              }
             />
           </div>
 
@@ -832,12 +1002,20 @@ export default function DataIntelligence() {
                         </span>
                       </td>
                       <td className="py-3 pl-3 text-right">
-                        {p.isBalanced ? (
+                        {p.status === 'reconciled' ? (
                           <span className="inline-flex items-center gap-1 rounded-full bg-[#00E096]/15 px-2.5 py-0.5 text-xs font-medium text-[#00E096] border border-[#00E096]/30">
                             <ShieldCheck className="h-3 w-3" /> Balanced ($0.00)
                           </span>
-                        ) : (
+                        ) : p.status === 'no_data' ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-slate-700/30 px-2.5 py-0.5 text-xs font-medium text-slate-400 border border-slate-700">
+                            No Data
+                          </span>
+                        ) : p.status === 'incomplete' ? (
                           <span className="inline-flex items-center gap-1 rounded-full bg-[#FFB547]/15 px-2.5 py-0.5 text-xs font-medium text-[#FFB547] border border-[#FFB547]/30">
+                            <AlertTriangle className="h-3 w-3" /> Incomplete
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-[#FF6B6B]/15 px-2.5 py-0.5 text-xs font-medium text-[#FF6B6B] border border-[#FF6B6B]/30">
                             <AlertTriangle className="h-3 w-3" /> Discrepancy
                           </span>
                         )}

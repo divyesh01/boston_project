@@ -6,8 +6,8 @@
 // the engine reads from occupancy/reservations/weather — the calculation itself
 // lives in pricingEngine.js so it can be unit-tested in Node.
 
-import { readObjectSetting, writeJsonSetting } from "@/lib/settingsStore";
-import { notifySettingsChanged } from "@/lib/settingsBus";
+import { readObjectSetting, writeJsonSetting } from "./settingsStore.js";
+import { notifySettingsChanged } from "./settingsBus.js";
 
 const KEY = "rri_pricing_config";
 

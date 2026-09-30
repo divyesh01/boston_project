@@ -7,13 +7,16 @@ import { Lightbulb, ArrowRight, TrendingUp } from "lucide-react";
 import { useSettingsVersion } from "@/hooks/useSettingsVersion";
 import { calculateOtaDependence, calculateDirectShiftOpportunity, CHANNEL_GROUPS } from "@/lib/channelDictionary";
 
-export default function OtaMatrix({ rows }) {
-  useSettingsVersion();
+export default function OtaMatrix({ rows = [] }) {
+  const settingsVersion = useSettingsVersion();
 
   // Cent-exact channel engine (integer cents via toCents/multiply) — the same
   // source OtaChannels and Money Kept read, so the subtitle totals reconcile to
   // the cent instead of re-summing net_revenue and applying commission in float.
-  const channels = CalculationService.calculateChannelMetrics(rows);
+  const channels = useMemo(
+    () => CalculationService.calculateChannelMetrics(rows || []),
+    [rows, settingsVersion]
+  );
 
   const totalGross = fromCents(sumCents(channels.map((c) => c.gross)));
   const totalCommission = fromCents(sumCents(channels.map((c) => c.commission)));
@@ -33,6 +36,25 @@ export default function OtaMatrix({ rows }) {
     () => calculateDirectShiftOpportunity(channels, 0.10),
     [channels]
   );
+
+  if (!rows || rows.length === 0 || channels.length === 0) {
+    return (
+      <Card
+        title="Owner Channel Net Profitability Matrix"
+        subtitle="Channel distribution and OTA commission analysis"
+      >
+        <div className="py-12 text-center">
+          <p className="font-heading text-sm font-semibold text-slate-300">
+            Channel data unavailable
+          </p>
+          <p className="mt-1 text-xs text-slate-500 max-w-md mx-auto">
+            No channel or source distribution records found for the selected property and date range.
+            Upload a Source of Business report to analyze OTA commission leakage and channel net margins.
+          </p>
+        </div>
+      </Card>
+    );
+  }
 
   const bestDirect = channels.filter((c) => c.isDirect || c.rate === 0).sort((a, b) => b.gross - a.gross)[0] || null;
   const worstOta = channels.filter((c) => c.isOta || c.rate > 0).sort((a, b) => b.commission - a.commission)[0] || null;
@@ -103,7 +125,7 @@ export default function OtaMatrix({ rows }) {
           </thead>
           <tbody>
             {channels.map((c, i) => (
-              <tr key={c.source} className="border-t border-white/5 transition-colors hover:bg-white/[0.03]">
+              <tr key={`${c.property_id}:${c.source}`} className="border-t border-white/5 transition-colors hover:bg-white/[0.03]">
                 <td className="py-2.5 pr-4 text-slate-500">{i + 1}</td>
                 <td className="py-2.5 pr-4">
                   <div className="flex flex-col">

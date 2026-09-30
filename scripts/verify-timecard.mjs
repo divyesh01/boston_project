@@ -12,9 +12,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { register } from "node:module";
-
-register(new URL("./resolve-alias.mjs", import.meta.url));
+await import("./_loader-boot.mjs");
 
 // fake-indexeddb must be installed before anything imports Dexie.
 await import("fake-indexeddb/auto");

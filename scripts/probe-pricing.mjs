@@ -48,7 +48,7 @@ const reservations = [
 ];
 assert(Math.abs(forecastOccupancy({ reservations, rooms, date: "2026-08-10", defaultOccupancy: 0.5 }) - 0.5) < 1e-9, "2/4 booked -> 0.5");
 assert(Math.abs(forecastOccupancy({ reservations, rooms, date: "2026-08-11", defaultOccupancy: 0.5 }) - 0.25) < 1e-9, "1/4 booked -> 0.25");
-assert(forecastOccupancy({ reservations: [], rooms, date: "2026-12-01", defaultOccupancy: 0.6 }) === 0.6, "no bookings -> default");
+assert(forecastOccupancy({ reservations: [], rooms, date: "2026-12-01", defaultOccupancy: 0.6 }) === 0, "no bookings -> zero");
 
 assert(isWeekend("2026-08-08") === true, "Saturday weekend");
 assert(isWeekend("2026-08-07") === true, "Friday weekend");

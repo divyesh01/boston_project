@@ -116,4 +116,45 @@ describe('CalculationService - Financial Metrics', () => {
       expect(result.revpar).toBe(10);
     });
   });
+
+  describe('Card Processing Fee Centralization (R09)', () => {
+    it('accurately computes card fee with integer-cent precision and excludes non-card tenders', () => {
+      const payRows = [
+        {
+          visa: 1542.50,
+          master: 850.25,
+          amex: 400.00,
+          discover: 125.75,
+          cash: 500.00,
+          check: 300.00,
+          direct_bill: 1200.00,
+          wire_transfer: 2500.00,
+        },
+      ];
+
+      // Card total = 1542.50 + 850.25 + 400.00 + 125.75 = 2918.50
+      // Fee at 2.5% = 2918.50 * 0.025 = 72.9625 -> $72.96
+      const fees = CalculationService.calculateCardFees(payRows, 0.025);
+
+      expect(fees.cardTotal).toBe(2918.50);
+      expect(fees.cardTotalCents).toBe(291850);
+      expect(fees.fee).toBe(72.96);
+      expect(fees.feeCents).toBe(7296);
+
+      // MoneyKept should compute the exact same fee to the cent
+      const occRows = [{ date: '2026-09-01', room_revenue: 5000 }];
+      const moneyKept = CalculationService.calculateMoneyKept(
+        occRows,
+        [], // srcRows
+        [], // grossRows
+        [{ ...payRows[0], date: '2026-09-01' }], // payRows
+        [], // expenses
+        [], // payroll
+        { from: '2026-09-01', to: '2026-09-01' } // dateRange
+      );
+
+      // Assert that moneyKept uses the exact same fee calculation
+      expect(moneyKept.ccFees).toBe(fees.fee);
+    });
+  });
 });

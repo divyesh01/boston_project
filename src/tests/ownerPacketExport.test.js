@@ -236,7 +236,7 @@ describe('Monthly Owner Performance Packet Exporter', () => {
     expect(rows5[9][0]).toBe('Reconciliation Status:');
     expect(rows5[9][1]).toBe('BALANCED ($0.00 Difference)');
     expect(rows5[11][0]).toBe('Data Health Gate Status:');
-    expect(rows5[11][1]).toBe('READY / AUDITED');
+    expect(rows5[11][1]).toBe('RECONCILED / OTHER CONTROLS UNVERIFIED');
   });
 
   it('correctly integrates with CalculationService.calculatePerPropertyStats output (camelCase roomsSold)', () => {
@@ -320,5 +320,41 @@ describe('Monthly Owner Performance Packet Exporter', () => {
     expect(buf[1]).toBe(0x4B);
     expect(buf[2]).toBe(0x03);
     expect(buf[3]).toBe(0x04);
+  });
+
+  it('R02 regression: preserves health score 0, marks zero/incomplete data as unverified, and does not claim false audit assurance', () => {
+    const wb = buildOwnerPerformancePacketWorkbook({
+      dateRangeLabel: 'Sep 2026',
+      properties: [{ id: 'BOS', name: 'Boston Inn' }],
+      kpis: { revenue: 0, roomsSold: 0, netKept: 0 },
+      propertyStats: [],
+      portfolioHealth: {
+        portfolioScore: 0,
+        criticalCount: 0,
+        properties: [],
+      },
+      reconciliation: {
+        reported: 0,
+        calculated: 0,
+        difference: 0,
+        isBalanced: false,
+        status: 'no_data',
+      },
+    });
+
+    const wsProv = wb.Sheets['Data Provenance'];
+    expect(wsProv).toBeDefined();
+    const rows = XLSX.utils.sheet_to_json(wsProv, { header: 1 });
+    const rowMap = Object.fromEntries(rows.filter((r) => r.length >= 2).map((r) => [r[0], r[1]]));
+
+    // Health score must be 0/100, NEVER defaulted to 100/100
+    expect(rowMap['Portfolio Health Score:']).toBe('0/100');
+
+    // Gate status must be unverified, NEVER READY / AUDITED
+    expect(rowMap['Data Health Gate Status:']).toBe('NO DATA / UNVERIFIED');
+
+    // Invariant check must NOT claim verification on zero ingested activity
+    expect(rowMap['Deterministic Invariant Check:']).not.toBe('Integer Cent Balance & Rate Card Reconciliation Verified');
+    expect(rowMap['Deterministic Invariant Check:']).toBe('Zero Ledger Activity Ingested: No Financial Assurance Claimed');
   });
 });

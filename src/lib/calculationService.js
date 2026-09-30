@@ -65,46 +65,75 @@ function classifySource(r) {
  * `occ_capacity_rooms` by summing, and a max cannot be recovered from a sum. The
  * fallback is what must not repeat, and it no longer does — it is used only when NO
  * row for that date carries an explicit inventory figure.
+ */
+/**
+ * Sum daily capacity with defined out-of-order (OOO) room semantics (R10).
  *
- * @param {any[]} rows occupancy rows carrying `property_id`, `date`, `total_rooms`
+ * Physical capacity = total physical rooms in the building.
+ * Available capacity = physical capacity minus out-of-order (down/maintenance) rooms.
+ * Under USALI standard lodging accounting:
+ * - Gross Occupancy = Rooms Sold / Total Physical Rooms
+ * - Net Available Occupancy = Rooms Sold / Available Rooms (excluding OOO)
+ *
+ * @param {any[]} rows occupancy rows carrying `property_id`, `date`, `total_rooms`, `out_of_order`/`down_rooms`
  * @param {(pid: string) => number} roomsFor fallback inventory for a property
+ * @param {{ excludeOoo?: boolean }} [options] whether to subtract out-of-order rooms
  * @returns {number} capacity in room-cents
  */
-function capacityCents(rows, roomsFor) {
-  /** @type {Map<string, { pid: string, explicit: number }>} */
+function capacityCents(rows, roomsFor, options = {}) {
+  const { excludeOoo = false } = options || {};
+  /** @type {Map<string, { pid: string, explicit: number, ooo: number }>} */
   const byDay = new Map();
   (rows || []).forEach((r) => {
     const pid = r.property_id || '_default';
     const key = `${pid}|${String(r.date).slice(0, 10)}`;
     const rowRooms = Number(r.total_rooms) || 0;
+    const rowOoo = Number(r.out_of_order ?? r.down_rooms ?? r.ooo_rooms ?? 0);
+    const rowAvail = Number(r.available_rooms) || 0;
     const cur = byDay.get(key);
-    if (cur) cur.explicit += rowRooms > 0 ? rowRooms : 0;
-    else byDay.set(key, { pid, explicit: rowRooms > 0 ? rowRooms : 0 });
+    if (cur) {
+      if (rowRooms > 0) cur.explicit += rowRooms;
+      if (rowOoo > 0) cur.ooo += rowOoo;
+    } else {
+      byDay.set(key, {
+        pid,
+        explicit: rowRooms > 0 ? rowRooms : (rowAvail > 0 ? rowAvail + rowOoo : 0),
+        ooo: rowOoo > 0 ? rowOoo : 0,
+      });
+    }
   });
 
   let total = 0;
   byDay.forEach((day) => {
-    const rooms = day.explicit > 0 ? day.explicit : roomsFor(day.pid);
-    total += (Number(rooms) || 0) * 100;
+    const physical = day.explicit > 0 ? day.explicit : roomsFor(day.pid);
+    const effective = excludeOoo ? Math.max(0, physical - day.ooo) : physical;
+    total += (Number(effective) || 0) * 100;
   });
   return total;
 }
 
 export class CalculationService {
-  static calculateOccupancyMetrics(occRows = [], propertyRoomCounts = {}) {
+  static calculateOccupancyMetrics(occRows = [], propertyRoomCounts = {}, options = {}) {
     const revenue = sumCents(occRows.map(r => r.room_revenue));
     const roomsSold = sumCents(occRows.map(r => r.rooms_sold));
 
-    const capacity = capacityCents(occRows, (pid) => propertyRoomCounts?.[pid] ?? 100);
+    const totalCapacity = capacityCents(occRows, (pid) => propertyRoomCounts?.[pid] ?? 100, { excludeOoo: false });
+    const availableCapacity = capacityCents(occRows, (pid) => propertyRoomCounts?.[pid] ?? 100, { excludeOoo: true });
+    const oooCapacity = Math.max(0, totalCapacity - availableCapacity);
 
-    const occupancy = capacity ? divideRate(roomsSold, capacity) : 0;
+    // Option to calculate based on available rooms vs total physical rooms
+    const activeCapacity = options.excludeOoo ? availableCapacity : totalCapacity;
+
+    const occupancy = activeCapacity ? divideRate(roomsSold, activeCapacity) : 0;
     const adr = roomsSold ? divide(revenue, roomsSold) : 0;
-    const revpar = capacity ? divide(revenue, capacity) : 0;
+    const revpar = activeCapacity ? divide(revenue, activeCapacity) : 0;
 
     return {
       revenue: fromCents(revenue),
       roomsSold: fromCents(roomsSold),
-      capacity: fromCents(capacity),
+      capacity: fromCents(totalCapacity),
+      availableRooms: fromCents(availableCapacity),
+      outOfOrderRooms: fromCents(oooCapacity),
       occupancy: fromRate(occupancy),
       adr: fromCents(adr),
       revpar: fromCents(revpar),
@@ -167,22 +196,26 @@ export class CalculationService {
     const map = new Map();
     srcRows.forEach((r) => {
       const key = r.source || r.code || 'UNKNOWN';
-      const cur = map.get(key) || { source: key, code: r.code || '', grossCents: 0, stays: 0, refundsCents: 0 };
+      const mapKey = String(propertyId === "*" ? (r.property_id || "*") : propertyId) + ":" + key;
+      const cur = map.get(mapKey) || { property_id: propertyId === "*" ? (r.property_id || "*") : propertyId, source: key, code: r.code || '', grossCents: 0, stays: 0, refundsCents: 0, days:Object.create(null) };
       if (!cur.code && r.code) cur.code = r.code;
+      const date = String(r.date || "").slice(0,10);
+      const day = cur.days[date] || {date,grossCents:0,stays:0};
+      day.grossCents += toCents(r.net_revenue); day.stays += Number(r.stays)||0; cur.days[date] = day;
       cur.grossCents += toCents(r.net_revenue);
       cur.stays += Number(r.stays) || 0;
       if (r.refunds || r.refund_amount) {
         cur.refundsCents += toCents(r.refunds || r.refund_amount || 0);
       }
-      map.set(key, cur);
+      map.set(mapKey, cur);
     });
 
-    const ccFeeRate = options.ccFeeRate ?? getCcFeeRate(propertyId);
+
 
     return [...map.values()]
       .filter((c) => c.grossCents > 0 || c.stays > 0)
       .map((c) => {
-        const info = commissionFor(c.source, propertyId);
+        const info = commissionFor(c.source, c.property_id);
         const norm = normalizeChannel(c.source, c.code);
         const gross = fromCents(c.grossCents);
         let commissionCents = 0;
@@ -192,12 +225,16 @@ export class CalculationService {
         // RATE_SCALE and return a figure 10,000x too small).
         else if (info.type === 'fixed') commissionCents = Math.round(toCents(info.rate) * c.stays);
         else if (info.type === 'actual') commissionCents = toCents(info.rate);
+        const weights = Object.values(c.days).sort((a,b)=>a.date.localeCompare(b.date));
+        const denominator = weights.reduce((n,d)=>n+(info.type==='fixed'?d.stays:d.grossCents),0);
+        const dailyCommission = weights.map(d=>({date:d.date,cents:denominator?Math.round(commissionCents*(info.type==='fixed'?d.stays:d.grossCents)/denominator):0}));
+        if (dailyCommission.length) dailyCommission.at(-1).cents += commissionCents - dailyCommission.reduce((n,d)=>n+d.cents,0);
         const commission = fromCents(commissionCents);
         const netCents = c.grossCents - commissionCents;
 
         // Payment processing fees (e.g. card interchange/gateway on OTA or card channels)
         const applyPaymentFee = options.applyPaymentFee ?? (norm.isOta || options.allChannelsCardFee);
-        const paymentFeeCents = applyPaymentFee ? multiply(gross, ccFeeRate) : 0;
+        const paymentFeeCents = applyPaymentFee ? multiply(gross, options.ccFeeRate ?? getCcFeeRate(c.property_id)) : 0;
         const paymentFee = fromCents(paymentFeeCents);
 
         const refundsCents = c.refundsCents || 0;
@@ -212,6 +249,7 @@ export class CalculationService {
         // the result: a cents-scaled field sitting next to dollar fields is exactly
         // how a consumer ends up rendering a number 100x too large.
         return {
+          property_id: c.property_id,
           source: c.source,
           normalized: norm.normalizedName,
           group: norm.group,
@@ -221,6 +259,7 @@ export class CalculationService {
           ...info,
           gross,
           commission,
+          dailyCommission,
           paymentFee,
           refunds,
           net: fromCents(netCents),
@@ -251,9 +290,56 @@ export class CalculationService {
     return { methodTotals, cardTotal, cashTotal, totalCollected, refunds, netPaymentCollected };
   }
 
-  static calculateTaxLiability(srcRows = [], grossRows = [], propertyId = null, dateRange = { from: '', to: '' }) {
-    const taxConfig = getTaxConfig();
-    if (!taxConfig.taxEnabled || getTaxSettings().length === 0) {
+  /**
+   * Canonical Card Processing Fee Calculation (R09).
+   * Centralizes card processing fee computation across all views (PaymentMethodChart,
+   * MoneyKept, CalculationService) to eliminate floating-point and formula drift.
+   *
+   * @param {Array<Object>} payRows Payment ledger rows
+   * @param {number} [rate] Optional fee rate override; defaults to getCcFeeRate()
+   * @returns {{
+   *   cardTotalCents: number,
+   *   cardTotal: number,
+   *   feeCents: number,
+   *   fee: number,
+   *   rate: number,
+   *   methodFeeCents: Record<string,number>,
+   *   daily: Array<{property_id: any, date: string, cardTotalCents: number, rate: number, feeCents: number, methods: Record<string,number>}>
+   * }}
+   */
+  static calculateCardFees(payRows = [], rate = null) {
+    const groups = new Map();
+    for (const row of payRows || []) {
+      const key = String(row.property_id ?? '*') + ':' + String(row.date || '').slice(0,10);
+      const group = groups.get(key) || {property_id:row.property_id,date:String(row.date || '').slice(0,10),cardTotalCents:0,methods:Object.fromEntries(CARD_METHODS.map(k=>[k,0])),rate:rate ?? getCcFeeRate(row.property_id || '*')};
+      for (const method of CARD_METHODS) group.methods[method] += toCents(row[method]);
+      group.cardTotalCents += sumCents(CARD_METHODS.map(k => row[k])); groups.set(key,group);
+    }
+    const daily = [...groups.values()].map(group => ({...group,feeCents:multiply(fromCents(group.cardTotalCents),group.rate)}));
+    const methodFeeCents = Object.fromEntries(CARD_METHODS.map(k=>[k,0]));
+    for (const group of daily) {
+      const allocation = CARD_METHODS.map(method=>({method,cents:group.cardTotalCents ? Math.round(group.feeCents * group.methods[method] / group.cardTotalCents) : 0,volume:Math.abs(group.methods[method])}));
+      allocation.sort((a,b)=>b.volume-a.volume);
+      allocation[0].cents += group.feeCents - allocation.reduce((n,a)=>n+a.cents,0);
+      for (const item of allocation) methodFeeCents[item.method] += item.cents;
+    }
+    const cardTotalCents = daily.reduce((n,g)=>n+g.cardTotalCents,0);
+    const feeCents = daily.reduce((n,g)=>n+g.feeCents,0);
+    return {cardTotalCents,cardTotal:fromCents(cardTotalCents),feeCents,fee:fromCents(feeCents),rate:rate ?? getCcFeeRate(),daily,methodFeeCents};
+  }
+
+  static calculateTaxLiability(srcRows = [], grossRows = [], propertyId = null, dateRange = { from: '', to: '' }, occupancyRows = []) {
+    const sourceDays = new Set(srcRows.map(row=>String(row.property_id || '*')+':'+String(row.date).slice(0,10)));
+    srcRows = [...srcRows,...occupancyRows.filter(row=>!sourceDays.has(String(row.property_id || '*')+':'+String(row.date).slice(0,10))).map(row=>({...row,source:'Walk-in',net_revenue:row.room_revenue}))];
+    const propertyIds = [...new Set([...srcRows,...grossRows].map(row=>row.property_id || '*'))];
+    if (!propertyId && propertyIds.length > 1) {
+      const totals = {state:0,city:0,other:0,total:0,imported:0,estimated:0};
+      for (const id of propertyIds) {const part = this.calculateTaxLiability(srcRows.filter(r=>(r.property_id||'*')===id),grossRows.filter(r=>(r.property_id||'*')===id),id,dateRange); for (const key of Object.keys(totals)) totals[key] = fromCents(toCents(totals[key])+toCents(part[key]));}
+      return totals;
+    }
+    propertyId = propertyId || propertyIds[0] || '*';
+    const taxConfig = getTaxConfig(propertyId);
+    if (!taxConfig.taxEnabled) {
       // Every key the enabled path returns, so a caller reading `.estimated` or
       // `.imported` gets 0 rather than undefined — which would become NaN the
       // moment it reached toCents() and poison the whole deduction total.
@@ -266,9 +352,9 @@ export class CalculationService {
     // were collapsed by the daily-aggregate cache.
     const taxBase = new Map();
     srcRows.forEach((r) => {
-      const src = TAX_SOURCES.find((s) => s.key === classifySource(r));
+      const src = taxConfig.sources.find((s) => s.key === classifySource(r));
       // Also respect per-source taxExempt from commission rate settings
-      const info = commissionFor(r.source || r.code);
+      const info = commissionFor(r.source || r.code, r.property_id || propertyId);
       if (!src || !src.taxable || info.taxExempt) return;
       const d = String(r.date).slice(0, 10);
       taxBase.set(d, (taxBase.get(d) || 0) + toCents(r.net_revenue));
@@ -277,7 +363,8 @@ export class CalculationService {
     const taxImp = new Map();
     grossRows.forEach((r) => {
       const d = String(r.date).slice(0, 10);
-      const cur = taxImp.get(d) || { state: 0, city: 0, other: 0 };
+      const cur = taxImp.get(d) || { state: 0, city: 0, other: 0, present:false };
+      cur.present ||= r.tax_fields_present === true || (r.tax_fields_present !== false && ["state_tax","city_tax","other_tax"].some(key=>r[key] != null));
       cur.state += toCents(r.state_tax);
       cur.city += toCents(r.city_tax);
       cur.other += toCents(r.other_tax);
@@ -306,7 +393,7 @@ export class CalculationService {
       const imp = taxImp.get(d);
       // Threshold is now a whole cent rather than 0.004 dollars, because the values
       // being tested are cents. Same intent: "was any tax actually imported".
-      const hasImported = imp && (imp.state + imp.city + imp.other) > 0;
+      const hasImported = imp?.present === true;
       if (hasImported) {
         stateCents += imp.state;
         cityCents += imp.city;
@@ -362,39 +449,16 @@ export class CalculationService {
     const grossBasis = grossRevenueForPeriod({ grossRows, occRows });
     const grossCents = grossBasis.cents;
 
-    const ccFee = getCcFeeRate();
-    const ccFeeRefunds = getCcFeeOnRefunds();
+
 
     const otaCommissionsCents = sumCents(this.calculateChannelMetrics(srcRows).map(c => c.commission));
 
-    // Card volume is the sum of the CARD_METHODS columns — NOT
-    // `total - cash - check`.
-    //
-    // WHY THIS CHANGED (2026-08-20): `total - cash - check` charged a credit-card
-    // processing fee on every non-cash, non-check tender, which includes
-    // direct_bill, corpay, wire_transfer, loyalty_certificate, loyalty_discount,
-    // vip_pass, other and closed_balance_folio. None of those touch a card
-    // processor. The effect was to overstate a deduction, which understates the
-    // owner's "money kept" — the single number this whole widget exists to report.
-    //
-    // Evidence that this line was the outlier rather than the spec: the live
-    // dashboard widget src/components/dashboard/MoneyKept.jsx:187 sums CARD_METHODS,
-    // src/lib/actionCenter.js sums CARD_METHODS, and scripts/verify-money-kept.mjs
-    // already asserted that CARD_METHODS deliberately excludes cash, check,
-    // direct_bill and wire_transfer. Three sources agreed; this one did not.
-    //
-    // BEST OUTCOME NOTE: deriving the volume from the named card columns is the
-    // better logic because it fails SAFE. A new tender column added to the schema
-    // is not silently treated as a card (and charged a fee) — it is simply not a
-    // card until someone adds it to CARD_METHODS, which is a one-line, reviewable
-    // decision rather than an invisible consequence of a subtraction.
-    const cardTotalCents = sumCents((payRows || []).flatMap(r => CARD_METHODS.map(k => r[k])));
-    const ccFeesCents = multiply(fromCents(cardTotalCents), ccFee);
+    const { cardTotalCents, feeCents: ccFeesCents } = this.calculateCardFees(payRows);
 
     const refundsDollars = refundTotal(payRows);
     const refundsCents = toCents(refundsDollars);
     let refundFeesCents = 0;
-    if (ccFeeRefunds) refundFeesCents = multiply(refundsDollars, ccFee);
+    for (const row of payRows) {const id=row.property_id || "*";if(getCcFeeOnRefunds(id)) refundFeesCents += multiply(refundTotal([row]),getCcFeeRate(id));}
 
     const expInPeriod = expenses.filter(e => inRange(e.expense_date, dateRange.from, dateRange.to));
     // Approved/paid only (COMMITTED_PAYROLL_STATUSES in src/lib/payrollCalc.js) —
@@ -449,7 +513,7 @@ export class CalculationService {
     // derived figure on top of it bills the owner twice for the same fee.
     const refundFeesAppliedCents = ccLeg.basis === 'actual' ? 0 : refundFeesCents;
 
-    const taxLiability = this.calculateTaxLiability(srcRows, grossRows, propertyId, dateRange);
+    const taxLiability = this.calculateTaxLiability(srcRows, grossRows, propertyId, dateRange, occRows);
     // Only the ESTIMATED portion is an owner cost. The imported portion was
     // collected from the guest and is remitted onward — reported below as
     // passThroughTaxes so it stays visible instead of disappearing.

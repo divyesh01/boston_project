@@ -1,13 +1,13 @@
 import React, { useMemo } from "react";
 import PieDonut from "@/components/charts/PieDonut";
 import Card from "@/components/ui-exec/Card";
-import { CHART_COLORS, money2, pct } from "@/lib/hotel";
-import { getCcFeeRate } from "@/lib/commissionRates";
+import { CHART_COLORS, money2 } from "@/lib/hotel";
 import { useSettingsVersion } from "@/hooks/useSettingsVersion";
+import { CalculationService } from "@/lib/calculationService";
+import { fromCents, toCents, sumCents } from "@/lib/decimal";
 
-export default function PaymentMethodChart({ payRows }) {
-  const ccFee = getCcFeeRate();
-  useSettingsVersion();
+export default function PaymentMethodChart({ payRows = [] }) {
+  const settingsVersion = useSettingsVersion();
 
   const data = useMemo(() => {
     if (!payRows?.length) return { chart: [], totals: {} };
@@ -38,17 +38,18 @@ export default function PaymentMethodChart({ payRows }) {
 
     // Filter out zero values
     const chart = Object.entries(sums)
-      .filter(([_, v]) => Math.abs(v.value) > 0.01)
-      .map(([name, v]) => ({ name, value: v.value, isCard: v.isCard, color: v.color }))
+      .filter(([_, v]) => Math.abs(v.value) >= 0.01)
+      .map(([name, v]) => ({ name, value: v.value, isCard: v.isCard, color: v.color, feeCents:0 }))
       .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
 
-    const totalGross = chart.reduce((a, c) => a + c.value, 0);
-    const cardTotal = chart.filter((c) => c.isCard).reduce((a, c) => a + c.value, 0);
-    const ccFees = cardTotal * ccFee;
-    const netKept = totalGross - ccFees;
+    const totalGross = fromCents(sumCents(chart.map((c) => c.value)));
+    const { cardTotal, fee: ccFees, methodFeeCents } = CalculationService.calculateCardFees(payRows);
+    const netKept = fromCents(toCents(totalGross) - toCents(ccFees));
 
+    const methods = {Visa:"visa",Mastercard:"master",Amex:"amex",Discover:"discover"};
+    for (const row of chart) row.feeCents = methodFeeCents[methods[row.name]] || 0;
     return { chart, totals: { totalGross, cardTotal, ccFees, netKept } };
-  }, [payRows, ccFee]);
+  }, [payRows, settingsVersion]);
 
   if (!data.chart.length) {
     return (
@@ -63,7 +64,7 @@ export default function PaymentMethodChart({ payRows }) {
   return (
     <Card
       title="Payment Method Distribution"
-      subtitle={`Total ${money2(totals.totalGross)} · CC fees ${money2(totals.ccFees)} (${pct(ccFee, 2)} on cards) · Net kept ${money2(totals.netKept)}`}
+      subtitle={`Total ${money2(totals.totalGross)} · CC fees ${money2(totals.ccFees)} (configured property rates) · Net kept ${money2(totals.netKept)}`}
     >
       {/* Big single donut — every category labelled on the chart */}
       <div className="h-[700px]">
@@ -78,14 +79,14 @@ export default function PaymentMethodChart({ payRows }) {
             <div className="min-w-0 flex-1">
               <div className="text-sm font-medium text-slate-200">
                 {c.name}
-                {c.isCard && <span className="ml-1.5 text-xs text-slate-500">· {pct(ccFee, 1)} fee</span>}
+                {c.isCard && <span className="ml-1.5 text-xs text-slate-500">· configured fee</span>}
               </div>
               <div className="text-sm font-semibold tabular-nums text-white">{money2(c.value)}</div>
             </div>
             <div className="shrink-0 text-right">
               <div className="text-xs text-slate-400">after fees</div>
               <div className="text-sm tabular-nums text-[#00E096]">
-                {c.isCard ? money2(c.value * (1 - ccFee)) : money2(c.value)}
+                {c.isCard ? money2(fromCents(toCents(c.value) - c.feeCents)) : money2(c.value)}
               </div>
             </div>
           </div>

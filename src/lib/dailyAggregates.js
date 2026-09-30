@@ -20,7 +20,7 @@ import { toCents, fromCents } from '@/lib/decimal';
 // the cache whenever its units or shape change so an old browser cannot render a
 // cents-valued source_net as dollars and turn a normal commission into a six-figure
 // deduction. The raw ledgers remain available as the honest fallback.
-export const DAILY_AGGREGATE_VERSION = 3;
+export const DAILY_AGGREGATE_VERSION = 4;
 
 const PAYMENT_FIELDS = [
   ...CARD_METHODS, 'cash', 'check', 'direct_bill', 'corpay', 'wire_transfer',
@@ -123,6 +123,7 @@ async function fetchLedger(name, propertyId, from, to) {
  * @property {number} gross_state_tax cents
  * @property {number} gross_city_tax cents
  * @property {number} gross_other_tax cents
+ * @property {boolean} gross_tax_fields_present
  * @property {number} gross_room_rent cents
  * @property {Record<string, number>} gross_misc cents
  * @property {Record<string, number>} payment cents
@@ -150,7 +151,7 @@ function newDay(pid, date) {
     property_id: pid,
     business_date: date,
     occ_revenue: 0, occ_rooms_sold: 0, occ_capacity_rooms: 0,
-    source_net: {}, gross_state_tax: 0, gross_city_tax: 0, gross_other_tax: 0, gross_room_rent: 0, gross_misc: {},
+    source_net: Object.create(null), gross_state_tax: 0, gross_city_tax: 0, gross_other_tax: 0, gross_room_rent: 0, gross_tax_fields_present:false, gross_misc: {},
     payment: {}, payment_total: 0, expense_by_category: {},
   };
 }
@@ -200,6 +201,7 @@ function finalizeDay(d) {
     gross_city_tax: fromCents(d.gross_city_tax),
     gross_other_tax: fromCents(d.gross_other_tax),
     gross_room_rent: fromCents(d.gross_room_rent),
+    gross_tax_fields_present:d.gross_tax_fields_present,
     gross_misc: centsToDollars(d.gross_misc),
     payment: centsToDollars(d.payment),
     payment_total: fromCents(d.payment_total),
@@ -254,6 +256,7 @@ export function aggregateDays({ occ = [], src = [], gross = [], pay = [], exp = 
 
   for (const r of gross) {
     const d = ensure(r.property_id, String(r.date).slice(0, 10));
+    d.gross_tax_fields_present ||= ["state_tax","city_tax","other_tax"].some(key=>r[key]!=null);
     d.gross_state_tax += toCents(r.state_tax);
     d.gross_city_tax += toCents(r.city_tax);
     d.gross_other_tax += toCents(r.other_tax);
@@ -387,14 +390,33 @@ export function buildSyntheticRows(aggregates) {
       });
     }
 
-    // Support source_net map or channel_summary_json string/object
+    // Support source_net map or channel_summary_json string/object with structured _meta (R06)
     let channelMap = a.source_net;
-    if (!channelMap && a.channel_summary_json) {
+    let meta = null;
+    if (a.channel_summary_json) {
       try {
         const parsed = typeof a.channel_summary_json === "string" ? JSON.parse(a.channel_summary_json) : a.channel_summary_json;
-        channelMap = {};
-        for (const [k, v] of Object.entries(parsed || {})) {
-          channelMap[k] = { net: typeof v === "number" ? v / 100 : (v?.net || 0), stays: v?.stays || 0 };
+        if (parsed && typeof parsed === "object") {
+          meta = parsed._meta || null;
+          if (!channelMap) {
+            channelMap = Object.create(null);
+            if (meta?.channelsWithStays && typeof meta.channelsWithStays === "object") {
+              for (const [ch, info] of Object.entries(meta.channelsWithStays)) {
+                channelMap[ch] = {
+                  net: typeof info.net === "number" ? fromCents(info.net) : (info.net || 0),
+                  stays: Number(info.stays) || 0,
+                };
+              }
+            } else {
+              for (const [k, v] of Object.entries(parsed)) {
+                if (k === "_meta") continue;
+                channelMap[k] = {
+                  net: typeof v === "number" ? fromCents(v) : (v?.net || 0),
+                  stays: v?.stays || 0,
+                };
+              }
+            }
+          }
         }
       } catch {
         channelMap = null;
@@ -409,28 +431,49 @@ export function buildSyntheticRows(aggregates) {
       }
     }
 
-    const roomRent = a.gross_room_rent || (a.room_revenue_cents ? a.room_revenue_cents / 100 : 0);
-    const miscTotal = a.ancillary_revenue_cents ? a.ancillary_revenue_cents / 100 : 0;
-    if (roomRent || miscTotal || a.gross_state_tax || a.gross_city_tax || a.gross_other_tax || (a.gross_misc && Object.values(a.gross_misc).some((x) => x))) {
+    const roomRent = a.gross_room_rent ?? (meta?.gross_room_rent_cents != null ? fromCents(meta.gross_room_rent_cents) : (a.room_revenue_cents != null ? fromCents(a.room_revenue_cents) : 0));
+    const miscTotal = a.ancillary_revenue_cents ? fromCents(a.ancillary_revenue_cents) : 0;
+    const stateTax = a.gross_state_tax ?? (meta?.taxes?.state_tax_cents != null ? fromCents(meta.taxes.state_tax_cents) : 0);
+    const cityTax = a.gross_city_tax ?? (meta?.taxes?.city_tax_cents != null ? fromCents(meta.taxes.city_tax_cents) : 0);
+    const otherTax = a.gross_other_tax ?? (meta?.taxes?.other_tax_cents != null ? fromCents(meta.taxes.other_tax_cents) : 0);
+    const food = a.gross_misc?.food ?? (meta?.ancillary?.food_cents != null ? fromCents(meta.ancillary.food_cents) : 0);
+    const bar = a.gross_misc?.bar ?? (meta?.ancillary?.bar_cents != null ? fromCents(meta.ancillary.bar_cents) : 0);
+    const miscCharge = a.gross_misc?.misc_charge ?? (meta?.ancillary?.misc_charge_cents != null ? fromCents(meta.ancillary.misc_charge_cents) : (meta?.ancillary?.misc_cents != null ? fromCents(meta.ancillary.misc_cents) : (meta?.ancillary ? 0 : miscTotal)));
+
+    if (roomRent || miscTotal || stateTax || cityTax || otherTax || (a.gross_misc && Object.values(a.gross_misc).some((x) => x))) {
       const g = {
         property_id: a.property_id,
         date,
         room_rent: roomRent,
-        state_tax: a.gross_state_tax || 0,
-        city_tax: a.gross_city_tax || 0,
-        other_tax: a.gross_other_tax || 0,
-        misc_charge: a.gross_misc?.misc_charge || miscTotal,
+        tax_fields_present:a.gross_tax_fields_present ?? meta?.tax_fields_present ?? (stateTax+cityTax+otherTax!==0),
+        state_tax: stateTax,
+        city_tax: cityTax,
+        other_tax: otherTax,
+        misc_charge: miscCharge,
+        food,
+        bar,
       };
       for (const f of GROSS_MISC_FIELDS) {
-        if (f !== 'misc_charge') g[f] = a.gross_misc?.[f] || 0;
+        if (g[f] === undefined) {
+          g[f] = a.gross_misc?.[f] ?? (meta?.ancillary?.[f + "_cents"] != null ? fromCents(meta.ancillary[f + "_cents"]) : 0);
+        }
       }
       grossRows.push(g);
     }
 
-    const payTotal = a.payment_total || (a.payment_total_cents ? a.payment_total_cents / 100 : 0);
-    if (payTotal || (a.payment && Object.keys(a.payment).length)) {
+    const payTotal = a.payment_total ?? (a.payment_total_cents != null ? fromCents(a.payment_total_cents) : 0);
+    const hasPayMeta = Boolean(meta?.payments && Object.keys(meta.payments).length > 0);
+    if (payTotal || (a.payment && Object.keys(a.payment).length) || hasPayMeta) {
       const pay = { property_id: a.property_id, date, total: payTotal };
-      for (const f of PAYMENT_FIELDS) pay[f] = a.payment?.[f] || 0;
+      for (const f of PAYMENT_FIELDS) {
+        if (a.payment?.[f] != null) {
+          pay[f] = a.payment[f];
+        } else if (meta?.payments?.[f] != null) {
+          pay[f] = fromCents(meta.payments[f]);
+        } else {
+          pay[f] = 0;
+        }
+      }
       payRows.push(pay);
     }
 

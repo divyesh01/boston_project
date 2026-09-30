@@ -256,7 +256,7 @@ export default function OtaChannels() {
                 {channels.map((c) => {
                   const rateInfo = rates[c.source] || { type: "none", rate: 0, taxExempt: false };
                   return (
-                    <tr key={c.source} className="border-t border-white/5 transition-colors hover:bg-white/[0.03]">
+                    <tr key={`${c.property_id}:${c.source}`} className="border-t border-white/5 transition-colors hover:bg-white/[0.03]">
                       <td className="py-2.5 pr-3 font-medium text-slate-200">{c.source}</td>
                       <td className="py-2.5 pr-3 text-right tabular-nums">{money(c.gross)}</td>
                       <td className="py-2.5 pr-3">
@@ -350,7 +350,7 @@ export default function OtaChannels() {
                       : "Highly profitable channel. Focus on growing this segment."
                     : "High volume channel. Consider negotiating lower commission or pushing direct bookings.";
                   return (
-                    <div key={c.source} className="flex items-start gap-3 rounded-lg bg-white/[0.03] p-3">
+                    <div key={`${c.property_id}:${c.source}`} className="flex items-start gap-3 rounded-lg bg-white/[0.03] p-3">
                       <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-[#FFB547]" />
                       <div className="flex-1">
                         <p className="text-sm text-white">{c.source}</p>

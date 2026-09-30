@@ -206,6 +206,8 @@ const SENTINEL = /^(?:http-only|all|none|null|undefined|true|false|owner|admin)$
 const TEST_FILE = /(?:\.test\.[jt]sx?$|(?:^|\/)tests\/|(?:^|\/)scripts\/(?:probe[-_]|verify[-_]|test[_-]|acceptance|_))/;
 
 const ALLOWED_TEST_FIXTURES = new Map([
+  ["fake-access-token", "importDriveFile.test.js synthetic connector token"],
+  ["fake-drive-access-token", "listDriveFiles.test.js synthetic connector token"],
   // The auth lifecycle suites. Named "Mock..." so it cannot be read as real.
   ['MockSecurePass#2026', 'authLocal.test.js / dataIntegrity.test.js owner fixture'],
   // A deliberately DIFFERENT password, proving a second owner registration is

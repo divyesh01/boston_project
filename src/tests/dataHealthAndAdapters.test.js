@@ -66,6 +66,44 @@ describe('Data Health & Completeness Engine', () => {
     expect(discrepancy.isBalanced).toBe(false);
     expect(discrepancy.difference).toBe(13.91);
     expect(discrepancy.status).toBe('discrepancy');
+
+    // R01: A 1-cent real discrepancy must fail exact reconciliation
+    const oneCentDiscrepancy = reconcileFinancialTotals(100.00, 100.01);
+    expect(oneCentDiscrepancy.isBalanced).toBe(false);
+    expect(oneCentDiscrepancy.difference).toBe(0.01);
+    expect(oneCentDiscrepancy.status).toBe('discrepancy');
+
+    // R01: Empty/zero ledgers without explicit data must NEVER produce verified success
+    const emptyResult = reconcileFinancialTotals(0, 0);
+    expect(emptyResult.isBalanced).toBe(false);
+    expect(emptyResult.status).toBe('no_data');
+    expect(emptyResult.difference).toBe(0);
+
+    // R01: Missing channel ledger must be marked incomplete, not verified
+    const missingChannel = reconcileFinancialTotals(500.00, 0, {
+      hasData: true,
+      reportedCount: 5,
+      calculatedCount: 0,
+      channelLedgerPresent: false,
+    });
+    expect(missingChannel.isBalanced).toBe(false);
+    expect(missingChannel.status).toBe('incomplete');
+
+    // R01: Failed ledger fetch must return failed status
+    const failedResult = reconcileFinancialTotals(0, 0, { isFailed: true });
+    expect(failedResult.isBalanced).toBe(false);
+    expect(failedResult.status).toBe('failed');
+
+    // R01: Payment settlement mismatch is explicitly tracked
+    const paymentMismatch = reconcileFinancialTotals(1000.00, 1000.00, {
+      paymentsTotal: 950.00,
+      hasData: true,
+    });
+    expect(paymentMismatch.isBalanced).toBe(true);
+    expect(paymentMismatch.status).toBe('reconciled');
+    expect(paymentMismatch.paymentsMatch).toBe(false);
+    expect(paymentMismatch.paymentsStatus).toBe('variance');
+    expect(paymentMismatch.paymentsDifference).toBe(50.00);
   });
 
   it('correctly evaluates empty property data and empty portfolio without defaulting to 100', () => {

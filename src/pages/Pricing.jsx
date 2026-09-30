@@ -52,7 +52,16 @@ export default function Pricing() {
   const [pushing, setPushing] = useState(false);
   const [horizon, setHorizon] = useState(14);
 
-  const { forecast, enabled, isError: forecastError, error: forecastErr, refetch: refetchForecast } = usePricingForecast(horizon);
+  const {
+    forecast,
+    enabled,
+    isError: forecastError,
+    error: forecastErr,
+    refetch: refetchForecast,
+    isHistoricalSimulation,
+    forecastStartDate,
+    calendarToday,
+  } = usePricingForecast(horizon);
 
   const update = (patch) => {
     const next = { ...cfg, ...patch };
@@ -100,6 +109,13 @@ export default function Pricing() {
   const handlePush = async () => {
     if (isPortfolio) { setNotice({ type: "error", text: "Select a specific property to push rates." }); return; }
     if (!today) return;
+    if (isHistoricalSimulation) {
+      setNotice({
+        type: "error",
+        text: `Cannot push historical simulation rates (${forecastStartDate}) to live channels. Rate push requires a live business date.`,
+      });
+      return;
+    }
     setPushing(true); setNotice(null);
     try {
       const rateMap = {};
@@ -145,6 +161,15 @@ export default function Pricing() {
         <p className="mt-1 text-sm text-slate-400">Auto-adjust nightly rates from demand, seasonality, weather, and the competitive set · {propName}</p>
       </header>
 
+      {isHistoricalSimulation && (
+        <div className="flex items-center gap-2 rounded-xl border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-xs text-sky-200">
+          <span className="font-semibold text-sky-300">Historical Simulation Horizon:</span>
+          <span>
+            Rates and demand signals are anchored to historical report date <strong className="text-white">{forecastStartDate}</strong> (calendar today is {calendarToday}). Rate push to live channels is disabled for historical backtesting.
+          </span>
+        </div>
+      )}
+
       {/* Without this, a failed room read still printed a full rate card — the page said
           "No room register yet to size demand", which reads as an empty hotel rather
           than a failed read. The forecast hook is checked as well: it reads the
@@ -174,7 +199,9 @@ export default function Pricing() {
         {today && (
           <>
             <div className="rounded-2xl border border-white/5 bg-[#0A1628]/60 p-4">
-              <p className="text-[11px] uppercase tracking-widest text-slate-500">Tonight's Recommended Rate</p>
+              <p className="text-[11px] uppercase tracking-widest text-slate-500">
+                {isHistoricalSimulation ? `Anchor (${forecastStartDate}) Recommended Rate` : "Tonight's Recommended Rate"}
+              </p>
               <p className="mt-2 font-heading text-2xl font-semibold text-white">{money2(fromCents(avgRecCents))}</p>
               <p className={`mt-0.5 text-xs ${avgRecCents >= avgBaseCents ? "text-[#00E096]" : "text-[#FF6B6B]"}`}>
                 {avgRecCents >= avgBaseCents ? "+" : ""}{money2(fromCents(avgRecCents - avgBaseCents))} vs base {money2(fromCents(avgBaseCents))}

@@ -59,20 +59,22 @@ export function calculateOtaShiftEconomics({
 }
 
 export default function OTAShiftSimulator({
-  grossOtaRevenue = 136988.58,
+  grossOtaRevenue = 0,
   otaCommissionRate = 0.16,
-  periodDays = 214,
+  periodDays = 1,
 }) {
   const [shiftPct, setShiftPct] = useState(15); // default 15% target shift
+  const hasData = typeof grossOtaRevenue === "number" && grossOtaRevenue > 0;
 
   const results = useMemo(() => {
+    if (!hasData) return null;
     return calculateOtaShiftEconomics({
       grossOtaRevenue,
       shiftPct,
       otaCommissionRate,
       periodDays,
     });
-  }, [grossOtaRevenue, shiftPct, otaCommissionRate, periodDays]);
+  }, [grossOtaRevenue, shiftPct, otaCommissionRate, periodDays, hasData]);
 
   return (
     <Card className="relative overflow-hidden border border-emerald-500/20 bg-gradient-to-br from-slate-900/95 via-slate-900 to-emerald-950/20 p-6 shadow-2xl backdrop-blur-xl">
@@ -99,15 +101,27 @@ export default function OTAShiftSimulator({
 
         <div className="text-right">
           <div className="text-xs text-slate-400">Current Base OTA Volume</div>
-          <div className="text-sm font-semibold text-slate-200">{money(grossOtaRevenue)}</div>
+          <div className="text-sm font-semibold text-slate-200">
+            {hasData ? money(grossOtaRevenue) : "—"}
+          </div>
         </div>
       </div>
 
-      {/* Interactive Controls & Realtime Results */}
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-12">
-        {/* Left Column: Interactive Slider */}
-        <div className="lg:col-span-5 space-y-5">
-          <div>
+      {!hasData ? (
+        <div className="mt-6 rounded-xl border border-white/5 bg-slate-800/30 p-8 text-center">
+          <Sliders className="mx-auto h-8 w-8 text-slate-500 mb-3" />
+          <h4 className="text-sm font-semibold text-slate-300">Channel data unavailable</h4>
+          <p className="mt-1 text-xs text-slate-400 max-w-md mx-auto">
+            No OTA booking revenue was recorded for the selected property and date range.
+            Upload a Source of Business report with third-party channels (Expedia, Booking.com, etc.) to model direct booking savings.
+          </p>
+        </div>
+      ) : (
+        /* Interactive Controls & Realtime Results */
+        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-12">
+          {/* Left Column: Interactive Slider */}
+          <div className="lg:col-span-5 space-y-5">
+            <div>
             <div className="flex justify-between text-xs font-medium text-slate-300 mb-2">
               <span className="flex items-center gap-1.5">
                 <Percent className="h-3.5 w-3.5 text-emerald-400" /> Target Direct Shift
@@ -195,6 +209,7 @@ export default function OTAShiftSimulator({
           </div>
         </div>
       </div>
+      )}
     </Card>
   );
 }

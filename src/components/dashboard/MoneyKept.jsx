@@ -11,6 +11,7 @@ import { usePaymentData } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { money, money2, pct, sum, inRange, C, CHART_COLORS, commissionFor, grossRevenueForPeriod, rowAncillaryRevenueCents } from "@/lib/hotel";
 import { fromCents, toCents, multiply } from "@/lib/decimal";
+import { CalculationService } from "@/lib/calculationService";
 import { getCcFeeRate, getCcFeeOnRefunds } from "@/lib/commissionRates";
 import { getTaxConfig } from "@/lib/taxConfig";
 import { getEffectiveTaxRates, getTaxSettings } from "@/lib/taxSettings";
@@ -178,7 +179,8 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     const taxImp = new Map();
     grossInPeriod.forEach((r) => {
       const d = String(r.date).slice(0, 10);
-      const cur = taxImp.get(d) || { state: 0, city: 0, other: 0 };
+      const cur = taxImp.get(d) || { state: 0, city: 0, other: 0, present:false };
+      cur.present ||= r.tax_fields_present === true || (r.tax_fields_present !== false && ["state_tax","city_tax","other_tax"].some(key=>r[key] != null));
       cur.state += Number(r.state_tax) || 0;
       cur.city += Number(r.city_tax) || 0;
       cur.other += Number(r.other_tax) || 0;
@@ -201,108 +203,31 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     // two halves grossRevenueForPeriod adds up.
     occRows.forEach((r) => bump(String(r.date).slice(0, 10), "gross", Number(r.room_revenue) || 0));
     grossInPeriod.forEach((r) => bump(String(r.date).slice(0, 10), "gross", fromCents(rowAncillaryRevenueCents(r))));
-    srcRows.forEach((r) => {
-      const rev = Number(r.net_revenue) || 0;
-      const stays = Number(r.stays) || 0;
-      const info = commissionFor(r.source || r.code);
-      // INTEGER CENTS, not float dollars. rev * info.rate let each row land on
-      // either side of a half-cent depending on nothing but binary rounding, and
-      // the errors accumulated across every source row of the period — the same
-      // defect class fixed in calculationService.calculateChannelMetrics. multiply()
-      // is the cents-safe primitive: (cents, rate) -> cents, exact.
-      let commCents = 0;
-      if (info.type === "percentage") commCents = multiply(rev, info.rate);
-      else if (info.type === "fixed") commCents = toCents(info.rate) * stays;
-      else if (info.type === "actual") commCents = toCents(info.rate);
-      bump(String(r.date).slice(0, 10), "commission", fromCents(commCents));
-    });
+    const channels = CalculationService.calculateChannelMetrics(srcRows);
+    channels.forEach(c=>c.dailyCommission.forEach(d=>bump(d.date,"commission",fromCents(d.cents))));
+    const cardFees = CalculationService.calculateCardFees(payRows);
+    cardFees.daily.forEach(r=>bump(r.date,"ccFee",fromCents(r.feeCents)));
     payRows.forEach((r) => {
       const date = String(r.date).slice(0, 10);
       const card = CARD_METHODS.reduce((a, k) => a + (Number(r[k]) || 0), 0);
-      bump(date, "ccFee", card * ccFee);
+
       const refund = Math.abs(refundOf(r));
       bump(date, "refunds", refund);
-      if (ccFeeRefunds) bump(date, "refundFee", refund * ccFee);
+      if (getCcFeeOnRefunds(r.property_id || "*")) bump(date, "refundFee", fromCents(multiply(refund, getCcFeeRate(r.property_id || "*"))));
     });
 
     // ── Tax estimate base: net revenue of taxable booking sources per day/property.
     // Only taxable sources (hotel-collect OTAs, walk-in, direct/property bookings) form
     // the base; imported PMS tax lines (below) always take precedence when present.
-    const taxCfg = getTaxConfig();
-    const taxableSources = new Set(taxCfg.sources.filter((s) => s.taxable).map((s) => s.key));
-    const taxBaseByKey = new Map();
-    const occGrossByKey = new Map();
-    const hasSourceByKey = new Map();
-    const dateBaseKeys = new Map();
-    const keyDate = (k) => k.slice(0, 10);
-    const pushDateKey = (k) => {
-      const d = keyDate(k);
-      const arr = dateBaseKeys.get(d) || [];
-      arr.push(k);
-      dateBaseKeys.set(d, arr);
-    };
-    srcRows.forEach((r) => {
-      const d = String(r.date).slice(0, 10);
-      const pid = r.property_id || "";
-      const key = `${d}|${pid}`;
-      hasSourceByKey.set(key, true);
-      // A source is taxable only if BOTH conditions hold:
-      // 1. Its tax-config bucket is marked taxable (classifyTaxSource → TAX_SOURCES)
-      // 2. The per-source commission rate entry does NOT have taxExempt === true
-      const srcInfo = commissionFor(r.source || r.code);
-      if (taxableSources.has(classifyTaxSource(r)) && !srcInfo.taxExempt) {
-        taxBaseByKey.set(key, (taxBaseByKey.get(key) || 0) + (Number(r.net_revenue) || 0));
-      }
-      pushDateKey(key);
-    });
-    occRows.forEach((r) => {
-      const d = String(r.date).slice(0, 10);
-      const pid = r.property_id || "";
-      const key = `${d}|${pid}`;
-      occGrossByKey.set(key, (occGrossByKey.get(key) || 0) + (Number(r.room_revenue) || 0));
-      pushDateKey(key);
+    const dayTotals = [...dayMap.values()].sort((a,b)=>a.date.localeCompare(b.date)).map(day=>{
+      const source=srcRows.filter(r=>String(r.date).slice(0,10)===day.date);
+      const grossDay=grossInPeriod.filter(r=>String(r.date).slice(0,10)===day.date);
+      const occDay=occRows.filter(r=>String(r.date).slice(0,10)===day.date);
+      const tax=CalculationService.calculateTaxLiability(source,grossDay,null,{from:day.date,to:day.date},occDay);
+      const imported=CalculationService.calculateTaxLiability([],grossDay,null,{from:day.date,to:day.date});
+      return {...day,state:tax.state,city:tax.city,other:tax.other,passTax:tax.imported,deductTax:tax.estimated,impState:imported.state,impCity:imported.city,impOther:imported.other,taxBase:source.reduce((n,r)=>n+(Number(r.net_revenue)||0),0)||occDay.reduce((n,r)=>n+(Number(r.room_revenue)||0),0)};
     });
 
-    // Resolve taxes per day: imported (pass-through) or estimated from configured rates (deducted).
-    // The per-property tax settings remain active even when the legacy global toggle is off.
-    const taxEnabled = taxCfg.taxEnabled || getTaxSettings().length > 0;
-    const ratesCache = new Map();
-    const ratesFor = (pid, d) => {
-      const k = `${pid}|${d}`;
-      if (!ratesCache.has(k)) ratesCache.set(k, getEffectiveTaxRates(pid, d));
-      return ratesCache.get(k);
-    };
-
-    const dayTotals = [...dayMap.values()].sort((a, b) => a.date.localeCompare(b.date)).map((d) => {
-      const imp = taxImp.get(d.date);
-      const hasImported = imp && (imp.state + imp.city + imp.other) > 0.004;
-      let state = 0, city = 0, other = 0, passTax = 0, deductTax = 0, baseSum = 0;
-      if (hasImported) {
-        state = imp.state;
-        city = imp.city;
-        other = imp.other;
-        passTax = state + city + other;
-      } else if (taxEnabled) {
-        const keys = dateBaseKeys.get(d.date) || [];
-        const used = new Set();
-        keys.forEach((key) => {
-          if (used.has(key)) return;
-          used.add(key);
-          const pid = key.slice(d.date.length + 1);
-          const r = ratesFor(pid, d.date);
-          const hasSource = hasSourceByKey.has(key);
-          const base = taxBaseByKey.has(key) ? taxBaseByKey.get(key) : hasSource ? 0 : (occGrossByKey.get(key) || 0);
-          baseSum += base;
-          state += base * r.state;
-          city += base * r.city;
-          other += base * r.other;
-        });
-        deductTax = state + city + other;
-      }
-      return { ...d, state, city, other, passTax, deductTax, taxBase: baseSum };
-    });
-
-    // ── Manual expenses & payroll ──
     const expRecord = (e) => ({
       name: e.expense_name || "Expense",
       detail: `${e.vendor || "—"} · ${e.category} · ${String(e.expense_date || "").slice(0, 10)}`,
@@ -361,42 +286,10 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     const manualTaxAmt = manualStateAmt + manualCityAmt + manualOtherTaxAmt;
 
     // ── OTA commissions from imported SourceDay data ──
-    const srcMap = new Map();
-    srcRows.forEach((r) => {
-      const src = r.source || r.code || "UNKNOWN";
-      const info = commissionFor(src);
-      const rev = Number(r.net_revenue) || 0;
-      const stays = Number(r.stays) || 0;
-      // Same integer-cents rule as the day ledger above: accumulate commission in
-      // cents via multiply(), convert once for display. The per-source `comm`
-      // figure feeds a headline deduction item, so float drift here was visible
-      // money, not noise.
-      let commCents = 0;
-      if (info.type === "percentage") commCents = multiply(rev, info.rate);
-      else if (info.type === "fixed") commCents = toCents(info.rate) * stays;
-      else if (info.type === "actual") commCents = toCents(info.rate);
-      const cur = srcMap.get(src) || { name: src, gross: 0, stays: 0, commCents: 0, rate: info.rate };
-      cur.gross += rev;
-      cur.stays += stays;
-      cur.commCents += commCents;
-      srcMap.set(src, cur);
-    });
-    const otaRecords = [...srcMap.values()]
-      .filter((x) => x.gross > 0 || x.commCents > 0)
-      .map((x) => ({
-        name: x.name,
-        detail: `Gross ${money2(x.gross)} @ ${pct(x.rate, 1)} commission`,
-        amount: fromCents(x.commCents),
-      }));
+    const otaRecords = channels.filter(c=>c.gross>0 || c.commission>0).map(c=>({name:c.source,detail:`Gross ${money2(c.gross)} @ ${pct(c.rate,1)} commission`,amount:c.commission}));
 
-    // ── CC fees & refunds per day ──
-    const ccRecords = payRows
-      .map((r) => {
-        const date = String(r.date).slice(0, 10);
-        const card = CARD_METHODS.reduce((a, k) => a + (Number(r[k]) || 0), 0);
-        return { name: date, detail: `Card volume ${money2(card)} @ ${pct(ccFee, 2)}`, amount: card * ccFee };
-      })
-      .filter((x) => x.amount > 0);
+
+    const ccRecords = cardFees.daily.map(r=>({name:r.date,detail:`Card volume ${money2(fromCents(r.cardTotalCents))} @ ${pct(r.rate,2)}`,amount:fromCents(r.feeCents)})).filter(r=>r.amount>0);
 
     const refundRecords = dayTotals.filter((d) => d.refunds > 0).map((d) => ({
       name: d.date,
@@ -455,7 +348,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       pushItem("cc", "Credit Card Processing Fees (estimated)", ccTotal, ccRecords);
       // The statement already contains what the processor charged on refunds, so
       // the derived refund fee rides with the estimate only.
-      if (ccFeeRefunds) {
+      if (refundFeeRecords.length) {
         pushItem("refund_fee", "CC Fee on Refunds", refundFeeRecords.reduce((a, x) => a + x.amount, 0), refundFeeRecords);
       }
     }
@@ -525,14 +418,14 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
     const impDays = dayTotals.filter((d) => d.passTax > 0.004);
     const estDays = dayTotals.filter((d) => d.deductTax > 0.004);
     const sumOn = (rows, k) => rows.reduce((a, d) => a + d[k], 0);
-    const liabState = sumOn(impDays, "state") + (taxIsActual ? manualStateAmt : sumOn(estDays, "state"));
-    const liabCity = sumOn(impDays, "city") + (taxIsActual ? manualCityAmt : sumOn(estDays, "city"));
-    const liabOther = sumOn(impDays, "other") + (taxIsActual ? manualOtherTaxAmt : sumOn(estDays, "other"));
+    const liabState = sumOn(dayTotals, "impState") + (taxIsActual ? manualStateAmt : sumOn(dayTotals, "state") - sumOn(dayTotals,"impState"));
+    const liabCity = sumOn(dayTotals, "impCity") + (taxIsActual ? manualCityAmt : sumOn(dayTotals, "city") - sumOn(dayTotals,"impCity"));
+    const liabOther = sumOn(dayTotals, "impOther") + (taxIsActual ? manualOtherTaxAmt : sumOn(dayTotals, "other") - sumOn(dayTotals,"impOther"));
     const passThrough = sumOn(impDays, "passTax");
 
     const dayImpImported = (d) => {
       const imp = taxImp.get(d.date);
-      return !!(imp && (imp.state + imp.city + imp.other) > 0.004);
+      return imp?.present === true;
     };
 
     const taxRecords = {

@@ -17,7 +17,7 @@ function weatherByDate(snapshots) {
   const map = {};
   for (const s of snapshots || []) {
     const d = String(s.date || "").slice(0, 10);
-    if (!d) continue;
+    if (!d || s.source === "demo" || s.demo === true) continue;
     // current conditions carry the actionable signal; fall back to any row.
     if (s.kind === "current" || map[d] == null) map[d] = s.condition || s.weather || map[d] || null;
   }
@@ -27,7 +27,7 @@ function weatherByDate(snapshots) {
 // Compute a pricing forecast for the active property using live data.
 //   days — how many days ahead (default 14)
 export function usePricingForecast(days = 14) {
-  const { property, latestDate } = useGlobalFilters();
+  const { property } = useGlobalFilters();
   const roomsQ = useRooms(property);
   const reservationsQ = useReservations(null, property);
   const snapshotsQ = useWeatherSnapshots(property);
@@ -35,20 +35,25 @@ export function usePricingForecast(days = 14) {
   const { data: reservations = [] } = reservationsQ;
   const { data: snapshots = [] } = snapshotsQ;
 
-  const config = getPricingConfig();
+  const config = getPricingConfig(typeof property === "string" && property !== "all" ? property : "*");
   const wByDate = useMemo(() => weatherByDate(snapshots), [snapshots]);
+
+  const calendarToday = new Intl.DateTimeFormat("en-CA", {timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
+  const forecastStartDate = calendarToday;
+  const isHistoricalSimulation = false;
+  const unavailable = property === "all" || Array.isArray(property) || roomsQ.isPending || reservationsQ.isPending || roomsQ.isError || reservationsQ.isError;
 
   const forecast = useMemo(
     () =>
-      buildPricingForecast({
+      unavailable ? [] : buildPricingForecast({
         rooms,
         reservations,
         weatherByDate: wByDate,
         config,
         days,
-        fromDate: latestDate || new Date().toISOString().slice(0, 10),
+        fromDate: forecastStartDate,
       }),
-    [rooms, reservations, wByDate, config, days, latestDate]
+    [rooms, reservations, wByDate, config, days, forecastStartDate, unavailable]
   );
 
   // The three reads have to be reported to the caller, not just consumed. Each of
@@ -66,5 +71,16 @@ export function usePricingForecast(days = 14) {
     snapshotsQ.refetch();
   };
 
-  return { forecast, config, enabled: Boolean(config.enabled), days, isError, error, refetch };
+  return {
+    forecast,
+    config,
+    enabled: Boolean(config.enabled),
+    days,
+    isError,
+    error,
+    refetch,
+    isHistoricalSimulation,
+    forecastStartDate,
+    calendarToday,
+  };
 }

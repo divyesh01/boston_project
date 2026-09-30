@@ -16,7 +16,16 @@ import { fromCents } from "@/lib/decimal";
 // channel push live on the /pricing page.
 export default function PricingPanel() {
   useRealtimeInvalidation(["rooms", "reservations", "weather"]);
-  const { forecast, config, enabled, isError, error, refetch } = usePricingForecast(14);
+  const {
+    forecast,
+    config,
+    enabled,
+    isError,
+    error,
+    refetch,
+    isHistoricalSimulation,
+    forecastStartDate,
+  } = usePricingForecast(14);
 
   const today = forecast[0] || null;
   const baseAdrCents = today
@@ -55,7 +64,13 @@ export default function PricingPanel() {
   return (
     <Card
       title="Dynamic Pricing"
-      subtitle={enabled ? "Recommended rates from live demand signals" : "Pricing engine is disabled"}
+      subtitle={
+        enabled
+          ? isHistoricalSimulation
+            ? `Historical simulation anchored at ${forecastStartDate}`
+            : "Recommended rates from live demand signals"
+          : "Pricing engine is disabled"
+      }
       right={
         <Link to="/pricing" className="flex items-center gap-1.5 rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-300 hover:bg-white/5">
           <Settings2 className="h-3.5 w-3.5" /> Configure
@@ -85,7 +100,9 @@ export default function PricingPanel() {
         <div>
           <div className="grid gap-3 sm:grid-cols-4">
             <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
-              <p className="text-[10px] uppercase tracking-widest text-slate-500">Today&rsquo;s Rate</p>
+              <p className="text-[10px] uppercase tracking-widest text-slate-500">
+                {isHistoricalSimulation ? `Anchor (${forecastStartDate})` : "Today’s Rate"}
+              </p>
               <p className="mt-1 font-heading text-2xl font-semibold text-white">{money2(fromCents(recAdrCents))}</p>
               <div className="mt-0.5 flex items-center gap-1 text-xs">
                 {deltaCents >= 0 ? <TrendingUp className="h-3 w-3 text-[#00E096]" /> : <TrendingDown className="h-3 w-3 text-[#FF6B6B]" />}
@@ -95,7 +112,9 @@ export default function PricingPanel() {
             <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
               <p className="text-[10px] uppercase tracking-widest text-slate-500">Occupancy</p>
               <p className="mt-1 font-heading text-2xl font-semibold text-white">{Math.round(occ * 100)}%</p>
-              <p className="text-xs text-slate-400">forecast for tonight</p>
+              <p className="text-xs text-slate-400">
+                {isHistoricalSimulation ? "historical estimate" : "forecast for tonight"}
+              </p>
             </div>
             <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
               <p className="text-[10px] uppercase tracking-widest text-slate-500">7-Day Revenue</p>
@@ -112,7 +131,9 @@ export default function PricingPanel() {
           {chartData.length > 1 && (
             <div className="mt-4">
               <div className="mb-1 flex items-center justify-between">
-                <p className="text-xs text-slate-400">14-day recommended ADR trend</p>
+                <p className="text-xs text-slate-400">
+                  {isHistoricalSimulation ? `14-day trend from ${forecastStartDate}` : "14-day recommended ADR trend"}
+                </p>
                 <Link to="/pricing" className="flex items-center gap-1 text-xs text-[#00D4FF] hover:underline">
                   Open full forecast <ArrowRight className="h-3 w-3" />
                 </Link>

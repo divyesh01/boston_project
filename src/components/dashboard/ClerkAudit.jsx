@@ -1,72 +1,16 @@
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import Card from "@/components/ui-exec/Card";
 import { money2, C } from "@/lib/hotel";
+import { reconcileCash } from "@/lib/cashReconciliation";
 import { AlertTriangle, CheckCircle2, Filter } from "lucide-react";
 
-export default function ClerkAudit({ records }) {
+export default function ClerkAudit({ records = [] }) {
   const [showFlaggedOnly, setShowFlaggedOnly] = useState(false);
 
-  const payments = records.filter((r) => r.record_type === "payment");
-  const drops = records.filter((r) => r.record_type === "drop");
-  const clerkPayments = records.filter((r) => r.record_type === "clerk_payment");
-
-  const cashPayment = payments.find((r) => (r.payment_type || "").toUpperCase() === "CASH");
-  const cashCollected = Number(cashPayment?.net_today || cashPayment?.adjusted || 0);
-  const cashAdjusted = Number(cashPayment?.adjusted || cashPayment?.net_today || 0);
-
-  const electronicPayments = payments
-    .filter((r) => (r.payment_type || "").toUpperCase() !== "CASH")
-    .reduce((a, r) => a + Number(r.net_today || r.adjusted || 0), 0);
-
-  const totalShiftActivity = cashCollected + electronicPayments;
-  const totalDrops = drops.reduce((a, d) => a + Number(d.amount || 0), 0);
-  const expectedCashDrop = cashAdjusted;
-  const actualCashDrop = totalDrops;
-  const variance = expectedCashDrop - actualCashDrop;
-
-  const status = !drops.length
-    ? "Missing"
-    : Math.abs(variance) < 1
-    ? "Matched"
-    : variance > 0
-    ? "Short"
-    : "Over";
-
-  const statusColor = {
-    Matched: C.green,
-    Short: C.coral,
-    Over: C.amber,
-    Missing: C.coral,
-  }[status];
-
-  const byClerk = useMemo(() => {
-    const map = new Map();
-    drops.forEach((d) => {
-      const k = d.clerk_name || "Unknown";
-      const cur = map.get(k) || { clerk: k, drops: 0, dropCount: 0, last: "", cashCollected: 0 };
-      cur.drops += Number(d.amount) || 0;
-      cur.dropCount += 1;
-      if ((d.shift_date || "") > cur.last) cur.last = d.shift_date || "";
-      map.set(k, cur);
-    });
-    clerkPayments.forEach((r) => {
-      if ((r.payment_type || "").toUpperCase() === "CASH") {
-        const k = r.clerk_name || "Unknown";
-        if (!map.has(k)) map.set(k, { clerk: k, drops: 0, dropCount: 0, last: "", cashCollected: 0 });
-        map.get(k).cashCollected += Number(r.amount) || 0;
-      }
-    });
-    return [...map.values()];
-  }, [drops, clerkPayments]);
-
-  const clerks = byClerk
-    .map((c) => {
-      const expected = c.cashCollected || (byClerk.length === 1 ? cashAdjusted : c.drops);
-      return { ...c, expected, variance: expected - c.drops };
-    })
-    .sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance));
-
-  const flaggedClerks = clerks.filter((c) => Math.abs(c.variance) > 1);
+  const safeRecords = Array.isArray(records) ? records : [];
+  const {totalShiftActivity,electronicPayments,actualCashDrop,expectedCashDrop,varianceCents,variance,status,clerks} = reconcileCash(safeRecords);
+  const statusColor = {Matched:C.green,Short:C.coral,Over:C.amber,Incomplete:C.amber}[status];
+  const flaggedClerks = clerks.filter((c) => Math.abs(c.varianceCents) > 0);
   const displayClerks = showFlaggedOnly ? flaggedClerks : clerks;
 
   return (
@@ -99,7 +43,7 @@ export default function ClerkAudit({ records }) {
       <div className="mb-4 grid grid-cols-2 gap-3 text-xs">
         <div className="rounded-lg border border-white/5 bg-[#0A1628]/60 p-3">
           <p className="text-slate-500">Total shift activity</p>
-          <p className="font-heading text-lg text-white">{money2(totalShiftActivity)}</p>
+          <p className="font-heading text-lg text-white">{totalShiftActivity === null ? "Unavailable" : money2(totalShiftActivity)}</p>
         </div>
         <div className="rounded-lg border border-white/5 bg-[#0A1628]/60 p-3">
           <p className="text-slate-500">Electronic payments</p>
@@ -107,7 +51,7 @@ export default function ClerkAudit({ records }) {
         </div>
         <div className="rounded-lg border border-white/5 bg-[#0A1628]/60 p-3">
           <p className="text-slate-500">Expected cash drop</p>
-          <p className="font-heading text-lg text-white">{money2(expectedCashDrop)}</p>
+          <p className="font-heading text-lg text-white">{expectedCashDrop === null ? "Unavailable" : money2(expectedCashDrop)}</p>
         </div>
         <div className="rounded-lg border border-white/5 bg-[#0A1628]/60 p-3">
           <p className="text-slate-500">Actual cash drop</p>
@@ -115,7 +59,7 @@ export default function ClerkAudit({ records }) {
         </div>
       </div>
 
-      {Math.abs(variance) >= 1 && (
+      {Math.abs(varianceCents) > 0 && (
         <div className="mb-4 flex items-center gap-3 rounded-xl border border-[#FF6B6B]/20 bg-[#FF6B6B]/[0.05] p-3">
           <AlertTriangle className="h-4 w-4 shrink-0 text-[#FF6B6B]" />
           <p className="text-sm font-bold text-[#FF6B6B]">
@@ -128,12 +72,13 @@ export default function ClerkAudit({ records }) {
         </div>
       )}
 
+      {status === "Incomplete" && <p className="mb-4 text-sm text-amber-300">Cash receipts are missing for one or more property days. Deposits cannot be classified as over or short.</p>}
       <div className="space-y-2">
         {displayClerks.map((c) => {
-          const isFlagged = Math.abs(c.variance) > 1;
+          const isFlagged = Math.abs(c.varianceCents) > 0;
           return (
             <div
-              key={c.clerk}
+              key={c.key}
               className={`flex items-center justify-between rounded-xl border px-4 py-3 transition-colors ${
                 isFlagged ? "border-[#FF6B6B]/20 bg-[#FF6B6B]/[0.05]" : "border-white/5 bg-[#0A1628]/60 hover:border-white/10"
               }`}

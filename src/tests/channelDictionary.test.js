@@ -48,6 +48,30 @@ describe('Owner Channel Dictionary & Normalization', () => {
     const prop = normalizeChannel('PROPERTY BOOKING', 'PRP');
     expect(prop.normalizedName).toBe('Property Direct');
     expect(prop.group).toBe(CHANNEL_GROUPS.DIRECT);
+
+    const redistay = normalizeChannel('REDISTAY', 'RRI');
+    expect(redistay.normalizedName).toBe('Brand Website');
+    expect(redistay.group).toBe(CHANNEL_GROUPS.DIRECT);
+
+    const cro = normalizeChannel('CENTRAL RESERVATIONS', 'CRO');
+    expect(cro.normalizedName).toBe('Property Direct');
+    expect(cro.group).toBe(CHANNEL_GROUPS.DIRECT);
+
+    const corp = normalizeChannel('DIRECT BILL', 'DB');
+    expect(corp.normalizedName).toBe('Group & Corporate');
+    expect(corp.group).toBe(CHANNEL_GROUPS.CORPORATE);
+
+    const clp = normalizeChannel('CORPORATE LODGING', 'CLP');
+    expect(clp.normalizedName).toBe('Group & Corporate');
+    expect(clp.group).toBe(CHANNEL_GROUPS.CORPORATE);
+
+    const bdc = normalizeChannel('BOOKING', 'BDC');
+    expect(bdc.normalizedName).toBe('Booking.com');
+    expect(bdc.group).toBe(CHANNEL_GROUPS.OTA);
+
+    const epc = normalizeChannel('EXPEDIA PARTNER CENTRAL', 'EPC');
+    expect(epc.normalizedName).toBe('Expedia');
+    expect(epc.group).toBe(CHANNEL_GROUPS.OTA);
   });
 
   it('calculates OTA Dependence scores and thresholds accurately', () => {

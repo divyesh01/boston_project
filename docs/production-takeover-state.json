@@ -1,0 +1,25 @@
+{
+  "task_id": "production-takeover-2026-09-30",
+  "owner_request": "Take over Gemini's production-readiness patch and finish the job",
+  "owner_contract": {
+    "success": "Correct the remaining financial, security and operational defects; verify the complete patch and provide an evidence-based release decision",
+    "non_goals": ["Unrelated redesign", "Unapproved production mutations", "Bypass protected files"],
+    "acceptance_scenarios": ["Fresh and hydrated dashboards agree to the cent", "Property A cannot alter Property B", "Missing data never becomes verified zero", "Owner exports match selected dates and properties", "Current pricing and actions tell the truth"]
+  },
+  "current_phase": "review-and-repair",
+  "risk": 3,
+  "compute_mode": "DEEP",
+  "agents_used": 3,
+  "why_this_depth_was_sufficient": "Three independent read-only reviewers cover worker security/atomicity, finance/owner outputs, and dependency/operations paths. Root is sole writer; adequacy will be reassessed after tests and review.",
+  "writer": "root",
+  "role_packs": ["commander", "nisarg-1-architecture", "nisarg-2-risk", "nisarg-3-owner", "editor", "vansh", "tester", "independent-attacker", "owner-agent"],
+  "domain_packs": ["finance", "property-isolation", "imports-ingestion", "auth-security", "ui-accessibility", "deployment-operations"],
+  "workflows": ["high-risk-change"],
+  "invariants": ["Protected files untouched without explicit file-specific authorization", "Integer cents and valid zeros preserved", "Missing is not zero", "One coherent published aggregate revision", "Scope every property read/write/export"],
+  "claims": [],
+  "evidence": [{"id":"BASELINE-01","origin":"OBSERVED","detail":"V3 PASS; original Gemini patch preserved at D:/Caches/temp/rri-gemini-baseline-Hwo0lZ"}],
+  "rejected_claims": ["Gemini's claim all critical and high-priority repairs are complete"],
+  "test_results": [],
+  "deferred_items": [],
+  "final_status": null
+}

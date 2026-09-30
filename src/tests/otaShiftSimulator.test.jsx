@@ -1,5 +1,7 @@
+import React from 'react';
 import { describe, it, expect } from 'vitest';
-import { calculateOtaShiftEconomics } from '@/components/dashboard/OTAShiftSimulator';
+import { render, screen } from '@testing-library/react';
+import OTAShiftSimulator, { calculateOtaShiftEconomics } from '@/components/dashboard/OTAShiftSimulator';
 
 describe('OTA to Direct Shift Simulator Economics', () => {
   it('returns zero savings when shift percentage is 0%', () => {
@@ -100,5 +102,15 @@ describe('OTA to Direct Shift Simulator Economics', () => {
       periodDays: 0,
     });
     expect(Number.isFinite(divZeroRes.annualizedGain)).toBe(true);
+  });
+
+  it('renders Channel data unavailable and disables savings claim when grossOtaRevenue is missing or 0', () => {
+    const { rerender } = render(<OTAShiftSimulator grossOtaRevenue={0} />);
+    expect(screen.getByText("Channel data unavailable")).toBeInTheDocument();
+    expect(screen.queryByText(/Projected 12-month EBITDA lift/i)).not.toBeInTheDocument();
+
+    // Also when called with no props (should not fall back to $136,988.58)
+    rerender(<OTAShiftSimulator />);
+    expect(screen.getByText("Channel data unavailable")).toBeInTheDocument();
   });
 });

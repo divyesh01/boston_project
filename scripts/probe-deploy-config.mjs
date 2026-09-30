@@ -539,13 +539,9 @@ section('8. Dependency supply chain');
   const pkg = JSON.parse(read('package.json'));
   const xlsxSpec = (pkg.dependencies || {}).xlsx || '';
 
-  // The user chose the npm registry version for supply-chain integrity (npm audit,
-  // lockfile integrity).  We accept that despite the known CVEs in 0.18.5,
-  // because the registry is the only source and we have no newer version.
-  // The lockfile provides integrity to prevent tampering.
-  check('xlsx resolves to the npm registry (not a CDN tarball)',
-    /^npm:/.test(xlsxSpec) || /^https:\/\/registry\.npmjs\.org/.test(xlsxSpec) || /^\^?\d+\.\d+\.\d+$/.test(xlsxSpec),
-    `spec is "${xlsxSpec}" — expected npm registry`);
+  // SheetJS publishes patched Community Edition on its official CDN; npm 0.18.5 is vulnerable.
+  check('xlsx resolves to the pinned official patched distribution',
+    xlsxSpec === 'https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz', xlsxSpec);
   const ver = (xlsxSpec.match(/(\d+)\.(\d+)\.(\d+)/) || []).slice(1).map(Number);
   check('the xlsx version is readable', ver.length === 3, xlsxSpec);
   // We do not enforce a minimum version because npm has no newer version.
@@ -561,7 +557,7 @@ section('8. Dependency supply chain');
     /^sha(512|384|256)-/.test(lockEntry.integrity || ''),
     'without integrity, npm ci could install a tampered package');
   check('the lockfile and package.json resolve to the same version',
-    Boolean(lockEntry.version) && lockEntry.version === (xlsxSpec.replace(/^[\^~]/, '')),
+    Boolean(lockEntry.version) && lockEntry.version === ver.join('.') && lockEntry.resolved === xlsxSpec,
     `lock version="${lockEntry.version || '(absent)'}" pkg="${xlsxSpec}"`);
 }
 

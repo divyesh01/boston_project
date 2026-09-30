@@ -1,3 +1,4 @@
+import {parseWorkbookInWorker} from "./workbookParser";
 import { db, runInTransaction, createImportSession, completeImportSession, failImportSession, addImportRecordIds } from '@/api/base44Client';
 
 import {
@@ -376,13 +377,7 @@ async function skipExisting(entity, rows, keyFn, propertyId) {
 // '-12.50' with an apostrophe before parsing corrupts numeric data into NaN.
 async function getRowsArray(type, fileUrl, meta) {
   if (meta?.rawBytes && /\.xlsx?$/i.test(meta.sourceFile || '')) {
-    const XLSX = await import('xlsx');
-    if (meta.rawBytes.byteLength > MAX_IMPORT_BYTES) throw new Error('Workbook exceeds import size limit');
-    const workbook = XLSX.read(meta.rawBytes, { type: 'array', cellDates: true });
-    if (workbook.SheetNames.length !== 1) throw new Error('Select a single-sheet report before importing; multiple sheets are not silently skipped');
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    if (!sheet) throw new Error('Workbook contains no sheets');
-    const csv = XLSX.utils.sheet_to_csv(sheet, { dateNF: "yyyy-mm-dd" });
+    const csv = await parseWorkbookInWorker(meta.rawBytes);
     return withLazyObjects(await parseTextInWorker(csv));
   }
   // If CSV text was pre-read from the File object, parse it in the worker (no

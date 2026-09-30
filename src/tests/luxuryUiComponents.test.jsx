@@ -133,21 +133,12 @@ describe('ScheduleReportDialog Component', () => {
       <ScheduleReportDialog isOpen={true} onClose={onClose} onSendTest={onSendTest} />
     );
 
-    expect(screen.getByText('Schedule Automated Owner Packets')).toBeInTheDocument();
-
-    // Trigger test delivery
-    const sendTestBtn = screen.getByRole('button', { name: /Send Test Now/i });
-    fireEvent.click(sendTestBtn);
+    expect(screen.getByText('Report delivery unavailable')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', {name:/Download owner packet/i}));
     expect(onSendTest).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', {name:/Save Automation/i})).toBeNull();
+    expect(localStorage.getItem('scheduled_report_config')).toBeNull();
 
-    // Save configuration
-    const saveBtn = screen.getByRole('button', { name: /Save Automation/i });
-    fireEvent.click(saveBtn);
-    expect(onClose).toHaveBeenCalledTimes(1);
-
-    const savedConfig = JSON.parse(localStorage.getItem('scheduled_report_config') || '{}');
-    expect(savedConfig.frequency).toBe('weekly');
-    expect(savedConfig.includeProvenance).toBe(true);
   });
 });
 

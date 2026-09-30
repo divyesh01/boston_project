@@ -15,7 +15,7 @@
 // signal spike can never produce an unbounded rate. The module is React-free so
 // scripts/probe-pricing.mjs can exercise the real implementation in Node.
 
-import { DEFAULT_PRICING_CONFIG, ROOM_TYPES } from "./pricingSettings.js";
+import { DEFAULT_PRICING_CONFIG } from "./pricingSettings.js";
 import { predictDemand } from "./forecasting.js";
 
 export const RATE_SCALE = 10000; // basis points: 10000 == 1.00x
@@ -110,17 +110,18 @@ export function recommendRate({ baseCents, occupancy, isWeekend, weatherConditio
 // Expected occupancy for a date from the reservation book: rooms with
 // check_in <= date < check_out divided by total inventory. Falls back to the
 // configured default when there is no inventory or no bookings.
-export function forecastOccupancy({ reservations, rooms, date, defaultOccupancy }) {
+export function forecastOccupancy({ reservations, rooms, date, defaultOccupancy: _defaultOccupancy = null }) {
   const totalRooms = Array.isArray(rooms) ? rooms.length : 0;
-  if (totalRooms === 0) return clamp(Number(defaultOccupancy) || 0, 0, 1);
+  if (totalRooms === 0) return null;
   const target = String(date).slice(0, 10);
   let booked = 0;
   for (const r of reservations || []) {
+    if (/cancel|no.?show|void/i.test(String(r.status || r.reservation_status || ""))) continue;
     const ci = String(r.check_in || "").slice(0, 10);
     const co = String(r.check_out || "").slice(0, 10);
     if (ci && co && ci <= target && co > target) booked += 1;
   }
-  if (booked === 0) return clamp(Number(defaultOccupancy) || 0, 0, 1);
+
   return clamp(booked / totalRooms, 0, 1);
 }
 
@@ -259,13 +260,17 @@ export function buildPricingForecast({ rooms, reservations, weatherByDate = {}, 
   const start = fromDate || new Date().toISOString().slice(0, 10);
   const presentTypes = (Array.isArray(rooms) && rooms.length > 0)
     ? [...new Set(rooms.map((r) => r.room_type).filter(Boolean))]
-    : ROOM_TYPES;
+    : [];
+  if (!presentTypes.length) return [];
   const out = [];
   for (let i = 0; i < days; i += 1) {
     const date = addDays(start, i);
     const weekend = isWeekend(date);
     const occupancy = forecastOccupancy({ reservations, rooms, date, defaultOccupancy: cfg.forecastDefaultOccupancy });
     const condition = weatherByDate[date] || null;
+    const allocation = presentTypes.map(type=>{const count=rooms.filter(r=>r.room_type===type).length;const exact=occupancy*count;return {type,count,sold:Math.floor(exact),fraction:exact-Math.floor(exact)};});
+    let remaining = Math.round(occupancy * rooms.length) - allocation.reduce((n,t)=>n+t.sold,0);
+    for (const item of [...allocation].sort((a,b)=>b.fraction-a.fraction)) {if(remaining>0 && item.sold<item.count){item.sold++;remaining--;}}
     const types = {};
     let adrNum = 0;
     let adrDen = 0;
@@ -277,13 +282,12 @@ export function buildPricingForecast({ rooms, reservations, weatherByDate = {}, 
       const rec = recommendRate({ baseCents: base, occupancy, isWeekend: weekend, weatherCondition: condition, config: cfg });
       types[type] = rec;
       if (rec.recommendedCents > 0) {
-        adrNum += rec.recommendedCents;
-        adrDen += 1;
+        adrNum += rec.recommendedCents * rooms.filter(r => r.room_type === type).length;
+        adrDen += rooms.filter(r => r.room_type === type).length;
       }
       // Projected rooms sold for this type scales with occupancy and a simple
       // per-type inventory share (equal split across present types).
-      const typeRooms = Math.max(1, Math.round((rooms ? rooms.length : 0) / presentTypes.length));
-      const sold = Math.round(occupancy * typeRooms);
+      const sold = allocation.find(item=>item.type===type).sold;
       projectedRoomNights += sold;
       projectedRevenue += sold * rec.recommendedCents;
       // The same room nights valued at the RACK rate. Emitted here, next to the

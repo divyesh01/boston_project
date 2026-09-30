@@ -387,7 +387,12 @@ export function useDailyFinancialAggregates(dateRange, propertyId, enabled = tru
         if (res.ok) {
           const data = await res.json();
           if (data?.ok && Array.isArray(data.summaries) && data.summaries.length > 0) {
-            return buildSyntheticRows(data.summaries);
+            const complete = data.summaries.every(row => {
+              try { const meta = JSON.parse(row.channel_summary_json || '{}')._meta;
+                return meta && ['occupancy','revenue','source','payment'].every(type=>meta.coverage?.includes(type));
+              } catch {return false;}
+            });
+            if (complete && data.source === 'property_day_summary' && data.stale !== true) return buildSyntheticRows(data.summaries);
           }
         }
       } catch {

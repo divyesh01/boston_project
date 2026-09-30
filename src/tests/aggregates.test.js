@@ -100,4 +100,77 @@ describe('Server-Authoritative Daily Financial Aggregates', () => {
     expect(grossRows[0].misc_charge).toBe(1500);
     expect(grossRows[0].room_rent + grossRows[0].misc_charge).toBe(9500);
   });
+
+  it('correctly maps structured _meta dimensions (taxes, payments, channels with stays)', () => {
+    const summaryWithMeta = [
+      {
+        property_id: 'HOTEL_C',
+        business_date: '2026-08-20',
+        room_revenue_cents: 1000000,
+        ancillary_revenue_cents: 200000,
+        total_revenue_cents: 1200000,
+        rooms_sold: 50,
+        available_rooms: 100,
+        payment_total_cents: 1200000,
+        channel_summary_json: JSON.stringify({
+          Expedia: 600000,
+          Direct: 400000,
+          _meta: {
+            channelsWithStays: {
+              Expedia: { net: 600000, stays: 30 },
+              Direct: { net: 400000, stays: 20 },
+            },
+            taxes: {
+              state_tax_cents: 80000,
+              city_tax_cents: 30000,
+              other_tax_cents: 10000,
+            },
+            payments: {
+              cash: 200000,
+              visa: 1000000,
+            },
+            ancillary: {
+              food_cents: 100000,
+              bar_cents: 50000,
+              misc_cents: 50000,
+            },
+          },
+        }),
+      },
+    ];
+
+    const { occRows, srcRows, grossRows, payRows } = buildSyntheticRows(summaryWithMeta);
+
+    // Gross and taxes
+    expect(grossRows).toHaveLength(1);
+    expect(grossRows[0].room_rent).toBe(10000);
+    expect(grossRows[0].state_tax).toBe(800);
+    expect(grossRows[0].city_tax).toBe(300);
+    expect(grossRows[0].other_tax).toBe(100);
+    expect(grossRows[0].food).toBe(1000);
+    expect(grossRows[0].bar).toBe(500);
+
+    // Payments
+    expect(payRows).toHaveLength(1);
+    expect(payRows[0].total).toBe(12000);
+    expect(payRows[0].cash).toBe(2000);
+    expect(payRows[0].visa).toBe(10000);
+    expect(payRows[0].master).toBe(0);
+
+    // Channels with stays
+    expect(srcRows).toHaveLength(2);
+    const expRow = srcRows.find((r) => r.source === 'Expedia');
+    expect(expRow).toBeDefined();
+    expect(expRow.net_revenue).toBe(6000);
+    expect(expRow.stays).toBe(30);
+
+    const dirRow = srcRows.find((r) => r.source === 'Direct');
+    expect(dirRow).toBeDefined();
+    expect(dirRow.net_revenue).toBe(4000);
+    expect(dirRow.stays).toBe(20);
+
+    // Ensure _meta was not added as a channel
+    expect(srcRows.some((r) => r.source === '_meta')).toBe(false);
+  });
 });
+

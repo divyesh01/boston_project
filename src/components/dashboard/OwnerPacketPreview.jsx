@@ -13,13 +13,29 @@ export default function OwnerPacketPreview({
   occupancy = 0.578,
   propertiesCount = 2,
   isExporting = false,
+  reconciliation = null,
+  portfolioHealth = null,
 }) {
+  const isBalanced = reconciliation?.isBalanced === true;
+  const hasVariance = (reconciliation?.difference || 0) > 0;
+  const hasRawSignatures = Array.isArray(portfolioHealth?.provenanceHashes) && portfolioHealth.provenanceHashes.length > 0;
+
+  const reconDetail = isBalanced
+    ? 'Cent-Exact Ledger Reconciliation ($0.00 Discrepancy)'
+    : hasVariance
+    ? `Ledger Variance: $${Number(reconciliation.difference).toFixed(2)}`
+    : 'Ledger Audit & Completeness Analysis';
+
+  const provenanceDetail = hasRawSignatures
+    ? 'Immutable SHA-256 Raw File Audit Signatures'
+    : 'Data Provenance & System Audit Controls';
+
   const sheets = [
     { num: 1, name: 'Executive Summary', detail: 'Portfolio ADR, RevPAR, Net Kept & Headline KPIs' },
     { num: 2, name: 'Property Performance', detail: 'Volume vs Rate Effect Variance Decomposition' },
     { num: 3, name: 'OTA & Channel Economics', detail: 'Channel Net Take-Home & Direct Booking Shift' },
-    { num: 4, name: 'Data Health & Audit', detail: 'Cent-Exact Ledger Reconciliation ($0.00 Discrepancy)' },
-    { num: 5, name: 'Provenance & Controls', detail: 'Immutable SHA-256 Raw File Audit Signatures' },
+    { num: 4, name: 'Data Health & Audit', detail: reconDetail },
+    { num: 5, name: 'Provenance & Controls', detail: provenanceDetail },
   ];
 
   return (

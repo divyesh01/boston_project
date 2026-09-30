@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip } from "recharts";
 import { Settings2 } from "lucide-react";
@@ -7,7 +7,7 @@ import { useWeatherSnapshots } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { db } from "@/api/base44Client";
 import { getWeatherConfig, saveWeatherConfig } from "@/lib/weatherSettings";
-import { loadWeather, forecastRows, buildDemoForecast, fetchOpenWeatherForecast } from "@/lib/weatherService";
+import { loadWeather, fetchOpenWeatherForecast } from "@/lib/weatherService";
 
 function conditionLabel(cond) {
   const c = String(cond || "");
@@ -27,35 +27,38 @@ function tempC(kOrC) {
 }
 
 export default function WeatherPanel() {
-  const { property, latestDate } = useGlobalFilters();
+  const { property } = useGlobalFilters();
   const { data: snapshots = [] } = useWeatherSnapshots(property);
 
   const [cfgOpen, setCfgOpen] = useState(false);
-  const [draftLat, setDraftLat] = useState(getWeatherConfig().lat);
-  const [draftLon, setDraftLon] = useState(getWeatherConfig().lon);
+  const [draftLat, setDraftLat] = useState(getWeatherConfig(typeof property === "string" && property !== "all" ? property : "*").lat);
+  const [draftLon, setDraftLon] = useState(getWeatherConfig(typeof property === "string" && property !== "all" ? property : "*").lon);
   const [cfgError, setCfgError] = useState("");
 
   const isPortfolio = property === "all" || Array.isArray(property);
   const propertyId = !isPortfolio ? property : "all";
-  const date = latestDate || new Date().toISOString().slice(0, 10);
+  const [locationVersion,setLocationVersion] = useState(0);
+  useEffect(()=>{const cfg=getWeatherConfig(propertyId);setDraftLat(cfg.lat);setDraftLon(cfg.lon);},[propertyId]);
+  const date = new Intl.DateTimeFormat("en-CA", {timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
 
   const { data, isLoading } = useQuery({
-    queryKey: ["weather-load", propertyId, date, (snapshots || []).length],
+    queryKey: ["weather-load", propertyId, date, locationVersion, (snapshots || []).length],
     queryFn: async () => {
+      const cfg = getWeatherConfig(propertyId);
       if (isPortfolio) {
-        return { rows: forecastRows("all", date, buildDemoForecast()), source: "portfolio" };
+        return { rows: [], source: "unavailable" };
       }
       return loadWeather({
         propertyId,
         date,
-        cacheRows: snapshots,
+        cacheRows: locationVersion ? [] : snapshots,
         fetchFn: () => fetchOpenWeatherForecast({
-          lat: getWeatherConfig().lat,
-          lon: getWeatherConfig().lon,
+          lat: cfg.lat,
+          lon: cfg.lon,
           invoke: (name, params) => db.functions.invoke(name, params),
         }),
         persistFn: async (rows) => {
-          const existing = await db.entities.WeatherSnapshot.filter({ property_id: propertyId }).list("date", 100000);
+          const existing = await db.entities.WeatherSnapshot.filter({ property_id: propertyId }, "date", 100000);
           const stale = existing.filter((r) => String(r.date).slice(0, 10) === date);
           if (stale.length) {
             for (const s of stale) await db.entities.WeatherSnapshot.delete(s.id);
@@ -72,10 +75,11 @@ export default function WeatherPanel() {
   const chartData = forecast.map((f) => ({ day: String(f.date).slice(5), high: Number(f.temp_max), low: Number(f.temp_min) }));
 
   const handleSaveCfg = () => {
+    if (!String(draftLat).trim() || !String(draftLon).trim() || !Number.isFinite(Number(draftLat)) || !Number.isFinite(Number(draftLon)) || Math.abs(Number(draftLat)) > 90 || Math.abs(Number(draftLon)) > 180) {setCfgError("Enter valid latitude (-90 to 90) and longitude (-180 to 180)."); return;}
     const stored = saveWeatherConfig({
-      lat: Number(draftLat) || 41.89,
-      lon: Number(draftLon) || -70.91,
-    });
+      lat: Number(draftLat),
+      lon: Number(draftLon),
+    }, propertyId);
     if (!stored) {
       // Closing this panel is its only "saved" signal, so it must stay open on a
       // refused write: the forecast below would keep describing the old location.
@@ -86,6 +90,7 @@ export default function WeatherPanel() {
     }
     setCfgError("");
     setCfgOpen(false);
+    setLocationVersion(v=>v+1);
   };
 
   return (
@@ -118,7 +123,12 @@ export default function WeatherPanel() {
       )}
 
       {isLoading && <p className="text-sm text-slate-500">Loading weather…</p>}
-      {!isLoading && (
+      {!isLoading && rows.length === 0 && (
+        <div className="flex h-32 items-center justify-center text-xs text-slate-500">
+          {isPortfolio ? "Select one property to view weather." : "Live weather unavailable for this property/location."}
+        </div>
+      )}
+      {!isLoading && rows.length > 0 && (
         <div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
@@ -144,7 +154,15 @@ export default function WeatherPanel() {
             <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
               <p className="text-[10px] uppercase tracking-widest text-slate-500">Data Source</p>
               <p className="mt-1 font-heading text-2xl font-semibold text-white">{data?.source || "—"}</p>
-              <p className="text-xs text-slate-400">{data?.source === "api" ? "Live OpenWeather (server)" : data?.source === "cache" ? "Cached" : "Demo (server key unavailable)"}</p>
+              <p className="text-xs text-slate-400">
+                {data?.source === "api"
+                  ? "Live OpenWeather (server)"
+                  : data?.source === "cache"
+                  ? "Cached Live Forecast"
+                  : data?.source === "portfolio"
+                  ? "Portfolio Regional Benchmark"
+                  : "Demo (server key unconfigured)"}
+              </p>
             </div>
           </div>
 

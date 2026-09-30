@@ -139,7 +139,7 @@ export default function Dashboard() {
     return filterByMonths(base, months);
   }, [aggData, gross, dateRange, months]);
   const aggPayRows = useMemo(() => (aggData ? aggData.payRows : payRows), [aggData, payRows]);
-  const aggExpenses = useMemo(() => (aggData ? aggData.expenseRows : expenses), [aggData, expenses]);
+  const aggExpenses = useMemo(() => expenses, [expenses]);
   const clerkFiltered = useMemo(() => {
     let r = clerk;
     if (employee !== "all") r = r.filter((x) => x.clerk_name === employee);
@@ -338,10 +338,19 @@ export default function Dashboard() {
     const occupancyRevenueCents = sumCents(occRows.map((r) => r.room_revenue || 0));
     const reportedCents = grossLedgerCents > 0 ? grossLedgerCents : occupancyRevenueCents;
     const calculatedCents = sumCents(srcRows.map((r) => r.net_revenue || r.revenue || 0));
-    const finalReported = reportedCents > 0 ? fromCents(reportedCents) : totalRev.dollars || revenue;
-    const finalCalculated = calculatedCents > 0 ? fromCents(calculatedCents) : totalRev.dollars || revenue;
-    return reconcileFinancialTotals(finalReported, finalCalculated);
-  }, [grossRows, occRows, srcRows, totalRev.dollars, revenue]);
+    const finalReported = reportedCents > 0 ? fromCents(reportedCents) : (totalRev.dollars || revenue);
+    const finalCalculated = fromCents(calculatedCents);
+    const hasData = reportedCents > 0 || calculatedCents > 0 || (totalRev.dollars || revenue) > 0;
+    const payCents = sumCents((aggPayRows || []).map((r) => r.total || 0));
+
+    return reconcileFinancialTotals(finalReported, finalCalculated, {
+      hasData,
+      reportedCount: grossRows.length || occRows.length,
+      calculatedCount: srcRows.length,
+      paymentsTotal: (aggPayRows || []).length > 0 ? fromCents(payCents) : null,
+      channelLedgerPresent: srcRows.length > 0,
+    });
+  }, [grossRows, occRows, srcRows, totalRev.dollars, revenue, aggPayRows]);
 
   const channelMetrics = useMemo(
     () => CalculationService.calculateChannelMetrics(srcRows),
@@ -747,6 +756,8 @@ export default function Dashboard() {
               occupancy={occupancy}
               propertiesCount={isPortfolio ? properties.length : 1}
               isExporting={exporting}
+              reconciliation={reconciliation}
+              portfolioHealth={portfolioHealth}
             />
           </div>
         )}

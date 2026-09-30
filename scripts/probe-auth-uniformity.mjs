@@ -152,3 +152,6 @@ console.log(`probe-auth-uniformity: ${pass} passed, ${fail} failed\n`);
 if (fail > 0) {
   process.exit(1);
 }
+
+console.log(`PASSED: ${pass} passed, ${fail} failed`);
+process.exit(0);

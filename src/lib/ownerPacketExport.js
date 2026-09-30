@@ -60,7 +60,7 @@ export function buildOwnerPerformancePacketWorkbook({
     ['Portfolio Occupancy', fmtPct((kpis.occupancy || 0) * 100), 'Weighted by available room capacity'],
     ['Average Daily Rate (ADR)', fmtMoney(kpis.adr || 0), 'Revenue per occupied room night'],
     ['Revenue Per Available Room (RevPAR)', fmtMoney(kpis.revpar || 0), 'Total room revenue / total capacity'],
-    ['Total Net Kept Revenue', fmtMoney(kpis.netKept || (kpis.revenue || 0) - (kpis.commissionTotal || 0)), 'Net take-home after OTA commissions & fees'],
+    ['Total Net Kept Revenue', kpis.netKept == null ? 'UNAVAILABLE' : fmtMoney(kpis.netKept), 'Net take-home after OTA commissions & fees'],
     ['OTA Commission Drag', fmtMoney(kpis.commissionTotal || 0), 'Total distribution commission deducted'],
     ['OTA Commission Ratio', fmtPct((kpis.commissionRate || 0) * 100), 'Commission as % of gross revenue'],
     ['Direct Booking Share', fmtPct((kpis.directShare || 0) * 100), 'Share of revenue from direct and brand web'],
@@ -230,23 +230,47 @@ export function buildOwnerPerformancePacketWorkbook({
   const healthDataRows = healthProperties.map((p) => [
     p.propertyId,
     p.propertyName,
-    p.overallScore,
-    p.statusLabel || p.status,
-    p.completeness?.occupancy ?? 100,
-    p.completeness?.revenue ?? 100,
-    p.completeness?.source ?? 100,
-    p.completeness?.payment ?? 100,
+    p.overallScore ?? 0,
+    p.statusLabel || p.status || 'Unknown',
+    p.completeness?.occupancy ?? 0,
+    p.completeness?.revenue ?? 0,
+    p.completeness?.source ?? 0,
+    p.completeness?.payment ?? 0,
     (p.missingDates?.occupancy?.length || 0) + (p.missingDates?.revenue?.length || 0),
     p.latestDates?.occupancy || 'N/A',
   ]);
+
+  const hasHealthScore = portfolioHealth && portfolioHealth.portfolioScore !== undefined && portfolioHealth.portfolioScore !== null;
+  const portfolioScoreNum = hasHealthScore ? Number(portfolioHealth.portfolioScore) : null;
+  const healthScoreDisplay = portfolioScoreNum !== null ? `${portfolioScoreNum}/100` : 'UNKNOWN';
+
+  const isReconciled = reconciliation && reconciliation.isBalanced === true;
+  const hasNonZeroActivity = (kpis.revenue || 0) > 0 || (reconciliation.reported || 0) > 0;
+  const isHealthy = hasHealthScore &&
+    (portfolioHealth.criticalCount || 0) === 0 &&
+    portfolioScoreNum >= 80 &&
+    isReconciled &&
+    hasNonZeroActivity;
+
+  let sheet4ReconStatus = 'DISCREPANCY DETECTED';
+  if (reconciliation.status === 'no_data' || (!hasNonZeroActivity && !isReconciled)) {
+    sheet4ReconStatus = 'NO DATA (UNVERIFIED)';
+  } else if (reconciliation.status === 'incomplete') {
+    sheet4ReconStatus = 'INCOMPLETE LEDGER COVERAGE';
+  } else if (reconciliation.status === 'failed') {
+    sheet4ReconStatus = 'FAILED (LEDGER READ ERROR)';
+  } else if (isReconciled) {
+    sheet4ReconStatus = 'BALANCED ($0.00 Difference)';
+  }
 
   const reconRows = [
     ['', ''],
     ['FINANCIAL LEDGER RECONCILIATION AUDIT ($0.00 DIFFERENCE TARGET)', ''],
     ['Reported PMS Room Revenue:', reconciliation.reported || 0],
     ['Calculated Channel Ledger Revenue:', reconciliation.calculated || 0],
+    ['Settled Payment Ledger Total:', reconciliation.payments != null ? reconciliation.payments : 'N/A'],
     ['Unreconciled Variance:', reconciliation.difference || 0],
-    ['Reconciliation Balance Status:', reconciliation.isBalanced ? 'BALANCED ($0.00 Difference)' : 'DISCREPANCY DETECTED'],
+    ['Reconciliation Balance Status:', sheet4ReconStatus],
   ];
 
   const wsHealth = XLSX.utils.aoa_to_sheet([healthHeader, ...healthDataRows, ...reconRows]);
@@ -255,11 +279,44 @@ export function buildOwnerPerformancePacketWorkbook({
   // ─────────────────────────────────────────────────────────────────────────────
   // SHEET 5: DATA PROVENANCE & AUDIT CONTROLS
   // ─────────────────────────────────────────────────────────────────────────────
-  const isHealthy = (portfolioHealth.criticalCount || 0) === 0 && (portfolioHealth.portfolioScore || 100) >= 80;
   const totalMissingDates = healthProperties.reduce(
     (acc, p) => acc + (p.missingDates?.occupancy?.length || 0) + (p.missingDates?.revenue?.length || 0),
     0
   );
+
+  let gateStatus = 'INCOMPLETE / REQUIRES REVIEW';
+  if (!hasHealthScore || portfolioScoreNum === 0 || !hasNonZeroActivity) {
+    gateStatus = 'NO DATA / UNVERIFIED';
+  } else if (isHealthy) {
+    gateStatus = 'RECONCILED / OTHER CONTROLS UNVERIFIED';
+  }
+
+  let reconStatusLabel = 'DISCREPANCY DETECTED';
+  if (reconciliation.status === 'no_data' || (!hasNonZeroActivity && !isReconciled)) {
+    reconStatusLabel = 'NO DATA (UNVERIFIED)';
+  } else if (reconciliation.status === 'incomplete') {
+    reconStatusLabel = 'INCOMPLETE LEDGER COVERAGE';
+  } else if (reconciliation.status === 'failed') {
+    reconStatusLabel = 'FAILED TO RECONCILE';
+  } else if (isReconciled) {
+    reconStatusLabel = 'BALANCED ($0.00 Difference)';
+  }
+
+  let invariantCheck = 'Reconciliation Pending / Unverified';
+  if (isReconciled && hasNonZeroActivity) {
+    invariantCheck = 'Integer Cent Balance Verified; Rate Card Controls Not Evaluated';
+  } else if (reconciliation.difference > 0) {
+    invariantCheck = `Reconciliation Variance Detected: ${fmtMoney(reconciliation.difference)} Drift`;
+  } else if (reconciliation.status === 'incomplete') {
+    invariantCheck = 'Reconciliation Incomplete: Channel Distribution Ledger Missing';
+  } else if (!hasNonZeroActivity) {
+    invariantCheck = 'Zero Ledger Activity Ingested: No Financial Assurance Claimed';
+  }
+
+  const hasRawHashes = Array.isArray(portfolioHealth.provenanceHashes) && portfolioHealth.provenanceHashes.length > 0;
+  const hashInventory = hasRawHashes
+    ? portfolioHealth.provenanceHashes.map((h) => `${h.file || h.id}: ${h.sha256}`).join('; ')
+    : 'No raw-file SHA-256 signatures supplied in export scope';
 
   const provenanceRows = [
     ['PORTFOLIO DATA PROVENANCE & AUDIT CONTROLS', ''],
@@ -269,14 +326,15 @@ export function buildOwnerPerformancePacketWorkbook({
     ['Properties Scoped:', properties.map((p) => p.name || p.id).join(', ')],
     ['Property Count:', properties.length],
     ['Total Portfolio Room Revenue:', fmtMoney(kpis.revenue || 0)],
-    ['Total Net Kept Revenue:', fmtMoney(kpis.netKept || 0)],
+    ['Total Net Kept Revenue:', kpis.netKept == null ? 'UNAVAILABLE' : fmtMoney(kpis.netKept)],
     ['Reconciliation Variance:', fmtMoney(reconciliation.difference || 0)],
-    ['Reconciliation Status:', reconciliation.isBalanced ? 'BALANCED ($0.00 Difference)' : 'DISCREPANCY DETECTED'],
-    ['Portfolio Health Score:', `${portfolioHealth.portfolioScore || 100}/100`],
-    ['Data Health Gate Status:', isHealthy ? 'READY / AUDITED' : 'INCOMPLETE / REQUIRES REVIEW'],
+    ['Reconciliation Status:', reconStatusLabel],
+    ['Portfolio Health Score:', healthScoreDisplay],
+    ['Data Health Gate Status:', gateStatus],
     ['Missing Date Gaps Across Portfolio:', totalMissingDates],
     ['Engine Identity:', 'Boston Project Owner Intelligence Core (DIVYESH-V3)'],
-    ['Deterministic Invariant Check:', 'Integer Cent Balance & Rate Card Reconciliation Verified'],
+    ['Deterministic Invariant Check:', invariantCheck],
+    ['Raw File SHA-256 Inventory (verification not performed):', hashInventory],
   ];
 
   const wsProvenance = XLSX.utils.aoa_to_sheet(provenanceRows);

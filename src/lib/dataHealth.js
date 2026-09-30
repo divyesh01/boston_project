@@ -212,23 +212,116 @@ export function evaluatePortfolioDataHealth(properties = [], dataByProperty = {}
  *
  * @param {number} reportedGross Total from PMS Revenue Summary / Final Audit
  * @param {number} calculatedGross Total calculated from raw rows
+ * @param {Object} [options={}] Reconciliation options and coverage metadata
+ * @param {boolean} [options.hasData] Explicit indicator whether ledger rows exist
+ * @param {number|null} [options.reportedCount] Count of reported revenue rows
+ * @param {number|null} [options.calculatedCount] Count of channel ledger rows
+ * @param {number|null} [options.paymentsTotal] Total of payment ledger settlements
+ * @param {boolean} [options.channelLedgerPresent=true] Whether the channel ledger is present
+ * @param {boolean} [options.isFailed=false] Whether any ledger fetch failed
+ * @param {boolean} [options.allowZero=false] Explicitly allow verified zero activity
  * @returns {{
  *   reported: number,
  *   calculated: number,
  *   difference: number,
  *   isBalanced: boolean,
- *   status: 'reconciled' | 'discrepancy'
+ *   status: 'reconciled' | 'discrepancy' | 'incomplete' | 'no_data' | 'failed',
+ *   payments: number | null,
+ *   paymentsDifference: number | null,
+ *   paymentsMatch: boolean | null,
+ *   paymentsStatus: 'matched' | 'variance' | 'no_data' | 'incomplete' | 'failed' | 'not_evaluated',
+ *   message: string,
  * }}
  */
-export function reconcileFinancialTotals(reportedGross = 0, calculatedGross = 0) {
-  const diffCents = Math.abs(toCents(reportedGross) - toCents(calculatedGross));
+export function reconcileFinancialTotals(reportedGross = 0, calculatedGross = 0, options = {}) {
+  const {
+    hasData = (toCents(reportedGross) !== 0 || toCents(calculatedGross) !== 0),
+    reportedCount = null,
+    calculatedCount = null,
+    paymentsTotal = null,
+    channelLedgerPresent = true,
+    isFailed = false,
+    allowZero = false,
+  } = options;
+
+  const reportedCents = toCents(reportedGross);
+  const calculatedCents = toCents(calculatedGross);
+  const diffCents = Math.abs(reportedCents - calculatedCents);
+
+  if (isFailed) {
+    return {
+      reported: fromCents(reportedCents),
+      calculated: fromCents(calculatedCents),
+      difference: fromCents(diffCents),
+      isBalanced: false,
+      status: 'failed',
+      payments: paymentsTotal != null ? fromCents(toCents(paymentsTotal)) : null,
+      paymentsDifference: null,
+      paymentsMatch: null,
+      paymentsStatus: 'failed',
+      message: 'Failed to retrieve financial ledger data',
+    };
+  }
+
+  if (!hasData && !allowZero) {
+    return {
+      reported: 0,
+      calculated: 0,
+      difference: 0,
+      isBalanced: false,
+      status: 'no_data',
+      payments: paymentsTotal != null ? fromCents(toCents(paymentsTotal)) : 0,
+      paymentsDifference: null,
+      paymentsMatch: null,
+      paymentsStatus: 'no_data',
+      message: 'No ledger data available for financial reconciliation',
+    };
+  }
+
+  // If reported revenue exists, but channel distribution is missing or zero rows
+  if (channelLedgerPresent === false || reportedCount === 0 || calculatedCount === 0) {
+    return {
+      reported: fromCents(reportedCents),
+      calculated: fromCents(calculatedCents),
+      difference: fromCents(diffCents),
+      isBalanced: false,
+      status: 'incomplete',
+      payments: paymentsTotal != null ? fromCents(toCents(paymentsTotal)) : null,
+      paymentsDifference: null,
+      paymentsMatch: null,
+      paymentsStatus: 'incomplete',
+      message: 'Missing channel distribution ledger: incomplete ledger coverage',
+    };
+  }
+
   const isBalanced = diffCents === 0;
 
+  // Payments reconciliation
+  let paymentsMatch = null;
+  /** @type {'matched' | 'variance' | 'no_data' | 'incomplete' | 'failed' | 'not_evaluated'} */
+  let paymentsStatus = 'not_evaluated';
+  let paymentsDifference = null;
+
+  if (paymentsTotal !== null) {
+    const payCents = toCents(paymentsTotal);
+    const payDiffCents = Math.abs(payCents - reportedCents);
+    paymentsDifference = fromCents(payDiffCents);
+    paymentsMatch = payDiffCents === 0;
+    paymentsStatus = paymentsMatch ? 'matched' : 'variance';
+  }
+
   return {
-    reported: fromCents(toCents(reportedGross)),
-    calculated: fromCents(toCents(calculatedGross)),
+    reported: fromCents(reportedCents),
+    calculated: fromCents(calculatedCents),
     difference: fromCents(diffCents),
     isBalanced,
     status: isBalanced ? 'reconciled' : 'discrepancy',
+    payments: paymentsTotal != null ? fromCents(toCents(paymentsTotal)) : null,
+    paymentsDifference,
+    paymentsMatch,
+    paymentsStatus,
+    message: isBalanced
+      ? 'Cent-Exact Financial Reconciliation Confirmed ($0.00 Variance)'
+      : `Unreconciled Variance: $${fromCents(diffCents).toFixed(2)}`,
   };
 }

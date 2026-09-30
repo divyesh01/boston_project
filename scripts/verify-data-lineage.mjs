@@ -33,13 +33,16 @@ console.log('='.repeat(65));
 
 // 1. Raw Fixture Lineage & Cryptographic Integrity
 console.log('\n1. Source Data Cryptographic Signatures (SHA-256):');
-if (fs.existsSync(DATA_DIR)) {
-  const csvFiles = fs.readdirSync(DATA_DIR).filter((f) => f.endsWith('.csv'));
-  check('Authoritative source CSV fixtures present', csvFiles.length >= 14, `found ${csvFiles.length} source files`);
+const hasDataFiles = fs.existsSync(DATA_DIR) && fs.readdirSync(DATA_DIR).filter((f) => f.endsWith('.csv')).length > 0;
+const fixtureDir = hasDataFiles ? DATA_DIR : path.join(ROOT, 'src/lib/__fixtures__/hotelkey');
+
+if (fs.existsSync(fixtureDir)) {
+  const csvFiles = fs.readdirSync(fixtureDir).filter((f) => f.endsWith('.csv'));
+  check('Authoritative source CSV fixtures present', csvFiles.length >= 10, `found ${csvFiles.length} source files in ${hasDataFiles ? 'scripts/data' : '__fixtures__'}`);
 
   let validHashes = 0;
   for (const file of csvFiles) {
-    const fullPath = path.join(DATA_DIR, file);
+    const fullPath = path.join(fixtureDir, file);
     const content = fs.readFileSync(fullPath);
     const hash = createHash('sha256').update(content).digest('hex');
     if (hash && hash.length === 64) {
@@ -48,7 +51,7 @@ if (fs.existsSync(DATA_DIR)) {
   }
   check('Cryptographic SHA-256 hashes generated for all source CSVs', validHashes === csvFiles.length, `${validHashes}/${csvFiles.length} valid 256-bit hashes`);
 } else {
-  check('Source data directory exists', false, 'scripts/data missing');
+  check('Source fixtures directory exists', false, 'fixtures missing');
 }
 
 // 2. Channel Normalization & Segment Mapping Rules

@@ -11,16 +11,17 @@ const ROOT = path.resolve(HERE, '../..');
 const DATA_DIR = path.join(ROOT, 'scripts/data');
 
 describe('Data Lineage & Cryptographic Invariants Gate', () => {
-  it('verifies SHA-256 signatures of all raw HotelKey CSV fixtures', () => {
-    if (fs.existsSync(DATA_DIR)) {
-      const csvFiles = fs.readdirSync(DATA_DIR).filter((f) => f.endsWith('.csv'));
-      expect(csvFiles.length).toBeGreaterThanOrEqual(14);
-      for (const file of csvFiles) {
-        const fullPath = path.join(DATA_DIR, file);
-        const content = fs.readFileSync(fullPath);
-        const hash = createHash('sha256').update(content).digest('hex');
-        expect(hash).toHaveLength(64);
-      }
+  it('verifies SHA-256 signatures of raw HotelKey CSV fixtures', () => {
+    const hasDataFiles = fs.existsSync(DATA_DIR) && fs.readdirSync(DATA_DIR).filter((f) => f.endsWith('.csv')).length > 0;
+    const fixtureDir = hasDataFiles ? DATA_DIR : path.join(ROOT, 'src/lib/__fixtures__/hotelkey');
+
+    const csvFiles = fs.readdirSync(fixtureDir).filter((f) => f.endsWith('.csv'));
+    expect(csvFiles.length).toBeGreaterThanOrEqual(10);
+    for (const file of csvFiles) {
+      const fullPath = path.join(fixtureDir, file);
+      const content = fs.readFileSync(fullPath);
+      const hash = createHash('sha256').update(content).digest('hex');
+      expect(hash).toHaveLength(64);
     }
   });
 

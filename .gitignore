@@ -136,3 +136,14 @@ fix_user.py
 docs/architecture/*.visual-check*.png
 docs/architecture/*.visual-check.html
 docs/architecture/*.visual-check.json
+
+# Generated agent staging / analysis output — disposable and regenerated on demand.
+/.skill-staging/
+/.superbrain/
+
+# One-off root maintenance scripts. Maintained automation belongs in scripts/.
+/fix_brain*.py
+/fix_entities.py
+/rename_functions.py
+/enhance.py
+/upgrade_system*.cjs

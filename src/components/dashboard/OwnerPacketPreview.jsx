@@ -26,7 +26,7 @@ export default function OwnerPacketPreview({
     <Card className="border border-white/10 bg-slate-900/90 p-5 shadow-xl backdrop-blur-md">
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/5 pb-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-500/10 text-teal-400 border border-teal-500/20">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
             <FileSpreadsheet className="h-5 w-5" />
           </div>
           <div>
@@ -34,7 +34,7 @@ export default function OwnerPacketPreview({
               <h3 className="text-sm font-semibold text-white tracking-wide">
                 Owner Performance Packet (.xlsx)
               </h3>
-              <span className="rounded-full bg-teal-500/10 px-2 py-0.5 text-[10px] font-medium text-teal-400 border border-teal-500/20">
+              <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300 border border-amber-500/20">
                 5-Sheet Multi-Property
               </span>
             </div>
@@ -47,7 +47,7 @@ export default function OwnerPacketPreview({
         <button
           onClick={onDownloadPacket}
           disabled={isExporting}
-          className="flex items-center gap-1.5 rounded-xl bg-teal-600 px-3.5 py-2 text-xs font-semibold text-white shadow-lg shadow-teal-600/20 hover:bg-teal-500 active:scale-[0.98] transition-all disabled:opacity-50"
+          className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-emerald-600/20 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.98] transition-all disabled:opacity-50"
         >
           <Download className="h-3.5 w-3.5" />
           {isExporting ? 'Generating...' : 'Download Packet'}
@@ -58,12 +58,12 @@ export default function OwnerPacketPreview({
         {sheets.map((sheet) => (
           <div
             key={sheet.num}
-            className="rounded-xl border border-white/5 bg-slate-800/40 p-3 flex flex-col justify-between hover:border-teal-500/30 transition-colors"
+            className="rounded-xl border border-white/5 bg-slate-800/40 p-3 flex flex-col justify-between hover:border-amber-500/30 transition-colors"
           >
             <div>
               <div className="flex items-center justify-between text-[11px] font-mono text-slate-500">
                 <span>SHEET 0{sheet.num}</span>
-                <CheckCircle2 className="h-3.5 w-3.5 text-teal-400" />
+                <CheckCircle2 className="h-3.5 w-3.5 text-amber-400" />
               </div>
               <div className="text-xs font-medium text-slate-200 mt-1.5 font-sans">
                 {sheet.name}

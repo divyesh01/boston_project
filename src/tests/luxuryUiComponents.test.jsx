@@ -7,6 +7,7 @@ import OwnerPacketPreview from '@/components/dashboard/OwnerPacketPreview';
 import ScheduleReportDialog from '@/components/dashboard/ScheduleReportDialog';
 import BatchActionsModal from '@/components/dashboard/BatchActionsModal';
 import SidebarNav from '@/components/dashboard/SidebarNav';
+import OtaMatrix from '@/components/dashboard/OtaMatrix';
 import { FEATURE_FLAGS, isFeatureEnabled, setFeatureFlag, useFeatureFlag } from '@/lib/featureFlags';
 
 describe('Luxury UI Feature Flags', () => {
@@ -200,3 +201,23 @@ describe('SidebarNav Component', () => {
     expect(screen.getByText('OTA & Channel Economics')).toBeInTheDocument();
   });
 });
+
+describe('OtaMatrix Interconnected Action', () => {
+  it('renders direct shift banner with simulate button triggering callback', () => {
+    const onOpenSimulator = vi.fn();
+    const rows = [
+      { source: 'EXPEDIA', code: 'EXP', net_revenue: 10000, stays: 50 },
+      { source: 'BOOKING.COM', code: 'BDC', net_revenue: 15000, stays: 70 },
+      { source: 'WALK-IN', code: 'WI', net_revenue: 5000, stays: 20 },
+    ];
+
+    render(<OtaMatrix rows={rows} onOpenSimulator={onOpenSimulator} />);
+
+    expect(screen.getByText('Direct Shift Opportunity')).toBeInTheDocument();
+    const simBtn = screen.getByRole('button', { name: /Simulate/i });
+    expect(simBtn).toBeInTheDocument();
+    fireEvent.click(simBtn);
+    expect(onOpenSimulator).toHaveBeenCalledTimes(1);
+  });
+});
+

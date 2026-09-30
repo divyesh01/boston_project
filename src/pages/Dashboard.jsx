@@ -730,7 +730,12 @@ export default function Dashboard() {
 
         <RevenueTrend rows={occRows} dateRange={`${dateRange.from || "—"} to ${dateRange.to || "—"}`} />
         <Suspense fallback={<div className="flex h-64 items-center justify-center rounded-xl border border-white/10 bg-[#0A1628]/60"><Loader2 className="h-6 w-6 animate-spin text-slate-500" /></div>}>
-          <OtaMatrix rows={srcRows} />
+          <OtaMatrix
+            rows={srcRows}
+            onOpenSimulator={() => {
+              document.getElementById("ota-shift-section")?.scrollIntoView({ behavior: "smooth" });
+            }}
+          />
         </Suspense>
 
         {luxuryUiEnabled && (

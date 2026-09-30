@@ -70,11 +70,11 @@ export default function SidebarNav({ currentProperty = 'All Properties' }) {
   return (
     <nav className="flex flex-col space-y-6 px-3 py-4" aria-label="Sidebar Navigation">
       {/* Property Context Pill */}
-      <div className="rounded-xl border border-white/5 bg-slate-900/60 p-2.5">
-        <div className="text-[10px] uppercase font-mono tracking-wider text-slate-500">Active Scope</div>
+      <div className="rounded-xl border border-amber-500/20 bg-gradient-to-r from-amber-500/[0.08] via-slate-900/60 to-slate-900/60 p-2.5 shadow-sm">
+        <div className="text-[10px] uppercase font-mono tracking-wider text-amber-400/90 font-medium">Active Scope</div>
         <div className="flex items-center justify-between mt-1">
-          <span className="text-xs font-semibold text-slate-200 truncate">{currentProperty}</span>
-          <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="text-xs font-semibold text-slate-100 truncate">{currentProperty}</span>
+          <span className="h-2 w-2 rounded-full bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.6)] animate-pulse" />
         </div>
       </div>
 
@@ -109,7 +109,7 @@ export default function SidebarNav({ currentProperty = 'All Properties' }) {
                   </div>
 
                   {item.badge && (
-                    <span className="rounded-md bg-white/5 px-1.5 py-0.5 text-[10px] font-mono text-slate-400 border border-white/5">
+                    <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-mono text-amber-300/90 border border-amber-500/20">
                       {item.badge}
                     </span>
                   )}

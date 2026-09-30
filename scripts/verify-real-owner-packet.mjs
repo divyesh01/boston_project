@@ -1,12 +1,16 @@
 // scripts/verify-real-owner-packet.mjs
 // Generates a real 5-sheet Owner Performance Packet workbook using real staging D1 aggregate data.
 
+import { register } from "node:module";
+register(new URL("./resolve-alias.mjs", import.meta.url));
+
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as XLSX from "xlsx";
-import { buildOwnerPerformancePacketWorkbook } from "../src/lib/ownerPacketExport.js";
+
+const { buildOwnerPerformancePacketWorkbook } = await import("../src/lib/ownerPacketExport.js");
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const npxCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npx-cli.js");

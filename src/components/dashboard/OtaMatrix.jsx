@@ -7,7 +7,7 @@ import { Lightbulb, ArrowRight, TrendingUp } from "lucide-react";
 import { useSettingsVersion } from "@/hooks/useSettingsVersion";
 import { calculateOtaDependence, calculateDirectShiftOpportunity, CHANNEL_GROUPS } from "@/lib/channelDictionary";
 
-export default function OtaMatrix({ rows }) {
+export default function OtaMatrix({ rows, onOpenSimulator }) {
   useSettingsVersion();
 
   // Cent-exact channel engine (integer cents via toCents/multiply) — the same
@@ -154,9 +154,18 @@ export default function OtaMatrix({ rows }) {
               </p>
             </div>
           </div>
-          <div className="text-right">
-            <span className="text-[10px] uppercase tracking-wider text-slate-400">Potential Gain</span>
-            <p className="text-base font-bold text-[#00E096]">+{money(shiftOpportunity.potentialSavings)}</p>
+          <div className="flex items-center gap-4">
+            <div className="text-right">
+              <span className="text-[10px] uppercase tracking-wider text-slate-400">Potential Gain</span>
+              <p className="text-base font-bold text-[#00E096]">+{money(shiftOpportunity.potentialSavings)}</p>
+            </div>
+            <button
+              type="button"
+              onClick={onOpenSimulator || (() => document.getElementById("ota-shift-section")?.scrollIntoView({ behavior: "smooth" }))}
+              className="flex items-center gap-1.5 rounded-lg border border-[#00E096]/30 bg-[#00E096]/15 px-3 py-1.5 text-xs font-semibold text-[#00E096] hover:bg-[#00E096]/25 transition-all active:scale-[0.98]"
+            >
+              Simulate <ArrowRight className="h-3.5 w-3.5" />
+            </button>
           </div>
         </div>
       )}

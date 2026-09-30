@@ -1,3 +1,6 @@
+import { requireLocalFixtures } from "./_require-local-fixtures.mjs";
+requireLocalFixtures("verify-coexistence.mjs", ["Hotel Statistics (1).csv","All Transactions.csv","All Transactions (1).csv","All Transactions (2).csv"]);
+
 // All four uploaded files in ONE database, imported in one pass.
 //
 // verify-transactions.mjs and verify-statistics.mjs each start from an empty

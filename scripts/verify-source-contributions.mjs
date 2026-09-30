@@ -1,3 +1,6 @@
+import { requireLocalFixtures } from "./_require-local-fixtures.mjs";
+requireLocalFixtures("verify-source-contributions.mjs", ["Source Summary (1).csv","Source Summary (2).csv","Source Summary (3).csv","Source Summary.csv"]);
+
 // End-to-end: import the four Source Summary files into ONE database, in the
 // order the operator did, and assert what the history row would now say.
 await import("fake-indexeddb/auto");

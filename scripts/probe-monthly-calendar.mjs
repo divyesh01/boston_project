@@ -1,3 +1,6 @@
+import { requireLocalFixtures } from "./_require-local-fixtures.mjs";
+requireLocalFixtures("probe-monthly-calendar.mjs", ["Occupancy Summary midelboro.csv"]);
+
 // Probe: the calendar must draw the months it measures, and every revenue number
 // on the page must be the same measure.
 //

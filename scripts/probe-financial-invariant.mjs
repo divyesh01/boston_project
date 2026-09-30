@@ -1,3 +1,6 @@
+import { requireLocalFixtures } from "./_require-local-fixtures.mjs";
+requireLocalFixtures("probe-financial-invariant.mjs", ["All Transactions.csv","All Transactions (1).csv","All Transactions (2).csv","Hotel Statistics (1).csv","Occupancy Summary midelboro.csv"]);
+
 // Probe: the revenue reconciliation invariant, stated correctly and verified honestly.
 //
 // ─────────────────────────────────────────────────────────────────────────────

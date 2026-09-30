@@ -29,6 +29,14 @@ assert(playwright, 'Playwright module could not be dynamically imported.');
 const defaultChromeWin = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const chromeExe = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || (process.platform === 'win32' && fs.existsSync(defaultChromeWin) ? defaultChromeWin : undefined);
 
+const bundledChromium = !chromeExe && playwright?.chromium?.executablePath
+  ? playwright.chromium.executablePath()
+  : "";
+if (!chromeExe && (!bundledChromium || !fs.existsSync(bundledChromium))) {
+  console.log("SKIP: probe-three-browser-sync.mjs — Playwright Chromium is not installed. Dedicated CI installs Chromium and runs this probe explicitly.");
+  process.exit(0);
+}
+
 const PEPPER = 'production-test-pepper-at-least-32-chars-long';
 const ACCT_PRIMARY = 'acct_probe_primary';
 const ACCT_ATTACKER = 'acct_probe_attacker';

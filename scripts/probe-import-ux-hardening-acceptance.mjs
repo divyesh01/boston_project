@@ -1,3 +1,6 @@
+import { requireLocalFixtures } from "./_require-local-fixtures.mjs";
+requireLocalFixtures("probe-import-ux-hardening-acceptance.mjs", ["Occupancy Summary midelboro.csv","Source Summary.csv","Gross Revenue Report midelboro.csv","Payments Summary.csv","Clerk Shift.csv","Hotel Statistics.csv","All Transactions.csv","Adjustments and Refunds Activity.csv"]);
+
 // Deterministic Acceptance Test: Red Roof Intelligence Import UX Hardening Pass
 //
 // Verifies the complete operational & UX requirements:

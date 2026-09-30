@@ -1,3 +1,6 @@
+import { requireLocalFixtures } from "./_require-local-fixtures.mjs";
+requireLocalFixtures("probe-money-kept-gross.mjs", ["Occupancy Summary midelboro.csv","Gross Revenue Report midelboro.csv","Hotel Statistics (1).csv"]);
+
 // Probe: the "Estimated Money Kept" gross must be TOTAL revenue, not room-only —
 // and it must be the same total on BOTH row shapes the widget is ever fed.
 //

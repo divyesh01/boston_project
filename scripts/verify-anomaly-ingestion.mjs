@@ -1,3 +1,6 @@
+import { requireLocalFixtures } from "./_require-local-fixtures.mjs";
+requireLocalFixtures("verify-anomaly-ingestion.mjs", ["All Transactions (2).csv"]);
+
 // End-to-end smoke: scan + import a real All Transactions CSV through the REAL
 // shipped pipeline (scanReport -> importReport) and assert that:
 //   1. the anomaly engine ran and persisted rows into AnomalyAlert

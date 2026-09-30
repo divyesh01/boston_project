@@ -1,3 +1,6 @@
+import { requireLocalFixtures } from "./_require-local-fixtures.mjs";
+requireLocalFixtures("probe-import-validation.mjs", ["All Transactions.csv","Hotel Statistics (1).csv"]);
+
 // Probe for "integrity signals are computed, then discarded" (B8).
 //
 // scanTransactions computes the two signals that matter most for the main

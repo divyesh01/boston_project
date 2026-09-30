@@ -81,7 +81,7 @@ check(
   "user-facing adapters prohibit bare npx tsc as the command",
   commandAdapters.every((file) => {
     const text = read(file);
-    return /do not use|never substitute/i.test(text) && text.includes("npx tsc --noEmit");
+    return /(?:do not use|do not substitute|never substitute|not a bare)[\s\S]{0,120}npx tsc --noEmit/i.test(text);
   }),
 );
 

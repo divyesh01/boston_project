@@ -75,9 +75,9 @@ vi.mock("@/api/localDb", () => ({
 
 vi.mock("@/lib/commissionRates", () => ({
   COMMISSION_TYPES: [
-    { value: "percentage", label: "Percentage" },
-    { value: "fixed", label: "Fixed" },
-    { value: "none", label: "None" },
+    ["percentage", "Percentage"],
+    ["fixed", "Fixed"],
+    ["none", "None"],
   ],
   getCommissionRates: () => state.rates,
   setCommissionRates: (value) => { state.rates = value; return true; },

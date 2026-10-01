@@ -24,7 +24,9 @@ function read(rel) {
 }
 
 const canonicalPath = "docs/engineering/AGENT_RULES.md";
+const coordinationPath = "docs/engineering/CODEX_ANTIGRAVITY_WORKFLOW.md";
 const canonical = read(canonicalPath);
+const coordination = read(coordinationPath);
 const adapters = [
   "AGENTS.md",
   "CLAUDE.md",
@@ -44,16 +46,38 @@ check("canonical policy uses the real typecheck command", canonical.includes("np
 check("canonical policy forbids direct ordinary work on main", canonical.includes("directly on `main`"));
 check("canonical policy protects synthetic-only HotelKey fixtures", canonical.includes("no real guest, hotel, PMS, or production data"));
 check("canonical policy does not recommend the broken bare tsc command", !canonical.includes("\n\`\`\`bash\nnpx tsc --noEmit"));
-check("canonical policy makes Codex the implementation owner", canonical.includes("Codex is the implementation owner"));
-check("canonical policy makes Antigravity the verification owner", canonical.includes("Antigravity is the verification owner"));
-check("Codex role split applies to every model", canonical.includes("every Codex model or variant"));
-check("Codex avoids duplicate broad verification", canonical.includes("must **not** spend substantial context or execution budget duplicating verification"));
-check("Codex hands verification to Antigravity", canonical.includes("Codex plans/implements -> Antigravity tests/verifies"));
+check("canonical policy requires every Codex model to load role contract", canonical.includes("Every Codex model and every Gemini/Antigravity model must read"));
+check("canonical policy requires the shared Codex/Antigravity contract", canonical.includes(coordinationPath));
+check("shared role contract exists", coordination.length > 2000);
+check("shared role contract applies to every Codex and Antigravity model", coordination.includes("every model, size, reasoning level, and variant"));
+check("shared role contract makes Codex implementation owner", coordination.includes("Codex role: implementation owner"));
+check("shared role contract makes Antigravity verification owner", coordination.includes("Antigravity role: verification owner"));
+check("shared role contract requires Codex handoff", coordination.includes("Required handoff: Codex -> Antigravity"));
+check("shared role contract requires Antigravity report", coordination.includes("Required report: Antigravity -> Codex"));
+check("shared role contract preserves implementation-verification loop", coordination.includes("Codex plans/implements -> Antigravity tests/verifies -> Codex fixes findings -> Antigravity re-verifies"));
 
 for (const adapter of adapters) {
   const text = read(adapter);
   check(`${adapter} routes to canonical policy`, text.includes(canonicalPath));
 }
+
+const mandatoryCoordinationAdapters = [
+  "GEMINI.md",
+  ".agents/agents.md",
+  ".agents/skills/divyesh-v3-router/SKILL.md",
+  "AI_CORE_RULES.md",
+  ".agents/rules/project-context.md",
+];
+for (const adapter of mandatoryCoordinationAdapters) {
+  const text = read(adapter);
+  check(`${adapter} routes to mandatory Codex/Antigravity contract`, text.includes(coordinationPath));
+}
+
+const codexAdapter = read("AGENTS.md");
+check(
+  "Codex reaches mandatory role contract through canonical policy",
+  codexAdapter.includes(canonicalPath) && canonical.includes(coordinationPath),
+);
 
 const v3Adapters = [
   "AGENTS.md",

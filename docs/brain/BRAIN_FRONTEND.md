@@ -2,6 +2,10 @@
 
 ## Startup payload (October 2026)
 
+The startup branch incorporates main's parallel page prefetch and cached startup
+hydration. These compose with lazy Layout and the on-demand command dialog.
+The integration was reviewed without additional tests at the owner's request.
+
 `src/App.jsx` loads the authenticated `Layout` through its existing suspense
 fallback. The unused root Yjs provider is removed; the lazy `DemoYDoc` page keeps
 its own provider and document. `CommandMenu` retains only shortcut/open state at

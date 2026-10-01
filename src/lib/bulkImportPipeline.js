@@ -741,26 +741,8 @@ export async function executeBulkImport(scanResult, meta = {}) {
       expectedRevision = predecessors[0].expected_revision ?? predecessors[0].revision ?? null;
     }
   }
-  if (forceImport && !supersedesBundleId && (!predecessors || predecessors.length === 0)) {
-    let revision = 0, afterId = '';
-    const candidates = [];
-    for (;;) {
-      const query = new URLSearchParams({server_property_id: propertyId, since_revision: String(revision), after_id: afterId});
-      const response = await fetch(`/api/bulk-import/manifest?${query}`);
-      if (!response.ok) throw new Error('Cannot verify replacement authority');
-      const { manifests } = await response.json();
-      for (const m of manifests) if (m.status === 'active' && m.report_type === reportType && m.normalized_hash !== normalizedHash &&
-        (m.raw_file_hash === rawFileHash || (m.min_date && m.max_date && bundle.minDate && bundle.maxDate && m.min_date <= bundle.maxDate && m.max_date >= bundle.minDate))) candidates.push(m);
-      if (manifests.length < 200) break;
-      const last = manifests[manifests.length - 1]; revision = last.revision; afterId = last.id;
-    }
-    if (candidates.length > 1) throw new Error('Correction overlaps multiple reports; reconcile the reports before importing');
-    if (candidates.length === 1) {
-      supersedesBundleId = candidates[0].id;
-      expectedRevision = candidates[0].revision;
-      predecessors = [{ id: candidates[0].id, expected_revision: candidates[0].revision }];
-    }
-  }
+  // The server discovers and verifies all overlapping reports atomically,
+  // preserving old-only dates. Force Import uses the same date merge policy.
 
   if (supersedesBundleId === bundleId || (Array.isArray(predecessors) && predecessors.some(p => (typeof p === 'string' ? p : p.id) === bundleId))) {
     bundleId = `raw_${crypto.randomUUID()}`;
@@ -843,5 +825,7 @@ export async function executeBulkImport(scanResult, meta = {}) {
     raw_archive_id: rawArchiveId,
     revision: activationResult.revision,
     duplicate: false,
+    preservedRows: Number(activationResult.preserved_rows) || 0,
+    effectiveRows: Number(activationResult.row_count) || bundle.totalRowCount,
   };
 }

@@ -10,7 +10,7 @@ export function testR2Binding() {
     },
     async get(key) {
       const row = await this.head(key);
-      return row ? { ...row, body: row.data } : null;
+      return row ? { ...row, body: row.data, arrayBuffer: async () => row.data.slice(0) } : null;
     },
     async put(key, body, options = {}) {
       const data = await new Response(body).arrayBuffer();

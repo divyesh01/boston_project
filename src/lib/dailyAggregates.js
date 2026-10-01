@@ -92,8 +92,8 @@ async function fetchLedger(name, propertyId, from, to) {
   if (bound) query[field] = bound;
 
   let rows;
-  if (propertyId && propertyId !== 'all') {
-    query.property_id = propertyId;
+  if (propertyId != null && propertyId !== '' && propertyId !== 'all') {
+    query.property_id = Array.isArray(propertyId) ? { $in: propertyId } : propertyId;
     rows = await db.entities[name].filter(query);
   } else {
     // No 200000 cap. list() sorted by -created_date and then sliced, so once a
@@ -297,28 +297,31 @@ export function aggregateDays({ occ = [], src = [], gross = [], pay = [], exp = 
 // upsert into localDb.DailyFinancialAggregate. Idempotent: re-running for the
 // same days overwrites them. Returns the number of day-rows written.
 export async function rebuildDailyAggregates({ propertyId = 'all', from = '', to = '' } = {}) {
-  const occ = await fetchLedger('OccupancyDay', propertyId, from, to);
-  const src = await fetchLedger('SourceDay', propertyId, from, to);
-  const gross = await fetchLedger('GrossRevenueDay', propertyId, from, to);
-  const pay = await fetchLedger('PaymentDay', propertyId, from, to);
-  const exp = await fetchLedger('Expense', propertyId, from, to);
+  // Concurrent readers join the same synchronization promise. Sequential
+  // reads could exceed the freshness window and download every bundle again.
+  const [occ, src, gross, pay, exp] = await Promise.all([
+    fetchLedger('OccupancyDay', propertyId, from, to),
+    fetchLedger('SourceDay', propertyId, from, to),
+    fetchLedger('GrossRevenueDay', propertyId, from, to),
+    fetchLedger('PaymentDay', propertyId, from, to),
+    fetchLedger('Expense', propertyId, from, to),
+  ]);
 
   const days = aggregateDays({ occ, src, gross, pay, exp });
 
   let written = 0;
   await localDb.transaction('rw', localDb.DailyFinancialAggregate, async () => {
-    for (const agg of days) {
-      const existing = await localDb.DailyFinancialAggregate
-        .where('[property_id+business_date]')
-        .equals([agg.property_id, agg.business_date])
-        .first();
-       if (existing) {
-        await localDb.DailyFinancialAggregate.update(existing.id, agg);
-      } else {
-        await localDb.DailyFinancialAggregate.add(agg);
-      }
-      written++;
-    }
+    if (!days.length) return;
+    // One indexed read and one batch write, instead of two awaited IndexedDB
+    // requests for every historical day. Retain existing IDs and extra fields.
+    const existing = await localDb.DailyFinancialAggregate
+      .where('[property_id+business_date]')
+      .anyOf(days.map(agg => [agg.property_id, agg.business_date])).toArray();
+    const key = agg => JSON.stringify([agg.property_id, agg.business_date]);
+    const byDay = new Map();
+    for (const row of existing) if (!byDay.has(key(row))) byDay.set(key(row), row);
+    await localDb.DailyFinancialAggregate.bulkPut(days.map(agg => ({ ...byDay.get(key(agg)), ...agg })));
+    written = days.length;
   });
 
   return { written, days: days.length };
@@ -344,7 +347,7 @@ export async function getDailyAggregates({ propertyId = 'all', from = '', to = '
   // run inside a localDb.transaction zone, and a proxy write there would await
   // the authorization lookup and kill the zone. See B6.)
   const query = {};
-  if (propertyId && propertyId !== 'all') {
+  if (propertyId != null && propertyId !== '' && propertyId !== 'all') {
     query.property_id = Array.isArray(propertyId) ? { $in: propertyId } : propertyId;
   }
   // The date range belongs in the query, not in a .filter() afterwards. This is

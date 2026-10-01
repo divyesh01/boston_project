@@ -311,18 +311,17 @@ export async function rebuildDailyAggregates({ propertyId = 'all', from = '', to
 
   let written = 0;
   await localDb.transaction('rw', localDb.DailyFinancialAggregate, async () => {
-    for (const agg of days) {
-      const existing = await localDb.DailyFinancialAggregate
-        .where('[property_id+business_date]')
-        .equals([agg.property_id, agg.business_date])
-        .first();
-       if (existing) {
-        await localDb.DailyFinancialAggregate.update(existing.id, agg);
-      } else {
-        await localDb.DailyFinancialAggregate.add(agg);
-      }
-      written++;
-    }
+    if (!days.length) return;
+    // One indexed read and one batch write, instead of two awaited IndexedDB
+    // requests for every historical day. Retain existing IDs and extra fields.
+    const existing = await localDb.DailyFinancialAggregate
+      .where('[property_id+business_date]')
+      .anyOf(days.map(agg => [agg.property_id, agg.business_date])).toArray();
+    const key = agg => JSON.stringify([agg.property_id, agg.business_date]);
+    const byDay = new Map();
+    for (const row of existing) if (!byDay.has(key(row))) byDay.set(key(row), row);
+    await localDb.DailyFinancialAggregate.bulkPut(days.map(agg => ({ ...byDay.get(key(agg)), ...agg })));
+    written = days.length;
   });
 
   return { written, days: days.length };

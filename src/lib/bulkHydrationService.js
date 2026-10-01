@@ -7,6 +7,24 @@ const COMMIT_KEY = `${BULK_SYNC_KEY}:commit`;
 class HydrationConflict extends Error {}
 const flights = new Map();
 const stateKey = propertyId => `${BULK_SYNC_KEY}:${propertyId || 'all'}`;
+
+async function reusableReport(manifest, scope) {
+  const report = await localDb.UploadedReport.get(manifest.id);
+  if (report?.bulk_cache_version !== 1 || report.bulk_verified_scope !== scope ||
+      report.bulk_verified_hash !== manifest.normalized_hash ||
+      report.bulk_verified_revision !== Number(manifest.revision)) return null;
+  const propertyIds = [...new Set([manifest.server_property_id, ...(manifest.property_aliases || [])])];
+  const properties = await localDb.Property.where('id').anyOf(propertyIds).toArray();
+  if (properties.length > 1 || report.property_id !== (properties[0]?.id ?? manifest.server_property_id)) return null;
+  const counts = report.bulk_entity_counts;
+  if (!counts || !Object.keys(counts).length) return null;
+  const entries = Object.entries(counts);
+  if (entries.some(([entity, count]) => !BULK_ENTITIES.includes(entity) || !Number.isSafeInteger(count) || count < 0)) return null;
+  if (entries.reduce((sum, [, count]) => sum + count, 0) !== report.rows_imported) return null;
+  const actual = await Promise.all(entries.map(([entity]) => localDb[entity].where('import_id').equals(manifest.id).count()));
+  if (entries.some(([, count], index) => count !== actual[index])) return null;
+  return report;
+}
 export async function getLastBulkRevision(propertyId = '') {
   return Number((await localDb.BusinessSyncState.get(stateKey(propertyId)))?.revision || 0);
 }
@@ -44,6 +62,15 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
       // Verify downloads concurrently, then commit the entire page atomically.
       // Retirements/replacements are still applied in manifest order below.
       const downloaded = await mapConcurrent(manifests.filter(manifest => manifest.status === 'active'), async (manifest) => {
+        // Always fetch current server manifests, but retain successfully committed
+        // payloads when their scope, revision, hash, roster and row counts agree.
+        // Missing receipts or partially cleared storage take the download path.
+        const cached = await reusableReport(manifest, scope);
+        if (cached) {
+          manifest.materialized_row_count = cached.rows_imported;
+          manifest.materialized_entity_counts = cached.bulk_entity_counts;
+          return [manifest.id, null];
+        }
         const res = await fetch(`/api/bulk-import/bundle/${encodeURIComponent(manifest.id)}/history`);
         if (!res.ok) throw new Error(`Bundle download failed: ${res.status}`);
         if (res.headers.get('x-base-normalized-hash') !== manifest.normalized_hash) throw new Error('Report changed during history recovery');
@@ -68,10 +95,12 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
           // All/property syncs and other tabs share this transactional commit fence.
           if ((await localDb.BusinessSyncState.get(COMMIT_KEY))?.token !== commitToken) throw new HydrationConflict();
           // Remove retired versions before inserting replacements, even at the same revision.
-          for (const manifest of manifests) {
-            if (!['tombstoned', 'superseded', 'destroyed'].includes(manifest.status)) continue;
-            for (const entity of BULK_ENTITIES) await localDb[entity].where('import_id').equals(manifest.id).delete();
-            await localDb.UploadedReport.where('import_id').equals(manifest.id).delete();
+          const retiredIds = manifests.filter(manifest => ['tombstoned', 'superseded', 'destroyed'].includes(manifest.status)).map(manifest => manifest.id);
+          if (retiredIds.length) {
+            await Promise.all([
+              ...BULK_ENTITIES.map(entity => localDb[entity].where('import_id').anyOf(retiredIds).delete()),
+              localDb.UploadedReport.where('import_id').anyOf(retiredIds).delete(),
+            ]);
           }
           for (const manifest of manifests) {
             const items = payloads.get(manifest.id);
@@ -102,6 +131,9 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
             await localDb.UploadedReport.put({ id: manifest.id, import_id: manifest.id, bulk_import_id: manifest.id, raw_archive_id: manifest.raw_archive_id || manifest.id,
               property_id: localPropertyId, report_type: manifest.report_type, file_name: manifest.original_file_name,
               file_hash: manifest.raw_file_hash, status: 'completed', rows_imported: manifest.materialized_row_count, raw_rows: [],
+              bulk_cache_version: 1, bulk_verified_scope: scope,
+              bulk_verified_hash: manifest.normalized_hash, bulk_verified_revision: Number(manifest.revision),
+              bulk_entity_counts: manifest.materialized_entity_counts,
               created_date: manifest.activated_at || manifest.created_at });
             const report = await localDb.UploadedReport.get(manifest.id);
             if (!report || report.property_id !== localPropertyId || Number(report.rows_imported) !== Number(manifest.materialized_row_count)) {

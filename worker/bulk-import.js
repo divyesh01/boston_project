@@ -4,6 +4,7 @@ import { assertPropertyInScope, ScopeError } from "./scope.js";
 import { queryAll, queryFirst } from "./db.js";
 import { isR2S3Enabled, resolveR2S3Stores } from "./r2-s3-adapter.js";
 import { mergeReportDates, reportBusinessDate } from './report-date-merge.js';
+import { mapConcurrent } from '../src/lib/mapConcurrent.js';
 
 class BulkImportError extends Error {
   constructor(message, status = 400, details = {}) {
@@ -1187,9 +1188,11 @@ async function downloadBundle(parts, env, scope) {
       }
     }
     ancestors.sort((a, b) => String(a.activated_at || a.created_at).localeCompare(String(b.activated_at || b.created_at)) || Number(a.revision) - Number(b.revision) || String(a.id).localeCompare(String(b.id)));
-    const older = [];
-    for (const ancestor of ancestors) older.push(await readMergeSource(ancestor, bulkStore, env, scope));
-    const incoming = await readMergeSource(manifest, bulkStore, env, scope);
+    // Bound storage concurrency and preserve oldest-to-newest ordering. Drain
+    // all workers on failure before returning an error to the client.
+    const sources = await mapConcurrent([...ancestors, manifest], source => readMergeSource(source, bulkStore, env, scope));
+    const incoming = sources.pop();
+    const older = sources;
     const merged = mergeReportDates(older, incoming, manifest.server_property_id);
     const bytes = new TextEncoder().encode(merged.map(item => JSON.stringify(item)).join('\n'));
     if (bytes.byteLength > 16 * 1024 * 1024) throw new BulkImportError('Recovered report exceeds supported size', 413);

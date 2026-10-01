@@ -319,9 +319,9 @@ console.log("\n=== 6. useGlobalFilters still emits what section 1 assumes ===");
   ok("…and its range is contiguous min..max, which is why months[] wins",
     /const minM = Math\.min\(\.\.\.months\)[\s\S]{0,900}return \{ from: iso\(year, minM, 1\), to \}/.test(provider),
     "computeRangeFromMonths changed — re-check the monthly branch of calendarMonths()");
-  ok("the empty-selection fallback is still current-month / January",
-    /const m = year === today\.getFullYear\(\) \? today\.getMonth\(\) : 0/.test(provider),
-    "fallbackMonth() in calendarGrids.js mirrors this rule");
+  ok("empty monthly selection includes the entire selected year",
+    /function computeRangeFromMonths\(year, months, latestDate\) \{\s*if \(!months \|\| months\.length === 0\) \{[^}]*return \{ from: iso\(year, 0, 1\), to: iso\(year, 11, 31\) \}/.test(provider),
+    "All Months must retain January through December instead of falling back to the current month");
 }
 
 console.log("\n" + "─".repeat(70));

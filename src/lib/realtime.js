@@ -332,6 +332,8 @@ export const APP_SYNC_PREFIXES = [
   "payroll", "anomaly-alerts", "rooms", "reservations", "weather",
   "daily-aggregates", "properties", "staff", "room-stays",
   "housekeeping", "reviews", "settings",
+  "latest-date", "uploads", "transaction-lines", "hotel-metrics",
+  "hotel-metric-dates", "adjustments-refunds", "clerk-anomalies",
 ];
 
 // Shared per-tab poll coordination. Each useRealtimeInvalidation instance
@@ -364,15 +366,20 @@ function unionPrefixes() {
 }
 
 async function invalidatePrefixList(list) {
-  for (const p of list) {
+  // Independent query refreshes share the same in-flight business pull. Waiting
+  // for each prefix could cross the freshness window and start another pull.
+  const results = await Promise.allSettled(list.map((p) => {
     // throwOnError lives in the OPTIONS argument only: TanStack v5
     // InvalidateQueryFilters has no such key, so placing it in the filter
     // object is a type error and dead at runtime.
-    await queryClientInstance.invalidateQueries(
+    return queryClientInstance.invalidateQueries(
       { queryKey: Array.isArray(p) ? p : [p] },
       { throwOnError: true }
     );
-  }
+  }));
+  // Drain every refresh before the poll loop retries or backs off.
+  const failed = results.find(result => result.status === 'rejected');
+  if (failed?.status === 'rejected') throw failed.reason;
 }
 
 function scheduleSharedPoll() {

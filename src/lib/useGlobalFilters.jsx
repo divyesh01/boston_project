@@ -67,9 +67,9 @@ const lastDay = (y, m) => new Date(y, m + 1, 0).getDate();
 
 function computeRangeFromMonths(year, months, latestDate) {
   if (!months || months.length === 0) {
-    const today = new Date();
-    const m = year === today.getFullYear() ? today.getMonth() : 0;
-    return { from: iso(year, m, 1), to: iso(year, m, lastDay(year, m)) };
+    // The control says All Months. Never hide historical imports by silently
+    // narrowing this selection to the computer's current month.
+    return { from: iso(year, 0, 1), to: iso(year, 11, 31) };
   }
   const minM = Math.min(...months);
   const maxM = Math.max(...months);
@@ -143,7 +143,7 @@ export function GlobalFiltersProvider({ children }) {
   const [selectedPropertyIds, setSelectedPropertyIds] = useState([]);
   const [period, setPeriod] = useState("ytd");
   const [year, setYear] = useState(CUR_YEAR);
-  // Multi-month: array of month indices (0-11). Empty = current month fallback
+  // Multi-month: array of month indices (0-11). Empty = all months in the year.
   const [months, setMonths] = useState([]);
   const [compareOn, setCompareOn] = useState(false);
   const [comparePeriod, setComparePeriod] = useState("monthly");

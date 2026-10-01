@@ -23,7 +23,6 @@ import { fromCents, sumCents } from "@/lib/decimal";
 import { getAlertThresholds } from "@/lib/alertThresholds";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { CalculationService } from "@/lib/calculationService";
-import { downloadOwnerPerformancePacket } from "@/lib/ownerPacketExport";
 import { evaluatePortfolioDataHealth, reconcileFinancialTotals } from "@/lib/dataHealth";
 import { toast } from "sonner";
 import { OwnerIntelligenceService } from "@/lib/ownerIntelligence";
@@ -124,6 +123,7 @@ export default function Dashboard() {
   // save. Same surface as OtaChannels.jsx, which already got this right.
   const [exportError, setExportError] = useState(null);
   const contentRef = useRef(null);
+  const packetExportInFlight = useRef(false);
 
   const occRows = useMemo(() => {
     const base = aggData ? aggData.occRows : occ.filter((r) => inRange(r.date, dateRange.from, dateRange.to));
@@ -379,8 +379,11 @@ export default function Dashboard() {
     setExporting(false);
   };
 
-  const handleExportPacket = () => {
+  const handleExportPacket = async () => {
+    if (packetExportInFlight.current) return;
+    packetExportInFlight.current = true;
     try {
+      const { downloadOwnerPerformancePacket } = await import("@/lib/ownerPacketExport");
       const packetProperties = isPortfolio
         ? Array.isArray(property)
           ? properties.filter((p) => property.includes(p.id))
@@ -428,6 +431,8 @@ export default function Dashboard() {
       toast.success('Downloaded Monthly Owner Performance Packet (.xlsx)');
     } catch (err) {
       toast.error(`Export failed: ${err?.message || 'Unknown error'}`);
+    } finally {
+      packetExportInFlight.current = false;
     }
   };
 

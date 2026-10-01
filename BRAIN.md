@@ -4,6 +4,15 @@
 > **AI AGENTS:** You are currently in the HUB. To save tokens and maximize context window efficiency, this file only contains routing.
 > Read the specific Spoke files below based on your exact task. NEVER scan the entire project.
 
+## FAST START FOR CODE CHANGES
+
+After `npm run verify:v3`, run `npm run ai:context -- "<task or file path>"`.
+It verifies the routing map, combines task text with the real diff, scores risk, checks
+protected-file boundaries and known-failure expiry, and prints exact proof commands.
+Before handoff or merge run `npm run ai:check -- "<same task>"`; it blocks scope drift,
+protected-file changes needing owner review, stale branches, and invalid agent context.
+Use `--json` for machine-readable output. See `AI_QUICKSTART.md`.
+
 ## THE SPOKES (Context Segmentation)
 | Domain | File | Use When... |
 |--------|------|-------------|

@@ -5,17 +5,21 @@ import { ErrorState } from "@/components/ui/status";
 import { QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { queryClientInstance } from '@/lib/query-client';
 import { hydrateAuthenticatedData } from '@/lib/startupHydration';
-import { YDocProvider } from '@/crdt';
 import { BrowserRouter as Router, Route, Routes, Navigate, useLocation } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import { isRouteMapped } from '@/lib/permissions';
 import { logAuditEvent } from '@/lib/auditLogger';
 import ScrollToTop from './components/ScrollToTop';
-import Layout from '@/components/Layout';
+const Layout = lazy(() => import('@/components/Layout'));
 import { attachClickSounds } from '@/lib/sound';
 
-const Dashboard = lazy(() => import('@/pages/Dashboard'));
+const startupPages = {
+  '/': () => import('@/pages/Dashboard'),
+  '/calendar': () => import('@/pages/MonthlyCalendar'),
+  '/statistics': () => import('@/pages/Statistics'),
+};
+const Dashboard = lazy(startupPages['/']);
 const Compare = lazy(() => import('@/pages/Compare'));
 const DataIntelligence = lazy(() => import('@/pages/DataIntelligence'));
 const RoomBoard = lazy(() => import('@/pages/RoomBoard'));
@@ -24,9 +28,9 @@ const Import = lazy(() => import('@/pages/Import'));
 const Employees = lazy(() => import('@/pages/Employees'));
 const Payments = lazy(() => import('@/pages/Payments'));
 const Transactions = lazy(() => import('@/pages/Transactions'));
-const Statistics = lazy(() => import('@/pages/Statistics'));
+const Statistics = lazy(startupPages['/statistics']);
 const SettingsPage = lazy(() => import('@/pages/Settings'));
-const MonthlyCalendar = lazy(() => import('@/pages/MonthlyCalendar'));
+const MonthlyCalendar = lazy(startupPages['/calendar']);
 const MtdGrowth = lazy(() => import('@/pages/MtdGrowth'));
 const Expenses = lazy(() => import('@/pages/Expenses'));
 const Payroll = lazy(() => import('@/pages/Payroll'));
@@ -188,8 +192,15 @@ const RequireAuth = ({ children }) => {
 
 const AuthoritativeDataGate = ({ children, userId, scopeKey }) => {
   const queryClient = useQueryClient();
+  const { pathname } = useLocation();
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState({ userId: null, scopeKey: null, status: 'loading', error: null });
+
+  useEffect(() => {
+    // Fetch the requested page while data is synchronizing, instead of starting
+    // a second network waterfall after the data gate opens.
+    if (userId && startupPages[pathname]) startupPages[pathname]().catch(() => {});
+  }, [userId, pathname]);
 
   useEffect(() => {
     if (!userId) return undefined;
@@ -201,7 +212,7 @@ const AuthoritativeDataGate = ({ children, userId, scopeKey }) => {
       import('@/lib/bulkHydrationService'),
       import('@/lib/dailyAggregates'),
     ]).then(([client, bulk, aggregates]) => hydrateAuthenticatedData({
-      hydrateBusinessData: () => client.businessData.hydrateFromServer(),
+      hydrateBusinessData: () => client.businessData.hydrateForStartup(),
       syncBulkBundles: bulk.syncBulkBundles,
       rebuildDailyAggregates: aggregates.rebuildDailyAggregates,
       invalidateQueries: (filters) => queryClient.invalidateQueries(filters),
@@ -276,7 +287,7 @@ const ProtectedRoutes = () => {
           <RequireAuth>
             <RequirePermission>
               <PasswordGate>
-                <Layout />
+                <Suspended><Layout /></Suspended>
               </PasswordGate>
             </RequirePermission>
           </RequireAuth>
@@ -359,7 +370,6 @@ function App() {
   return (
     <TopLevelErrorBoundary>
       <AuthProvider>
-        <YDocProvider name="app-root">
           <QueryClientProvider client={queryClientInstance}>
             <Router>
               <RouteProgress />
@@ -400,7 +410,6 @@ function App() {
             <SonnerToaster theme="dark" position="top-right" richColors closeButton />
 
           </QueryClientProvider>
-        </YDocProvider>
       </AuthProvider>
     </TopLevelErrorBoundary>
   );

@@ -2,7 +2,7 @@ import { db } from '@/api/base44Client';
 
 import { useQuery } from "@tanstack/react-query";
 import { purgeExpiredUploadedReportRawRows } from '@/lib/uploadRetention';
-import { getDailyAggregates, buildSyntheticRows, DAILY_AGGREGATE_VERSION } from '@/lib/dailyAggregates';
+import { getDailyAggregates, buildSyntheticRows, dateBound, DAILY_AGGREGATE_VERSION } from '@/lib/dailyAggregates';
 import { mergeImportHistory } from '@/lib/importHistory';
 import { fetchActiveManifests } from '@/lib/bulkImportPipeline';
 
@@ -10,20 +10,13 @@ export function useReservations(dateRange, propertyId) {
   return useQuery({
     queryKey: ["reservations", dateRange, propertyId],
     queryFn: async () => {
-      const filter = {};
-      if (propertyId && propertyId !== "all") {
-        if (Array.isArray(propertyId)) {
-          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
-        } else {
-          filter.property_id = propertyId;
-        }
-      }
+      const filter = buildFilter(null, propertyId);
       const allRes = await db.entities.Reservation.filter(filter);
-      
+
       return allRes.filter(r => {
         if (!dateRange || (!dateRange.from && !dateRange.to)) return true;
-        if (dateRange.from && r.check_out && new Date(r.check_out) < new Date(dateRange.from)) return false;
-        if (dateRange.to && r.check_in && new Date(r.check_in) > new Date(dateRange.to)) return false;
+        if (dateRange.from && r.check_out && String(r.check_out).slice(0, 10) < String(dateRange.from).slice(0, 10)) return false;
+        if (dateRange.to && r.check_in && String(r.check_in).slice(0, 10) > String(dateRange.to).slice(0, 10)) return false;
         return true;
       });
     },
@@ -31,12 +24,11 @@ export function useReservations(dateRange, propertyId) {
 }
 // Build a server-side filter combining date range and property_id(s)
 // propertyId can be: "all", a single string ID, or an array of IDs
-function buildFilter(dateRange, propertyId) {
+function buildFilter(dateRange, propertyId, dateField = 'date') {
   const filter = {};
-  if (dateRange?.from && dateRange?.to) {
-    filter.date = { $gte: dateRange.from, $lte: dateRange.to };
-  }
-  if (propertyId && propertyId !== "all") {
+  const bound = dateBound(dateRange?.from, dateRange?.to);
+  if (bound) filter[dateField] = bound;
+  if (propertyId != null && propertyId !== "" && propertyId !== "all") {
     if (Array.isArray(propertyId)) {
       if (propertyId.length > 0) filter.property_id = { $in: propertyId };
     } else {
@@ -44,28 +36,6 @@ function buildFilter(dateRange, propertyId) {
     }
   }
   return filter;
-}
-
-// Calculate an intelligent row limit based on date range and portfolio size to prevent over-fetching
-function getDynamicLimit(dateRange, propertyId, fallbackLimit = 100000) {
-  if (!dateRange || !dateRange.from || !dateRange.to) return fallbackLimit;
-  
-  const from = new Date(dateRange.from);
-  const to = new Date(dateRange.to);
-  if (isNaN(from.valueOf()) || isNaN(to.valueOf())) return fallbackLimit;
-  
-  const days = Math.max(1, Math.ceil((to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24)));
-  
-  // Assume ~5 records per day per property max for most entities (to leave room for duplicates/adjustments)
-  const multiplier = 5; 
-  let propCount = 50; // Max properties assumption for 'all'
-  
-  if (propertyId && propertyId !== "all") {
-    propCount = Array.isArray(propertyId) ? propertyId.length : 1;
-  }
-  
-  // Add base buffer of 1000, cap at fallbackLimit
-  return Math.min(fallbackLimit, (days + 2) * propCount * multiplier + 1000);
 }
 
 // Client-side filter: keep only rows whose date falls in one of the selected months
@@ -95,13 +65,7 @@ export function useOccupancy(dateRange, propertyId, months = [], enabled = true)
     enabled,
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
-      const limit = getDynamicLimit(dateRange, propertyId);
-      let rows;
-      if (filter.date) {
-        rows = await db.entities.OccupancyDay.filter(filter, "date", limit);
-      } else {
-        rows = await db.entities.OccupancyDay.list("date", limit);
-      }
+      const rows = await db.entities.OccupancyDay.filter(filter, "date");
       return filterByMonths(rows, months);
     },
   });
@@ -112,36 +76,23 @@ export function useSources(dateRange, propertyId, months = []) {
     queryKey: ["sources", dateRange?.from, dateRange?.to, propertyId, (months || []).join(",")],
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
-      const limit = getDynamicLimit(dateRange, propertyId);
-      let rows;
-      if (filter.date) {
-        rows = await db.entities.SourceDay.filter(filter, "date", limit);
-      } else {
-        rows = await db.entities.SourceDay.list("date", limit);
-      }
+      const rows = await db.entities.SourceDay.filter(filter, "date");
       return filterByMonths(rows, months);
     },
   });
 }
 
 // `enabled` mirrors useOccupancy above. Without it, a caller that gates on a
-// compare toggle has to pass an empty range instead — and an empty range makes
-// buildFilter produce no `filter.date`, which falls to the unfiltered
-// GrossRevenueDay.list() branch: a full-table read whose rows are then thrown
-// away. Defaulted true so the existing 3-argument callers are unaffected.
+// compare toggle has to pass an empty range instead, which still reads the
+// selected property's full history. Defaulted true so existing 3-argument
+// callers are unaffected.
 export function useGrossRevenue(dateRange, propertyId, months = [], enabled = true) {
   return useQuery({
     queryKey: ["gross", dateRange?.from, dateRange?.to, propertyId, (months || []).join(",")],
     enabled,
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
-      const limit = getDynamicLimit(dateRange, propertyId);
-      let rows;
-      if (filter.date) {
-        rows = await db.entities.GrossRevenueDay.filter(filter, "date", limit);
-      } else {
-        rows = await db.entities.GrossRevenueDay.list("date", limit);
-      }
+      const rows = await db.entities.GrossRevenueDay.filter(filter, "date");
       return filterByMonths(rows, months);
     },
   });
@@ -153,19 +104,8 @@ export function useClerkRecords(dateRange, propertyId) {
     queryFn: async () => {
       // ClerkShiftRecord carries an indexed shift_date (YYYY-MM-DD); scope by
       // the selected period so the Clerk Audit agrees with the dashboard range.
-      const filter = {};
-      if (dateRange?.from && dateRange?.to) {
-        filter.shift_date = { $gte: dateRange.from, $lte: dateRange.to };
-      }
-      if (propertyId && propertyId !== "all") {
-        if (Array.isArray(propertyId)) {
-          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
-        } else {
-          filter.property_id = propertyId;
-        }
-      }
-      const limit = getDynamicLimit(dateRange, propertyId, 100000);
-      const raw = await db.entities.ClerkShiftRecord.filter(filter, "-shift_date", limit);
+      const filter = buildFilter(dateRange, propertyId, 'shift_date');
+      const raw = await db.entities.ClerkShiftRecord.filter(filter, "-shift_date");
       // Deduplicate: repeated imports of the same CSV create duplicate rows.
       // Canonical key preserves record identity across imports — earliest
       // created_date wins so the oldest import's copy is kept.
@@ -200,11 +140,7 @@ export function useAdjustmentsRefunds(dateRange, propertyId) {
     queryKey: ["adjustments-refunds", dateRange?.from, dateRange?.to, propertyId],
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
-      const limit = getDynamicLimit(dateRange, propertyId);
-      if (filter.date) {
-        return db.entities.AdjustmentRefund.filter(filter, "date", limit);
-      }
-      return db.entities.AdjustmentRefund.list("date", limit);
+      return db.entities.AdjustmentRefund.filter(filter, "date");
     },
   });
 }
@@ -213,20 +149,12 @@ export function useClerkAnomalies(dateRange, propertyId) {
   return useQuery({
     queryKey: ["clerk-anomalies", dateRange?.from, dateRange?.to, propertyId],
     queryFn: async () => {
-      const filter = {};
-      if (propertyId && propertyId !== "all") {
-        if (Array.isArray(propertyId)) {
-          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
-        } else {
-          filter.property_id = propertyId;
-        }
-      }
-      const limit = getDynamicLimit(dateRange, propertyId);
-      const rows = await db.entities.AnomalyAlert.filter(filter, "date", limit);
+      const filter = buildFilter(null, propertyId);
+      const rows = await db.entities.AnomalyAlert.filter(filter, "date");
       return rows.filter((r) => {
         if (!dateRange || (!dateRange.from && !dateRange.to)) return true;
-        if (dateRange.from && r.date && r.date < dateRange.from) return false;
-        if (dateRange.to && r.date && r.date > dateRange.to) return false;
+        if (dateRange.from && r.date && String(r.date).slice(0, 10) < String(dateRange.from).slice(0, 10)) return false;
+        if (dateRange.to && r.date && String(r.date).slice(0, 10) > String(dateRange.to).slice(0, 10)) return false;
         return true;
       });
     },
@@ -238,13 +166,7 @@ export function usePaymentData(dateRange, propertyId, months = []) {
     queryKey: ["payments", dateRange?.from, dateRange?.to, propertyId, (months || []).join(",")],
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
-      const limit = getDynamicLimit(dateRange, propertyId);
-      let rows;
-      if (filter.date) {
-        rows = await db.entities.PaymentDay.filter(filter, "date", limit);
-      } else {
-        rows = await db.entities.PaymentDay.list("date", limit);
-      }
+      const rows = await db.entities.PaymentDay.filter(filter, "date");
       return filterByMonths(rows, months);
     },
   });
@@ -268,7 +190,7 @@ export function useUploads() {
 export function useProperties() {
   return useQuery({
     queryKey: ["properties"],
-    queryFn: () => db.entities.Property.list("-created_date", 100),
+    queryFn: () => db.entities.Property.list("-created_date"),
     staleTime: 5 * 60 * 1000,
   });
 }
@@ -276,10 +198,10 @@ export function useProperties() {
 // Fetch latest business date for a specific property (or portfolio overall)
 export function useLatestDate(propertyId) {
   return useQuery({
-    queryKey: ["latest-date", Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
+    queryKey: ["latest-date", propertyId],
     queryFn: async () => {
       const filter = {};
-      if (propertyId && propertyId !== "all") {
+      if (propertyId != null && propertyId !== "" && propertyId !== "all") {
         if (Array.isArray(propertyId)) {
           if (propertyId.length > 0) filter.property_id = { $in: propertyId };
         } else {
@@ -310,22 +232,12 @@ export function useHotelMetrics(dateRange, propertyId, enabled = true) {
       "hotel-metrics",
       dateRange?.from,
       dateRange?.to,
-      Array.isArray(propertyId) ? propertyId.join(",") : propertyId,
+      propertyId,
     ],
     enabled,
     queryFn: async () => {
-      const filter = {};
-      if (dateRange?.from && dateRange?.to) {
-        filter.business_date = { $gte: dateRange.from, $lte: dateRange.to };
-      }
-      if (propertyId && propertyId !== "all") {
-        if (Array.isArray(propertyId)) {
-          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
-        } else {
-          filter.property_id = propertyId;
-        }
-      }
-      return db.entities.HotelMetric.filter(filter, "business_date", 200000);
+      const filter = buildFilter(dateRange, propertyId, 'business_date');
+      return db.entities.HotelMetric.filter(filter, "business_date");
     },
   });
 }
@@ -338,17 +250,10 @@ export function useHotelMetrics(dateRange, propertyId, enabled = true) {
 // file" look identical, and the operator cannot tell which problem they have.
 export function useMetricDates(propertyId) {
   return useQuery({
-    queryKey: ["hotel-metric-dates", Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
+    queryKey: ["hotel-metric-dates", propertyId],
     queryFn: async () => {
-      const filter = {};
-      if (propertyId && propertyId !== "all") {
-        if (Array.isArray(propertyId)) {
-          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
-        } else {
-          filter.property_id = propertyId;
-        }
-      }
-      const rows = await db.entities.HotelMetric.filter(filter, "-business_date", 200000);
+      const filter = buildFilter(null, propertyId);
+      const rows = await db.entities.HotelMetric.filter(filter, "-business_date");
       return [...new Set(rows.map((r) => String(r.business_date || "").slice(0, 10)).filter(Boolean))]
         .sort((a, b) => (a < b ? 1 : -1));
     },
@@ -365,7 +270,7 @@ export function useMetricDates(propertyId) {
 // callers fall back to live computation.
 export function useDailyFinancialAggregates(dateRange, propertyId, enabled = true) {
   return useQuery({
-    queryKey: ["daily-aggregates", DAILY_AGGREGATE_VERSION, dateRange?.from, dateRange?.to, Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
+    queryKey: ["daily-aggregates", DAILY_AGGREGATE_VERSION, dateRange?.from, dateRange?.to, propertyId],
     enabled,
     queryFn: async () => {
       const aggs = await getDailyAggregates({
@@ -411,25 +316,22 @@ export function useDailyFinancialAggregates(dateRange, propertyId, enabled = tru
 // `TransactionLine` is in PROPERTY_TABLES, so the entity proxy also enforces
 // per-user property access on top of whatever filter is passed here.
 //
-// The limit is deliberately high: a full year of one property's ledger is in
-// the tens of thousands of rows and the page's rollups are only correct over
-// the complete set. All aggregation happens in transactionAnalytics.js.
+// Rollups require every matching row. Date and property indexes narrow the
+// read; an estimated row limit silently drops busy days or larger portfolios.
+// All aggregation happens in transactionAnalytics.js.
 export function useTransactions(dateRange, propertyId, months = [], enabled = true) {
   return useQuery({
     queryKey: [
       "transaction-lines",
       dateRange?.from,
       dateRange?.to,
-      Array.isArray(propertyId) ? propertyId.join(",") : propertyId,
+      propertyId,
       (months || []).join(","),
     ],
     enabled,
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
-      const limit = getDynamicLimit(dateRange, propertyId, 200000);
-      const rows = filter.date
-        ? await db.entities.TransactionLine.filter(filter, "date", limit)
-        : await db.entities.TransactionLine.list("date", limit);
+      const rows = await db.entities.TransactionLine.filter(filter, "date");
       return filterByMonths(rows, months);
     },
   });
@@ -441,17 +343,17 @@ export function useTransactions(dateRange, propertyId, months = [], enabled = tr
 // per-user property access.
 export function useRooms(propertyId) {
   return useQuery({
-    queryKey: ["rooms", Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
+    queryKey: ["rooms", propertyId],
     queryFn: async () => {
       const filter = {};
-      if (propertyId && propertyId !== "all") {
+      if (propertyId != null && propertyId !== "" && propertyId !== "all") {
         if (Array.isArray(propertyId)) {
           if (propertyId.length > 0) filter.property_id = { $in: propertyId };
         } else {
           filter.property_id = propertyId;
         }
       }
-      return db.entities.Room.filter(filter, "room_number", 100000);
+      return db.entities.Room.filter(filter, "room_number");
     },
   });
 }
@@ -464,15 +366,12 @@ export function useRoomStays(dateRange, propertyId, months = []) {
       "room-stays",
       dateRange?.from,
       dateRange?.to,
-      Array.isArray(propertyId) ? propertyId.join(",") : propertyId,
+      propertyId,
       (months || []).join(","),
     ],
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
-      const limit = getDynamicLimit(dateRange, propertyId);
-      const rows = filter.date
-        ? await db.entities.RoomStay.filter(filter, "date", limit)
-        : await db.entities.RoomStay.list("date", limit);
+      const rows = await db.entities.RoomStay.filter(filter, "date");
       return filterByMonths(rows, months);
     },
   });
@@ -485,20 +384,11 @@ export function useHousekeepingTasks(dateRange, propertyId) {
       "housekeeping",
       dateRange?.from,
       dateRange?.to,
-      Array.isArray(propertyId) ? propertyId.join(",") : propertyId,
+      propertyId,
     ],
     queryFn: async () => {
-      const filter = {};
-      if (dateRange?.from && dateRange?.to) filter.task_date = { $gte: dateRange.from, $lte: dateRange.to };
-      if (propertyId && propertyId !== "all") {
-        if (Array.isArray(propertyId)) {
-          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
-        } else {
-          filter.property_id = propertyId;
-        }
-      }
-      const limit = getDynamicLimit(dateRange, propertyId);
-      return db.entities.HousekeepingTask.filter(filter, "-task_date", limit);
+      const filter = buildFilter(dateRange, propertyId, 'task_date');
+      return db.entities.HousekeepingTask.filter(filter, "-task_date");
     },
   });
 }
@@ -510,20 +400,11 @@ export function useReviews(dateRange, propertyId) {
       "reviews",
       dateRange?.from,
       dateRange?.to,
-      Array.isArray(propertyId) ? propertyId.join(",") : propertyId,
+      propertyId,
     ],
     queryFn: async () => {
-      const filter = {};
-      if (dateRange?.from && dateRange?.to) filter.review_date = { $gte: dateRange.from, $lte: dateRange.to };
-      if (propertyId && propertyId !== "all") {
-        if (Array.isArray(propertyId)) {
-          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
-        } else {
-          filter.property_id = propertyId;
-        }
-      }
-      const limit = getDynamicLimit(dateRange, propertyId);
-      return db.entities.Review.filter(filter, "-review_date", limit);
+      const filter = buildFilter(dateRange, propertyId, 'review_date');
+      return db.entities.Review.filter(filter, "-review_date");
     },
   });
 }
@@ -531,17 +412,17 @@ export function useReviews(dateRange, propertyId) {
 // Cached weather snapshots (feature 5).
 export function useWeatherSnapshots(propertyId) {
   return useQuery({
-    queryKey: ["weather", Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
+    queryKey: ["weather", propertyId],
     queryFn: async () => {
       const filter = {};
-      if (propertyId && propertyId !== "all") {
+      if (propertyId != null && propertyId !== "" && propertyId !== "all") {
         if (Array.isArray(propertyId)) {
           if (propertyId.length > 0) filter.property_id = { $in: propertyId };
         } else {
           filter.property_id = propertyId;
         }
       }
-      return db.entities.WeatherSnapshot.filter(filter, "-date", 100000);
+      return db.entities.WeatherSnapshot.filter(filter, "-date");
     },
     staleTime: 60 * 1000,
   });

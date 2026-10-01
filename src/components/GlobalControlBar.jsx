@@ -18,9 +18,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 const CUR_YEAR = new Date().getFullYear();
 const YEARS = [CUR_YEAR - 2, CUR_YEAR - 1, CUR_YEAR, CUR_YEAR + 1].map(String);
 
-function useFilterOptions(propertyId) {
+function useFilterOptions(propertyId, filters) {
   const clerks = useQuery({
     queryKey: ["filter-clerks", Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
+    enabled: Boolean(filters.employee),
     queryFn: async () => {
       const filter = {};
       if (propertyId && propertyId !== "all") {
@@ -49,6 +50,7 @@ function useFilterOptions(propertyId) {
   });
   const sources = useQuery({
     queryKey: ["filter-sources", Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
+    enabled: Boolean(filters.channel),
     queryFn: async () => {
       const filter = {};
       if (propertyId && propertyId !== "all") {
@@ -131,12 +133,11 @@ function MultiPropertySelect({ selectedIds, properties, onToggle, onClear }) {
 export default function GlobalControlBar() {
   const loc = useLocation();
   const f = useGlobalFilters();
-  const { clerks, sources } = useFilterOptions(f.property);
-  const [applied, setApplied] = useState(false);
-  const [exporting, setExporting] = useState(false);
-
   const pageKey = loc.pathname;
   const filters = PAGE_FILTERS[pageKey] || {};
+  const { clerks, sources } = useFilterOptions(f.property, filters);
+  const [applied, setApplied] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   if (pageKey === "/settings" || pageKey === "/upload") return null;
 
@@ -175,7 +176,7 @@ export default function GlobalControlBar() {
   };
 
   const selectedMonthsLabel = f.months.length === 0
-    ? "Current Month"
+    ? "All Months"
     : f.months.length === 1
     ? MONTHS_LONG[f.months[0]]
     : f.months.map((m) => MONTHS_SHORT[m]).join(" + ");
@@ -269,7 +270,7 @@ export default function GlobalControlBar() {
           </div>
 
           <span className="text-xs text-slate-500">
-            {f.months.length} month{f.months.length === 1 ? "" : "s"}: {selectedMonthsLabel}
+            {f.months.length || 12} month{f.months.length === 1 ? "" : "s"}: {selectedMonthsLabel}
           </span>
         </div>
       )}

@@ -27,6 +27,7 @@ import {
 } from "@/lib/importQueueHelpers";
 import { rebuildDailyAggregates } from "@/lib/dailyAggregates";
 import { queryClientInstance } from "@/lib/query-client";
+import { APP_SYNC_PREFIXES, publishChange } from "@/lib/realtime";
 import { toCents, formatCents } from "@/lib/decimal";
 import { inspectUploadFile } from "@/lib/uploadGuard";
 import BusinessMigrationCard from "@/components/BusinessMigrationCard";
@@ -1097,8 +1098,16 @@ export default function Import() {
   // Rebuild the materialized daily aggregate for a property and drop the stale
   // cache so the Dashboard recomputes from the fresh pre-summed rows.
   const refreshAggregates = (pid) => {
-    rebuildDailyAggregates({ propertyId: pid })
-      .then(() => queryClientInstance.invalidateQueries({ queryKey: ["daily-aggregates"] }))
+    return rebuildDailyAggregates({ propertyId: pid })
+      .then(async () => {
+        // Bulk restoration writes directly to IndexedDB, so it does not emit
+        // entity-proxy notifications. Refresh every report consumer and the
+        // latest business date after the derived totals have been rebuilt.
+        await Promise.all(APP_SYNC_PREFIXES.map(prefix =>
+          queryClientInstance.invalidateQueries({ queryKey: [prefix] })
+        ));
+        publishChange('occupancy', 'import', { property_id: pid });
+      })
       .catch((e) => console.warn("[import] daily aggregate rebuild skipped:", e?.message));
   };
 

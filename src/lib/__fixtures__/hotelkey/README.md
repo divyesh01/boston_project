@@ -19,6 +19,7 @@ exists, and `src/lib/hotelKeyRegression.test.js` — despite the name — import
 | `src/lib/hotelKeyParserFixtures.test.js` | scan / parse | 25 |
 | `src/lib/hotelKeyImportFixtures.test.js` | import / persist / isolation | 30 |
 | `scripts/probe-hotelkey-mutations.mjs` | proves the two suites bite | 13 mutations |
+| `src/lib/goldenHotelOwnerJourney.test.js` | cross-report owner oracle / persistence / provenance | 5 |
 
 ```bash
 npx vitest run src/lib/hotelKeyParserFixtures.test.js src/lib/hotelKeyImportFixtures.test.js
@@ -65,6 +66,10 @@ every column except `Amount`.
 | `occupancy-percent-branches.csv` | The five branches of the 2026-08-20 occupancy fix, including the underivable row and the refused above-1 value. This is the flat-table shape, which carries no trailer checksum. |
 | `clerk-stacked-sections.csv` | Two payment-summary sections with the same payment types but different section headers, one deposit drop, and employee payment detail. Pins section-aware payment dedupe and the three distinct output legs. |
 | `timecard-date-guards.csv` | Two valid punches plus one unrecognised date shape and one impossible calendar date. Pins canonical field mapping, verbatim clock values, break/overtime handling, and fail-closed date rejection. |
+| `golden-owner-transactions.csv` | Synthetic Golden Hotel charge/payment ledger. Charge-side total is exactly **$1,050.00**: $1,000.00 room revenue + $50.00 ancillary revenue. The payment side mirrors it, so the file trailer is $2,100.00 without making settlement look like revenue. |
+| `golden-owner-occupancy.csv` | Three synthetic days whose room revenue totals exactly **$1,000.00** and whose printed occupancy ratios are 50%, 75%, and 80%. |
+| `golden-owner-source.csv` | Synthetic booking-channel split: **$400.00 Direct + $600.00 OTA = $1,000.00 room revenue**. |
+| `golden-owner-statistics.csv` | Synthetic Hotel Statistics snapshot: **$1,000.00 YTD room + $50.00 ancillary = $1,050.00 YTD total**. |
 
 ## Adding a fixture
 

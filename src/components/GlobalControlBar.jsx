@@ -175,7 +175,7 @@ export default function GlobalControlBar() {
   };
 
   const selectedMonthsLabel = f.months.length === 0
-    ? "Current Month"
+    ? "All Months"
     : f.months.length === 1
     ? MONTHS_LONG[f.months[0]]
     : f.months.map((m) => MONTHS_SHORT[m]).join(" + ");
@@ -269,7 +269,7 @@ export default function GlobalControlBar() {
           </div>
 
           <span className="text-xs text-slate-500">
-            {f.months.length} month{f.months.length === 1 ? "" : "s"}: {selectedMonthsLabel}
+            {f.months.length || 12} month{f.months.length === 1 ? "" : "s"}: {selectedMonthsLabel}
           </span>
         </div>
       )}

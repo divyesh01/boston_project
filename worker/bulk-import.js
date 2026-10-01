@@ -3,6 +3,7 @@ import { typedRecordKey, resolvePropertyKeyFromMappings } from "./business-sync.
 import { assertPropertyInScope, ScopeError } from "./scope.js";
 import { queryAll, queryFirst } from "./db.js";
 import { isR2S3Enabled, resolveR2S3Stores } from "./r2-s3-adapter.js";
+import { mergeReportDates, reportBusinessDate } from './report-date-merge.js';
 
 class BulkImportError extends Error {
   constructor(message, status = 400, details = {}) {
@@ -810,27 +811,65 @@ async function uploadBundle(request, env, scope) {
  * Updates raw_archived row OR inserts new manifest row, increments revision, and records 1 change event.
  * Exactly 3 D1 rows written! Total queries <= 5!
  */
+// Verify every source before using its rows in a combined active report. Raw
+// CSVs and prior normalized objects are immutable and remain in their archives.
+async function readMergeSource(manifest, bulkStore, env, scope) {
+  const key = manifestKey(manifest, scope);
+  const object = await bulkStore.get(key);
+  verifyObject(object, scope, manifest.server_property_id, manifest.normalized_hash);
+  const compressed = await object.arrayBuffer();
+  if (compressed.byteLength > MAX_BUNDLE_SIZE_BYTES) throw new BulkImportError('Source bundle exceeds merge limit', 413);
+  const decoded = createBoundedStream(new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip')), 16 * 1024 * 1024);
+  const text = await new Response(decoded.stream).text();
+  // Legacy rows can carry migration-era IDs. Prove each alias through the
+  // existing account/property resolver before accepting it in parseBundle.
+  const aliases = [...new Set(text.split('\n').filter(line => line.trim()).map(line => JSON.parse(line)?.row?.property_id))];
+  if (aliases.length > 4) throw new BulkImportError('Ambiguous source property identities');
+  for (const alias of aliases) {
+    if (await resolveServerPropertyId(env, scope, alias) !== manifest.server_property_id) {
+      throw new BulkImportError('Source bundle property mismatch', 403);
+    }
+  }
+  const items = parseBundle(text, manifest.server_property_id, aliases);
+  const computed = await contentHash(Number(manifest.identity_version) === 2 ? normalizedContent(items) : text);
+  if (computed !== manifest.normalized_hash || items.length !== Number(manifest.row_count) ||
+      items.some(item => item.entity !== REPORT_ENTITY[manifest.report_type])) {
+    throw new BulkImportError('Source bundle integrity mismatch', 422);
+  }
+  const counts = items.reduce((out, item) => { out[item.entity] = (out[item.entity] || 0) + 1; return out; }, {});
+  if (JSON.stringify(Object.entries(counts).sort()) !== JSON.stringify(Object.entries(JSON.parse(manifest.entity_counts_json || '{}')).sort())) {
+    throw new BulkImportError('Source bundle entity counts mismatch', 422);
+  }
+  return items;
+}
+
 async function activateBundle(requestOrBody, env, scope) {
   requireImportRole(scope);
   const body = typeof requestOrBody?.json === "function" ? await readJsonBody(requestOrBody) : requestOrBody;
   const propertyId = await resolveServerPropertyId(env, scope, body.server_property_id);
-  const hash = String(body.normalized_hash || '').toLowerCase();
+  let hash = String(body.normalized_hash || '').toLowerCase();
+  const submittedHash = hash;
   const rawHash = String(body.raw_file_hash || '').toLowerCase();
-  const key = canonicalKey(scope, propertyId, hash);
+  let key = canonicalKey(scope, propertyId, hash);
   if (body.object_key && body.object_key !== key) throw new BulkImportError('Noncanonical object key', 403, { code: 'IMPORT_OBJECT_SCOPE_MISMATCH' });
   const { rawStore, bulkStore } = getStores(env);
-  const head = await bulkStore.head(key);
+  let head = await bulkStore.head(key);
   verifyObject(head, scope, propertyId, hash);
   const reportType = head.customMetadata.report_type || String(body.report_type || '');
   if (body.report_type !== reportType) throw new BulkImportError('Report type mismatch');
-  const minDate = head.customMetadata.min_date || null, maxDate = head.customMetadata.max_date || null;
-  const identityVersion = Number(head.customMetadata.identity_version || 1);
-  const counts = JSON.parse(head.customMetadata.entity_counts_json || '{}');
-  const rowCount = Number(head.customMetadata.row_count);
+  let minDate = head.customMetadata.min_date || null, maxDate = head.customMetadata.max_date || null;
+  let identityVersion = Number(head.customMetadata.identity_version || 1);
+  let counts = JSON.parse(head.customMetadata.entity_counts_json || '{}');
+  let rowCount = Number(head.customMetadata.row_count);
   if ((body.row_count != null && body.row_count !== rowCount) || (body.entity_counts && JSON.stringify(Object.entries(body.entity_counts).sort()) !== JSON.stringify(Object.entries(counts).sort()))) {
     throw new BulkImportError('Manifest counts do not match verified payload', 400, { code: 'IMPORT_COUNT_MISMATCH' });
   }
-  const active = await queryFirst(env, "SELECT * FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND normalized_hash=? AND status='active'", [scope.accountId, propertyId, hash]);
+  // A merged report has a different hash from the submitted CSV's normalized
+  // payload. The activation guard records the submission hash for safe replay.
+  const active = await queryFirst(env, `SELECT * FROM import_bundle_manifest m WHERE account_id=? AND server_property_id=? AND status='active'
+    AND (normalized_hash=? OR (id=? AND raw_file_hash=? AND EXISTS (
+      SELECT 1 FROM business_mutation_guard g WHERE g.account_id=m.account_id AND g.mutation_id=? AND g.request_hash=?)))`,
+    [scope.accountId, propertyId, hash, String(body.id || ''), rawHash, `overlap-activate:${String(body.id || '')}`, submittedHash]);
   if (active) {
     // A distinct original with identical business content remains archived, but is no longer pending processing.
     const archiveId = String(body.source_archive_id || body.id || '');
@@ -873,19 +912,15 @@ async function activateBundle(requestOrBody, env, scope) {
     AND status='active' AND id<>? AND (raw_file_hash=? OR (min_date<=? AND max_date>=?)) LIMIT 1`,
     [scope.accountId, propertyId, String(body.report_type || ''), bundleId, rawHash, maxDate || '', minDate || '']);
 
-  const activeOverlaps = overlapCheck ? await queryAll(env, `SELECT id, revision, original_file_name, report_type, min_date, max_date, created_at, activated_at, row_count, raw_file_hash, server_property_id
+  const activeOverlaps = overlapCheck ? await queryAll(env, `SELECT *
     FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND report_type=?
     AND status='active' AND id<>? AND (raw_file_hash=? OR (min_date<=? AND max_date>=?)) ORDER BY min_date ASC, revision DESC`,
     [scope.accountId, propertyId, String(body.report_type || ''), bundleId, rawHash, maxDate || '', minDate || '']) : [];
 
   if (requestedPredecessors.length === 0 && activeOverlaps.length > 0) {
-    const first = activeOverlaps[0];
-    throw new BulkImportError('Report overlaps an active import; select its replacement explicitly', 409, {
-      code: 'IMPORT_REPLACEMENT_REQUIRED',
-      existing_bundle_id: first.id,
-      existing_bundle: first,
-      candidates: activeOverlaps,
-    });
+    // Owner policy: every successful new report wins on its own dates. The
+    // server discovers predecessors; clients cannot widen property scope.
+    requestedPredecessors = activeOverlaps.map(report => ({ id: report.id, expected_revision: report.revision }));
   }
 
   const validatedPredecessors = [];
@@ -933,6 +968,41 @@ async function activateBundle(requestOrBody, env, scope) {
     }
   }
 
+  let preservedRows = 0;
+  if (validatedPredecessors.length) {
+    const incoming = await readMergeSource({ server_property_id: propertyId, normalized_hash: hash, object_key: key,
+      identity_version: identityVersion, row_count: rowCount, report_type: reportType, entity_counts_json: JSON.stringify(counts) }, bulkStore, env, scope);
+    const older = [];
+    for (const predecessor of [...validatedPredecessors].sort((a, b) => Number(a.revision) - Number(b.revision) || String(a.id).localeCompare(String(b.id)))) {
+      older.push(await readMergeSource(predecessor, bulkStore, env, scope));
+    }
+    const merged = mergeReportDates(older, incoming, propertyId);
+    preservedRows = merged.length - incoming.length;
+    const text = merged.map(item => JSON.stringify(item)).join('\n');
+    const bytes = new TextEncoder().encode(text);
+    if (bytes.byteLength > 16 * 1024 * 1024) throw new BulkImportError('Combined report exceeds the supported size; existing reports remain active', 413);
+    hash = await contentHash(normalizedContent(merged));
+    key = canonicalKey(scope, propertyId, hash);
+    identityVersion = 2;
+    rowCount = merged.length;
+    counts = merged.reduce((out, item) => { out[item.entity] = (out[item.entity] || 0) + 1; return out; }, {});
+    const dates = merged.map(item => reportBusinessDate(item.row)).filter(Boolean).sort();
+    minDate = dates[0] || null; maxDate = dates[dates.length - 1] || null;
+    const existing = await bulkStore.head(key);
+    if (existing) verifyObject(existing, scope, propertyId, hash);
+    else {
+      const compressed = await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
+      await bulkStore.put(key, compressed, {
+        onlyIf: { etagDoesNotMatch: '*' },
+        httpMetadata: { contentType: 'application/x-ndjson', contentEncoding: 'gzip' },
+        customMetadata: { ...head.customMetadata, normalized_hash: hash, identity_version: '2', row_count: String(rowCount),
+          entity_counts_json: JSON.stringify(counts), min_date: minDate || '', max_date: maxDate || '', merge_policy: 'newest-report-per-date' },
+      });
+    }
+    head = await bulkStore.head(key);
+    verifyObject(head, scope, propertyId, hash);
+  }
+
   const state = await queryFirst(env, 'SELECT revision FROM business_sync_state WHERE account_id=?', [scope.accountId]);
   if (!state) throw new BulkImportError('Sync state is not initialized', 409);
   const revision = Number(state.revision) + 1;
@@ -946,7 +1016,7 @@ async function activateBundle(requestOrBody, env, scope) {
   statements.push(env.DB.prepare(`INSERT INTO business_mutation_guard(account_id,mutation_id,request_hash,ok,created_at)
     VALUES(?,?,?,CASE WHEN NOT EXISTS(SELECT 1 FROM import_bundle_manifest WHERE account_id=? AND server_property_id=? AND report_type=?
       AND status='active' AND id<>? ${notInClause} AND (raw_file_hash=? OR (min_date<=? AND max_date>=?)) LIMIT 1) THEN 1 ELSE 0 END,?)`)
-    .bind(scope.accountId, `overlap-activate:${bundleId}`, hash, scope.accountId, propertyId, String(body.report_type||''), bundleId, ...predIds, rawHash, maxDate||'', minDate||'', now));
+    .bind(scope.accountId, `overlap-activate:${bundleId}`, submittedHash, scope.accountId, propertyId, String(body.report_type||''), bundleId, ...predIds, rawHash, maxDate||'', minDate||'', now));
 
   if (source && !raw) statements.push(env.DB.prepare(`INSERT INTO business_mutation_guard(account_id,mutation_id,request_hash,ok,created_at)
     VALUES(?,?,?,CASE WHEN EXISTS(SELECT 1 FROM import_bundle_manifest WHERE account_id=? AND id=? AND archive_status='archived') THEN 1 ELSE 0 END,?)`)
@@ -1003,6 +1073,8 @@ async function activateBundle(requestOrBody, env, scope) {
     bundle_id: bundleId,
     revision,
     row_count: rowCount,
+    preserved_rows: preservedRows,
+    merge_policy: 'newest-report-per-date',
     superseded_count: validatedPredecessors.length,
     superseded_bundle_ids: predIds,
   }, { status: 201 });

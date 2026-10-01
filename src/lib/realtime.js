@@ -332,6 +332,8 @@ export const APP_SYNC_PREFIXES = [
   "payroll", "anomaly-alerts", "rooms", "reservations", "weather",
   "daily-aggregates", "properties", "staff", "room-stays",
   "housekeeping", "reviews", "settings",
+  "latest-date", "uploads", "transaction-lines", "hotel-metrics",
+  "hotel-metric-dates", "adjustments-refunds", "clerk-anomalies",
 ];
 
 // Shared per-tab poll coordination. Each useRealtimeInvalidation instance

@@ -1,5 +1,6 @@
 import localDb from './localDb.js';
 import { toCents } from '../lib/decimal.js';
+import { mapConcurrent } from '../lib/mapConcurrent.js';
 
 export const BUSINESS_ENTITIES = Object.freeze([
   'Property', 'OccupancyDay', 'SourceDay', 'GrossRevenueDay', 'PaymentDay',
@@ -329,7 +330,7 @@ export function createBusinessSyncClient({
     let generationId = null;
     let snapshotRevision = null;
     let scopeFingerprint = null;
-    for (const entity of BUSINESS_ENTITIES) {
+    const fetchEntity = async (entity) => {
       const rows = [];
       let cursor = '';
       do {
@@ -357,7 +358,13 @@ export function createBusinessSyncClient({
           // Non-blocking in headless/test environments
         }
       }
-    }
+      return rows;
+    };
+    // Establish the revision and access fence with Property before starting
+    // independent table downloads. Each table's pages still arrive in order.
+    if (await fetchEntity('Property') === null) return null;
+    const remaining = await mapConcurrent(BUSINESS_ENTITIES.filter(entity => entity !== 'Property'), fetchEntity);
+    if (remaining.some(rows => rows === null)) return null;
     return { generation_id: generationId, revision: snapshotRevision || 0, scope_fingerprint: scopeFingerprint, byEntity };
   }
 
@@ -371,10 +378,8 @@ export function createBusinessSyncClient({
       }
       for (const change of page.items) {
         if (change.entity_name === 'ImportBundle') {
-          try {
-            const { syncBulkBundles } = await import('../lib/bulkHydrationService.js');
-            await syncBulkBundles({ force: true });
-          } catch {}
+          // Hydrate restores all active bundles once after the entire feed.
+          // Restoring here repeated every report download for every change.
           revision = Number(change.seq);
           continue;
         }
@@ -395,39 +400,48 @@ export function createBusinessSyncClient({
     return { rebuild: false, state: next };
   }
 
-  async function hydrate({ force = false, allowDuringTransaction = false } = {}) {
-    if (hydrationPromise) return hydrationPromise;
+  async function hydrate({ force = false, allowDuringTransaction = false, requireOnline = false } = {}) {
+    if (hydrationPromise) {
+      if (!requireOnline) return hydrationPromise;
+      // Startup needs its own server check even if another reader used an
+      // offline fallback. Finish that pull before starting the strict one.
+      await hydrationPromise;
+      return hydrate({ force, allowDuringTransaction, requireOnline });
+    }
     hydrationPromise = (async () => {
       isHydrating = true;
       try {
         const prior = await localDb.BusinessSyncState.get(SYNC_STATE_KEY);
-        if (!force && prior?.generation_id && !prior?.roster_only) {
+        if (!force && prior?.generation_id && !prior?.roster_only &&
+            (!requireOnline || prior?.snapshot_complete === true)) {
           try {
             const applied = await applyFeed(prior);
-            try {
-              const { syncBulkBundles } = await import('../lib/bulkHydrationService.js');
-              await syncBulkBundles({ force: true });
-            } catch {}
             if (!applied.rebuild) {
+              let bulk = null;
+              try {
+                const { syncBulkBundles } = await import('../lib/bulkHydrationService.js');
+                bulk = await syncBulkBundles({ force: true });
+              } catch (error) { if (requireOnline) throw error; }
+              if (bulk?.verified) lastPullAt = Date.now();
               if (allowDuringTransaction || transactionPending) {
-                return { active: true, rebuilt: false, ...applied.state };
+                return { active: true, rebuilt: false, ...applied.state, bulk };
               }
               const localPropertyCount = await localDb.Property.count();
               if (localPropertyCount > 0 || prior?.empty_roster_confirmed) {
-                return { active: true, rebuilt: false, ...applied.state };
+                return { active: true, rebuilt: false, ...applied.state, bulk };
               }
               const roster = await syncPropertyRoster(applied.state);
-              return { active: true, rebuilt: false, ...applied.state, empty_roster_confirmed: roster.rows.length === 0 };
+              return { active: true, rebuilt: false, ...applied.state, bulk, empty_roster_confirmed: roster.rows.length === 0 };
             }
           } catch (error) {
-            if ((typeof navigator !== 'undefined' && navigator.onLine === false) || error?.status == null) return { active: true, offline: true, rebuilt: false, ...prior };
+            if (!requireOnline && ((typeof navigator !== 'undefined' && navigator.onLine === false) || error?.status == null)) return { active: true, offline: true, rebuilt: false, ...prior };
             throw error;
           }
         }
         let snapshot;
         try { snapshot = await fetchSnapshot(); }
         catch (error) {
-          if (prior && ((typeof navigator !== 'undefined' && navigator.onLine === false) || error?.status == null)) return { active: true, offline: true, rebuilt: false, ...prior };
+          if (!requireOnline && prior && ((typeof navigator !== 'undefined' && navigator.onLine === false) || error?.status == null)) return { active: true, offline: true, rebuilt: false, ...prior };
           throw error;
         }
         if (!snapshot) return { active: false, rebuilt: false };
@@ -443,6 +457,7 @@ export function createBusinessSyncClient({
             generation_id: snapshot.generation_id,
             revision: snapshot.revision,
             scope_fingerprint: snapshot.scope_fingerprint,
+            snapshot_complete: true,
             empty_roster_confirmed: snapshot.byEntity.Property.length === 0,
             updated_at: new Date().toISOString()
           });
@@ -463,13 +478,15 @@ export function createBusinessSyncClient({
         const applied = await applyFeed(state);
         if (applied.rebuild) {
           hydrationPromise = null;
-          return hydrate({ force: true });
+          return hydrate({ force: true, requireOnline });
         }
+        let bulk = null;
         try {
           const { syncBulkBundles } = await import('../lib/bulkHydrationService.js');
-          await syncBulkBundles({ force: true });
-        } catch {}
-        return { active: true, rebuilt: true, ...applied.state };
+          bulk = await syncBulkBundles({ force: true });
+        } catch (error) { if (requireOnline) throw error; }
+        if (bulk?.verified) lastPullAt = Date.now();
+        return { active: true, rebuilt: true, ...applied.state, bulk };
       } finally {
         isHydrating = false;
       }
@@ -1015,6 +1032,9 @@ export function createBusinessSyncClient({
       downloadBusinessBackup,
       migrateLocalData,
       hydrateFromServer: () => hydrate({ force: true }),
+      // Returning browsers check the feed; incomplete caches, new generations,
+      // and changed access still require the full authoritative snapshot.
+      hydrateForStartup: () => hydrate({ requireOnline: true }),
       syncNow: async () => { await flushOutbox(); return hydrate(); },
       syncPropertyRoster,
       reserveIdSequence: (prefix, floor) => request('business-sync/id-sequence/reserve', { method: 'POST', body: JSON.stringify({ prefix, floor }) }),

@@ -297,11 +297,15 @@ export function aggregateDays({ occ = [], src = [], gross = [], pay = [], exp = 
 // upsert into localDb.DailyFinancialAggregate. Idempotent: re-running for the
 // same days overwrites them. Returns the number of day-rows written.
 export async function rebuildDailyAggregates({ propertyId = 'all', from = '', to = '' } = {}) {
-  const occ = await fetchLedger('OccupancyDay', propertyId, from, to);
-  const src = await fetchLedger('SourceDay', propertyId, from, to);
-  const gross = await fetchLedger('GrossRevenueDay', propertyId, from, to);
-  const pay = await fetchLedger('PaymentDay', propertyId, from, to);
-  const exp = await fetchLedger('Expense', propertyId, from, to);
+  // Concurrent readers join the same synchronization promise. Sequential
+  // reads could exceed the freshness window and download every bundle again.
+  const [occ, src, gross, pay, exp] = await Promise.all([
+    fetchLedger('OccupancyDay', propertyId, from, to),
+    fetchLedger('SourceDay', propertyId, from, to),
+    fetchLedger('GrossRevenueDay', propertyId, from, to),
+    fetchLedger('PaymentDay', propertyId, from, to),
+    fetchLedger('Expense', propertyId, from, to),
+  ]);
 
   const days = aggregateDays({ occ, src, gross, pay, exp });
 

@@ -18,7 +18,12 @@ export async function hydrateAuthenticatedData({
   invalidateQueries,
 }) {
   const business = await hydrateBusinessData();
-  const bulk = await syncBulkBundles({ force: true });
+  // Forced business hydration already restores and verifies the active bundles.
+  // Reuse only that completed result; older clients or failed restoration still
+  // take the strict sync path rather than treating a cursor as proof of data.
+  const bulk = business?.bulk?.verified === true
+    ? business.bulk
+    : await syncBulkBundles({ force: true });
   if (!bulk?.verified) throw new Error('Active report bundles were not verified in local storage.');
 
   const aggregates = await rebuildDailyAggregates();

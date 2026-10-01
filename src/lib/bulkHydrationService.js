@@ -1,6 +1,7 @@
 import localDb from '../api/localDb.js';
 import { decompressPayloadGzip, generateDeterministicRowId } from './bulkImportPipeline.js';
 import { BULK_ENTITIES, parseBundle, contentHash, normalizedContent } from '../../worker/bulk-contract.js';
+import { mapConcurrent } from './mapConcurrent.js';
 const BULK_SYNC_KEY = 'authoritative-bulk-bundle-sync-v2';
 const COMMIT_KEY = `${BULK_SYNC_KEY}:commit`;
 class HydrationConflict extends Error {}
@@ -37,10 +38,12 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
       if (!Array.isArray(data.manifests)) throw new Error('Invalid manifest feed');
       const manifests = data.manifests;
       if (!manifests.length) return { synced, lastRevision: revision, activeManifests, materializedRows, verified: true };
-      const payloads = new Map();
       for (const manifest of manifests) {
         if (propertyId && manifest.server_property_id !== propertyId) throw new Error('Manifest scope mismatch');
-        if (manifest.status !== 'active') continue;
+      }
+      // Verify downloads concurrently, then commit the entire page atomically.
+      // Retirements/replacements are still applied in manifest order below.
+      const downloaded = await mapConcurrent(manifests.filter(manifest => manifest.status === 'active'), async (manifest) => {
         const res = await fetch(`/api/bulk-import/bundle/${encodeURIComponent(manifest.id)}`);
         if (!res.ok) throw new Error(`Bundle download failed: ${res.status}`);
         const bytes = await res.arrayBuffer();
@@ -50,8 +53,9 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
         if (hash !== manifest.normalized_hash || items.length !== Number(manifest.row_count)) throw new Error('Bundle hash or count mismatch');
         const counts = items.reduce((out, item) => { out[item.entity] = (out[item.entity] || 0) + 1; return out; }, {});
         if (JSON.stringify(Object.entries(counts).sort()) !== JSON.stringify(Object.entries(manifest.entity_counts || {}).sort())) throw new Error('Entity counts mismatch');
-        payloads.set(manifest.id, items);
-      }
+        return [manifest.id, items];
+      });
+      const payloads = new Map(downloaded);
       const tables = [...BULK_ENTITIES.map(name => localDb[name]), localDb.UploadedReport, localDb.BusinessSyncState,
         localDb.Property, localDb.DailyFinancialAggregate];
       try {

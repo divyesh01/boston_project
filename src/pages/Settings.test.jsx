@@ -200,7 +200,7 @@ describe("Settings page persistence contract", () => {
     renderSettings();
 
     expect(revenueInput("High revenue threshold (green)").value).toBe("6100");
-    expect(revenueInput("Medium revenue threshold (yellow)").value).toBe("3200");
+    expect(revenueInput("Medium revenue threshold (gray)").value).toBe("3200");
   });
 
   it("saves an edited revenue threshold and shows the persisted value after remount", async () => {

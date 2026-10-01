@@ -11,6 +11,7 @@ import { suggestedRateForDate, forecastOccupancy } from "@/lib/pricingEngine";
 import { isPricingEnabled, getPricingConfig, ROOM_TYPES } from "@/lib/pricingSettings";
 import { useRealtimeInvalidation } from "@/lib/realtime";
 import { ErrorState } from "@/components/ui/status";
+import { singleSelectedProperty } from "@/lib/propertySelection";
 import { motion, AnimatePresence } from "framer-motion";
 const KIND_STYLE = {
   occupied: { color: C.purple, label: "Occupied" },
@@ -22,6 +23,11 @@ const KIND_STYLE = {
 
 export default function RoomBoard() {
   const { dateRange, property, properties, months, latestDate } = useGlobalFilters();
+  const selectedProperty = singleSelectedProperty(property, properties);
+  const singlePropertyId = selectedProperty?.id ?? null;
+  const isPortfolio = singlePropertyId == null;
+  const propertyNames = useMemo(() => new Map(properties.map((p) => [String(p.id), p.name])), [properties]);
+  const propertyLabel = (row) => propertyNames.get(String(row.property_id)) || row.property_name || String(row.property_id || "Unassigned property");
   const queryClient = useQueryClient();
   useRealtimeInvalidation(["rooms", "room-stays", "housekeeping"]);
 
@@ -48,15 +54,23 @@ export default function RoomBoard() {
   const [newOut, setNewOut] = useState("");
   const [newFolio, setNewFolio] = useState("");
   const [notice, setNotice] = useState(null);
+  useEffect(() => {
+    setNewRoom("");
+    setNewGuest("");
+    setNewRate("");
+    setNewFolio("");
+    setNewOut("");
+    setNotice(null);
+  }, [singlePropertyId]);
 
   // Owner-facing pricing: compute the engine's suggested rate for the room
   // type being checked in on the selected board date. Feeds the check-in form
   // "suggested rate" badge so the operator never guesses what to charge.
-  const pricingEnabled = isPricingEnabled();
-  const pricingConfig = getPricingConfig();
+  const pricingEnabled = singlePropertyId != null && isPricingEnabled(singlePropertyId);
+  const pricingConfig = getPricingConfig(singlePropertyId ?? "*");
   const suggestedForRoom = useMemo(() => {
     if (!pricingEnabled || !newRoom || !boardDate) return null;
-    const room = rooms.find((r) => String(r.room_number) === String(newRoom));
+    const room = rooms.find((r) => String(r.property_id) === String(singlePropertyId) && String(r.room_number) === String(newRoom));
     if (!room) return null;
     const weatherByDate = {};
     for (const s of weatherSnapshots || []) {
@@ -67,7 +81,7 @@ export default function RoomBoard() {
     return suggestedRateForDate({
       roomType: room.room_type, date: boardDate, occupancy: occ, reservations, rooms, weatherByDate, config: pricingConfig,
     });
-  }, [pricingEnabled, newRoom, boardDate, rooms, reservations, weatherSnapshots, pricingConfig]);
+  }, [pricingEnabled, singlePropertyId, newRoom, boardDate, rooms, reservations, weatherSnapshots, pricingConfig]);
 
   // Recommended rate per room type for the selected board date — shown as a
   // "Suggested" badge on vacant tiles.
@@ -86,11 +100,10 @@ export default function RoomBoard() {
     return out;
   }, [pricingEnabled, boardDate, rooms, reservations, weatherSnapshots, pricingConfig]);
 
-  const isPortfolio = property === "all" || Array.isArray(property);
   const inventory = inventoryInScope(property, properties);
   const propName = isPortfolio
     ? (Array.isArray(property) ? `${property.length} Properties` : "Portfolio")
-    : (properties.find((p) => p.id === property)?.name || "Property");
+    : (selectedProperty?.name || "Property");
 
   const stats = useMemo(() => {
     if (!occ.length) {
@@ -122,10 +135,8 @@ export default function RoomBoard() {
     queryClient.invalidateQueries({ queryKey: ["housekeeping"] });
   };
 
-  const singlePropertyId = !isPortfolio ? property : null;
-
   const handleBootstrap = async () => {
-    if (!singlePropertyId) {
+    if (singlePropertyId == null) {
       setNotice({ type: "error", text: "Select a single property to create its room register." });
       return;
     }
@@ -152,7 +163,7 @@ export default function RoomBoard() {
 
   const handleAddStay = async (e) => {
     e.preventDefault();
-    if (!singlePropertyId) {
+    if (singlePropertyId == null) {
       setNotice({ type: "error", text: "Select a single property to add a stay." });
       return;
     }
@@ -161,7 +172,11 @@ export default function RoomBoard() {
       return;
     }
     const prop = properties.find((p) => p.id === singlePropertyId);
-    const room = rooms.find((r) => String(r.room_number) === String(newRoom));
+    const room = rooms.find((r) => String(r.property_id) === String(singlePropertyId) && String(r.room_number) === String(newRoom));
+    if (!room) {
+      setNotice({ type: "error", text: "Choose a room from the selected property's room register." });
+      return;
+    }
 
     // A check-in is two writes with two independent failure modes, and the
     // operator has to be told which one happened. Before, the stay write could
@@ -221,6 +236,10 @@ export default function RoomBoard() {
   };
 
   const handleRoomState = async (roomId, status) => {
+    if (singlePropertyId == null || !rooms.some((room) => room.id === roomId && String(room.property_id) === String(singlePropertyId))) {
+      setNotice({ type: "error", text: "Select this room's property before changing its status." });
+      return;
+    }
     // Housekeeping and maintenance taps write straight to the Room row. An
     // unreported rejection here left the row unchanged with no message at all,
     // which a user reads as "already saved".
@@ -345,7 +364,7 @@ export default function RoomBoard() {
               const s = KIND_STYLE[t.kind] || KIND_STYLE.available;
               return (
                 <motion.div
-                  key={t.room_number}
+                  key={t.room_key}
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
                   transition={{ delay: index * 0.015, duration: 0.2 }}
@@ -358,6 +377,7 @@ export default function RoomBoard() {
                     <span className="font-heading text-sm font-semibold text-white">{t.room_number}</span>
                     <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
                   </div>
+                  {isPortfolio && <p className="mt-1 truncate text-[10px] text-slate-400" title={propertyLabel(t)}>{propertyLabel(t)}</p>}
                   <p className="mt-1 truncate text-xs text-slate-300">{t.guest_name || s.label}</p>
                   <p className="truncate text-[10px] text-slate-500">{t.room_type}{t.floor ? ` · Fl ${t.floor}` : ""}</p>
                   {t.kind === "occupied" && (
@@ -419,6 +439,7 @@ export default function RoomBoard() {
             <table className="w-full text-left text-sm text-slate-300">
               <thead className="border-b border-white/10 text-xs uppercase text-slate-500">
                 <tr>
+                  {isPortfolio && <th className="px-4 py-3 font-medium">Property</th>}
                   <th className="px-4 py-3 font-medium">Channel</th>
                   <th className="px-4 py-3 font-medium">Conf #</th>
                   <th className="px-4 py-3 font-medium">Check-In</th>
@@ -437,6 +458,7 @@ export default function RoomBoard() {
                       transition={{ delay: index * 0.05 }}
                       className="transition-colors hover:bg-white/[0.02]"
                     >
+                      {isPortfolio && <td className="px-4 py-3">{propertyLabel(res)}</td>}
                       <td className="px-4 py-3">
                         <span className="inline-flex items-center gap-1.5 rounded-full bg-white/5 px-2.5 py-1 text-xs font-medium text-white">
                           {res.channel === "Booking.com" ? "B.com" : res.channel}
@@ -469,11 +491,12 @@ export default function RoomBoard() {
             Room
             <select
               value={newRoom}
+              disabled={singlePropertyId == null}
               onChange={(e) => setNewRoom(e.target.value)}
               className="rounded-lg border border-white/10 bg-[#0A1628] px-2 py-2 text-sm text-white"
             >
               <option value="">Select room</option>
-              {rooms.map((r) => (
+              {rooms.filter((r) => String(r.property_id) === String(singlePropertyId)).map((r) => (
                 <option key={r.id} value={r.room_number}>{r.room_number}</option>
               ))}
             </select>
@@ -504,7 +527,7 @@ export default function RoomBoard() {
           <button
             type="submit"
             className="self-end rounded-lg bg-[#6C63FF] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#5b52e8] disabled:opacity-50"
-            disabled={!singlePropertyId}
+            disabled={singlePropertyId == null}
           >
             Check In
           </button>

@@ -16,6 +16,7 @@ import AIInsightsEngine from '@/lib/aiInsights';
 import { db } from '@/api/base44Client';
 import { useQuery } from '@tanstack/react-query';
 import { useGlobalFilters } from '@/lib/useGlobalFilters';
+import { singleSelectedProperty } from '@/lib/propertySelection';
 import { formatNumber, toCents, fromCents, sumCents, formatCents } from '@/lib/decimal';
 import { ErrorState } from '@/components/ui/status';
 import { toast } from 'sonner';
@@ -204,6 +205,11 @@ export default function DataIntelligence() {
   };
 
   const handleUpload = async (fileList) => {
+    const targetProperty = singleSelectedProperty(property, properties);
+    if (!targetProperty) {
+      toast.error('Select one property before scanning its reports.');
+      return;
+    }
     // This page used to accept anything whose NAME ended in .csv/.xlsx/.xls — no
     // size cap, no magic-byte check — while Import.jsx enforced all three on the
     // same pipeline. One shared gate now guards both doors; see
@@ -256,7 +262,7 @@ export default function DataIntelligence() {
 
         const parsed = scanner.parseFileContent(text, file.name);
         const existingKeys = files
-          .filter((f) => f.propertyId === file.name)
+          .filter((f) => String(f.propertyId) === String(targetProperty.id))
           .map((f) => ({
             fileName: f.name,
             headers: [],
@@ -271,7 +277,9 @@ export default function DataIntelligence() {
           existingKeys
         );
 
-        scanResult.fileId = file.name;
+        scanResult.fileId = JSON.stringify([targetProperty.id, globalThis.crypto.randomUUID()]);
+        scanResult.propertyId = targetProperty.id;
+        scanResult.propertyName = targetProperty.name;
         scanResult.fileUrl = file_url;
         scanResult.originalFile = file;
         newResults.push(scanResult);
@@ -305,10 +313,12 @@ export default function DataIntelligence() {
       scanResult.headers,
       scanResult.fileName,
       scanResults
-        .filter((s) => s.fileId !== fileId)
+        .filter((s) => s.fileId !== fileId && String(s.propertyId) === String(scanResult.propertyId))
         .map((s) => ({ fileName: s.fileName, headers: s.headers, rows: s.rows }))
     );
     newScan.fileId = fileId;
+    newScan.propertyId = scanResult.propertyId;
+    newScan.propertyName = scanResult.propertyName;
     newScan.fileUrl = scanResult.fileUrl;
     newScan.originalFile = scanResult.originalFile;
     newScan.fixHistory = [{ action, timestamp: new Date().toISOString(), result: fixResult }];
@@ -1350,6 +1360,7 @@ function ScanResultCard({ result, onAutoFix, onExport }) {
           </div>
           <div>
             <p className="text-sm font-medium text-white">{result.fileName}</p>
+            <p className="text-xs text-slate-400">{result.propertyName || String(result.propertyId ?? 'Unassigned property')}</p>
             <p className="text-xs text-slate-500">
               {result.rowCount} rows · {issues.length} issues · Score: {health.score}/100 ({health.grade})
             </p>

@@ -1,4 +1,5 @@
 import { classifyRefund, REFUND_CLASSIFICATION } from "@/lib/refundClassification";
+import { propertyRecordKey } from "@/lib/propertyRecordIdentity";
 
 // Automated financial anomaly & fraud detection engine.
 //
@@ -106,6 +107,8 @@ function alertFor(alert_type, row, { severity, detail, amount, rule }) {
   const transaction_code = String(row?.transaction_code || "");
   return {
     alert_type,
+    property_id: row?.property_id ?? "",
+    property_name: row?.property_name || "",
     severity,
     date,
     username,
@@ -117,7 +120,7 @@ function alertFor(alert_type, row, { severity, detail, amount, rule }) {
     amount: round2(amount),
     detail,
     rule,
-    dedupe_key: [alert_type, date, username, folio_number, transaction_code, round2(amount)].join("|"),
+    dedupe_key: propertyRecordKey(row, alert_type, date, username, folio_number, transaction_code, round2(amount)),
   };
 }
 
@@ -133,16 +136,26 @@ export function detectRateOverrides(rows, options = {}) {
   const roomRows = rows.filter(isRoomCharge);
   if (!roomRows.length) return [];
 
-  let adr = options.adr;
-  if (!(adr > 0)) {
-    const positives = roomRows.map((r) => amountOf(r.amount)).filter((a) => a > 0);
-    adr = positives.length ? positives.reduce((s, a) => s + a, 0) / positives.length : 0;
+  const baselines = new Map();
+  for (const row of roomRows) {
+    const key = propertyRecordKey(row);
+    if (!baselines.has(key)) baselines.set(key, { total: 0, count: 0 });
+    const amount = amountOf(row.amount);
+    if (amount > 0) {
+      baselines.get(key).total += amount;
+      baselines.get(key).count += 1;
+    }
   }
-  if (!(adr > 0)) return [];
-
-  const threshold = adr * ratio;
   const flags = [];
   for (const row of roomRows) {
+    const baseline = baselines.get(propertyRecordKey(row));
+    // A single supplied ADR describes one hotel's batch. Portfolio batches
+    // calculate each hotel's own baseline instead of blending unlike rates.
+    const adr = options.adr > 0 && baselines.size === 1
+      ? options.adr
+      : baseline.count ? baseline.total / baseline.count : 0;
+    if (!(adr > 0)) continue;
+    const threshold = adr * ratio;
     const amt = amountOf(row.amount);
     if (amt < 0) continue;
     if (amt < threshold) {
@@ -173,7 +186,7 @@ export function detectExcessiveAdjustments(rows, options = {}) {
     if (amt >= 0) continue;
     const username = String(row.username || "unknown");
     const day = String(row.date || "").slice(0, 10) || "unknown";
-    const key = `${username}||${day}`;
+    const key = propertyRecordKey(row, username, day);
     if (!buckets.has(key)) buckets.set(key, { username, date: day, total: 0, rows: [] });
     buckets.get(key).total += Math.abs(amt);
     buckets.get(key).rows.push(row);
@@ -289,7 +302,9 @@ const EXACT_RATES = new Set([49, 59, 69, 79, 89, 99, 109, 119, 129, 139, 149, 15
 
 function clerkAlertFor(ruleId, ruleName, severity, riskType, row, amount) {
   return {
-    id: `${ruleId}|${row.date || ""}|${row.username || ""}|${row.roomNumber || ""}|${round2(amount)}|${row.time || ""}`,
+    id: propertyRecordKey(row, ruleId, row.date, row.username, row.roomNumber, round2(amount), row.time),
+    property_id: row.property_id ?? "",
+    property_name: row.property_name || "",
     ruleId,
     ruleName,
     severity,
@@ -334,7 +349,7 @@ function detectRepeatedAdjustmentLoop(adjustments, thresholds) {
   const minCount = thresholds.repeatedAdjustmentCount;
   const buckets = new Map();
   for (const a of adjustments) {
-    const key = `${a.roomNumber || "?"}|${(a.date || "").slice(0, 10)}`;
+    const key = propertyRecordKey(a, a.roomNumber || "?", (a.date || "").slice(0, 10));
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key).push(a);
   }
@@ -410,7 +425,7 @@ function detectMicroSkimming(refunds, thresholds) {
     const pt = String(r.paymentTypeRefunded || "").toUpperCase().trim();
     const amt = Math.abs(Number(r.amount) || 0);
     if (pt === "CASH" && classifyRefund(r).kind !== REFUND_CLASSIFICATION.DEPOSIT_RETURN && amt > 0 && amt <= thresholds.microSkimMaxAmount) {
-      const key = `${r.username || "?"}|${(r.date || "").slice(0, 10)}`;
+      const key = propertyRecordKey(r, r.username || "?", (r.date || "").slice(0, 10));
       if (!buckets.has(key)) buckets.set(key, []);
       buckets.get(key).push(r);
     }
@@ -558,13 +573,17 @@ function detectDepositRefunds(refunds, _thresholds) {
   return flags;
 }
 
-// Clerk Risk Score Matrix — aggregate flags and amounts per username.
+// Clerk Risk Score Matrix — aggregate flags and amounts per hotel and username.
 function buildClerkRiskScores(flaggedAnomalies, adjustments, refunds, thresholds) {
   const map = new Map();
-  const ensure = (username) => {
-    if (!map.has(username)) {
-      map.set(username, {
-        username,
+  const ensure = (row) => {
+    const key = propertyRecordKey(row, row.username);
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        property_id: row.property_id ?? "",
+        property_name: row.property_name || "",
+        username: row.username,
         totalFlags: 0,
         totalRefundedAmount: 0,
         totalAdjustedAmount: 0,
@@ -580,25 +599,25 @@ function buildClerkRiskScores(flaggedAnomalies, adjustments, refunds, thresholds
         behaviorAnalysis: "",
       });
     }
-    return map.get(username);
+    return map.get(key);
   };
 
   // Count flags per clerk
   for (const a of flaggedAnomalies) {
-    if (a.username) ensure(a.username).totalFlags += 1;
+    if (a.username) ensure(a).totalFlags += 1;
   }
 
   // Sum adjustment amounts per clerk
   for (const a of adjustments) {
     if (a.username) {
-      ensure(a.username).totalAdjustedAmount += Math.abs(Number(a.adjustedAmount ?? a.amount) || 0);
+      ensure(a).totalAdjustedAmount += Math.abs(Number(a.adjustedAmount ?? a.amount) || 0);
     }
   }
 
   // Sum refund amounts per clerk - track deposit vs room rent separately
   for (const r of refunds) {
     if (r.username) {
-      const u = ensure(r.username);
+      const u = ensure(r);
       const amt = Math.abs(Number(r.amount) || 0);
       u.totalRefundedAmount += amt;
       const classification = classifyRefund(r);

@@ -21,6 +21,7 @@ import EmployeeCompare from "@/components/transactions/EmployeeCompare";
 import CommissionsPanel from "@/components/transactions/CommissionsPanel";
 import LedgerTable from "@/components/transactions/LedgerTable";
 import { ErrorState } from "@/components/ui/status";
+import { propertyDisplayName } from "@/lib/propertyRecordIdentity";
 
 const tip = { background: "#0A1628", border: "1px solid #ffffff14", borderRadius: 12, color: "#e2e8f0" };
 const axis = { fill: "#64748b", fontSize: 10 };
@@ -42,6 +43,8 @@ const TABS = [
 // that does not exist on any row exports as empty rather than throwing, and a key
 // that exists on SOME rows is no longer dropped because row 0 lacked it.
 const TRANSACTION_EXPORT_COLUMNS = [
+  { key: "property_name", label: "Property" },
+  { key: "property_id", label: "Property ID" },
   { key: "date", label: "Date" },
   { key: "time", label: "Time" },
   { key: "guest_name", label: "Guest" },
@@ -58,7 +61,7 @@ const TRANSACTION_EXPORT_COLUMNS = [
 ];
 
 export default function Transactions() {
-  const { dateRange, property, months } = useGlobalFilters();
+  const { dateRange, property, months, properties } = useGlobalFilters();
   const [tab, setTab] = useState("overview");
   const [grain, setGrain] = useState("daily");
   const [includeSystem, setIncludeSystem] = useState(false);
@@ -69,8 +72,9 @@ export default function Transactions() {
   // Belt and braces: the query may be served from a cache built for a wider
   // range, so re-filter to exactly what the control bar is asking for.
   const scoped = useMemo(
-    () => (dateRange?.from && dateRange?.to ? rows.filter((r) => inRange(r.date, dateRange.from, dateRange.to)) : rows),
-    [rows, dateRange]
+    () => (dateRange?.from && dateRange?.to ? rows.filter((r) => inRange(r.date, dateRange.from, dateRange.to)) : rows)
+      .map((row) => ({ ...row, property_name: propertyDisplayName(row, properties) })),
+    [rows, dateRange, properties]
   );
 
   const stats = useMemo(() => summarize(scoped), [scoped]);
@@ -300,7 +304,7 @@ export default function Transactions() {
             <KpiCard label="Written by people" value={money2(humanRevenue)} sub={`${pct(stats.revenue ? humanRevenue / stats.revenue : 0)} of revenue`} accent={C.green} icon={Users2} />
             <KpiCard label="Written by automation" value={money2(automatedRevenue)} sub={`${pct(stats.revenue ? automatedRevenue / stats.revenue : 0)} of revenue`} accent={C.amber} icon={TrendingUp} />
             <KpiCard label="Active accounts" value={num(people.length)} sub={includeSystem ? "Including automation" : "People only"} accent={C.purple} />
-            <KpiCard label="Top producer" value={people[0] ? money2(people[0].revenue) : "—"} sub={people[0]?.label || "—"} accent={C.cyan} />
+            <KpiCard label="Top producer" value={people[0] ? money2(people[0].revenue) : "—"} sub={people[0]?.display_label || "—"} accent={C.cyan} />
           </div>
 
           <Card
@@ -326,7 +330,7 @@ export default function Transactions() {
                 <BarChart data={people.slice(0, 15)} layout="vertical" margin={{ left: 8, right: 24, top: 8 }}>
                   <CartesianGrid stroke="#ffffff0a" horizontal={false} />
                   <XAxis type="number" tick={axis} stroke="#ffffff10" tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
-                  <YAxis type="category" dataKey="label" tick={axis} stroke="#ffffff10" width={132} />
+                  <YAxis type="category" dataKey="display_label" tick={axis} stroke="#ffffff10" width={180} />
                   <Tooltip
                     contentStyle={tip}
                     cursor={{ fill: "#ffffff06" }}
@@ -334,7 +338,7 @@ export default function Transactions() {
                   />
                   <Bar dataKey="revenue" radius={[0, 4, 4, 0]}>
                     {people.slice(0, 15).map((p, i) => (
-                      <Cell key={i} fill={p.account_class === "system" ? C.amber : CHART_COLORS[i % CHART_COLORS.length]} />
+                      <Cell key={p.key} fill={p.account_class === "system" ? C.amber : CHART_COLORS[i % CHART_COLORS.length]} />
                     ))}
                   </Bar>
                 </BarChart>
@@ -357,9 +361,10 @@ export default function Transactions() {
                 </thead>
                 <tbody>
                   {people.map((p) => (
-                    <tr key={p.username} className="border-b border-white/5 last:border-0">
+                    <tr key={p.key} className="border-b border-white/5 last:border-0">
                       <td className="py-2.5">
                         <span className="text-slate-300">{p.label}</span>
+                        <span className="block text-xs text-slate-500">{p.property_name}</span>
                         {p.account_class === "system" && (
                           <span className="ml-2 rounded-full px-2 py-0.5 text-[10px]" style={{ background: `${C.amber}14`, color: C.amber }}>
                             automation

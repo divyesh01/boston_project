@@ -11,8 +11,9 @@ import KpiCard from "@/components/ui-exec/KpiCard";
 import StatusBadge from "@/components/ui-exec/StatusBadge";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
+import { singleSelectedProperty } from "@/lib/propertySelection";
 import { useRealtimeInvalidation } from "@/lib/realtime";
-import { num, pct, C, PROPERTY, money2 } from "@/lib/hotel";
+import { num, pct, C, money2 } from "@/lib/hotel";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { reserveEmployeeId } from "@/lib/employeeId";
 import { sumCents, fromCents } from "@/lib/decimal";
@@ -50,10 +51,10 @@ const EMPTY_STAFF = {
 
 function usePayroll(propertyId) {
   return useQuery({
-    queryKey: ["payroll", Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
+    queryKey: ["payroll", propertyId],
     queryFn: () => {
       const filter = {};
-      if (propertyId && propertyId !== "all") {
+      if (propertyId != null && propertyId !== "" && propertyId !== "all") {
         if (Array.isArray(propertyId)) {
           if (propertyId.length > 0) filter.property_id = { $in: propertyId };
         } else {
@@ -67,14 +68,14 @@ function usePayroll(propertyId) {
 
 function useStaff(propertyId) {
   return useQuery({
-    queryKey: ["staff", Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
+    queryKey: ["staff", propertyId],
     queryFn: async () => {
       const rows = (await db.entities.Staff.list("employee_name", 100000)) || [];
-      if (!propertyId || propertyId === "all") return rows;
+      if (propertyId == null || propertyId === "" || propertyId === "all") return rows;
       const targetIds = Array.isArray(propertyId) ? propertyId.map(String) : [String(propertyId)];
       return rows.filter((r) => {
         const pid = r.property_id != null ? String(r.property_id).trim() : "";
-        return pid === "" || targetIds.includes(pid);
+        return pid !== "" && targetIds.includes(pid);
       });
     },
   });
@@ -85,11 +86,11 @@ function useStaff(propertyId) {
 // the rest of the app applies.
 function useOccupancyRange(from, to, propertyId) {
   return useQuery({
-    queryKey: ["payroll-occupancy", from, to, Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
+    queryKey: ["payroll-occupancy", from, to, propertyId],
     queryFn: async () => {
       const filter = {};
       if (from && to) filter.date = { $gte: from, $lte: to };
-      if (propertyId && propertyId !== "all") {
+      if (propertyId != null && propertyId !== "" && propertyId !== "all") {
         if (Array.isArray(propertyId)) {
           if (propertyId.length > 0) filter.property_id = { $in: propertyId };
         } else {
@@ -102,7 +103,15 @@ function useOccupancyRange(from, to, propertyId) {
 }
 
 export default function Payroll() {
+  const { property } = useGlobalFilters();
+  // A draft/preview belongs to the property where it was opened. Switching
+  // context remounts the forms so it cannot be submitted under another hotel.
+  return <PropertyPayroll key={JSON.stringify(property)} />;
+}
+
+function PropertyPayroll() {
   const { property, properties } = useGlobalFilters();
+  const selectedProperty = singleSelectedProperty(property, properties);
   const qc = useQueryClient();
   useRealtimeInvalidation(["staff", "payroll"]);
   const payrollQ = usePayroll(property);
@@ -165,11 +174,11 @@ export default function Payroll() {
 
   const activeStaff = staff.filter((s) => s.active !== false);
 
-  const propFor = () => {
-    // `property` is "all", an id, or an array of ids from the global filter.
-    const id = Array.isArray(property) ? property[0] : property;
-    if (!id || id === "all") return null;
-    return properties.find((x) => x.id === id) || null;
+  const belongsTo = (record, target) => target != null && record?.property_id != null &&
+    String(record.property_id) === String(target.id);
+  const requireWriteProperty = () => {
+    if (!selectedProperty) toast.error("Select exactly one property before adding staff or payroll.");
+    return selectedProperty;
   };
 
   // Every money surface (dashboard Money Kept, Action Center, Expenses,
@@ -183,10 +192,16 @@ export default function Payroll() {
   // ─── Automated engine ───
   const handleRunEngine = async () => {
     if (running) return;
+    const p = requireWriteProperty();
+    if (!p) return;
+    if (!p.id) {
+      toast.error("Automatic payroll is unavailable for this property identifier. Use a manual payroll entry until the payroll engine is updated.");
+      return;
+    }
     setRunning(true);
     setEngineMsg(null);
     try {
-      const res = await db.functions.invoke("autoPayroll", { force: true });
+      const res = await db.functions.invoke("autoPayroll", { force: true, propertyId: p.id });
       const data = res?.data || res || {};
       setEngineMsg(data);
       if (data.status === "ok") sfx.success();
@@ -213,13 +228,9 @@ export default function Payroll() {
       deductions: form.deductions,
     });
 
-    const propertyId = property !== "all" ? (Array.isArray(property) ? property[0] : property) : "";
-    if (!propertyId) {
-      alert("Please select a specific property from the global filter before adding payroll.");
-      return;
-    }
-
-    const p = propFor();
+    const p = requireWriteProperty();
+    if (!p) return;
+    const propertyId = p.id;
     await db.entities.PayrollRun.create({
       ...form,
       ...payCalc,
@@ -247,6 +258,7 @@ export default function Payroll() {
     if (!name) return null;
     return payroll.find(
       (p) =>
+        belongsTo(p, selectedProperty) &&
         String(p.employee_name || "").trim().toLowerCase() === name &&
         p.pay_period_end === quickPeriod.periodEnd
     ) || null;
@@ -254,6 +266,8 @@ export default function Payroll() {
 
   const handleQuickAdd = async () => {
     if (running) return;
+    const p = requireWriteProperty();
+    if (!p) return;
     const name = quickForm.employee_name.trim();
     const amount = Number(quickForm.amount);
 
@@ -267,20 +281,14 @@ export default function Payroll() {
     setRunning(true);
     setQuickErr(null);
     try {
-      const p = propFor();
-      const propertyId = property !== "all" ? (Array.isArray(property) ? property[0] : property) : "";
-      if (!propertyId) {
-        setQuickErr("Please select a specific property from the global filter before adding payroll.");
-        setRunning(false);
-        return;
-      }
+      const propertyId = p.id;
       const propertyName = p?.name || "";
 
       // Match against the staff directory so the run carries the same
       // employee_id the engine would use — that is what makes the historical
       // poster's duplicate check see this run later.
       const existingStaff = activeStaff.find(
-        (s) => String(s.employee_name || "").trim().toLowerCase() === name.toLowerCase()
+        (s) => belongsTo(s, p) && String(s.employee_name || "").trim().toLowerCase() === name.toLowerCase()
       );
 
       const payCalc = calculatePay({ pay_type: "salary", base_rate: amount });
@@ -355,7 +363,8 @@ export default function Payroll() {
   const handleAddStaff = async () => {
     if (!staffForm.employee_name || !staffForm.base_rate) return;
     const baseRate = Number(staffForm.base_rate) || 0;
-    const p = propFor();
+    const p = requireWriteProperty();
+    if (!p) return;
     // Reserved before the create so two rapid clicks cannot both be issued the
     // same id, and so a departed employee's id is never reissued.
     const reservedId = await reserveEmployeeId(staffForm.employee_name, staff);
@@ -368,7 +377,7 @@ export default function Payroll() {
       bonus: Number(staffForm.bonus) || 0,
       deductions: Number(staffForm.deductions) || 0,
       employee_id: reservedId,
-      property_id: property !== "all" ? (Array.isArray(property) ? property[0] : property) : "",
+      property_id: p.id,
       property_name: p?.name || "",
     });
     setStaffForm(EMPTY_STAFF);
@@ -390,7 +399,7 @@ export default function Payroll() {
     // when it does, which is the one number worth knowing before removing someone.
     const nameKey = String(s?.employee_name || "").trim().toLowerCase();
     const ownRuns = nameKey
-      ? payroll.filter((r) => String(r?.employee_name || "").trim().toLowerCase() === nameKey)
+      ? payroll.filter((r) => belongsTo(r, { id: s.property_id }) && String(r?.employee_name || "").trim().toLowerCase() === nameKey)
       : [];
     const ownRunCents = sumCents(ownRuns.map((r) => r?.total_pay || 0));
 
@@ -425,6 +434,12 @@ export default function Payroll() {
 
   // ─── Post Historical Payroll (bulk create for past months) ───
   const generateHistoricalPreview = () => {
+    const p = requireWriteProperty();
+    if (!p) return null;
+    if (staffQ.isPending || payrollQ.isPending || readFailed) {
+      toast.error("Wait for this property's staff and payroll records to load before posting.");
+      return null;
+    }
     const { fromMonth, fromYear, toMonth, toYear, status, useStaffDirectory, monthlyOverrides } = historicalForm;
     if (fromYear > toYear || (fromYear === toYear && fromMonth > toMonth)) {
       setEngineMsg({ status: "failed", message: "End date must be after start date." });
@@ -439,6 +454,10 @@ export default function Payroll() {
 
     const periods = generateMonthPeriods(fromYear, fromMonth, toYear, toMonth);
     const staffSource = useStaffDirectory ? activeStaff : historicalForm.customEntries.filter(e => e.employee_name && Number(e.base_rate) > 0);
+    if (useStaffDirectory && staffSource.some(s => !belongsTo(s, p))) {
+      toast.error("The staff directory contains a record outside the selected property. Reload before posting.");
+      return null;
+    }
     if (!staffSource.length) {
       setEngineMsg({ status: "failed", message: "No staff to process." });
       sfx.error();
@@ -459,7 +478,7 @@ export default function Payroll() {
         const staffId = s.employee_id || s.id || s.employee_name;
         const existing = payroll.find(r => {
           const rId = r.employee_id || r.id || r.employee_name;
-          return rId === staffId && r.pay_period_end === period.periodEnd;
+          return belongsTo(r, p) && rId === staffId && r.pay_period_end === period.periodEnd;
         });
         
         const overrideKey = `${staffId}-${period.year}-${period.month}`;
@@ -501,6 +520,7 @@ export default function Payroll() {
     }
 
     return {
+      propertyId: p.id,
       periods,
       staffCount: staffSource.length,
       totalRuns,
@@ -544,7 +564,7 @@ export default function Payroll() {
 
   // Previously the Post button also required `activeStaff.length`, so Custom
   // Entries mode stayed disabled even with valid rows typed in.
-  const historicalReady = historicalSourceCount > 0 && historicalMonthCount > 0;
+  const historicalReady = !!selectedProperty && !readFailed && !staffQ.isPending && !payrollQ.isPending && historicalSourceCount > 0 && historicalMonthCount > 0;
 
   const handleBackToConfigure = () => {
     setHistoricalPreview(null);
@@ -562,19 +582,33 @@ export default function Payroll() {
   // before) means a missing preview is a bug, not a dead button.
   const handlePostHistorical = async () => {
     if (running) return;
+    const p = requireWriteProperty();
+    if (!p) return;
     if (!historicalPreview) { handlePreviewHistorical(); return; }
+    if (String(historicalPreview.propertyId) !== String(p.id)) {
+      setHistoricalPreview(null);
+      setHistoricalStep("configure");
+      toast.error("Select the property again and create a fresh payroll preview.");
+      return;
+    }
+    if (staffQ.isPending || payrollQ.isPending || readFailed) {
+      toast.error("Wait for this property's staff and payroll records to load before posting.");
+      return;
+    }
 
     setRunning(true);
     setHistoricalStep("posting");
     setEngineMsg(null);
 
     try {
-      const p = propFor();
-      const propertyId = property !== "all" ? (Array.isArray(property) ? property[0] : property) : "";
+      const propertyId = p.id;
       const propertyName = p?.name || "";
       const { fromMonth, fromYear, toMonth, toYear, status, useStaffDirectory, monthlyOverrides } = historicalForm;
       const periods = generateMonthPeriods(fromYear, fromMonth, toYear, toMonth);
       const staffSource = useStaffDirectory ? activeStaff : historicalForm.customEntries.filter(e => e.employee_name && Number(e.base_rate) > 0);
+      if (useStaffDirectory && staffSource.some(s => !belongsTo(s, p))) {
+        throw new Error("A staff record belongs to another property. Reload before posting payroll.");
+      }
 
       // Build all records to create
       const recordsToCreate = [];
@@ -586,7 +620,7 @@ export default function Payroll() {
           const staffId = s.employee_id || s.id || s.employee_name;
           const existing = payroll.find(r => {
             const rId = r.employee_id || r.id || r.employee_name;
-            return rId === staffId && r.pay_period_end === period.periodEnd;
+            return belongsTo(r, p) && rId === staffId && r.pay_period_end === period.periodEnd;
           });
           
           if (existing) { skipped++; continue; }
@@ -708,18 +742,16 @@ export default function Payroll() {
   //   4. Break-even: occupancy % at which nights sold exactly cover payroll.
   const totalRooms = () => {
     if (property === "all") {
-      const sumRooms = properties.reduce((s, p) => s + (p.rooms || 0), 0);
-      return sumRooms || PROPERTY.rooms;
+      return properties.reduce((s, p) => s + (Number(p.rooms) || 0), 0);
     }
     const ids = Array.isArray(property) ? property : [property];
-    const matched = properties.filter((p) => ids.includes(p.id));
-    const sumRooms = matched.reduce((s, p) => s + (p.rooms || 0), 0);
-    return sumRooms || PROPERTY.rooms;
+    const matched = properties.filter((p) => ids.some(id => String(id) === String(p.id)));
+    return matched.reduce((s, p) => s + (Number(p.rooms) || 0), 0);
   };
 
   const estAdr = (() => {
-    const rev = occRows.reduce((a, r) => a + (r.room_revenue || 0), 0);
-    const sold = occRows.reduce((a, r) => a + (r.rooms_sold || 0), 0);
+    const rev = fromCents(sumCents(occRows.map(r => r.room_revenue || 0)));
+    const sold = occRows.reduce((a, r) => a + (Number(r.rooms_sold) || 0), 0);
     return sold > 0 ? rev / sold : 0;
   })();
   const adr = Number(adrOverride) || estAdr || 0;
@@ -734,31 +766,37 @@ export default function Payroll() {
   // the projection. Do not "correct" this to match the dashboard: the two are
   // answering different questions.
   function payrollForMonth(periodEnd) {
-    const actual = payroll.filter((p) => p.pay_period_end === periodEnd);
-    if (actual.length) {
-      return {
-        source: "Actual",
-        count: actual.length,
-        regular: fromCents(sumCents(actual.map((p) => p.regular_pay || 0))),
-        overtime: fromCents(sumCents(actual.map((p) => p.overtime_pay || 0))),
-        bonus: fromCents(sumCents(actual.map((p) => p.bonus || 0))),
-        deductions: fromCents(sumCents(actual.map((p) => p.deductions || 0))),
-        total: fromCents(sumCents(actual.map((p) => p.total_pay || 0))),
-      };
+    // One hotel's logged runs must not suppress another hotel's projection.
+    const ids = new Set([
+      ...payroll.filter(p => p.pay_period_end === periodEnd).map(p => String(p.property_id ?? "")),
+      ...activeStaff.map(s => String(s.property_id ?? "")),
+    ]);
+    const records = [];
+    let actualCount = 0, projectedCount = 0;
+    for (const id of ids) {
+      const actual = payroll.filter(p => String(p.property_id ?? "") === id && p.pay_period_end === periodEnd);
+      if (actual.length) {
+        records.push(...actual);
+        actualCount += actual.length;
+        continue;
+      }
+      // Staff without a hotel cannot be attributed to a portfolio projection.
+      if (!id) continue;
+      for (const s of activeStaff.filter(s => String(s.property_id ?? "") === id)) {
+        if (!s.employee_name || !(Number(s.base_rate) > 0)) continue;
+        records.push(calculatePay(s));
+        projectedCount++;
+      }
     }
-    let count = 0, regular = 0, overtime = 0, bonus = 0, deductions = 0;
-    for (const s of activeStaff) {
-      if (!s.employee_name || !(Number(s.base_rate) > 0)) continue;
-      const baseRate = Number(s.base_rate) || 0;
-      const hours = Number(s.hours) || 0;
-      const otH = Number(s.overtime_hours) || 0;
-      const otR = Number(s.overtime_rate) || baseRate * 1.5;
-      const bns = Number(s.bonus) || 0;
-      const ded = Number(s.deductions) || 0;
-      const reg = s.pay_type === "salary" ? baseRate : baseRate * hours;
-      regular += reg; overtime += otH * otR; bonus += bns; deductions += ded; count++;
-    }
-    return { source: "Projected", count, regular, overtime, bonus, deductions, total: regular + overtime + bonus - deductions };
+    return {
+      source: actualCount ? (projectedCount ? "Mixed" : "Actual") : "Projected",
+      count: records.length,
+      regular: fromCents(sumCents(records.map(p => p.regular_pay || 0))),
+      overtime: fromCents(sumCents(records.map(p => p.overtime_pay || 0))),
+      bonus: fromCents(sumCents(records.map(p => p.bonus || 0))),
+      deductions: fromCents(sumCents(records.map(p => p.deductions || 0))),
+      total: fromCents(sumCents(records.map(p => p.total_pay || 0))),
+    };
   }
 
   const handleRunProjection = () => {
@@ -831,6 +869,7 @@ export default function Payroll() {
         <p className="mt-1 text-sm text-slate-400">
           Payroll is executed automatically on the final day of every month for all active staff.
         </p>
+        {!selectedProperty && <p className="mt-2 text-sm text-amber-300">Select one property to add staff or post payroll. Portfolio totals remain available below.</p>}
       </header>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -874,7 +913,7 @@ export default function Payroll() {
             <Button
               variant="soft"
               onClick={() => { setQuickErr(null); setShowQuickAdd(true); }}
-              disabled={running}
+              disabled={running || !selectedProperty}
               className="fx-clickable"
             >
               <Wallet className="h-4 w-4" /> Quick Add
@@ -882,7 +921,7 @@ export default function Payroll() {
             <Button
               variant="soft"
               onClick={() => { setHistoricalStep("configure"); setHistoricalPreview(null); setShowHistoricalForm(true); }}
-              disabled={running}
+              disabled={running || !selectedProperty}
               className="fx-clickable"
             >
               <History className="h-4 w-4" /> Post Historical
@@ -890,7 +929,7 @@ export default function Payroll() {
             <Button
               variant="primary"
               onClick={handleRunEngine}
-              disabled={running}
+              disabled={running || !selectedProperty}
               className="fx-clickable"
             >
               <Zap className={`h-4 w-4 ${running ? "animate-pulse" : ""}`} />
@@ -1074,7 +1113,7 @@ export default function Payroll() {
           /* Bare block comment — expression slot, see the projection Card above.
              `primary`: the one action this panel offers. The empty-state twin
              below is `soft` so the two never compete. */
-          <Button variant="primary" size="sm" onClick={() => setShowStaffForm(true)} className="fx-clickable">
+          <Button variant="primary" size="sm" onClick={() => setShowStaffForm(true)} disabled={!selectedProperty} className="fx-clickable">
             <UserPlus /> Add Staff
           </Button>
         }
@@ -1163,6 +1202,7 @@ export default function Payroll() {
                 <div className="flex items-center gap-3">
                   <div>
                     <p className="text-sm text-white">{s.employee_name}</p>
+                    <p className="text-xs text-slate-400">{s.property_name || properties.find(p => String(p.id) === String(s.property_id))?.name || `Property ${s.property_id ?? 'unassigned'}`}</p>
                     <p className="text-xs text-slate-500">
                       {s.department || "—"} · {s.pay_type} · {s.pay_type === "salary" ? money2(s.base_rate) + "/mo" : money2(s.base_rate) + "/hr"}
                     </p>
@@ -1220,7 +1260,7 @@ export default function Payroll() {
               {/* `soft`, not `primary`: the Card header's Add Staff is already
                   the panel's primary and both call the same setter, so a second
                   primary would put two competing answers on one panel. */}
-              <Button variant="soft" size="sm" onClick={() => setShowStaffForm(true)} className="mt-3">
+              <Button variant="soft" size="sm" onClick={() => setShowStaffForm(true)} disabled={!selectedProperty} className="mt-3">
                 <UserPlus /> Add First Staff Member
               </Button>
             </div>
@@ -1237,7 +1277,7 @@ export default function Payroll() {
              C-017 site: this was white on indigo at 4.32:1. `primary` because it
              is the only control in this Card's header and adding an entry is the
              panel's action. */
-          <Button variant="primary" size="sm" onClick={() => setShowForm(true)} className="fx-clickable">
+          <Button variant="primary" size="sm" onClick={() => setShowForm(true)} disabled={!selectedProperty} className="fx-clickable">
             <Plus /> Add Entry
           </Button>
         }
@@ -1335,6 +1375,7 @@ export default function Payroll() {
                 <StatusBadge status={p.payroll_status || "draft"} size="sm" />
                 <div>
                   <p className="text-sm text-white">{p.employee_name}</p>
+                  <p className="text-xs text-slate-400">{p.property_name || properties.find(prop => String(prop.id) === String(p.property_id))?.name || `Property ${p.property_id ?? 'unassigned'}`}</p>
                   <p className="text-xs text-slate-500">
                     {p.department || "—"} · {p.pay_type} · {p.pay_period_start || "—"} to {p.pay_period_end || "—"}
                     {p.auto_generated && <span className="ml-1 text-[#00E096]">· ⚙ auto</span>}

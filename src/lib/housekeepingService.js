@@ -6,6 +6,8 @@
 // overdue calculation. It is React-free so scripts/probe-housekeeping.mjs runs
 // it directly in Node.
 
+import { roomIdentityKey } from "./roomBoard.js";
+
 export const TASK_TYPES = [
   "cleaning",
   "inspection",
@@ -97,9 +99,9 @@ export function overdueTasks(tasks, today) {
 
 // Latest per-room status task, mirroring the room board's needs.
 export function roomHkByRoom(tasks) {
-  const map = {};
+  const map = Object.create(null);
   for (const t of tasks || []) {
-    const key = String(t.room_number || "").trim();
+    const key = roomIdentityKey(t);
     if (!key) continue;
     if (!map[key] || String(t.task_date || "") >= String(map[key].task_date || "")) map[key] = t;
   }

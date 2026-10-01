@@ -8,6 +8,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRef } from "react";
 import { useGlobalFilters, MONTHS_LONG } from "@/lib/useGlobalFilters";
+import { singleSelectedProperty } from "@/lib/propertySelection";
 import { useOccupancy, usePaymentData } from "@/lib/useHotelData";
 import { sum, inRange, pct, C, money2 } from "@/lib/hotel";
 // `hours` on a timecard-derived PayrollRun is an exact quotient of worked minutes
@@ -27,10 +28,10 @@ import { ErrorState } from "@/components/ui/status";
 
 function useExpenses(propertyId) {
   return useQuery({
-    queryKey: ["expenses", Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
+    queryKey: ["expenses", propertyId],
     queryFn: () => {
       const filter = {};
-      if (propertyId && propertyId !== "all") {
+      if (propertyId != null && propertyId !== "" && propertyId !== "all") {
         if (Array.isArray(propertyId)) {
           if (propertyId.length > 0) filter.property_id = { $in: propertyId };
         } else {
@@ -44,10 +45,10 @@ function useExpenses(propertyId) {
 
 function usePayroll(propertyId) {
   return useQuery({
-    queryKey: ["payroll", Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
+    queryKey: ["payroll", propertyId],
     queryFn: () => {
       const filter = {};
-      if (propertyId && propertyId !== "all") {
+      if (propertyId != null && propertyId !== "" && propertyId !== "all") {
         if (Array.isArray(propertyId)) {
           if (propertyId.length > 0) filter.property_id = { $in: propertyId };
         } else {
@@ -60,7 +61,17 @@ function usePayroll(propertyId) {
 }
 
 export default function Expenses() {
+  const { property } = useGlobalFilters();
+  return <PropertyExpenses key={JSON.stringify(property)} />;
+}
+
+function PropertyExpenses() {
   const { property, properties, dateRange, months, period, year } = useGlobalFilters();
+  const selectedProperty = singleSelectedProperty(property, properties);
+  const requireWriteProperty = () => {
+    if (!selectedProperty) toast.error("Select exactly one property before adding expenses or payroll.");
+    return selectedProperty;
+  };
   const occQ = useOccupancy(dateRange, property, months);
   const payQ = usePaymentData(dateRange, property, months);
   const { data: occ = [] } = occQ;
@@ -141,6 +152,8 @@ export default function Expenses() {
   const propName = property === "all" ? "All Properties" : (Array.isArray(property) ? `${property.length} Properties` : (properties.find((p) => p.id === property)?.name || "Property"));
 
   const handleAdd = async () => {
+    const prop = requireWriteProperty();
+    if (!prop) return;
     // Rate limiting for operational actions
     const rateLimit = operationalActionRateLimiter.check();
     if (!rateLimit.allowed) {
@@ -173,7 +186,6 @@ export default function Expenses() {
         category = slugifyCategory(form.customCat);
       }
     }
-    const prop = properties.find((p) => p.id === (Array.isArray(property) ? property[0] : property));
     try {
       await db.entities.Expense.create({
         expense_name: sanitizeCsvCell(String(form.expense_name || "").trim()),
@@ -185,7 +197,7 @@ export default function Expenses() {
         amount: Number(form.amount) || 0,
         recurring: form.frequency !== "one_time",
         taxable: form.taxable !== false,
-        property_id: property !== "all" ? (Array.isArray(property) ? property[0] : property) : "",
+        property_id: prop.id,
         property_name: prop?.name || "",
       });
       toast.success(`Expense "${form.expense_name}" saved.`);
@@ -231,7 +243,7 @@ export default function Expenses() {
   const expVirtualizer = useVirtualizer({
     count: filteredExpenses.length,
     getScrollElement: () => expParentRef.current,
-    estimateSize: () => 64,
+    estimateSize: () => 84,
     overscan: 10,
   });
 
@@ -239,11 +251,13 @@ export default function Expenses() {
   const payrollVirtualizer = useVirtualizer({
     count: payroll.length,
     getScrollElement: () => payrollParentRef.current,
-    estimateSize: () => 64,
+    estimateSize: () => 84,
     overscan: 10,
   });
 
   const handleAddPayroll = async () => {
+    const prop = requireWriteProperty();
+    if (!prop) return;
     // Rate limiting for operational actions
     const rateLimit = operationalActionRateLimiter.check();
     if (!rateLimit.allowed) {
@@ -259,7 +273,6 @@ export default function Expenses() {
     }
 
     if (!payrollForm.employee_name) return;
-    const prop = properties.find((p) => p.id === (Array.isArray(property) ? property[0] : property));
 
     // Pay is computed by the shared calculatePay, not here.
     //
@@ -300,7 +313,7 @@ export default function Expenses() {
       // that omits it is invalid, and because the delete dialog quotes this field back
       // to the owner before destroying the record.
       payroll_status: "draft",
-      property_id: property !== "all" ? (Array.isArray(property) ? property[0] : property) : "",
+      property_id: prop.id,
       property_name: prop?.name || "",
     });
     setPayrollForm({ employee_name: "", department: "Front Desk", pay_type: "hourly", base_rate: "", hours: "40", overtime_hours: "0", bonus: "0", deductions: "0", pay_period_start: new Date().toISOString().slice(0, 10), pay_period_end: new Date().toISOString().slice(0, 10) });
@@ -382,6 +395,7 @@ export default function Expenses() {
         <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Business Expenses & Profit Planner</h1>
         <p className="mt-1 text-sm text-slate-400">Manage payroll, track operating expenses, and calculate break-even targets.</p>
         <p className="mt-2 text-xs text-slate-500">{propName} · {periodLabel} · {year}</p>
+        {!selectedProperty && <p className="mt-2 text-sm text-amber-300">Select one property to add expenses or payroll. Portfolio totals remain available below.</p>}
       </header>
 
       {readFailed && (
@@ -518,6 +532,7 @@ export default function Expenses() {
           subtitle={`${filteredExpenses.length} of ${expenses.length} expenses · ${money2(operatingExpenses)} total`}
           right={
             <button
+              disabled={!selectedProperty}
               onClick={() => setShowForm(!showForm)}
               className="flex items-center gap-1.5 rounded-lg bg-[#6C63FF] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#5b52e8]"
             >
@@ -609,6 +624,7 @@ export default function Expenses() {
                     <div className="flex items-center gap-3">
                       <div>
                         <p className="text-sm text-white">{e.expense_name}</p>
+                        <p className="text-xs text-slate-400">{e.property_name || properties.find(p => String(p.id) === String(e.property_id))?.name || `Property ${e.property_id ?? 'unassigned'}`}</p>
                         <p className="text-xs text-slate-500">{e.vendor || "—"} · {expenseLabel(e.category)} · {frequencyLabel(e.frequency)}</p>
                       </div>
                     </div>
@@ -645,6 +661,7 @@ export default function Expenses() {
           subtitle={`${payroll.length} records · ${money2(totalPayroll)} total`}
           right={
             <button
+              disabled={!selectedProperty}
               onClick={() => setShowPayrollForm(!showPayrollForm)}
               className="flex items-center gap-1.5 rounded-lg bg-[#6C63FF] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#5b52e8]"
             >
@@ -688,6 +705,7 @@ export default function Expenses() {
                   >
                     <div>
                       <p className="text-sm text-white">{p.employee_name}</p>
+                      <p className="text-xs text-slate-400">{p.property_name || properties.find(prop => String(prop.id) === String(p.property_id))?.name || `Property ${p.property_id ?? 'unassigned'}`}</p>
                       <p className="text-xs text-slate-500">{p.department} · {p.pay_type} · {formatNumber(p.hours || 0, 'auto')}h</p>
                     </div>
                     <div className="flex items-center gap-3">

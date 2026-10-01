@@ -35,13 +35,14 @@
 // the zone so entity methods inside read a cached authorization snapshot; awaiting
 // anything that leaves the zone (an auth round-trip, a fetch) forces an early
 // commit and breaks atomicity. That is why the dedupe decision below is made
-// BEFORE the transaction opens and the zone contains writes and nothing else.
+// BEFORE the transaction opens. Existing edit ownership is checked inside the
+// same transaction, before any writes, against its authorized record snapshot.
 
 import { db, runInTransaction } from '@/api/base44Client';
 
 /**
  * @typedef {Object} PreparedRow
- * @property {{ _id?: string }} row the grid row (its `_id` marks an edit, not an insert)
+ * @property {{ _id?: string | number, property_id?: string | number }} row the grid row (its `_id` marks an edit, not an insert)
  * @property {Record<string, any>} record the validated entity fields to write
  */
 
@@ -55,17 +56,26 @@ import { db, runInTransaction } from '@/api/base44Client';
  *
  * @param {Object} args
  * @param {string} args.entityName entity to write, e.g. "OccupancyDay"
+ * @param {string | number} [args.propertyId] the single property being edited
  * @param {PreparedRow[]} args.prepared
  * @param {Set<string>} [args.existingKeys] dedupe keys already in the database
  * @param {(record: Record<string, any>) => string} args.dedupeKey
  * @returns {Promise<{ saved: number, skipped: number }>} counts that reflect what
  *          COMMITTED; on failure this throws and nothing was written.
  */
-export async function saveManualRows({ entityName, prepared = [], existingKeys, dedupeKey }) {
+export async function saveManualRows({ entityName, propertyId, prepared = [], existingKeys, dedupeKey }) {
   // Argument faults are the caller's bug, so they throw here rather than being
   // absorbed into a "0 records saved" that reads like an empty grid.
   if (!entityName) throw new Error('saveManualRows: entityName is required');
   if (typeof dedupeKey !== 'function') throw new Error('saveManualRows: dedupeKey must be a function');
+  // Older callers omit propertyId; infer it only from the batch, then require
+  // every row to use exactly that property. Never fall back to a roster entry.
+  const targetPropertyId = propertyId ?? prepared.find(item => item?.record)?.record.property_id;
+  const validProperty = (typeof targetPropertyId === 'string' && targetPropertyId.trim() !== '' && targetPropertyId !== 'all') ||
+    (typeof targetPropertyId === 'number' && Number.isFinite(targetPropertyId));
+  if (prepared.some(item => item?.record) && !validProperty) {
+    throw new Error('Select one property before saving manual entries.');
+  }
   // No existence check on the entity itself: `db.entities` is a Proxy that builds
   // a no-op entity for any name (base44Client.js#entitiesHandler), so `!entity` is
   // never true and a guard on it would be dead code. A typo'd name is a developer
@@ -86,14 +96,19 @@ export async function saveManualRows({ entityName, prepared = [], existingKeys, 
     const row = item?.row || {};
     const record = item?.record;
     if (!record) continue;
+    if (record.property_id !== targetPropertyId ||
+        (row.property_id != null && row.property_id !== targetPropertyId)) {
+      throw new Error('Manual entries belong to a different property. Reload this property before saving.');
+    }
     const key = dedupeKey(record);
     // An edit targets a known id, so it is never a duplicate of itself.
-    if (!row._id && seen.has(key)) {
+    const hasId = row._id !== undefined && row._id !== null && row._id !== '';
+    if (!hasId && seen.has(key)) {
       skipped++;
       continue;
     }
     seen.add(key);
-    writes.push({ id: row._id || null, record });
+    writes.push({ id: hasId ? row._id : null, record });
   }
 
   // Nothing to write is not a failure — it means every row was already present.
@@ -101,8 +116,17 @@ export async function saveManualRows({ entityName, prepared = [], existingKeys, 
   if (!writes.length) return { saved: 0, skipped };
 
   await runInTransaction([async () => {
+    // Check all edited IDs before the first create/update. An old draft may
+    // carry IDs from another property even when its visible fields look right.
     for (const w of writes) {
-      if (w.id) await entity.update(w.id, w.record);
+      if (w.id === null) continue;
+      const current = await entity.get(w.id);
+      if (!current || current.property_id !== targetPropertyId) {
+        throw new Error('An edited record is missing or belongs to another property. Reload before saving.');
+      }
+    }
+    for (const w of writes) {
+      if (w.id !== null) await entity.update(w.id, w.record);
       else await entity.create(w.record);
     }
   }]);

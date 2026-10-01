@@ -12,6 +12,7 @@ import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { signOffShiftAnomaly } from "@/lib/anomalySignoff";
 import { ErrorState } from "@/components/ui/status";
 import { db } from "@/api/base44Client";
+import { propertyRecordKey, propertyDisplayName } from "@/lib/propertyRecordIdentity";
 
 export default function Employees() {
   const { dateRange, property, properties, employee } = useGlobalFilters();
@@ -35,12 +36,21 @@ export default function Employees() {
   const [signOffNotes, setSignOffNotes] = useState({});
   const [signedClerks, setSignedClerks] = useState({});
   const [notice, setNotice] = useState(null);
+  const viewScope = JSON.stringify([property, dateRange.from, dateRange.to, employee]);
+  useEffect(() => {
+    setSelected(null);
+    setClerkFilter("all");
+    setFraudClerk("all");
+    setSignOffNotes({});
+    setSignedClerks({});
+    setNotice(null);
+  }, [viewScope]);
   useEffect(() => {
     db.auth.me().then((u) => { setMgr(u); setMgrError(null); }).catch((e) => { setMgr(null); setMgrError(e?.message || String(e)); });
   }, []);
 
   const handleSignOff = async (clerk) => {
-    const notes = signOffNotes[clerk.clerk] || "";
+    const notes = signOffNotes[clerk.reviewKey] || "";
     // A sign-off is an attribution: it writes reviewed_by_id / reviewed_by_name
     // onto the shift record and an ANOMALY_SIGN_OFF audit row. This used to fall
     // back to id "manager" and name "Manager" whenever db.auth.me() had failed,
@@ -55,6 +65,9 @@ export default function Employees() {
     }
     const user = mgr;
     try {
+      if (clerk.property_id === "" || clerk.property_id == null || clerk.records.some((rec) => propertyRecordKey(rec, rec.clerk_name || "Unknown") !== clerk.key)) {
+        throw new Error("Select shift records belonging to one identified property before signing off.");
+      }
       for (const rec of clerk.records) {
         if (!rec.id) continue;
         await signOffShiftAnomaly({
@@ -62,11 +75,11 @@ export default function Employees() {
           managerUserId: user.id,
           managerName: user.username || user.email || user.full_name || user.id,
           resolutionNotes: notes,
-          propertyId: rec.property_id || property || null,
+          propertyId: clerk.property_id,
         });
       }
-      setSignedClerks((p) => ({ ...p, [clerk.clerk]: true }));
-      setNotice({ type: "ok", text: `Signed off ${clerk.clerk}'s shift records.` });
+      setSignedClerks((p) => ({ ...p, [clerk.reviewKey]: true }));
+      setNotice({ type: "ok", text: `Signed off ${clerk.clerk}'s shift records at ${propertyDisplayName(clerk, properties)}.` });
     } catch (e) {
       setNotice({ type: "error", text: `Sign-off failed: ${e.message}` });
     }
@@ -82,12 +95,12 @@ export default function Employees() {
   // references, preserving current behavior exactly.
   const fraudAdjustments = useMemo(() => {
     if (fraudClerk === "all") return adjustments;
-    return adjustments.filter((a) => a.username === fraudClerk);
+    return adjustments.filter((a) => propertyRecordKey(a, a.username) === fraudClerk);
   }, [adjustments, fraudClerk]);
 
   const fraudRefunds = useMemo(() => {
     let r = refunds;
-    if (fraudClerk !== "all") r = r.filter((x) => x.username === fraudClerk);
+    if (fraudClerk !== "all") r = r.filter((x) => propertyRecordKey(x, x.username) === fraudClerk);
     if (fraudType !== "all") r = r.filter((x) => (x.paymentTypeRefunded || "—") === fraudType);
     return r;
   }, [refunds, fraudClerk, fraudType]);
@@ -96,11 +109,14 @@ export default function Employees() {
   // hides the others. Clerk options union adjustment + refund usernames; payment
   // types exist on refunds only.
   const fraudClerkOptions = useMemo(() => {
-    const set = new Set();
-    for (const a of adjustments) if (a.username) set.add(a.username);
-    for (const r of refunds) if (r.username) set.add(r.username);
-    return [...set].sort((a, b) => a.localeCompare(b));
-  }, [adjustments, refunds]);
+    const options = new Map();
+    for (const row of [...adjustments, ...refunds]) {
+      if (!row.username) continue;
+      const key = propertyRecordKey(row, row.username);
+      options.set(key, { key, label: `${row.username} · ${propertyDisplayName(row, properties)}` });
+    }
+    return [...options.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }, [adjustments, refunds, properties]);
 
   const fraudTypeOptions = useMemo(() => {
     const set = new Set();
@@ -147,9 +163,14 @@ export default function Employees() {
     if (!clerkRecords.length && !drops.length) return [];
 
     const map = new Map();
-    const ensure = (k) => {
+    const ensure = (row) => {
+      const clerk = row.clerk_name || "Unknown";
+      const k = propertyRecordKey(row, clerk);
       if (!map.has(k)) map.set(k, {
-        clerk: k,
+        key: k,
+        clerk,
+        property_id: row.property_id ?? "",
+        property_name: row.property_name || "",
         totalAdjusted: 0,
         positiveSum: 0,
         negativeSum: 0,
@@ -162,8 +183,7 @@ export default function Employees() {
     };
 
     typeFilteredClerkRecords.forEach((r) => {
-      const k = r.clerk_name || "Unknown";
-      const s = ensure(k);
+      const s = ensure(r);
       const adj = Number(r.amount) || 0;
       s.totalAdjusted += adj;
       if (adj > 0) s.positiveSum += adj;
@@ -173,8 +193,7 @@ export default function Employees() {
     });
 
     drops.forEach((d) => {
-      const k = d.clerk_name || "Unknown";
-      const s = ensure(k);
+      const s = ensure(d);
       s.dropCount += 1;
       s.cashDropped += Number(d.amount) || 0;
     });
@@ -191,22 +210,23 @@ export default function Employees() {
       }
       return {
         ...s,
+        reviewKey: JSON.stringify([viewScope, s.key, typeFilter, s.records.map((r) => [r.id, r.amount, r.created_date])]),
         avgPerRecord: s.txnCount ? Math.abs(s.totalAdjusted) / s.txnCount : 0,
         status,
       };
     }).sort((a, b) => b.txnCount - a.txnCount);
-  }, [typeFilteredClerkRecords, drops]);
+  }, [typeFilteredClerkRecords, drops, viewScope, typeFilter]);
 
   // Clerk filter narrows which clerk rows are shown in the table (the audit
   // aggregation/KPIs above still reflect the payment-type filter).
   const filteredStats = useMemo(() => {
     if (clerkFilter === "all") return stats;
-    return stats.filter((s) => s.clerk === clerkFilter);
+    return stats.filter((s) => s.key === clerkFilter);
   }, [stats, clerkFilter]);
 
   const clerkOptions = useMemo(
-    () => [...new Set(stats.map((s) => s.clerk))].sort((a, b) => a.localeCompare(b)),
-    [stats]
+    () => stats.map((s) => ({ key: s.key, label: `${s.clerk} · ${propertyDisplayName(s, properties)}` })).sort((a, b) => a.label.localeCompare(b.label)),
+    [stats, properties]
   );
   const typeOptions = useMemo(() => {
     const set = new Set(clerkRecords.map((r) => (r.payment_type || "—")).filter(Boolean));
@@ -342,7 +362,7 @@ export default function Employees() {
                 >
                   <option value="all">All Clerks</option>
                   {clerkOptions.map((c) => (
-                    <option key={c} value={c}>{c}</option>
+                    <option key={c.key} value={c.key}>{c.label}</option>
                   ))}
                 </select>
               </label>
@@ -378,16 +398,17 @@ export default function Employees() {
                   </thead>
                    <tbody>
                      {filteredStats.map((s) => (
-                      <React.Fragment key={s.clerk}>
+                      <React.Fragment key={s.key}>
                         <tr
-                          onClick={() => setSelected(selected === s.clerk ? null : s.clerk)}
+                          onClick={() => setSelected(selected === s.key ? null : s.key)}
                           className="cursor-pointer border-t border-white/5 transition-colors hover:bg-white/[0.03]"
                         >
                           <td className="py-2.5 pr-4">
                             <span className="flex items-center gap-2 text-slate-200">
-                              {selected === s.clerk ? <ChevronUp className="h-3.5 w-3.5 text-slate-500" /> : <ChevronDown className="h-3.5 w-3.5 text-slate-500" />}
+                              {selected === s.key ? <ChevronUp className="h-3.5 w-3.5 text-slate-500" /> : <ChevronDown className="h-3.5 w-3.5 text-slate-500" />}
                               {s.clerk}
                             </span>
+                            <span className="ml-5 text-xs text-slate-500">{propertyDisplayName(s, properties)}</span>
                           </td>
                           <td className="py-2.5 pr-4 text-right tabular-nums text-slate-400">{num(s.txnCount)}</td>
                           <td className="py-2.5 pr-4 text-right tabular-nums text-[#00E096]">{money2(s.positiveSum)}</td>
@@ -414,11 +435,11 @@ export default function Employees() {
                             )}
                           </td>
                         </tr>
-                        {selected === s.clerk && (
+                        {selected === s.key && (
                           <tr className="border-t border-white/5">
                             <td colSpan={totalDrops > 0 ? 7 : 6} className="bg-[#0A1628]/40 px-8 py-4">
                               <p className="mb-3 text-[11px] uppercase tracking-widest text-slate-500">
-                                Payment details — {s.clerk} · {s.records.length} records
+                                Payment details — {s.clerk} · {propertyDisplayName(s, properties)} · {s.records.length} records
                               </p>
                               <div className="max-h-60 overflow-auto">
                                 <table className="w-full text-xs">
@@ -445,17 +466,17 @@ export default function Employees() {
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/5 pt-3">
                   <input
-                    value={signOffNotes[s.clerk] || ""}
-                    onChange={(e) => setSignOffNotes((p) => ({ ...p, [s.clerk]: e.target.value }))}
+                    value={signOffNotes[s.reviewKey] || ""}
+                    onChange={(e) => setSignOffNotes((p) => ({ ...p, [s.reviewKey]: e.target.value }))}
                     placeholder="Resolution notes (optional)"
                     className="flex-1 min-w-[200px] rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-xs text-white"
                   />
                   <button
                     onClick={() => handleSignOff(s)}
-                    disabled={signedClerks[s.clerk]}
+                    disabled={signedClerks[s.reviewKey] || !s.records.length || s.property_id === "" || s.property_id == null}
                     className="rounded-lg bg-[#00D4FF] px-3 py-2 text-xs font-medium text-[#04231A] hover:bg-[#5fe3ff] disabled:opacity-50"
                   >
-                    {signedClerks[s.clerk] ? "Signed Off" : "Sign Off Shift"}
+                    {signedClerks[s.reviewKey] ? "Signed Off" : "Sign Off Shift"}
                   </button>
                 </div>
                              </td>
@@ -499,7 +520,7 @@ export default function Employees() {
                     >
                       <option value="all">All Clerks</option>
                       {fraudClerkOptions.map((c) => (
-                        <option key={c} value={c}>{c}</option>
+                        <option key={c.key} value={c.key}>{c.label}</option>
                       ))}
                     </select>
                   </label>
@@ -528,6 +549,8 @@ export default function Employees() {
                 </div>
 
                 <ClerkAuditMatrix
+                  key={viewScope}
+                  properties={properties}
                   flaggedAnomalies={flaggedAnomalies}
                   clerkRiskScores={clerkRiskScores}
                   adjustments={fraudAdjustments}

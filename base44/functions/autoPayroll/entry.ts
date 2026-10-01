@@ -20,6 +20,11 @@ const OT_MULTIPLIER = 1.5;
 const BREAK_MINUTES = 30;
 const BREAK_AFTER_HOURS = 6;
 
+const propertyKey = (value: any) => String(value ?? "").trim();
+const employeeNameKey = (value: any) => String(value ?? "").trim().toLowerCase();
+const payrollIdentity = (propertyId: any, employeeName: any) =>
+  JSON.stringify([propertyKey(propertyId), employeeNameKey(employeeName)]);
+
 // ─── Money (parity with src/lib/decimal.js and src/lib/timecardCalc.js) ───
 // Same isolation reason as the reconciler above: no shared import is possible,
 // so the three functions this file needs are inlined. They must stay
@@ -137,12 +142,12 @@ function reconcileTimecards(punches: any[]): any[] {
     if (!employeeKey) continue;
     const bounds = weekBounds(date, 0);
     if (!bounds) continue;
-    const propKey = String(p.property_id || "").trim();
-    const key = `${propKey}||${employeeKey.toLowerCase()}||${bounds.weekStart}`;
+    const propKey = propertyKey(p.property_id);
+    const key = JSON.stringify([propKey, employeeNameKey(employeeKey), bounds.weekStart]);
     let row = rows.get(key);
     if (!row) {
       row = {
-        employeeKey: employeeKey.toLowerCase(),
+        employeeKey: employeeNameKey(employeeKey),
         property_id: propKey,
         paid_minutes: 0,
         regular_minutes: 0,
@@ -309,7 +314,7 @@ export default async function runAutoPayroll(req) {
     if (body.propertyId) staffFilter.property_id = body.propertyId;
     let staff = (await base44.asServiceRole.entities.Staff.filter(staffFilter)) || [];
     if (body.propertyId) {
-      staff = staff.filter((s: any) => s.property_id === body.propertyId);
+      staff = staff.filter((s: any) => propertyKey(s.property_id) === body.propertyId);
     }
     if (!staff || staff.length === 0) {
       return Response.json({
@@ -329,10 +334,14 @@ export default async function runAutoPayroll(req) {
       if (body.propertyId) runFilter.property_id = body.propertyId;
       existing = await base44.asServiceRole.entities.PayrollRun.filter(runFilter) || [];
     } catch (err) {
-      existing = [];
+      console.error('[autoPayroll] payroll history read failed:', err);
+      return Response.json({
+        error: "Payroll history could not be loaded. No payroll was created; retry when the history is available.",
+        status: "failed",
+      }, { status: 503 });
     }
     const paidKeys = new Set(
-      existing.map((r) => `${r.property_id || "all"}::${String(r.employee_name || "").toLowerCase()}`)
+      existing.map((r) => payrollIdentity(r.property_id, r.employee_name))
     );
 
     // 2b. Reconcile clock-in/out punches for this period into per-employee
@@ -350,24 +359,25 @@ export default async function runAutoPayroll(req) {
       const allPunches = await base44.asServiceRole.entities.TimecardPunch.filter(punchFilter) || [];
       const punches = allPunches.filter(
         (p: any) =>
-          (!body.propertyId || p.property_id === body.propertyId) &&
+          (!body.propertyId || propertyKey(p.property_id) === body.propertyId) &&
           String(p.shift_date || "").slice(0, 10) >= periodStart &&
           String(p.shift_date || "").slice(0, 10) <= periodEnd
       );
       if (punches.length) {
-        const staffNames = new Set(staff.map((s: any) => String(s.employee_name).trim().toLowerCase()));
-        timecardWeeks = reconcileTimecards(punches).filter((w) => staffNames.has(String(w.employeeKey || "").toLowerCase()));
+        const staffIdentities = new Set(staff.map((s: any) => payrollIdentity(s.property_id, s.employee_name)));
+        timecardWeeks = reconcileTimecards(punches).filter((w) => staffIdentities.has(payrollIdentity(w.property_id, w.employeeKey)));
       }
     } catch (err) {
-      // TimecardPunch may not be deployed yet, or the filter isn't supported —
-      // fall back to Staff.hours silently rather than failing the whole run.
-      timecardWeeks = [];
+      console.error('[autoPayroll] timecard read failed:', err);
+      return Response.json({
+        error: "Timecards could not be loaded. No payroll was created; retry when timecards are available.",
+        status: "failed",
+      }, { status: 503 });
     }
     const byEmployee = (low: string, propId?: string) => {
+      const identity = payrollIdentity(propId, low);
       const weeks = timecardWeeks.filter((w) => {
-        if (String(w.employeeKey || "").toLowerCase() !== low) return false;
-        if (propId && w.property_id && w.property_id !== propId) return false;
-        return true;
+        return payrollIdentity(w.property_id, w.employeeKey) === identity;
       });
       if (!weeks.length) return null;
       // Sum the MINUTES, then divide once. Summing the per-week `hours` quotients
@@ -392,22 +402,27 @@ export default async function runAutoPayroll(req) {
     const created = [];
     const skipped = [];
     for (const s of staff) {
-      if (body.propertyId && s.property_id !== body.propertyId) {
+      const staffPropertyId = propertyKey(s.property_id);
+      if (body.propertyId && staffPropertyId !== body.propertyId) {
         continue;
       }
-      const key = `${s.property_id || "all"}::${String(s.employee_name || "").toLowerCase()}`;
+      if (!staffPropertyId || staffPropertyId === "all") {
+        skipped.push({ employee_name: s.employee_name, property_id: staffPropertyId, reason: "assign this employee to a property before generating payroll" });
+        continue;
+      }
+      const key = payrollIdentity(staffPropertyId, s.employee_name);
       if (paidKeys.has(key)) {
-        skipped.push({ employee_name: s.employee_name, reason: "already processed for this period" });
+        skipped.push({ employee_name: s.employee_name, property_id: staffPropertyId, reason: "already processed for this period" });
         continue;
       }
       if (!s.employee_name || !(Number(s.base_rate) > 0)) {
-        skipped.push({ employee_name: s.employee_name, reason: "missing pay configuration" });
+        skipped.push({ employee_name: s.employee_name, property_id: staffPropertyId, reason: "missing pay configuration" });
         continue;
       }
       const baseRate = Number(s.base_rate) || 0;
       // Timecard-derived hours win when punches cover the period for this person;
       // otherwise fall back to the hand-typed Staff record.
-      const tc = byEmployee(String(s.employee_name || "").toLowerCase(), s.property_id);
+      const tc = byEmployee(employeeNameKey(s.employee_name), staffPropertyId);
       const hours = tc ? Number(tc.hours) || 0 : Number(s.hours) || 0;
       const otHours = tc ? Number(tc.overtime_hours) || 0 : Number(s.overtime_hours) || 0;
       const otRate = Number(s.overtime_rate) || baseRate * OT_MULTIPLIER;
@@ -430,7 +445,7 @@ export default async function runAutoPayroll(req) {
       const totalPayCents = regularPayCents + overtimePayCents + toCents(bonus) - toCents(deductions);
 
       const record = {
-        property_id: s.property_id || "",
+        property_id: staffPropertyId,
         property_name: s.property_name || "",
         employee_name: s.employee_name,
         department: s.department || "",
@@ -453,6 +468,7 @@ export default async function runAutoPayroll(req) {
       };
 
       await base44.asServiceRole.entities.PayrollRun.create(record);
+      paidKeys.add(key);
       created.push(record);
     }
 

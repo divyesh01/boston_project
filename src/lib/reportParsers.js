@@ -100,8 +100,12 @@ async function recordCreatedIds(entity, propertyId, importId, ids) {
 // force re-import never stacks a second copy. Created ids go into the rollback
 // ledger, so an undo also removes the alerts the import produced.
 async function persistAnomalyAlerts(rows, meta) {
-  const propertyId = meta.propertyId || "";
-  const alerts = detectAnomalies(rows || []);
+  const propertyId = meta.propertyId ?? "";
+  const alerts = detectAnomalies((rows || []).map(row => ({
+    ...row,
+    property_id: propertyId,
+    property_name: meta.propertyName || "",
+  })));
   if (!alerts.length) return { count: 0, audit: null };
 
   const stamped = alerts.map((a) => ({
@@ -814,7 +818,15 @@ async function doImport(scanResult, meta, importId) {
     }
 
     // Run clerk-specific anomaly detection on imported adjustments/refunds
-    const anomalyInput = { adjustments, refunds };
+    const stampAnomalySource = row => ({
+      ...row,
+      property_id: restMeta.propertyId ?? "",
+      property_name: restMeta.propertyName || "",
+    });
+    const anomalyInput = {
+      adjustments: adjustments.map(stampAnomalySource),
+      refunds: refunds.map(stampAnomalySource),
+    };
     const { flaggedAnomalies } = detectClerkAnomalies(anomalyInput);
     let anomalyAudit = null;
     if (flaggedAnomalies.length) {

@@ -32,6 +32,14 @@ export function normalizeRoomNumber(v) {
   return String(v ?? "").trim();
 }
 
+// Room numbers repeat across hotels. Every operational join must include the
+// property; an unassigned record must never attach to a named property's room.
+export function roomIdentityKey(row) {
+  const number = normalizeRoomNumber(row?.room_number);
+  const propertyId = row?.property_id ?? "";
+  return number ? JSON.stringify([typeof propertyId, propertyId, number]) : "";
+}
+
 // Deterministic integer-cents rounding for a dollar rate (avoid float drift).
 export function toRateCents(dollars) {
   return Math.round((Number(dollars) || 0) * 100);
@@ -50,11 +58,11 @@ export function staysForDate(stays, date) {
   return (stays || []).filter((s) => String(s.date).slice(0, 10) === String(date).slice(0, 10));
 }
 
-// Map room_number -> stay for a single date.
+// Map property + room number -> stay for a single date.
 export function staysByRoom(stays, date) {
-  const map = {};
+  const map = Object.create(null);
   for (const s of staysForDate(stays, date)) {
-    const key = normalizeRoomNumber(s.room_number);
+    const key = roomIdentityKey(s);
     if (key && !map[key]) map[key] = s;
   }
   return map;
@@ -62,9 +70,9 @@ export function staysByRoom(stays, date) {
 
 // Most recent housekeeping state per room (across all tasks).
 export function housekeepingByRoom(tasks) {
-  const map = {};
+  const map = Object.create(null);
   for (const t of tasks || []) {
-    const key = normalizeRoomNumber(t.room_number);
+    const key = roomIdentityKey(t);
     if (!key) continue;
     const existing = map[key];
     if (!existing || String(t.task_date || "") >= String(existing.task_date || "")) {
@@ -81,6 +89,7 @@ export function roomBoardStats(rooms, stays, date) {
   const roomList = rooms || [];
   const dayStays = staysForDate(stays, date);
   const byRoom = staysByRoom(stays, date);
+  const registeredRooms = new Set(roomList.map(roomIdentityKey).filter(Boolean));
 
   let occupied = 0;
   let oos = 0;
@@ -92,7 +101,7 @@ export function roomBoardStats(rooms, stays, date) {
       oos += 1;
       continue;
     }
-    const stay = byRoom[normalizeRoomNumber(room.room_number)];
+    const stay = byRoom[roomIdentityKey(room)];
     if (stay) {
       occupied += 1;
       occupiedStays.push(stay);
@@ -104,8 +113,8 @@ export function roomBoardStats(rooms, stays, date) {
   // A stay might exist for a room not yet in the register — count it so the
   // board never under-reports occupancy.
   for (const stay of dayStays) {
-    const key = normalizeRoomNumber(stay.room_number);
-    const inRegister = roomList.some((r) => normalizeRoomNumber(r.room_number) === key);
+    const key = roomIdentityKey(stay);
+    const inRegister = registeredRooms.has(key);
     if (!inRegister) occupied += 1;
   }
 
@@ -132,6 +141,11 @@ export function roomBoardStats(rooms, stays, date) {
 // Derive the single display status for one room tile given its stay + housekeeping.
 export function roomTile(room, stay, housekeeping) {
   const base = {
+    id: room.id,
+    roomId: room.id,
+    property_id: room.property_id,
+    property_name: room.property_name || "",
+    room_key: roomIdentityKey(room),
     room_number: normalizeRoomNumber(room.room_number),
     room_type: room.room_type || "Standard",
     floor: room.floor || "",
@@ -164,7 +178,7 @@ export function buildRoomBoard(rooms, stays, tasks, date) {
   const byRoom = staysByRoom(stays, date);
   const hkByRoom = housekeepingByRoom(tasks);
   return (rooms || []).map((room) =>
-    roomTile(room, byRoom[normalizeRoomNumber(room.room_number)], hkByRoom[normalizeRoomNumber(room.room_number)])
+    roomTile(room, byRoom[roomIdentityKey(room)], hkByRoom[roomIdentityKey(room)])
   );
 }
 

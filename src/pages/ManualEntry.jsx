@@ -15,6 +15,7 @@ import { parseManualEntryCsv, parseManualEntryPaste } from "@/lib/manualEntryImp
 import { saveManualRows } from "@/lib/manualEntrySave";
 import { draftKeyFor, readDraft, writeDraft, clearDraft } from "@/lib/manualDraft";
 import { MAX_IMPORT_BYTES } from "@/lib/csvParser";
+import { singleSelectedProperty } from "@/lib/propertySelection";
 
 // An uploaded file is hostile input. MAX_IMPORT_BYTES is imported from csvParser —
 // the single source of truth the report-import path (fetchCsvRows, uploadGuard,
@@ -109,23 +110,40 @@ const REPORT_CONFIGS = {
 function useManualEntries(reportType, propertyId) {
   return useQuery({
     queryKey: ["manual-entries", reportType, propertyId],
+    enabled: propertyId !== undefined && propertyId !== null && propertyId !== "" && propertyId !== "all",
     queryFn: async () => {
       const config = REPORT_CONFIGS[reportType];
-      if (!config) return [];
-      const filter = { report_type: "manual_entry" };
-      if (propertyId && propertyId !== "all") {
-        if (Array.isArray(propertyId)) filter.property_id = { $in: propertyId };
-        else filter.property_id = propertyId;
-      }
-      return db.entities[config.entity].filter(filter, "-date", 100000);
+      if (!config || propertyId == null || propertyId === "" || propertyId === "all" || Array.isArray(propertyId)) return [];
+      return db.entities[config.entity].filter({ report_type: "manual_entry", property_id: propertyId }, "-date");
     },
   });
 }
 
 export default function ManualEntry() {
-  const { property, properties, accessibleProperties } = useGlobalFilters();
-  const qc = useQueryClient();
+  const { property, setProperty, accessibleProperties } = useGlobalFilters();
   const [reportType, setReportType] = useState("occupancy");
+  const selectedProperty = singleSelectedProperty(property, accessibleProperties);
+  // A different property or report gets its own editor lifetime. Rows, undo,
+  // drafts and unfinished CSV reads cannot migrate with a filter change.
+  return (
+    <ManualEntryEditor
+      key={JSON.stringify([typeof selectedProperty?.id, selectedProperty?.id, reportType])}
+      selectedProperty={selectedProperty}
+      accessibleProperties={accessibleProperties}
+      setProperty={setProperty}
+      reportType={reportType}
+      setReportType={setReportType}
+    />
+  );
+}
+
+function ManualEntryEditor({ selectedProperty, accessibleProperties, setProperty, reportType, setReportType }) {
+  const qc = useQueryClient();
+  const activeEditor = useRef(true);
+  useEffect(() => {
+    activeEditor.current = true;
+    return () => { activeEditor.current = false; };
+  }, []);
   const [search, setSearch] = useState("");
   const [rows, setRows] = useState([]);
   const [history, setHistory] = useState([]);
@@ -142,33 +160,30 @@ export default function ManualEntry() {
   const [importWarnings, setImportWarnings] = useState([]);
   const fileInputRef = useRef(null);
   
-  const [draftKey, setDraftKey] = useState("");
+  const draftKey = selectedProperty ? draftKeyFor(selectedProperty.id, reportType) : "";
   const [draftToRecover, setDraftToRecover] = useState(null);
   // Which draft key the auto-save failure has already been stated for, so a
   // refused write is reported once instead of on every keystroke.
   const draftWarnedFor = useRef("");
 
-  // When property/reportType changes, evaluate draft
+  // Only the explicitly selected property's draft belongs to this editor.
   useEffect(() => {
-    const propId = Array.isArray(property) ? property[0] : property;
-    if (!propId) return;
-    const key = draftKeyFor(propId, reportType);
-    setDraftKey(key);
+    if (!draftKey) return;
     
     // Every failure here reaches the screen as well as the console. A draft of
     // hand-typed money rows that turned out to be unreadable used to be deleted in
     // silence, and the grid simply came up empty. See src/lib/manualDraft.js.
-    const { rows: recoverable, discard, problem } = readDraft(key);
+    const { rows: recoverable, discard, problem } = readDraft(draftKey);
     // The result is deliberately ignored: a draft that cannot be loaded is being
     // removed as cleanup, and if the removal fails the next read reports it again.
-    if (discard) clearDraft(key);
+    if (discard) clearDraft(draftKey);
     setDraftToRecover(recoverable);
     if (problem) {
       setSaveMsg(problem);
       setMsgTone("error");
       setImportWarnings([problem]);
     }
-  }, [property, reportType]);
+  }, [draftKey]);
 
   // Auto-save. A refused write used to be a console.warn while the page went on
   // rendering its amber "● Unsaved draft" dot, so the operator was told the typed
@@ -217,15 +232,14 @@ export default function ManualEntry() {
   };
 
   const config = REPORT_CONFIGS[reportType];
-  const selectedProperty = properties.find((p) => p.id === (Array.isArray(property) ? property[0] : property));
   // The query OBJECT is kept, not just its data. `existingQ.isError` is what lets
   // handleSave refuse to write when the dedupe list could not load — see the guard
   // there. Defaulting via `?? []` (rather than destructuring `= []`) keeps the
   // failure visible instead of laundering it into an ordinary empty list.
-  const existingQ = useManualEntries(reportType, property);
+  const existingQ = useManualEntries(reportType, selectedProperty?.id);
   const existing = existingQ.data ?? [];
 
-  const propertyOpts = (accessibleProperties.length ? accessibleProperties : properties).map((p) => [p.id, p.name]);
+  const propertyOpts = accessibleProperties.map((p) => [JSON.stringify(p.id), p.name]);
 
   const pushHistory = useCallback((newRows) => {
     setHistory((prev) => {
@@ -237,14 +251,16 @@ export default function ManualEntry() {
   }, [historyIndex]);
 
   const loadFromExisting = useCallback(() => {
+    if (!selectedProperty || !existingQ.isSuccess) return;
     const mapped = existing.map((r) => ({ ...r, _id: r.id }));
     setRows(mapped);
     setHistory([JSON.parse(JSON.stringify(mapped))]);
     setHistoryIndex(0);
     setHasDraft(false);
-  }, [existing]);
+  }, [existing, existingQ.isSuccess, selectedProperty]);
 
   const initEmpty = useCallback(() => {
+    if (!selectedProperty) return;
     const today = new Date().toISOString().slice(0, 10);
     const newRow = {};
     config.fields.forEach((f) => {
@@ -258,7 +274,7 @@ export default function ManualEntry() {
     setHistory([JSON.parse(JSON.stringify(initial))]);
     setHistoryIndex(0);
     setHasDraft(false);
-  }, [config]);
+  }, [config, selectedProperty]);
 
   const handleAddRow = () => {
     const today = new Date().toISOString().slice(0, 10);
@@ -308,6 +324,7 @@ export default function ManualEntry() {
   // that could not be matched or a cell that could not be read arrives as a warning
   // and is left blank, so a missing figure is visible instead of reading as a real 0.
   const applyParsed = ({ rows: parsedRows, warnings, error }, whatFailed) => {
+    if (!activeEditor.current || !selectedProperty) return;
     if (error) {
       setSaveMsg(`${whatFailed} — ${error}`);
       setMsgTone("error");
@@ -340,7 +357,7 @@ export default function ManualEntry() {
     // Clearing the input means picking the same file twice still fires onChange,
     // so a retry after a failed import is not silently ignored.
     e.target.value = "";
-    if (!file) return;
+    if (!file || !selectedProperty) return;
     if (file.size > MAX_IMPORT_BYTES) {
       setSaveMsg(`Not imported — that file is ${(file.size / 1024 / 1024).toFixed(1)}MB, over the ${MAX_IMPORT_BYTES / 1024 / 1024}MB limit.`);
       setMsgTone("error");
@@ -351,11 +368,13 @@ export default function ManualEntry() {
     try {
       text = await file.text();
     } catch (err) {
+      if (!activeEditor.current) return;
       setSaveMsg(`Not imported — that file could not be read (${err?.message || "unknown error"}).`);
       setMsgTone("error");
       setImportWarnings([]);
       return;
     }
+    if (!activeEditor.current) return;
     // accept=".csv" is a filename filter the user can defeat in the file dialog.
     // A NUL byte means binary (xlsx, pdf), which would otherwise land in the grid
     // as mojibake rows and then be offered for saving.
@@ -431,7 +450,7 @@ export default function ManualEntry() {
     setSaving(true);
     setSaveMsg("");
     setImportWarnings([]);
-    const prop = selectedProperty || properties[0];
+    const prop = selectedProperty;
     if (!prop) {
       setSaveMsg("Select a property first.");
       setMsgTone("error");
@@ -439,8 +458,7 @@ export default function ManualEntry() {
       return;
     }
     // Enforce property access: a restricted user can only save to their own properties.
-    const allowedIds = accessibleProperties.length ? new Set(accessibleProperties.map((p) => String(p.id))) : null;
-    if (allowedIds && !allowedIds.has(String(prop.id))) {
+    if (!accessibleProperties.some((p) => p.id === prop.id)) {
       setSaveMsg("You do not have access to the selected property.");
       setMsgTone("error");
       setSaving(false);
@@ -449,7 +467,7 @@ export default function ManualEntry() {
     const meta = {
       property_id: prop.id,
       property_name: prop.name,
-      import_id: `manual_${Date.now()}`,
+      import_id: `manual_${crypto.randomUUID()}`,
       source_file: `Manual Entry by ${prop.name}`,
       report_type: "manual_entry",
     };
@@ -463,7 +481,7 @@ export default function ManualEntry() {
     // counted revenue with no error anywhere. An empty grid is a nuisance; an
     // empty dedupe set is silent data corruption. So the save refuses until the
     // read succeeds, and says exactly why.
-    if (existingQ.isError) {
+    if (!existingQ.isSuccess) {
       setSaveMsg("Not saved - the saved-entries list could not be loaded, so duplicate rows cannot be detected. Retry, and do not re-enter rows until it loads.");
       setMsgTone("error");
       setSaving(false);
@@ -551,11 +569,13 @@ export default function ManualEntry() {
       // written. See src/lib/manualEntrySave.js.
       ({ saved, skipped } = await saveManualRows({
         entityName,
+        propertyId: prop.id,
         prepared,
         existingKeys,
         dedupeKey,
       }));
     } catch (e) {
+      if (!activeEditor.current) return;
       setSaveMsg(`Not saved — ${e?.message || String(e)}. No records were written; fix the problem and save again.`);
       setMsgTone("error");
       setImportWarnings([e?.message || String(e)]);
@@ -570,6 +590,7 @@ export default function ManualEntry() {
     qc.invalidateQueries({ queryKey: ["payments"] });
     qc.invalidateQueries({ queryKey: ["gross"] });
     qc.invalidateQueries({ queryKey: ["sources"] });
+    if (!activeEditor.current) return;
     const extra = skipped ? ` · ${skipped} duplicate${skipped === 1 ? "" : "s"} skipped` : "";
     setSaveMsg(`${saved} records saved. All dashboards updated.${extra}`);
     setMsgTone("success");
@@ -627,8 +648,11 @@ export default function ManualEntry() {
           <div>
             <label className="mb-1.5 block text-xs text-slate-400">Property</label>
             <ResponsiveSelect
-              value={Array.isArray(property) ? property[0] : property}
-              onValueChange={() => { /* handled by global filters */ }}
+              value={selectedProperty ? JSON.stringify(selectedProperty.id) : ""}
+              onValueChange={(value) => {
+                const next = accessibleProperties.find((p) => JSON.stringify(p.id) === value);
+                if (next) setProperty(next.id);
+              }}
               options={propertyOpts}
               placeholder="Select property…"
             />
@@ -637,19 +661,20 @@ export default function ManualEntry() {
             <label className="mb-1.5 block text-xs text-slate-400">Report Type</label>
             <ResponsiveSelect
               value={reportType}
-              onValueChange={(v) => { setReportType(v); setRows([]); }}
+              onValueChange={setReportType}
               options={Object.entries(REPORT_CONFIGS).map(([k, c]) => [k, c.label])}
             />
           </div>
           <div className="flex items-end gap-2">
-            <button onClick={initEmpty} className="flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-200 hover:border-[#00D4FF]/30">
+            <button onClick={initEmpty} disabled={!selectedProperty} className="flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-200 hover:border-[#00D4FF]/30 disabled:opacity-50">
               <Plus className="h-3.5 w-3.5" /> New Grid
             </button>
-            <button onClick={loadFromExisting} className="flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-200 hover:border-[#00D4FF]/30">
+            <button onClick={loadFromExisting} disabled={!selectedProperty || !existingQ.isSuccess} className="flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-200 hover:border-[#00D4FF]/30 disabled:opacity-50">
               <Table2 className="h-3.5 w-3.5" /> Load Existing
             </button>
           </div>
         </div>
+        {!selectedProperty && <p className="mt-3 text-sm text-amber-400">Select one property before entering or loading records. Each property keeps its own grid and draft.</p>}
         {existingQ.isError && (
           <ErrorState
             title="Saved entries could not be loaded"
@@ -793,7 +818,7 @@ export default function ManualEntry() {
                 )}
                 <button
                   onClick={handleSave}
-                  disabled={saving || !hasDraft}
+                  disabled={saving || !hasDraft || !selectedProperty || !existingQ.isSuccess}
                   className="flex items-center gap-1.5 rounded-lg bg-[#00E096] px-4 py-2 text-sm font-medium text-[#040D1A] hover:bg-[#00c885] disabled:opacity-50"
                 >
                   <Save className="h-4 w-4" /> {saving ? "Saving…" : "Save & Update Dashboards"}
@@ -810,7 +835,7 @@ export default function ManualEntry() {
             <FileSpreadsheet className="h-12 w-12 text-slate-600" />
             <p className="mt-3 text-sm text-slate-400">No data in the grid yet.</p>
             <div className="mt-4 flex gap-2">
-              <button onClick={initEmpty} className="flex items-center gap-1.5 rounded-lg bg-[#6C63FF] px-4 py-2 text-sm font-medium text-white hover:bg-[#5b52e8]">
+              <button onClick={initEmpty} disabled={!selectedProperty} className="flex items-center gap-1.5 rounded-lg bg-[#6C63FF] px-4 py-2 text-sm font-medium text-white hover:bg-[#5b52e8] disabled:opacity-50">
                 <Plus className="h-4 w-4" /> Start New Grid
               </button>
               {existing.length > 0 && (
@@ -818,7 +843,7 @@ export default function ManualEntry() {
                   <Table2 className="h-4 w-4" /> Load {existing.length} Existing Records
                 </button>
               )}
-              <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-200 hover:border-[#00D4FF]/30">
+              <button onClick={() => fileInputRef.current?.click()} disabled={!selectedProperty} className="flex items-center gap-1.5 rounded-lg border border-white/10 px-4 py-2 text-sm text-slate-200 hover:border-[#00D4FF]/30 disabled:opacity-50">
                 <Upload className="h-4 w-4" /> Import CSV
               </button>
             </div>

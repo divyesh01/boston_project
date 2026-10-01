@@ -14,6 +14,8 @@ import {
 } from "@/lib/housekeepingService";
 import { generateHousekeepingSchedule } from "@/lib/laborOptimization";
 import { getHousekeepingConfig, saveHousekeepingConfig } from "@/lib/housekeepingConfig";
+import { roomIdentityKey } from "@/lib/roomBoard";
+import { singleSelectedProperty } from "@/lib/propertySelection";
 
 const STATUS_COLOR = {
   pending: { color: "#9CA3AF", label: "Pending" },
@@ -48,21 +50,31 @@ export default function Housekeeping() {
     if (latestDate && !taskDate) setTaskDate(latestDate);
   }, [latestDate, taskDate]);
 
-  const isPortfolio = property === "all" || Array.isArray(property);
-  const singlePropertyId = !isPortfolio ? property : null;
+  const selectedProperty = singleSelectedProperty(property, properties);
+  const singlePropertyId = selectedProperty?.id ?? null;
+  const isPortfolio = singlePropertyId == null;
+  const propertyNames = useMemo(() => new Map(properties.map((p) => [String(p.id), p.name])), [properties]);
+  const propertyLabel = (row) => propertyNames.get(String(row.property_id)) || row.property_name || String(row.property_id || "Unassigned property");
+  useEffect(() => {
+    setTaskRoom("");
+    setAssignee("");
+    setExpandedTask(null);
+    setShowNew(false);
+    setNotice(null);
+  }, [singlePropertyId]);
 
   // Owner-tunable productivity standards (turnover minutes, wage, target labor %),
   // persisted per property via housekeepingConfig.
-  const [hkConfig, setHkConfig] = useState(() => getHousekeepingConfig(singlePropertyId || "default"));
+  const [hkConfig, setHkConfig] = useState(() => getHousekeepingConfig(singlePropertyId ?? "default"));
   const [hkEdited, setHkEdited] = useState(hkConfig);
   useEffect(() => {
-    const c = getHousekeepingConfig(singlePropertyId || "default");
+    const c = getHousekeepingConfig(singlePropertyId ?? "default");
     setHkConfig(c);
     setHkEdited(c);
   }, [singlePropertyId]);
   const setHk = (field, value) => setHkEdited((p) => ({ ...p, [field]: value }));
   const saveHk = () => {
-    const key = singlePropertyId || "default";
+    const key = singlePropertyId ?? "default";
     if (!saveHousekeepingConfig(key, hkEdited)) {
       setNotice({
         type: "error",
@@ -108,7 +120,7 @@ export default function Housekeeping() {
 
   const handleCreateTask = async (e) => {
     e.preventDefault();
-    if (!singlePropertyId) {
+    if (singlePropertyId == null) {
       setNotice({ type: "error", text: "Select a single property to assign tasks." });
       return;
     }
@@ -116,11 +128,15 @@ export default function Housekeeping() {
       setNotice({ type: "error", text: "Choose a room." });
       return;
     }
-    const room = rooms.find((r) => String(r.room_number) === String(taskRoom));
+    const room = rooms.find((r) => String(r.property_id) === String(singlePropertyId) && String(r.room_number) === String(taskRoom));
+    if (!room) {
+      setNotice({ type: "error", text: "Choose a room from the selected property's room register." });
+      return;
+    }
     const due = taskDate;
     await db.entities.HousekeepingTask.create({
       property_id: singlePropertyId,
-      property_name: properties.find((p) => p.id === singlePropertyId)?.name || "",
+      property_name: selectedProperty?.name || "",
       task_date: due,
       due_date: due,
       room_number: String(taskRoom),
@@ -272,6 +288,7 @@ export default function Housekeeping() {
             right={
               <button
                 onClick={() => setShowNew((v) => !v)}
+                disabled={singlePropertyId == null}
                 className="rounded-lg border border-[#00E096]/40 bg-[#00E096]/10 px-3 py-1.5 text-xs font-medium text-[#00E096] hover:bg-[#00E096]/20"
               >
                 {showNew ? "Cancel" : "+ New Task"}
@@ -284,7 +301,7 @@ export default function Housekeeping() {
                   Room
                   <select value={taskRoom} onChange={(e) => setTaskRoom(e.target.value)} className="rounded-lg border border-white/10 bg-[#0A1628] px-2 py-2 text-sm text-white">
                     <option value="">Select room</option>
-                    {rooms.map((r) => <option key={r.id} value={r.room_number}>{r.room_number}</option>)}
+                    {rooms.filter((r) => String(r.property_id) === String(singlePropertyId)).map((r) => <option key={r.id} value={r.room_number}>{r.room_number}</option>)}
                   </select>
                 </label>
                 <label className="flex flex-col gap-1 text-xs text-slate-400">
@@ -309,7 +326,7 @@ export default function Housekeeping() {
 
             <div className="grid gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
               {rooms.map((room) => {
-                const hk = hkByRoom[String(room.room_number).trim()];
+                const hk = hkByRoom[roomIdentityKey(room)];
                 const status = roomHkStatus(room, hk);
                 const meta = STATUS_COLOR[status] || STATUS_COLOR.pending;
                 return (
@@ -318,6 +335,7 @@ export default function Housekeeping() {
                       <span className="font-heading text-sm font-semibold text-white">{room.room_number}</span>
                       <span className="h-2 w-2 rounded-full" style={{ background: meta.color }} />
                     </div>
+                    {isPortfolio && <p className="mt-1 truncate text-[10px] text-slate-400" title={propertyLabel(room)}>{propertyLabel(room)}</p>}
                     <p className="mt-1 text-[10px] text-slate-400">{room.room_type}</p>
                     <p className="mt-0.5 text-[10px] font-medium" style={{ color: meta.color }}>{meta.label}</p>
                     {hk && <p className="mt-0.5 truncate text-[10px] text-slate-500">{hk.assignee ? `→ ${hk.assignee}` : ""}</p>}
@@ -340,6 +358,7 @@ export default function Housekeeping() {
                   return (
                     <div key={t.id} className="rounded-xl border border-white/5 bg-[#0A1628]/50 p-3">
                       <div className="flex flex-wrap items-center gap-3">
+                        {isPortfolio && <span className="text-xs text-slate-400">{propertyLabel(t)}</span>}
                         <span className="w-12 font-heading text-sm font-semibold text-white">{t.room_number}</span>
                         <span className="w-32 text-xs text-slate-300">{t.task_label || TASK_TYPE_LABELS[t.task] || t.task}</span>
                         <span className="w-24 truncate text-xs text-slate-400">{t.assignee || "Unassigned"}</span>

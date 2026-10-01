@@ -5,14 +5,18 @@ import { motion, AnimatePresence } from "framer-motion";
 import { classifyRefund, REFUND_CLASSIFICATION, refundEvidenceText } from "@/lib/refundClassification";
 import { filterAuditRefunds, REFUND_FILTERS_DEFAULT, refundFilterTotal } from "@/lib/refundAuditFilters";
 import { clampAuditDrawerWidth, DEFAULT_AUDIT_DRAWER_WIDTH } from "@/lib/auditDrawerResize";
+import { propertyRecordKey, propertyDisplayName } from "@/lib/propertyRecordIdentity";
 
 export default function ClerkAuditMatrix({ 
   flaggedAnomalies = [], 
   clerkRiskScores = [], 
   adjustments = [], 
-  refunds = [] 
+  refunds = [],
+  properties = [],
 }) {
-  const [selectedClerk, setSelectedClerk] = useState(null);
+  const [selectedClerkKey, setSelectedClerkKey] = useState(null);
+  const selectedClerk = clerkRiskScores.find((clerk) => propertyRecordKey(clerk, clerk.username) === selectedClerkKey) || null;
+  const setSelectedClerk = (clerk) => setSelectedClerkKey(clerk ? propertyRecordKey(clerk, clerk.username) : null);
   const [auditDrawerWidth, setAuditDrawerWidth] = useState(null);
   const drawerResizeStart = useRef(null);
   const [sortConfig, setSortConfig] = useState({ key: 'severityScore', direction: 'desc' });
@@ -173,10 +177,10 @@ export default function ClerkAuditMatrix({
   // cash room-rent refunds, room-rent refunds, and unclear records rise to top.
   const processedRefunds = useMemo(() => {
     if (!selectedClerk) return [];
-    const clerkRefunds = classifiedRefunds.filter(r => r.username === selectedClerk.username);
+    const clerkRefunds = classifiedRefunds.filter(r => propertyRecordKey(r, r.username) === selectedClerkKey);
     const paymentScoped = selectedMethod === 'ALL' ? clerkRefunds : clerkRefunds.filter((row) => getPaymentCategory(row) === selectedMethod);
     return filterAuditRefunds(paymentScoped, refundFilters);
-  }, [classifiedRefunds, selectedClerk, selectedMethod, refundFilters]);
+  }, [classifiedRefunds, selectedClerk, selectedClerkKey, selectedMethod, refundFilters]);
   const filteredRefundTotal = useMemo(() => refundFilterTotal(processedRefunds), [processedRefunds]);
   const changeRefundFilter = (key, value) => setRefundFilters((current) => ({ ...current, [key]: value }));
 
@@ -185,7 +189,7 @@ export default function ClerkAuditMatrix({
   // dollar-impact (Tier 2), and routine zero-dollar lines (Tier 3) at the bottom.
   const processedAdjustments = useMemo(() => {
     if (!selectedClerk) return [];
-    const clerkAdjs = adjustments.filter(a => a.username === selectedClerk.username);
+    const clerkAdjs = adjustments.filter(a => propertyRecordKey(a, a.username) === selectedClerkKey);
     const filtered = clerkAdjs
       .filter(row => {
         if (adjReasonFilter === 'ALL') return true;
@@ -203,11 +207,11 @@ export default function ClerkAuditMatrix({
     // Rapid-repeat detection: same room + same date with 2+ posts.
     const groupCounts = new Map();
     for (const a of filtered) {
-      const key = `${a.roomNumber || '?'}|${(a.date || '').slice(0, 10)}`;
+      const key = propertyRecordKey(a, a.roomNumber || '?', (a.date || '').slice(0, 10));
       groupCounts.set(key, (groupCounts.get(key) || 0) + 1);
     }
     const isRapidRepeat = (a) =>
-      (groupCounts.get(`${a.roomNumber || '?'}|${(a.date || '').slice(0, 10)}`) || 0) >= 2;
+      (groupCounts.get(propertyRecordKey(a, a.roomNumber || '?', (a.date || '').slice(0, 10))) || 0) >= 2;
 
     const getAmt = (a) => parseFloat(a.adjustedAmount ?? a.amount ?? 0);
 
@@ -234,7 +238,7 @@ export default function ClerkAuditMatrix({
         if (dt !== 0) return dt;
         return String(b.time) < String(a.time) ? -1 : 1;
       });
-  }, [adjustments, selectedClerk, adjReasonFilter, adjMethodFilter, hideZeroAdj]);
+  }, [adjustments, selectedClerk, selectedClerkKey, adjReasonFilter, adjMethodFilter, hideZeroAdj]);
 
   const adjSummary = useMemo(() => {
     const amt = (a) => parseFloat(a.adjustedAmount ?? a.amount ?? 0);
@@ -339,14 +343,14 @@ export default function ClerkAuditMatrix({
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {sortedClerkScores.map((clerk, idx) => (
+                {sortedClerkScores.map((clerk) => (
                   <tr 
-                    key={idx} 
+                    key={propertyRecordKey(clerk, clerk.username)}
                     className="hover:bg-white/[0.04] cursor-pointer transition-all duration-200 group relative"
                     onClick={() => setSelectedClerk(clerk)}
                   >
                     <td className="px-6 py-4 font-medium text-slate-200 group-hover:text-cyan-400 transition-colors flex items-center gap-2">
-                      {clerk.username}
+                      <span>{clerk.username}<span className="block text-xs font-normal text-slate-500">{propertyDisplayName(clerk, properties)}</span></span>
                       <ChevronRightIcon className="w-4 h-4 opacity-0 group-hover:opacity-100 -translate-x-2 group-hover:translate-x-0 transition-all text-cyan-500" />
                     </td>
                     <td className="px-6 py-4 text-right text-slate-300 font-mono">{money2(clerk.totalAdjustedAmount)}</td>
@@ -435,7 +439,7 @@ export default function ClerkAuditMatrix({
                 {sortedAnomalies.map((anomaly, idx) => (
                   <tr key={idx} className="hover:bg-white/[0.04] transition-colors group">
                     <td className="px-6 py-3.5 text-slate-300 whitespace-nowrap font-mono text-[13px]">{anomaly.date} <span className="text-slate-500 ml-1">{anomaly.time}</span></td>
-                    <td className="px-6 py-3.5 text-slate-200 font-medium">{anomaly.username}</td>
+                    <td className="px-6 py-3.5 text-slate-200 font-medium">{anomaly.username}<span className="block text-xs font-normal text-slate-500">{propertyDisplayName(anomaly, properties)}</span></td>
                     <td className="px-6 py-3.5 text-slate-300 font-mono">{anomaly.roomNumber}</td>
                     <td className="px-6 py-3.5">
                       <div className="flex items-center gap-2">
@@ -509,6 +513,7 @@ export default function ClerkAuditMatrix({
                     <UserX className="text-cyan-400 w-6 h-6" />
                     Audit Trail: <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-500">{selectedClerk.username}</span>
                   </h3>
+                  <p className="mt-1 text-xs text-slate-400">{propertyDisplayName(selectedClerk, properties)}</p>
                   <p className="text-sm text-slate-400 mt-1 flex items-center gap-2">
                     <span style={getBadgeStyle(selectedClerk.riskLevel)} className="px-2 py-0.5 rounded text-[10px] font-bold tracking-wider">{selectedClerk.riskLevel} RISK</span>
                     • {selectedClerk.totalFlags} flagged items
@@ -647,7 +652,7 @@ export default function ClerkAuditMatrix({
                           const tier3 = processedAdjustments.filter(a => a._tier === 3);
 
                           const renderRow = (adj, i) => {
-                            const isFlagged = flaggedAnomalies.some(f => f.transaction === adj || (f.username === adj.username && f.date === adj.date && f.time === adj.time && f.amount === (adj.adjustedAmount ?? adj.amount)));
+                            const isFlagged = flaggedAnomalies.some(f => f.transaction === adj || propertyRecordKey(f, f.username, f.date, f.time, f.roomNumber, f.amount) === propertyRecordKey(adj, adj.username, adj.date, adj.time, adj.roomNumber, adj.adjustedAmount ?? adj.amount));
                             const methodCode = getAdjustmentMethodCode(adj);
                             const methodLabel = methodCode === 'DIRECT_BILL' ? 'db' : methodCode === 'CARD' ? 'cb' : methodCode === 'CASH' ? 'ch' : '—';
                             const isZero = Math.abs(parseFloat(adj.adjustedAmount ?? adj.amount ?? 0)) === 0;
@@ -770,7 +775,7 @@ export default function ClerkAuditMatrix({
                       <tbody className="divide-y divide-white/5">
                         {(() => {
                           const rows = processedRefunds.map((ref, i) => {
-                            const isFlagged = flaggedAnomalies.some(f => f.transaction === ref || (f.username === ref.username && f.date === ref.date && f.time === ref.time && f.amount === ref.amount));
+                            const isFlagged = flaggedAnomalies.some(f => f.transaction === ref || propertyRecordKey(f, f.username, f.date, f.time, f.roomNumber, f.amount) === propertyRecordKey(ref, ref.username, ref.date, ref.time, ref.roomNumber, ref.amount));
                             const classification = ref.refundClassification || classifyRefund(ref);
                             const sourceEvidence = refundEvidenceText(ref);
                             const isCash = classification.isCash;

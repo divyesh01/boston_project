@@ -53,8 +53,8 @@ function Picker({ label, value, onChange, options, accent }) {
         className="h-10 w-full rounded-lg border border-white/10 bg-[#0A1628] px-3 text-sm text-slate-200 outline-none transition-colors focus:border-[#6C63FF]"
       >
         {options.map((o) => (
-          <option key={o.username} value={o.username}>
-            {o.label} · {money(o.revenue)}
+          <option key={o.key} value={o.key}>
+            {o.display_label} · {money(o.revenue)}
           </option>
         ))}
       </select>
@@ -76,8 +76,8 @@ export default function EmployeeCompare({ rows = [], grain = "monthly" }) {
   const [bUser, setBUser] = useState("");
 
   // Default to the top two once data arrives, without stomping a user's choice.
-  const a = aUser || people[0]?.username || "";
-  const b = bUser || people[1]?.username || "";
+  const a = people.some((person) => person.key === aUser) ? aUser : people[0]?.key || "";
+  const b = people.some((person) => person.key === bUser) ? bUser : people[1]?.key || "";
 
   const cmp = useMemo(
     () => (a && b ? compareEmployees(rows, a, b, seriesGrain) : null),
@@ -131,10 +131,10 @@ export default function EmployeeCompare({ rows = [], grain = "monthly" }) {
                 <tr className="border-b border-white/5 text-left">
                   <th className="pb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-slate-500">Metric</th>
                   <th className="pb-2 text-right text-[11px] font-medium uppercase tracking-[0.14em]" style={{ color: C.purple }}>
-                    {cmp.a.label}
+                    {cmp.a.display_label}
                   </th>
                   <th className="pb-2 text-right text-[11px] font-medium uppercase tracking-[0.14em]" style={{ color: C.cyan }}>
-                    {cmp.b.label}
+                    {cmp.b.display_label}
                   </th>
                   <th className="pb-2 text-right text-[11px] font-medium uppercase tracking-[0.14em] text-slate-500">
                     A − B
@@ -200,8 +200,8 @@ export default function EmployeeCompare({ rows = [], grain = "monthly" }) {
                 <YAxis tick={axis} stroke="#ffffff10" tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
                 <Tooltip contentStyle={tip} formatter={(v) => money(v)} cursor={{ fill: "#ffffff06" }} />
                 <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
-                <Bar dataKey={cmp.a.label} fill={C.purple} radius={[4, 4, 0, 0]} />
-                <Bar dataKey={cmp.b.label} fill={C.cyan} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="revenueA" name={cmp.a.display_label} fill={C.purple} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="revenueB" name={cmp.b.display_label} fill={C.cyan} radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>

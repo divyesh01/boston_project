@@ -9,6 +9,7 @@
 // the source file's own trailer checksums.
 import { toCents, fromCents, sumCents } from "@/lib/decimal";
 import { LEDGER_SIDE_CHARGE, LEDGER_SIDE_PAYMENT, displayEmployee, classifyAccount } from "@/lib/transactionNorm";
+import { propertyRecordKey, propertyDisplayName } from "@/lib/propertyRecordIdentity";
 
 const sumAmount = (rows) => fromCents(sumCents(rows.map((r) => r.amount)));
 
@@ -82,8 +83,8 @@ export function summarize(rows = []) {
     avgTicket: charges.length ? revenue / charges.length : 0,
     days,
     avgPerDay: days ? revenue / days : 0,
-    folios: new Set(rows.map((r) => r.folio_number).filter(Boolean)).size,
-    guests: new Set(rows.map((r) => r.confirmation_number).filter(Boolean)).size,
+    folios: new Set(rows.filter((r) => r.folio_number !== undefined && r.folio_number !== null && r.folio_number !== "").map((r) => propertyRecordKey(r, r.folio_number))).size,
+    guests: new Set(rows.filter((r) => r.confirmation_number !== undefined && r.confirmation_number !== null && r.confirmation_number !== "").map((r) => propertyRecordKey(r, r.confirmation_number))).size,
   };
 }
 
@@ -146,7 +147,7 @@ export function paymentMix(rows = []) {
 // Employees
 // ---------------------------------------------------------------------------
 
-// One row per username, ranked by revenue. System/automation accounts are
+// One row per hotel and username, ranked by revenue. System/automation accounts are
 // excluded by default: they post more than any human and would otherwise top
 // every leaderboard. They are never excluded from revenue totals — only from
 // people comparisons.
@@ -156,8 +157,13 @@ export function employeeStats(rows = [], { includeSystem = false } = {}) {
     const u = r.username || "";
     const cls = r.account_class || classifyAccount(u);
     if (!includeSystem && cls === "system") continue;
-    let e = map.get(u);
-    if (!e) { e = { username: u, label: r.employee_label || displayEmployee(u), account_class: cls, rows: [] }; map.set(u, e); }
+    const key = propertyRecordKey(r, u);
+    let e = map.get(key);
+    if (!e) {
+      const label = r.employee_label || displayEmployee(u);
+      e = { key, property_id: r.property_id ?? "", property_name: propertyDisplayName(r), username: u, label, display_label: `${label} · ${propertyDisplayName(r)}`, account_class: cls, rows: [] };
+      map.set(key, e);
+    }
     e.rows.push(r);
   }
   return [...map.values()]
@@ -166,11 +172,21 @@ export function employeeStats(rows = [], { includeSystem = false } = {}) {
 }
 
 // Head-to-head for exactly two employees, with per-metric deltas.
-export function compareEmployees(rows = [], usernameA, usernameB, grain = "monthly") {
-  const rowsA = rows.filter((r) => r.username === usernameA);
-  const rowsB = rows.filter((r) => r.username === usernameB);
-  const a = { username: usernameA, label: displayEmployee(usernameA), account_class: classifyAccount(usernameA), ...summarize(rowsA) };
-  const b = { username: usernameB, label: displayEmployee(usernameB), account_class: classifyAccount(usernameB), ...summarize(rowsB) };
+export function compareEmployees(rows = [], identityA, identityB, grain = "monthly") {
+  const people = employeeStats(rows, { includeSystem: true });
+  const resolve = (identity) => {
+    const exact = people.find((person) => person.key === identity);
+    if (exact) return exact;
+    // Preserve single-hotel callers that pass a username. Ambiguous portfolio
+    // usernames cannot silently combine two hotels into one comparison.
+    const matches = people.filter((person) => person.username === identity);
+    return matches.length === 1 ? matches[0] : null;
+  };
+  const a = resolve(identityA);
+  const b = resolve(identityB);
+  if (!a || !b) return null;
+  const rowsA = a.rows;
+  const rowsB = b.rows;
 
   const METRICS = [
     ["revenue", "Revenue written"],
@@ -191,8 +207,8 @@ export function compareEmployees(rows = [], usernameA, usernameB, grain = "month
   const buckets = [...new Set([...sA, ...sB].map((p) => p.bucket))].sort();
   const series = buckets.map((bk) => ({
     name: bucketLabel(bk, grain),
-    [a.label]: sA.find((p) => p.bucket === bk)?.revenue || 0,
-    [b.label]: sB.find((p) => p.bucket === bk)?.revenue || 0,
+    revenueA: sA.find((p) => p.bucket === bk)?.revenue || 0,
+    revenueB: sB.find((p) => p.bucket === bk)?.revenue || 0,
   }));
 
   return {
@@ -278,13 +294,17 @@ export function cardFeeBreakdown(rows = [], feeRate = 0, { byEmployee = false } 
     const map = new Map();
     for (const r of cards) {
       const u = r.username || "";
-      let e = map.get(u);
-      if (!e) { e = { username: u, label: r.employee_label || displayEmployee(u), cents: 0, count: 0 }; map.set(u, e); }
+      const key = propertyRecordKey(r, u);
+      let e = map.get(key);
+      if (!e) { e = { key, property_id: r.property_id ?? "", property_name: propertyDisplayName(r), username: u, label: r.employee_label || displayEmployee(u), cents: 0, count: 0 }; map.set(key, e); }
       e.cents += toCents(r.amount);
       e.count += 1;
     }
     result.byEmployee = [...map.values()]
       .map((e) => ({
+        key: e.key,
+        property_id: e.property_id,
+        property_name: e.property_name,
         username: e.username,
         label: e.label,
         settled: fromCents(e.cents),

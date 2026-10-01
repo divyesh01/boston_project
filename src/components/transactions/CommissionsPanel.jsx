@@ -90,8 +90,8 @@ export default function CommissionsPanel({ rows = [], sourceRows = [], dateRange
               </thead>
               <tbody>
                 {cards.byEmployee.slice(0, 12).map((e) => (
-                  <tr key={e.username} className="border-b border-white/5 last:border-0">
-                    <td className="py-2.5 text-slate-300">{e.label}</td>
+                  <tr key={e.key} className="border-b border-white/5 last:border-0">
+                    <td className="py-2.5 text-slate-300">{e.label}<span className="block text-xs text-slate-500">{e.property_name}</span></td>
                     <td className="py-2.5 text-right tabular-nums text-slate-400">{num(e.count)}</td>
                     <td className="py-2.5 text-right tabular-nums text-slate-200">{money(e.settled)}</td>
                     <td className="py-2.5 text-right tabular-nums" style={{ color: C.coral }}>{money2(e.fee)}</td>

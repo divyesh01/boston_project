@@ -30,6 +30,7 @@
 // this incorrectly.
 import { convertDate, parseAmount } from "@/lib/csvParser";
 import { recordCoercion } from "@/lib/importValidation";
+import { legacyClientTransactionDedupeKey } from "../../shared/transactionIdentity.js";
 
 // Ledger sides — the two roles a row can play, expressed in P&L terms.
 export const LEDGER_SIDE_CHARGE = "charge";       // revenue (raises folio balance)
@@ -162,18 +163,12 @@ export function displayEmployee(username) {
 // So the key includes an occurrence index: the Nth identical row is a distinct
 // record. That keeps every legitimate row while still making a re-import of the
 // same file idempotent, because the same file replays the same occurrences in
-// the same order.
+// the same order. The historical v1 encoding is owned by
+// shared/transactionIdentity.js; changing its bytes here would invalidate existing
+// Dexie dedupe keys, so migration to the Worker v2 format must be explicit.
 // ---------------------------------------------------------------------------
 export function transactionDedupeKey(row, occurrence = 0) {
-  return [
-    row.property_id ?? "",
-    row.date ?? "",
-    row.time ?? "",
-    row.folio_number ?? "",
-    row.transaction_code ?? "",
-    row.amount ?? 0,
-    occurrence,
-  ].join("|");
+  return legacyClientTransactionDedupeKey(row, occurrence);
 }
 
 // Assigns occurrence indexes across a batch, then stamps each row's key.

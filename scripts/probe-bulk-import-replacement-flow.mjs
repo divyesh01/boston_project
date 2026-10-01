@@ -1,11 +1,7 @@
 // scripts/probe-bulk-import-replacement-flow.mjs
-// Verifies explicit report replacement and overlap conflict recovery:
-// 1. Backend detects active overlap and returns 409 IMPORT_REPLACEMENT_REQUIRED with existing_bundle_id and candidate details.
-// 2. Failed replacement attempt leaves existing active report 100% intact.
-// 3. User explicit confirmation provides predecessor bundle ID and expected revision.
-// 4. Server-archived original is reused without second raw upload.
-// 5. Successful activation supersedes existing active report atomically.
-// 6. Covers both real production patterns: hotel_statistics and source_summary.
+// Verifies automatic newest-report-per-date merging, retained historical dates,
+// immutable raw archives, property isolation, stale revision guards, and legacy
+// replacement error fidelity for hotel_statistics and source reports.
 
 import "fake-indexeddb/auto";
 import {
@@ -25,7 +21,7 @@ import {
   sha256Hex,
   activateBundleOnServer,
 } from "../src/lib/bulkImportPipeline.js";
-import { normalizedContent, contentHash } from "../worker/bulk-contract.js";
+import { normalizedContent, contentHash, parseBundle } from "../worker/bulk-contract.js";
 
 async function computeNormalizedHash(bundle) {
   const items = [];
@@ -38,6 +34,16 @@ async function computeNormalizedHash(bundle) {
 }
 
 const run = makeRunner("probe-bulk-import-replacement-flow");
+
+async function downloadItems(env, owner, bundleId, propertyId) {
+  const request = new Request(`http://localhost/api/bulk-import/bundle/${bundleId}`);
+  const response = await handleBulkImportRequest(request, env, owner, new URL(request.url), ["api", "bulk-import", "bundle", bundleId]);
+  assertEqual(response.status, 200, "Active normalized bundle is downloadable");
+  const text = await new Response(response.body.pipeThrough(new DecompressionStream("gzip"))).text();
+  const items = parseBundle(text, propertyId);
+  assertEqual(await contentHash(normalizedContent(items)), response.headers.get("x-normalized-hash"), "Downloaded composite matches its advertised content hash");
+  return items;
+}
 
 function setupWorker() {
   clearMockStore();
@@ -62,7 +68,7 @@ function setupWorker() {
   return { db, env, stats, owner };
 }
 
-await run.check("1. Hotel Statistics pattern: overlap returns 409 with existing_bundle_id & candidate details", async () => {
+await run.check("1. Hotel Statistics: automatic overlap merge retains dates absent from the new report", async () => {
   const { db, env, owner } = setupWorker();
   const propertyId = "PROP_MIDDELBORO";
 
@@ -215,7 +221,7 @@ await run.check("1. Hotel Statistics pattern: overlap returns 409 with existing_
   });
   await handleBulkImportRequest(upNorm2, env, owner, new URL(upNorm2.url), ["api", "bulk-import", "upload"]);
 
-  // Step 1C: Attempt to activate v2 WITHOUT replacement -> MUST return 409 IMPORT_REPLACEMENT_REQUIRED
+  // Step 1C: The server discovers predecessors and preserves omitted dates automatically.
   const act2NoReplace = new Request("http://localhost/api/bulk-import/activate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -229,39 +235,19 @@ await run.check("1. Hotel Statistics pattern: overlap returns 409 with existing_
     }),
   });
   const act2NoReplaceRes = await handleBulkImportRequest(act2NoReplace, env, owner, new URL(act2NoReplace.url), ["api", "bulk-import", "activate"]);
-  assertEqual(act2NoReplaceRes.status, 409, "Activation without replacement returns 409");
-  const act2Err = await act2NoReplaceRes.json();
-  assertEqual(act2Err.code, "IMPORT_REPLACEMENT_REQUIRED", "Error code is IMPORT_REPLACEMENT_REQUIRED");
-  assertEqual(act2Err.existing_bundle_id, v1BundleId, "existing_bundle_id matches active v1 bundle ID");
-  assert(act2Err.existing_bundle != null, "existing_bundle details provided");
-  assertEqual(act2Err.existing_bundle.original_file_name, "Hotel_Statistics__1_.csv", "existing_bundle file name is provided");
-  assertEqual(act2Err.existing_bundle.revision, 1, "existing_bundle revision is provided");
-
-  // Step 1D: Verify old active report remains 100% active and revision is unchanged
-  const rowV1AfterFail = db.prepare("SELECT * FROM import_bundle_manifest WHERE id=?").get(v1BundleId);
-  assertEqual(rowV1AfterFail.status, "active", "Old active report remains active after failed overlap activation");
-  assertEqual(rowV1AfterFail.revision, 1, "Old active report revision remains 1");
-
-  // Step 1E: Now activate with explicit replacement confirmation
-  const act2Replace = new Request("http://localhost/api/bulk-import/activate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      id: v2BundleId,
-      server_property_id: propertyId,
-      report_type: "hotel_statistics",
-      raw_file_hash: v2RawHash,
-      normalized_hash: v2NormHash,
-      row_count: 2,
-      supersedes_bundle_id: v1BundleId,
-      expected_revision: v1Revision,
-    }),
-  });
-  const act2ReplaceRes = await handleBulkImportRequest(act2Replace, env, owner, new URL(act2Replace.url), ["api", "bulk-import", "activate"]);
-  assertEqual(act2ReplaceRes.status, 201, "Guarded replacement activation succeeds");
-  const act2ReplaceJson = await act2ReplaceRes.json();
+  assertEqual(act2NoReplaceRes.status, 201, "Overlap activates automatically");
+  const act2ReplaceJson = await act2NoReplaceRes.json();
   assertEqual(act2ReplaceJson.status, "active", "New bundle is active");
   assertEqual(act2ReplaceJson.revision, 2, "Sync state revision is incremented to 2");
+  assertEqual(act2ReplaceJson.row_count, 4, "Composite includes both old and new rows");
+  assertEqual(act2ReplaceJson.preserved_rows, 2, "Both omitted historical dates are preserved");
+  const mergedItems = await downloadItems(env, owner, v2BundleId, propertyId);
+  assertEqual(mergedItems.length, 4, "Downloaded composite contains four rows");
+  for (const [date, value] of [["2026-08-01", 120.5], ["2026-08-03", 125], ["2026-08-05", 98], ["2026-08-07", 95]]) {
+    const matching = mergedItems.filter(item => item.row.business_date === date);
+    assertEqual(matching.length, 1, `Exactly one metric remains for ${date}`);
+    assertEqual(matching[0].row.value, value, `Correct metric value remains for ${date}`);
+  }
 
   // Step 1F: Assert lineage state in D1
   const rowV1Final = db.prepare("SELECT * FROM import_bundle_manifest WHERE id=?").get(v1BundleId);
@@ -547,8 +533,9 @@ await run.check("2. Source Summary pattern: scope isolation & lineage conflict g
   const staleErr = await actStaleRes.json();
   assertEqual(staleErr.code, "IMPORT_LINEAGE_CONFLICT", "Stale revision error code is IMPORT_LINEAGE_CONFLICT");
 
-  // Correct revision replacement succeeds
-  const currentMid = db.prepare("SELECT revision FROM import_bundle_manifest WHERE id=?").get(bundleMidId);
+  assertEqual(db.prepare("SELECT status FROM import_bundle_manifest WHERE id=?").get(bundleMidId).status, "active", "Stale request leaves the existing report active");
+
+  // Automatic discovery also succeeds after a rejected stale explicit request.
   const actCorrect = new Request("http://localhost/api/bulk-import/activate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -559,12 +546,21 @@ await run.check("2. Source Summary pattern: scope isolation & lineage conflict g
       raw_file_hash: rawMid1Hash,
       normalized_hash: mid1NormHash,
       row_count: 2,
-      supersedes_bundle_id: bundleMidId,
-      expected_revision: currentMid.revision,
     }),
   });
   const actCorrectRes = await handleBulkImportRequest(actCorrect, env, owner, new URL(actCorrect.url), ["api", "bulk-import", "activate"]);
-  assertEqual(actCorrectRes.status, 201, "Correct replacement of Source Summary succeeded");
+  assertEqual(actCorrectRes.status, 201, "Automatic Source Summary merge succeeded");
+  const mergedItems = await downloadItems(env, owner, bundleMid1Id, propertyId);
+  assertEqual(mergedItems.length, 2, "Overlapping dates are replaced rather than appended");
+  for (const [date, rooms] of [["2026-08-01", 22], ["2026-08-02", 28]]) {
+    const matching = mergedItems.filter(item => item.row.date === date);
+    assertEqual(matching.length, 1, `Exactly one source row remains for ${date}`);
+    assertEqual(matching[0].row.rooms, rooms, `New report wins for ${date}`);
+  }
+  assertEqual(db.prepare("SELECT status FROM import_bundle_manifest WHERE id=?").get(bundleOtherId).status, "active", "Other property's report remains active");
+  const otherItems = await downloadItems(env, owner, bundleOtherId, otherPropertyId);
+  assertEqual(otherItems.length, 2, "Other property retains its rows");
+  assertEqual(otherItems.find(item => item.row.date === "2026-08-01").row.rooms, 10, "Other property's original values remain unchanged");
 });
 
 await run.check("3. Pipeline error fidelity: activateBundleOnServer preserves existing_bundle_id & candidates", async () => {

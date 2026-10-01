@@ -2,7 +2,7 @@ import localDb from '../api/localDb.js';
 import { decompressPayloadGzip, generateDeterministicRowId } from './bulkImportPipeline.js';
 import { BULK_ENTITIES, parseBundle, contentHash, normalizedContent } from '../../worker/bulk-contract.js';
 import { mapConcurrent } from './mapConcurrent.js';
-const BULK_SYNC_KEY = 'authoritative-bulk-bundle-sync-v2';
+const BULK_SYNC_KEY = 'authoritative-bulk-bundle-sync-v3-history';
 const COMMIT_KEY = `${BULK_SYNC_KEY}:commit`;
 class HydrationConflict extends Error {}
 const flights = new Map();
@@ -44,15 +44,20 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
       // Verify downloads concurrently, then commit the entire page atomically.
       // Retirements/replacements are still applied in manifest order below.
       const downloaded = await mapConcurrent(manifests.filter(manifest => manifest.status === 'active'), async (manifest) => {
-        const res = await fetch(`/api/bulk-import/bundle/${encodeURIComponent(manifest.id)}`);
+        const res = await fetch(`/api/bulk-import/bundle/${encodeURIComponent(manifest.id)}/history`);
         if (!res.ok) throw new Error(`Bundle download failed: ${res.status}`);
+        if (res.headers.get('x-base-normalized-hash') !== manifest.normalized_hash) throw new Error('Report changed during history recovery');
         const bytes = await res.arrayBuffer();
         const text = await decompressPayloadGzip(bytes);
         const items = parseBundle(text, manifest.server_property_id, manifest.property_aliases || []);
-        const hash = await contentHash(Number(manifest.identity_version) === 2 ? normalizedContent(items) : text);
-        if (hash !== manifest.normalized_hash || items.length !== Number(manifest.row_count)) throw new Error('Bundle hash or count mismatch');
+        const hash = await contentHash(normalizedContent(items));
+        const effectiveCount = Number(res.headers.get('x-row-count'));
+        const effectiveCounts = JSON.parse(res.headers.get('x-entity-counts') || '{}');
+        if (hash !== res.headers.get('x-normalized-hash') || items.length !== effectiveCount || effectiveCount < Number(manifest.row_count)) throw new Error('Bundle hash or count mismatch');
         const counts = items.reduce((out, item) => { out[item.entity] = (out[item.entity] || 0) + 1; return out; }, {});
-        if (JSON.stringify(Object.entries(counts).sort()) !== JSON.stringify(Object.entries(manifest.entity_counts || {}).sort())) throw new Error('Entity counts mismatch');
+        if (JSON.stringify(Object.entries(counts).sort()) !== JSON.stringify(Object.entries(effectiveCounts).sort())) throw new Error('Entity counts mismatch');
+        manifest.materialized_row_count = effectiveCount;
+        manifest.materialized_entity_counts = effectiveCounts;
         return [manifest.id, items];
       });
       const payloads = new Map(downloaded);
@@ -96,13 +101,13 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
             }
             await localDb.UploadedReport.put({ id: manifest.id, import_id: manifest.id, bulk_import_id: manifest.id, raw_archive_id: manifest.raw_archive_id || manifest.id,
               property_id: localPropertyId, report_type: manifest.report_type, file_name: manifest.original_file_name,
-              file_hash: manifest.raw_file_hash, status: 'completed', rows_imported: manifest.row_count, raw_rows: [],
+              file_hash: manifest.raw_file_hash, status: 'completed', rows_imported: manifest.materialized_row_count, raw_rows: [],
               created_date: manifest.activated_at || manifest.created_at });
             const report = await localDb.UploadedReport.get(manifest.id);
-            if (!report || report.property_id !== localPropertyId || Number(report.rows_imported) !== Number(manifest.row_count)) {
+            if (!report || report.property_id !== localPropertyId || Number(report.rows_imported) !== Number(manifest.materialized_row_count)) {
               throw new Error(`Active report manifest ${manifest.id} was not materialized locally`);
             }
-            for (const [entity, expected] of Object.entries(manifest.entity_counts || {})) {
+            for (const [entity, expected] of Object.entries(manifest.materialized_entity_counts || {})) {
               const actual = await localDb[entity].where('import_id').equals(manifest.id).count();
               if (actual !== Number(expected)) throw new Error(`Active report ${manifest.id} ${entity} rows did not reconcile locally`);
             }
@@ -124,7 +129,7 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
       for (const manifest of manifests) {
         if (manifest.status !== 'active') continue;
         activeManifests++;
-        materializedRows += Number(manifest.row_count) || 0;
+        materializedRows += Number(manifest.materialized_row_count) || 0;
       }
       if (manifests.length < 200) return { synced, lastRevision: revision, activeManifests, materializedRows, verified: true };
     }

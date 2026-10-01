@@ -817,7 +817,9 @@ async function readMergeSource(manifest, bulkStore, env, scope) {
   const key = manifestKey(manifest, scope);
   const object = await bulkStore.get(key);
   verifyObject(object, scope, manifest.server_property_id, manifest.normalized_hash);
-  const compressed = await object.arrayBuffer();
+  const compressed = typeof object.arrayBuffer === 'function'
+    ? await object.arrayBuffer()
+    : await new Response(object.body).arrayBuffer();
   if (compressed.byteLength > MAX_BUNDLE_SIZE_BYTES) throw new BulkImportError('Source bundle exceeds merge limit', 413);
   const decoded = createBoundedStream(new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip')), 16 * 1024 * 1024);
   const text = await new Response(decoded.stream).text();
@@ -1162,6 +1164,44 @@ async function downloadBundle(parts, env, scope) {
   }
 
   const { bulkStore } = getStores(env);
+
+  if (parts[4] === 'history') {
+    // Recover only retained ancestors of this active report. Never resurrect
+    // tombstoned reports or follow lineage across an account/property/type.
+    const ancestors = [];
+    let frontier = [manifest.id];
+    const seen = new Set(frontier);
+    while (frontier.length) {
+      const placeholders = frontier.map(() => '?').join(',');
+      const parents = await queryAll(env, `SELECT * FROM import_bundle_manifest
+        WHERE account_id=? AND server_property_id=? AND report_type=?
+        AND status='superseded' AND superseded_by_bundle_id IN (${placeholders})`,
+        [scope.accountId, manifest.server_property_id, manifest.report_type, ...frontier]);
+      frontier = [];
+      for (const parent of parents) {
+        if (seen.has(parent.id)) throw new BulkImportError('Invalid report lineage', 409);
+        seen.add(parent.id);
+        if (seen.size > 200) throw new BulkImportError('Report history exceeds recovery limit', 413);
+        ancestors.push(parent);
+        frontier.push(parent.id);
+      }
+    }
+    ancestors.sort((a, b) => String(a.activated_at || a.created_at).localeCompare(String(b.activated_at || b.created_at)) || Number(a.revision) - Number(b.revision) || String(a.id).localeCompare(String(b.id)));
+    const older = [];
+    for (const ancestor of ancestors) older.push(await readMergeSource(ancestor, bulkStore, env, scope));
+    const incoming = await readMergeSource(manifest, bulkStore, env, scope);
+    const merged = mergeReportDates(older, incoming, manifest.server_property_id);
+    const bytes = new TextEncoder().encode(merged.map(item => JSON.stringify(item)).join('\n'));
+    if (bytes.byteLength > 16 * 1024 * 1024) throw new BulkImportError('Recovered report exceeds supported size', 413);
+    const counts = merged.reduce((out, item) => { out[item.entity] = (out[item.entity] || 0) + 1; return out; }, {});
+    const compressed = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
+    return new Response(compressed, { headers: {
+      'Content-Type': 'application/gzip', 'Cache-Control': 'private, no-store',
+      'x-bundle-id': manifest.id, 'x-base-normalized-hash': manifest.normalized_hash,
+      'x-normalized-hash': await contentHash(normalizedContent(merged)),
+      'x-row-count': String(merged.length), 'x-entity-counts': JSON.stringify(counts),
+    } });
+  }
 
   if (bulkStore && typeof bulkStore.get === "function") {
     const object = await bulkStore.get(manifestKey(manifest, scope));

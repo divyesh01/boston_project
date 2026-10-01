@@ -248,7 +248,7 @@ const ALLOWED_TEST_FIXTURES = new Map([
   ['StrongPass123!@#', 'test_local_auth.mjs strength-accepted path'],
   ['TestPass123!@#', 'test_local_auth.mjs sign-in path'],
   ['NewUserPass123!@#', 'test_local_auth.mjs new-user path'],
-  ['ConsistentPass123!@#', 'verify_cross_module_impact.mjs cross-module sign-in'],
+  ['ConsistentPass123!@#', 'verify-cross-module-impact.mjs cross-module sign-in'],
   // The shared harness sign-in used by every suite that must authenticate first
   // (see _harness-auth.mjs). Self-describing name.
   ['Harness-Owner-Password-1!', '_harness-auth.mjs shared owner sign-in'],

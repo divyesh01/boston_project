@@ -458,7 +458,7 @@ async function runTreeAudit() {
   // STATIC walk (isSuiteFile), which is a different question. A file can be swept and yet
   // unaudited, so nobody enforces its summary contract; or audited and yet never run. Each
   // walk therefore carries its own floor, and NOT_A_SUITE above says why this name is on it.
-  const MUST_REMAIN_AUDITED = ['probe-auth-hardening.mjs'];
+  const MUST_REMAIN_AUDITED = ['probe-auth-hardening.mjs', 'verify-acceptance-harness.mjs', 'verify-cross-module-impact.mjs'];
   const unaudited = MUST_REMAIN_AUDITED
     .map((f) => ({ f, onDisk: fs.existsSync(path.join(SCRIPTS_DIR, f)) }))
     .filter(({ f, onDisk }) => !onDisk || !isSuiteFile(f));

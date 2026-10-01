@@ -194,7 +194,7 @@ scripts\verify-source-contributions.mjs
 scripts\verify-statistics.mjs
 scripts\verify-timecard.mjs
 scripts\verify-transactions.mjs
-scripts\verify_cross_module_impact.mjs
+scripts\verify-cross-module-impact.mjs
 src\App.jsx
 src\api\authLocal.test.js
 src\api\autoPayroll.test.js

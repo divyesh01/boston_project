@@ -207,12 +207,13 @@ The remaining visual split is secondary. Risk LOW-MEDIUM. Benefit: medium.
 1. **Dedup keys live in two modules.** `src/lib/reportParsers.js` and
    `src/lib/transactionNorm.js` both participate in the no-double-count invariant. Whoever
    splits either one must first write down which module owns the key.
-2. **`scripts/` membership is decided by filename.** A suite runs only if its basename
-   ends `.mjs` and starts `probe-`, `verify-` or `test_`. Files like
-   `verify_cross_module_impact.mjs` (393 lines, underscore) never run, and
-   `PROTOCOL_V2_ADDENDUM.md` incorrectly lists it among the `verify-*` suites. Renaming it
-   would *start* running a 393-line suite — a change to the gate surface that needs its own
-   verification, so it is reported here rather than done.
+2. **Verification discovery is now pinned against silent omissions.** Completed
+   2026-10-01: `verify_cross_module_impact.mjs` was promoted to the discovered
+   `verify-cross-module-impact.mjs` suite with an explicit PASS/FAIL contract, and
+   `verify-acceptance-harness.mjs` now runs the real-data harness when private HotelKey
+   exports are present while reporting an honest SKIP in clean CI. Both names are pinned in
+   `MUST_DISCOVER` and the suite-integrity audit floor so a future rename/exclusion cannot
+   silently remove them from verification.
 3. **Unreachable-but-tracked UI.** Eight `src/` components have zero importers and are
    marked UNWIRED in `docs/brain/BRAIN_FRONTEND.md`: `propertyMap.jsx`,
    `MFARecoveryModal.jsx`, `HousekeepingSettingsModal.jsx`, `AnomalySignoffModal.jsx`,

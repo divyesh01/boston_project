@@ -276,7 +276,7 @@ const listId = `list ${LIST_ID} (${discovered.length} discovered)`;
 // scripts/probe-suite-integrity.mjs, which pins the same names into the static contract audit.
 // The two walks are separate by design and each one needs its own floor: a file can be swept
 // but unaudited, or audited but never run.
-const MUST_DISCOVER = ["probe-auth-hardening.mjs"];
+const MUST_DISCOVER = ["probe-auth-hardening.mjs", "verify-acceptance-harness.mjs", "verify-cross-module-impact.mjs"];
 const undiscovered = MUST_DISCOVER.filter((f) => !discovered.includes(f));
 if (undiscovered.length) {
   console.error(`Discovery floor violated: ${undiscovered.length} required suite(s) are not in the discovered set.`);

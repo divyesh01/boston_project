@@ -60,6 +60,7 @@ npm run lint
 > - `AGENTS.md` (project root)
 > - `PROTECTED_FILES.md`
 > - `AI_CORE_RULES.md`
+> - `docs/engineering/CODEX_ANTIGRAVITY_WORKFLOW.md` — mandatory role split for every Codex and Antigravity model
 
 ## Global Sync
 > All 14 global skills from `~/.gemini/config/skills/` apply automatically.

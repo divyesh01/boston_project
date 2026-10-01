@@ -16,9 +16,10 @@ export async function hydrateAuthenticatedData({
   syncBulkBundles,
   rebuildDailyAggregates,
   invalidateQueries,
+  force = false,
 }) {
-  const business = await hydrateBusinessData();
-  const bulk = await syncBulkBundles({ force: true });
+  const business = await hydrateBusinessData({ force });
+  const bulk = await syncBulkBundles({ force });
   if (!bulk?.verified) throw new Error('Active report bundles were not verified in local storage.');
 
   const aggregates = await rebuildDailyAggregates();

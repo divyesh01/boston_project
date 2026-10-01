@@ -59,7 +59,13 @@ number of rows below, verified against `src/pages/*.jsx` (excluding `*.test.jsx`
 | Page | File | What It Does | Key Dependencies |
 |------|------|-------------|-----------------|
 | **Employees** | `src/pages/Employees.jsx` | Staff roster, clerk cash variance audit, anomaly sign-off | `anomalyDetector.js`, `anomalySignoff.js`, `ClerkAuditMatrix` |
-| **Payroll** | `src/pages/Payroll.jsx` | Payroll register: hourly/salary, overtime, compensation, realtime invalidation | `payrollCalc.js`, `timecardCalc.js`, `employeeId.js`, `deleteGuard.js`, `realtime.js` |
+| **Payroll** | `src/pages/Payroll.jsx` | Payroll register: hourly/salary, overtime, compensation, multi-row selection & bulk delete, realtime invalidation | `payrollCalc.js`, `timecardCalc.js`, `employeeId.js`, `deleteGuard.js`, `realtime.js` |
+
+### Startup Hydration & Loading Performance
+- `AuthoritativeDataGate` in `src/App.jsx` uses non-forced startup hydration (`force = false`) on existing local profiles.
+- Incremental sync checks server feed and bulk bundle manifest by `since_revision`, returning in milliseconds rather than re-downloading all historical R2 gzip archives on every page refresh.
+- `rebuildDailyAggregates` in `src/lib/dailyAggregates.js` batches updates via `bulkPut` using an in-memory Map lookup instead of sequential N+1 IndexedDB queries.
+- `Payroll.jsx` features multi-entry selection ("Select All" / "Deselect All"), row checkboxes, a dynamic bulk summary bar with count and total pay, and protected bulk deletion via `guardDestructiveAction` and `PayrollRun.bulkDelete()`.
 
 ### Analytics & Intelligence
 | Page | File | What It Does | Key Dependencies |

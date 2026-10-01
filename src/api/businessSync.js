@@ -406,7 +406,7 @@ export function createBusinessSyncClient({
             const applied = await applyFeed(prior);
             try {
               const { syncBulkBundles } = await import('../lib/bulkHydrationService.js');
-              await syncBulkBundles({ force: true });
+              await syncBulkBundles({ force: false });
             } catch {}
             if (!applied.rebuild) {
               if (allowDuringTransaction || transactionPending) {
@@ -1014,7 +1014,7 @@ export function createBusinessSyncClient({
       inspectLocalBusinessData,
       downloadBusinessBackup,
       migrateLocalData,
-      hydrateFromServer: () => hydrate({ force: true }),
+      hydrateFromServer: (opts = {}) => hydrate({ force: true, ...opts }),
       syncNow: async () => { await flushOutbox(); return hydrate(); },
       syncPropertyRoster,
       reserveIdSequence: (prefix, floor) => request('business-sync/id-sequence/reserve', { method: 'POST', body: JSON.stringify({ prefix, floor }) }),

@@ -201,10 +201,11 @@ const AuthoritativeDataGate = ({ children, userId, scopeKey }) => {
       import('@/lib/bulkHydrationService'),
       import('@/lib/dailyAggregates'),
     ]).then(([client, bulk, aggregates]) => hydrateAuthenticatedData({
-      hydrateBusinessData: () => client.businessData.hydrateFromServer(),
+      hydrateBusinessData: (opts) => client.businessData.hydrateFromServer(opts),
       syncBulkBundles: bulk.syncBulkBundles,
       rebuildDailyAggregates: aggregates.rebuildDailyAggregates,
       invalidateQueries: (filters) => queryClient.invalidateQueries(filters),
+      force: attempt > 0,
     })).then(() => {
       if (!cancelled) setState({ userId, scopeKey, status: 'ready', error: null });
     }).catch((error) => {

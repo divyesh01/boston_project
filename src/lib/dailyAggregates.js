@@ -307,17 +307,20 @@ export async function rebuildDailyAggregates({ propertyId = 'all', from = '', to
 
   let written = 0;
   await localDb.transaction('rw', localDb.DailyFinancialAggregate, async () => {
+    const existing = await localDb.DailyFinancialAggregate.toArray();
+    const existingMap = new Map(existing.map((row) => [`${row.property_id}|${row.business_date}`, row.id]));
+    const toPut = [];
     for (const agg of days) {
-      const existing = await localDb.DailyFinancialAggregate
-        .where('[property_id+business_date]')
-        .equals([agg.property_id, agg.business_date])
-        .first();
-       if (existing) {
-        await localDb.DailyFinancialAggregate.update(existing.id, agg);
+      const priorId = existingMap.get(`${agg.property_id}|${agg.business_date}`);
+      if (priorId != null) {
+        toPut.push({ ...agg, id: priorId });
       } else {
-        await localDb.DailyFinancialAggregate.add(agg);
+        toPut.push(agg);
       }
       written++;
+    }
+    if (toPut.length > 0) {
+      await localDb.DailyFinancialAggregate.bulkPut(toPut);
     }
   });
 

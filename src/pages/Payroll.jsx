@@ -6,6 +6,8 @@ import Card from "@/components/ui-exec/Card";
 import Button from "@/components/ui-exec/Button";
 import Input from "@/components/ui-exec/Input";
 import Select from "@/components/ui-exec/Select";
+import { Checkbox } from "@/components/ui/checkbox";
+import { cn } from "@/lib/utils";
 import { EmptyState, ErrorState } from "@/components/ui/status";
 import KpiCard from "@/components/ui-exec/KpiCard";
 import StatusBadge from "@/components/ui-exec/StatusBadge";
@@ -117,6 +119,30 @@ export default function Payroll() {
   const [showForm, setShowForm] = useState(false);
   const [showStaffForm, setShowStaffForm] = useState(false);
   const [showHistoricalForm, setShowHistoricalForm] = useState(false);
+  const [selectedRunIds, setSelectedRunIds] = useState([]);
+  const [isDeletingSelected, setIsDeletingSelected] = useState(false);
+
+  const validSelectedIds = selectedRunIds.filter((id) => payroll.some((p) => p.id === id));
+  const isAllSelected = payroll.length > 0 && validSelectedIds.length === payroll.length;
+
+  const handleToggleSelectAll = () => {
+    if (isAllSelected) {
+      setSelectedRunIds([]);
+    } else {
+      setSelectedRunIds(payroll.map((p) => p.id));
+    }
+  };
+
+  const handleToggleSelectOne = (id) => {
+    setSelectedRunIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleClearSelection = () => {
+    setSelectedRunIds([]);
+  };
+
   const [form, setForm] = useState(EMPTY_RUN);
   const [staffForm, setStaffForm] = useState(EMPTY_STAFF);
   // Default the range to last month. `getMonth() - 1` underflows to -1 every
@@ -695,8 +721,52 @@ export default function Payroll() {
     }
     gate.complete();
     sfx.pop();
+    setSelectedRunIds((prev) => prev.filter((id) => id !== p.id));
     invalidateMoney();
     toast.success(`Payroll run for ${p?.employee_name || "employee"} deleted.`);
+  };
+
+  const handleDeleteSelected = async () => {
+    const selectedRuns = payroll.filter((p) => validSelectedIds.includes(p.id));
+    if (!selectedRuns.length) return;
+
+    const totalSelectedPay = selectedRuns.reduce((sum, r) => sum + (Number(r?.total_pay) || 0), 0);
+    const committedRuns = selectedRuns.filter(
+      (r) => r?.payroll_status === "approved" || r?.payroll_status === "paid"
+    );
+    const committedTotal = committedRuns.reduce((sum, r) => sum + (Number(r?.total_pay) || 0), 0);
+
+    const lines = [
+      `${selectedRuns.length} payroll run(s) totaling ${money2(totalSelectedPay)}.`,
+      committedRuns.length > 0
+        ? `This includes ${committedRuns.length} approved/paid run(s) totaling ${money2(committedTotal)}. Deleting them removes pay already committed and will increase reported Money Kept by ${money2(committedTotal)}.`
+        : "None of these runs are approved or paid, so Money Kept will not change.",
+    ];
+
+    const gate = guardDestructiveAction({
+      title: `Delete ${selectedRuns.length} selected payroll run${selectedRuns.length === 1 ? "" : "s"}?`,
+      lines,
+    });
+
+    if (!gate.ok) {
+      if (gate.message) toast.error(gate.message);
+      return;
+    }
+
+    try {
+      setIsDeletingSelected(true);
+      await db.entities.PayrollRun.bulkDelete(validSelectedIds);
+      gate.complete();
+      sfx.pop();
+      invalidateMoney();
+      toast.success(`Deleted ${selectedRuns.length} payroll run(s).`);
+      setSelectedRunIds([]);
+    } catch (e) {
+      sfx.error();
+      toast.error(`Could not delete selected payroll runs: ${e?.message || e}. Nothing was removed.`);
+    } finally {
+      setIsDeletingSelected(false);
+    }
   };
 
   // ─── Projection & break-even engine ───
@@ -1233,13 +1303,22 @@ export default function Payroll() {
         title="Payroll Runs"
         subtitle={`${payroll.length} entries · ${money2(totalPay)} total`}
         right={
-          /* Bare block comment — expression slot, see the projection Card above.
-             C-017 site: this was white on indigo at 4.32:1. `primary` because it
-             is the only control in this Card's header and adding an entry is the
-             panel's action. */
-          <Button variant="primary" size="sm" onClick={() => setShowForm(true)} className="fx-clickable">
-            <Plus /> Add Entry
-          </Button>
+          <div className="flex items-center gap-2">
+            {payroll.length > 0 && (
+              <Button
+                variant={isAllSelected ? "secondary" : "soft"}
+                size="sm"
+                onClick={handleToggleSelectAll}
+                className="fx-clickable text-xs"
+                title={isAllSelected ? "Deselect all payroll runs" : "Select all payroll runs"}
+              >
+                {isAllSelected ? "Deselect All" : "Select All"}
+              </Button>
+            )}
+            <Button variant="primary" size="sm" onClick={() => setShowForm(true)} className="fx-clickable">
+              <Plus /> Add Entry
+            </Button>
+          </div>
         }
       >
         {showForm && (
@@ -1328,56 +1407,107 @@ export default function Payroll() {
       </DialogPrimitive.Root>
         )}
 
-        <div className="space-y-2">
-          {payroll.map((p) => (
-            <div key={p.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/5 bg-[#0A1628]/60 px-4 py-3">
-              <div className="flex items-center gap-3">
-                <StatusBadge status={p.payroll_status || "draft"} size="sm" />
-                <div>
-                  <p className="text-sm text-white">{p.employee_name}</p>
-                  <p className="text-xs text-slate-500">
-                    {p.department || "—"} · {p.pay_type} · {p.pay_period_start || "—"} to {p.pay_period_end || "—"}
-                    {p.auto_generated && <span className="ml-1 text-[#00E096]">· ⚙ auto</span>}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="text-right">
-                  <p className="text-xs text-slate-500">Reg {money2(p.regular_pay || 0)} · OT {money2(p.overtime_pay || 0)}</p>
-                  <p className="text-sm font-heading text-white">{money2(p.total_pay || 0)}</p>
-                </div>
-                {/* Content-width, not the primitive's default w-full: this sits in
-                    a flex row beside the money column, so BOTH the wrapper and the
-                    field need w-auto or the select eats the row. statusColor's
-                    class lands after the field's own text colour in cn(), so
-                    tailwind-merge lets the status hue win — the same behaviour the
-                    raw select had. aria-label is additive: this control has no
-                    label element of any kind, and it writes payroll status. */}
-                <Select
-                  value={p.payroll_status || "draft"}
-                  onChange={(e) => handleStatusChange(p.id, e.target.value)}
-                  aria-label={`Payroll status for ${p.employee_name || "this run"}`}
-                  wrapperClassName="w-auto"
-                  className={`w-auto text-xs ${statusColor(p.payroll_status)}`}
-                >
-                  <option value="draft">Draft</option>
-                  <option value="pending_review">Pending Review</option>
-                  <option value="approved">Approved</option>
-                  <option value="paid">Paid</option>
-                </Select>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleDelete(p)}
-                  aria-label={`Delete the payroll run for ${p.employee_name || "this employee"}`}
-                  title="Delete payroll run"
-                  className="hover:text-[var(--data-negative)]"
-                >
-                  <Trash2 />
-                </Button>
-              </div>
+        {validSelectedIds.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-500/25 bg-red-500/[0.06] px-4 py-2.5 mb-3 animate-in fade-in duration-150">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-2 w-2 rounded-full bg-red-400 animate-pulse" />
+              <span className="text-xs font-semibold text-white">
+                {validSelectedIds.length} of {payroll.length} selected
+              </span>
+              <span className="text-xs text-slate-300">
+                · {money2(payroll.filter((p) => validSelectedIds.includes(p.id)).reduce((sum, r) => sum + (Number(r?.total_pay) || 0), 0))} total pay
+              </span>
             </div>
-          ))}
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={handleClearSelection}
+                className="text-xs text-slate-400 hover:text-white"
+              >
+                Clear Selection
+              </Button>
+              <Button
+                variant="danger"
+                size="xs"
+                onClick={handleDeleteSelected}
+                disabled={isDeletingSelected}
+                className="gap-1.5"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                {isDeletingSelected ? "Deleting..." : `Delete Selected (${validSelectedIds.length})`}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          {payroll.map((p) => {
+            const isSelected = validSelectedIds.includes(p.id);
+            return (
+              <div
+                key={p.id}
+                className={cn(
+                  "flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 transition-colors",
+                  isSelected
+                    ? "border-red-500/30 bg-red-500/[0.04]"
+                    : "border-white/5 bg-[#0A1628]/60"
+                )}
+              >
+                <div className="flex items-center gap-3">
+                  <Checkbox
+                    checked={isSelected}
+                    onCheckedChange={() => handleToggleSelectOne(p.id)}
+                    aria-label={`Select payroll run for ${p.employee_name || "this employee"}`}
+                    className="border-white/20 data-[state=checked]:bg-[#6C63FF] data-[state=checked]:border-[#6C63FF]"
+                  />
+                  <StatusBadge status={p.payroll_status || "draft"} size="sm" />
+                  <div>
+                    <p className="text-sm text-white">{p.employee_name}</p>
+                    <p className="text-xs text-slate-500">
+                      {p.department || "—"} · {p.pay_type} · {p.pay_period_start || "—"} to {p.pay_period_end || "—"}
+                      {p.auto_generated && <span className="ml-1 text-[#00E096]">· ⚙ auto</span>}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-4">
+                  <div className="text-right">
+                    <p className="text-xs text-slate-500">Reg {money2(p.regular_pay || 0)} · OT {money2(p.overtime_pay || 0)}</p>
+                    <p className="text-sm font-heading text-white">{money2(p.total_pay || 0)}</p>
+                  </div>
+                  {/* Content-width, not the primitive's default w-full: this sits in
+                      a flex row beside the money column, so BOTH the wrapper and the
+                      field need w-auto or the select eats the row. statusColor's
+                      class lands after the field's own text colour in cn(), so
+                      tailwind-merge lets the status hue win — the same behaviour the
+                      raw select had. aria-label is additive: this control has no
+                      label element of any kind, and it writes payroll status. */}
+                  <Select
+                    value={p.payroll_status || "draft"}
+                    onChange={(e) => handleStatusChange(p.id, e.target.value)}
+                    aria-label={`Payroll status for ${p.employee_name || "this run"}`}
+                    wrapperClassName="w-auto"
+                    className={`w-auto text-xs ${statusColor(p.payroll_status)}`}
+                  >
+                    <option value="draft">Draft</option>
+                    <option value="pending_review">Pending Review</option>
+                    <option value="approved">Approved</option>
+                    <option value="paid">Paid</option>
+                  </Select>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => handleDelete(p)}
+                    aria-label={`Delete the payroll run for ${p.employee_name || "this employee"}`}
+                    title="Delete payroll run"
+                    className="hover:text-[var(--data-negative)]"
+                  >
+                    <Trash2 />
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
           {!payroll.length && (
             readFailed ? (
               <ErrorState

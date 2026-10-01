@@ -7,9 +7,11 @@
 ## FAST START FOR CODE CHANGES
 
 After `npm run verify:v3`, run `npm run ai:context -- "<task or file path>"`.
-It reads the machine-verified repo guide, test matrix, module contracts, protected-file
-list, and known-failure registry, then prints only the likely subsystem, files, gates,
-and risks. Use `--json` for machine-readable output. See `AI_QUICKSTART.md`.
+It verifies the routing map, combines task text with the real diff, scores risk, checks
+protected-file boundaries and known-failure expiry, and prints exact proof commands.
+Before handoff or merge run `npm run ai:check -- "<same task>"`; it blocks scope drift,
+protected-file changes needing owner review, stale branches, and invalid agent context.
+Use `--json` for machine-readable output. See `AI_QUICKSTART.md`.
 
 ## THE SPOKES (Context Segmentation)
 | Domain | File | Use When... |

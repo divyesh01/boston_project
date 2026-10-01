@@ -1,60 +1,70 @@
-# AI Quickstart — fast path for code changes
+# AI Quickstart — fast, bounded code changes
 
-This file is an accelerator, not a second policy. The canonical engineering contract is
-`docs/engineering/AGENT_RULES.md`; `PROTECTED_FILES.md` and DIVYESH V3 still outrank
-everything here.
+This is an accelerator, not a second policy. The canonical engineering contract remains
+`docs/engineering/AGENT_RULES.md`; `PROTECTED_FILES.md` and DIVYESH V3 outrank this file.
 
-## Start every code task with two commands
+## Before editing
 
 ```bash
 npm run verify:v3
-npm run ai:context -- "describe the task or paste the file path"
+npm run ai:context -- "describe the task or paste a file path"
 ```
+
+`ai:context` is read-only. It combines the machine-verified repo guide, test matrix,
+module contracts, protected-file list, current branch/diff, known-failure registry and
+DIVYESH V3 state. It outputs the likely subsystem, risk, invariants, exact proof commands,
+and a Codex → Antigravity handoff.
 
 Examples:
 
 ```bash
 npm run ai:context -- "Dashboard YTD revenue"
 npm run ai:context -- src/lib/bulkHydrationService.js
-npm run ai:context -- "login session timeout"
-npm run ai:context -- --json "HotelKey import"
+npm run ai:context -- --changed "HotelKey import"
+npm run ai:context -- --json "login session timeout"
 ```
 
-`ai:context` is read-only. It uses the repository's existing machine-verified routing
-documents instead of inventing another map:
+## While editing
+
+1. Read only the printed **Read first** files, direct callers/imports, and the relevant
+   BRAIN spoke. Do not scan the whole repository unless the route is insufficient.
+2. Treat `PROTECTED` as a hard boundary. A protected-file edit still requires explicit
+   current-task owner authority; the tool has no bypass flag.
+3. For `HIGH` risk modules, prove the failure first, then make the smallest complete fix.
+4. Keep one concern per branch/PR. Reuse existing helpers and contracts.
+5. Run the printed targeted proof before broad checks.
+
+## Before handoff or merge
+
+```bash
+npm run ai:check -- "same task description"
+```
+
+`ai:check` evaluates the actual working tree and branch diff. It exits non-zero for hard
+blockers such as V3 drift, a broken routing map, malformed/expired known-failure entries,
+protected-file changes needing owner review, mapped changes outside the requested
+subsystem, implementation changes on `main`, or a branch behind its base.
+
+It also warns on wide diffs, ambiguous cross-domain routing, and unmapped files. Its final
+section is a ready-to-use Codex → Antigravity verification handoff.
+
+## Known failures are evidence, not a waiver
+
+`docs/engineering/KNOWN_FAILURES.json` uses a strict schema. Every active exception must
+name a real suite, stable signature, first-seen commit, affected area, accepter, review
+date, expiry date and tracking issue. Expired or malformed active entries block the
+context/check command.
+
+Never register a failure introduced by the current change. An empty `failures` array means
+there are no accepted pre-existing failures.
+
+## Source-of-truth inputs
 
 - `docs/AI_REPO_GUIDE.md` — subsystem → files → primary gate → protected files
 - `docs/TEST_MATRIX.md` — subsystem → relevant suites → exact commands
-- `docs/MODULE_CONTRACTS.md` — module invariant and risk
+- `docs/MODULE_CONTRACTS.md` — module invariants and risk
+- `PROTECTED_FILES.md` — locked files
 - `docs/engineering/KNOWN_FAILURES.json` — accepted pre-existing failures only
-- `PROTECTED_FILES.md` — files an agent may not edit without current-task owner authority
 
-## Fast workflow
-
-1. Run the two commands above. If V3 reports `BLOCKED`, do not make substantive edits.
-2. Read the listed **Read first** files, their direct callers/imports, and the one relevant
-   BRAIN spoke. Do not scan the whole repository.
-3. If the requested path is protected, stop unless the owner explicitly authorized that
-   protected-file change in the current task.
-4. Create a focused branch. Keep one concern per PR.
-5. Make the smallest complete diff. Reuse existing helpers; do not create parallel
-   implementations.
-6. Run the targeted gate from `ai:context` first. Then run the applicable repository
-   checks (`npm run typecheck`, `npm run lint`, tests/build, and any risk-specific gate).
-7. Inspect the final diff and report exactly what changed, what did not change, what ran,
-   and any remaining unverified state.
-
-## Known-failure rule
-
-`docs/engineering/KNOWN_FAILURES.json` is a registry, not a waiver. A failure may be
-listed only when it is repeatable, existed before the current change, has a stable
-signature, and is explicitly being carried as known debt. Never add a new failure just
-to make a PR look green.
-
-An empty `failures` array means there are no accepted pre-existing failures. A new
-failure is therefore new until proven otherwise.
-
-## Keep context small
-
-Prefer the output of `npm run ai:context` over broad repository searches. Escalate to a
-wider scan only when the printed routing is insufficient or contradicted by the code.
+The goal: **route narrowly, edit minimally, prove exactly, and block silent scope creep
+before review.**

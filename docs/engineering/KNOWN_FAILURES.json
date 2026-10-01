@@ -1,15 +1,30 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "purpose": "Registry of accepted, repeatable pre-existing verification failures. This is not a waiver for new failures.",
   "policy": {
     "empty_means": "No accepted pre-existing failures are currently registered.",
+    "required_active_fields": [
+      "id",
+      "suite",
+      "signature",
+      "first_seen_commit",
+      "areas",
+      "accepted_by",
+      "reviewed_on",
+      "expires_on",
+      "issue",
+      "active"
+    ],
     "add_only_when": [
       "The failure is repeatable.",
       "The failure existed before the current change.",
       "The failure has a stable suite and signature.",
-      "The owner or project workflow explicitly accepts carrying it as known debt."
+      "The first-seen commit is recorded.",
+      "The affected subsystem is named.",
+      "The owner or project workflow explicitly accepts carrying it as known debt.",
+      "The entry has a review date, expiry date, and tracking issue."
     ],
-    "never_use_for": "Do not add a newly introduced failure to make a change appear green."
+    "never_use_for": "Do not add a newly introduced failure to make a change appear green. Expired or malformed active entries are invalid."
   },
   "failures": []
 }

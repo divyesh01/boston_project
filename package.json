@@ -30,7 +30,8 @@
     "audit:gate": "node scripts/audit-gate.mjs",
     "verify:all": "node scripts/verify-all.mjs",
     "verify:v3": "node scripts/verify-divyesh-v3.mjs",
-    "ai:context": "node scripts/ai-context.mjs"
+    "ai:context": "node scripts/ai-context.mjs",
+    "ai:check": "node scripts/ai-context.mjs --check --changed"
   },
   "dependencies": {
     "@base44/sdk": "^0.8.41",

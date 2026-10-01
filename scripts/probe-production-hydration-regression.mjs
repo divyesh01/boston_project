@@ -41,7 +41,6 @@ globalThis.fetch = async (input, init) => {
   const url = new URL(String(input), globalThis.location.origin);
   if (url.pathname.startsWith('/api/bulk-import/raw-upload') || url.pathname.startsWith('/api/bulk-import/upload') || url.pathname.startsWith('/api/bulk-import/activate')) uploadRequests++;
   if (failBundleDownload && url.pathname.startsWith('/api/bulk-import/bundle/')) {
-    failBundleDownload = false;
     return Response.json({ error: 'Injected transient bundle outage' }, { status: 503 });
   }
   if (failBundleDownloadAfter !== null && url.pathname.startsWith('/api/bulk-import/bundle/')) {
@@ -130,6 +129,7 @@ await run.check('Active server imports reproduce the fresh-browser zero-revenue 
       invalidateQueries: async ({ queryKey }) => invalidateCalls.push(queryKey[0]),
     });
   } catch { failed = true; }
+  failBundleDownload = false;
   assert(failed, 'failed bundle download rejects startup hydration instead of returning empty data');
   assertEqual(await getLastBulkRevision(), 0, 'failed initial hydration does not advance the active manifest cursor');
   assertEqual(await localDb.GrossRevenueDay.count(), 0, 'failed initial hydration leaves ledgers unmaterialized');

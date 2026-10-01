@@ -3,7 +3,7 @@ import { typedRecordKey, resolvePropertyKeyFromMappings } from "./business-sync.
 import { assertPropertyInScope, ScopeError } from "./scope.js";
 import { queryAll, queryFirst } from "./db.js";
 import { isR2S3Enabled, resolveR2S3Stores } from "./r2-s3-adapter.js";
-import { mergeReportDates, reportBusinessDate } from './report-date-merge.js';
+import { createReportDateAccumulator, reportBusinessDate } from './report-date-merge.js';
 import { mapConcurrent } from '../src/lib/mapConcurrent.js';
 
 class BulkImportError extends Error {
@@ -818,11 +818,10 @@ async function readMergeSource(manifest, bulkStore, env, scope) {
   const key = manifestKey(manifest, scope);
   const object = await bulkStore.get(key);
   verifyObject(object, scope, manifest.server_property_id, manifest.normalized_hash);
-  const compressed = typeof object.arrayBuffer === 'function'
-    ? await object.arrayBuffer()
-    : await new Response(object.body).arrayBuffer();
-  if (compressed.byteLength > MAX_BUNDLE_SIZE_BYTES) throw new BulkImportError('Source bundle exceeds merge limit', 413);
-  const decoded = createBoundedStream(new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip')), 16 * 1024 * 1024);
+  if (object.size > MAX_BUNDLE_SIZE_BYTES) throw new BulkImportError('Source bundle exceeds merge limit', 413);
+  const body = object.body ?? await object.arrayBuffer();
+  const compressed = createBoundedStream(new Response(body).body, MAX_BUNDLE_SIZE_BYTES);
+  const decoded = createBoundedStream(compressed.stream.pipeThrough(new DecompressionStream('gzip')), 16 * 1024 * 1024);
   const text = await new Response(decoded.stream).text();
   // Legacy rows can carry migration-era IDs. Prove each alias through the
   // existing account/property resolver before accepting it in parseBundle.
@@ -975,11 +974,12 @@ async function activateBundle(requestOrBody, env, scope) {
   if (validatedPredecessors.length) {
     const incoming = await readMergeSource({ server_property_id: propertyId, normalized_hash: hash, object_key: key,
       identity_version: identityVersion, row_count: rowCount, report_type: reportType, entity_counts_json: JSON.stringify(counts) }, bulkStore, env, scope);
-    const older = [];
-    for (const predecessor of [...validatedPredecessors].sort((a, b) => Number(a.revision) - Number(b.revision) || String(a.id).localeCompare(String(b.id)))) {
-      older.push(await readMergeSource(predecessor, bulkStore, env, scope));
+    const accumulator = createReportDateAccumulator(propertyId, 16 * 1024 * 1024);
+    accumulator.add(incoming);
+    for (const predecessor of [...validatedPredecessors].sort((a, b) => Number(b.revision) - Number(a.revision) || String(b.id).localeCompare(String(a.id)))) {
+      accumulator.add(await readMergeSource(predecessor, bulkStore, env, scope));
     }
-    const merged = mergeReportDates(older, incoming, propertyId);
+    const merged = accumulator.rows();
     preservedRows = merged.length - incoming.length;
     const text = merged.map(item => JSON.stringify(item)).join('\n');
     const bytes = new TextEncoder().encode(text);
@@ -1169,34 +1169,33 @@ async function downloadBundle(parts, env, scope) {
   if (parts[4] === 'history') {
     // Recover only retained ancestors of this active report. Never resurrect
     // tombstoned reports or follow lineage across an account/property/type.
-    const ancestors = [];
-    let frontier = [manifest.id];
-    const seen = new Set(frontier);
-    while (frontier.length) {
-      const placeholders = frontier.map(() => '?').join(',');
-      const parents = await queryAll(env, `SELECT * FROM import_bundle_manifest
-        WHERE account_id=? AND server_property_id=? AND report_type=?
-        AND status='superseded' AND superseded_by_bundle_id IN (${placeholders})`,
-        [scope.accountId, manifest.server_property_id, manifest.report_type, ...frontier]);
-      frontier = [];
-      for (const parent of parents) {
-        if (seen.has(parent.id)) throw new BulkImportError('Invalid report lineage', 409);
-        seen.add(parent.id);
-        if (seen.size > 200) throw new BulkImportError('Report history exceeds recovery limit', 413);
-        ancestors.push(parent);
-        frontier.push(parent.id);
-      }
+    // One scoped traversal avoids a network round-trip per historical generation.
+    // UNION terminates cycles. One extra row detects overflow without truncation.
+    // Raw-only duplicates have no normalized payload and contribute no old days.
+    const ancestors = await queryAll(env, `WITH RECURSIVE lineage(id) AS (
+      SELECT ? UNION SELECT m.id FROM import_bundle_manifest m JOIN lineage l ON m.superseded_by_bundle_id=l.id
+      WHERE m.account_id=? AND m.server_property_id=? AND m.report_type=? AND m.status='superseded'
+      AND m.normalized_hash IS NOT NULL AND m.normalized_hash<>'' LIMIT 2002
+    ) SELECT m.* FROM import_bundle_manifest m JOIN lineage l ON m.id=l.id WHERE m.account_id=? AND m.id<>?`,
+    [manifest.id, scope.accountId, manifest.server_property_id, manifest.report_type, scope.accountId, manifest.id]);
+    if (ancestors.length > 2000) throw new BulkImportError('Report history exceeds recovery limit', 413);
+    ancestors.sort((a, b) => String(b.activated_at || b.created_at).localeCompare(String(a.activated_at || a.created_at)) || Number(b.revision) - Number(a.revision) || String(b.id).localeCompare(String(a.id)));
+    const accumulator = createReportDateAccumulator(manifest.server_property_id, 16 * 1024 * 1024);
+    accumulator.add(await readMergeSource(manifest, bulkStore, env, scope));
+    // Consume two files at a time, preserving report priority and releasing each
+    // batch before reading more. Never retain every decoded historical version.
+    for (let offset = 0; offset < ancestors.length; offset += 2) {
+      const sources = await mapConcurrent(ancestors.slice(offset, offset + 2), source => readMergeSource(source, bulkStore, env, scope));
+      for (const source of sources) accumulator.add(source);
     }
-    ancestors.sort((a, b) => String(a.activated_at || a.created_at).localeCompare(String(b.activated_at || b.created_at)) || Number(a.revision) - Number(b.revision) || String(a.id).localeCompare(String(b.id)));
-    // Bound storage concurrency and preserve oldest-to-newest ordering. Drain
-    // all workers on failure before returning an error to the client.
-    const sources = await mapConcurrent([...ancestors, manifest], source => readMergeSource(source, bulkStore, env, scope));
-    const incoming = sources.pop();
-    const older = sources;
-    const merged = mergeReportDates(older, incoming, manifest.server_property_id);
+    const merged = accumulator.rows();
     const bytes = new TextEncoder().encode(merged.map(item => JSON.stringify(item)).join('\n'));
     if (bytes.byteLength > 16 * 1024 * 1024) throw new BulkImportError('Recovered report exceeds supported size', 413);
     const counts = merged.reduce((out, item) => { out[item.entity] = (out[item.entity] || 0) + 1; return out; }, {});
+    const current = await queryFirst(env, 'SELECT status,revision,normalized_hash FROM import_bundle_manifest WHERE account_id=? AND id=?', [scope.accountId, manifest.id]);
+    if (current?.status !== 'active' || current.revision !== manifest.revision || current.normalized_hash !== manifest.normalized_hash) {
+      throw new BulkImportError('Report changed during history recovery; refresh the manifest', 409, { code: 'IMPORT_HISTORY_CHANGED' });
+    }
     const compressed = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
     return new Response(compressed, { headers: {
       'Content-Type': 'application/gzip', 'Cache-Control': 'private, no-store',
@@ -1476,6 +1475,7 @@ export async function handleBulkImportRequest(request, env, scope, url, parts) {
 
     return responseError("not found", 404, { code: "ROUTE_NOT_FOUND" });
   } catch (error) {
+    if (error?.code === 'REPORT_MERGE_LIMIT') return responseError(error.message, 413, { code: error.code });
     if (error instanceof BulkImportError) {
       return responseError(error.message, error.status, error.details);
     }

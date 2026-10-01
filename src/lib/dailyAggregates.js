@@ -92,8 +92,8 @@ async function fetchLedger(name, propertyId, from, to) {
   if (bound) query[field] = bound;
 
   let rows;
-  if (propertyId && propertyId !== 'all') {
-    query.property_id = propertyId;
+  if (propertyId != null && propertyId !== '' && propertyId !== 'all') {
+    query.property_id = Array.isArray(propertyId) ? { $in: propertyId } : propertyId;
     rows = await db.entities[name].filter(query);
   } else {
     // No 200000 cap. list() sorted by -created_date and then sliced, so once a
@@ -347,7 +347,7 @@ export async function getDailyAggregates({ propertyId = 'all', from = '', to = '
   // run inside a localDb.transaction zone, and a proxy write there would await
   // the authorization lookup and kill the zone. See B6.)
   const query = {};
-  if (propertyId && propertyId !== 'all') {
+  if (propertyId != null && propertyId !== '' && propertyId !== 'all') {
     query.property_id = Array.isArray(propertyId) ? { $in: propertyId } : propertyId;
   }
   // The date range belongs in the query, not in a .filter() afterwards. This is

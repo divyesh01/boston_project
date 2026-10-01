@@ -147,3 +147,6 @@ docs/architecture/*.visual-check.json
 /rename_functions.py
 /enhance.py
 /upgrade_system*.cjs
+
+# Root-level agent prompt scratch belongs in docs/archive/ or outside the repo.
+/antigravity-prompt.md

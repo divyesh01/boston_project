@@ -67,7 +67,7 @@ This document serves as the final verification checklist before marking Red Roof
       (`PBKDF2_ITERATIONS`). Verification accepts 100,000–1,000,000
       (`MIN_SUPPORTED_ITERATIONS`/`MAX_SUPPORTED_ITERATIONS`), so credentials
       minted at a higher count still verify. **This checklist previously claimed
-      150,000 and `PRODUCTION_READINESS_REPORT.md` claims an upgrade to 300,000;
+      150,000 and `docs/archive/PRODUCTION_READINESS_REPORT.md` claims an upgrade to 300,000;
       neither figure is in the Worker.** Whether 100,000 is the intended floor is
       an open owner decision, not a settled item.
 - [x] Server-side pepper in the derivation input, versioned

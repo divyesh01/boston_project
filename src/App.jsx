@@ -5,14 +5,13 @@ import { ErrorState } from "@/components/ui/status";
 import { QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { queryClientInstance } from '@/lib/query-client';
 import { hydrateAuthenticatedData } from '@/lib/startupHydration';
-import { YDocProvider } from '@/crdt';
 import { BrowserRouter as Router, Route, Routes, Navigate, useLocation } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import { isRouteMapped } from '@/lib/permissions';
 import { logAuditEvent } from '@/lib/auditLogger';
 import ScrollToTop from './components/ScrollToTop';
-import Layout from '@/components/Layout';
+const Layout = lazy(() => import('@/components/Layout'));
 import { attachClickSounds } from '@/lib/sound';
 
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
@@ -276,7 +275,7 @@ const ProtectedRoutes = () => {
           <RequireAuth>
             <RequirePermission>
               <PasswordGate>
-                <Layout />
+                <Suspended><Layout /></Suspended>
               </PasswordGate>
             </RequirePermission>
           </RequireAuth>
@@ -359,7 +358,6 @@ function App() {
   return (
     <TopLevelErrorBoundary>
       <AuthProvider>
-        <YDocProvider name="app-root">
           <QueryClientProvider client={queryClientInstance}>
             <Router>
               <RouteProgress />
@@ -400,7 +398,6 @@ function App() {
             <SonnerToaster theme="dark" position="top-right" richColors closeButton />
 
           </QueryClientProvider>
-        </YDocProvider>
       </AuthProvider>
     </TopLevelErrorBoundary>
   );

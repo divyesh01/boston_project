@@ -1,5 +1,19 @@
 # 4. ALL 34 PAGES (What Users See)
 
+## Startup payload (October 2026)
+
+`src/App.jsx` loads the authenticated `Layout` through its existing suspense
+fallback. The unused root Yjs provider is removed; the lazy `DemoYDoc` page keeps
+its own provider and document. `CommandMenu` retains only shortcut/open state at
+startup and imports `CommandMenuDialog` when Ctrl/Cmd+K opens it. Closing restores
+focus, and reopening retries a failed dialog load. Authentication and authoritative
+data hydration gates retain their existing behavior.
+
+The completed intermediate build reduced the transitive initial JavaScript from
+1,231,657 to 936,210 bytes (gzip: 391,321 to 298,816) after the App changes alone.
+The final command-menu split has not been built or tested: the owner requested
+that Antigravity perform the follow-up testing.
+
 ## Owner Analyst: grounded financial answers
 
 `src/components/AIAssistant.jsx` is an owner-facing analyst surface in the

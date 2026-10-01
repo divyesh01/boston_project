@@ -339,23 +339,28 @@ export class CalculationService {
     return {refundsCents,feeCents,daily};
   }
 
-  static calculateTaxLiability(srcRows = [], grossRows = [], propertyId = null, dateRange = { from: '', to: '' }, occupancyRows = []) {
+  static calculateTaxLiability(srcRows = [], grossRows = [], propertyId = null, dateRange = { from: '', to: '' }, occupancyRows = [], includeCalculations = false) {
     if (propertyId === 'all' || Array.isArray(propertyId)) propertyId = null;
-    const sourceDays = new Set(srcRows.map(row=>String(row.property_id || '*')+':'+String(row.date).slice(0,10)));
-    srcRows = [...srcRows,...occupancyRows.filter(row=>!sourceDays.has(String(row.property_id || '*')+':'+String(row.date).slice(0,10))).map(row=>({...row,source:'__ROOM_REVENUE_ESTIMATE__',tax_basis_fallback:true,net_revenue:row.room_revenue}))];
-    const propertyIds = [...new Set([...srcRows,...grossRows].map(row=>row.property_id || '*'))];
+    const sourceDays = new Set(srcRows.map(row=>JSON.stringify([row.property_id ?? '*',String(row.date).slice(0,10)])));
+    srcRows = [...srcRows,...occupancyRows.filter(row=>!sourceDays.has(JSON.stringify([row.property_id ?? '*',String(row.date).slice(0,10)]))).map(row=>({...row,source:'__ROOM_REVENUE_ESTIMATE__',tax_basis_fallback:true,net_revenue:row.room_revenue}))];
+    const propertyIds = [...new Set([...srcRows,...grossRows].map(row=>row.property_id ?? '*'))];
     if (propertyIds.length > 1) {
-      const totals = {state:0,city:0,other:0,total:0,imported:0,estimated:0};
-      for (const id of propertyIds) {const part = this.calculateTaxLiability(srcRows.filter(r=>(r.property_id||'*')===id),grossRows.filter(r=>(r.property_id||'*')===id),id,dateRange); for (const key of Object.keys(totals)) totals[key] = fromCents(toCents(totals[key])+toCents(part[key]));}
+      const totals = {state:0,city:0,other:0,total:0,imported:0,estimated:0,calculations:[]};
+      for (const id of propertyIds) {
+        const part = this.calculateTaxLiability(srcRows.filter(r=>(r.property_id ?? '*')===id),grossRows.filter(r=>(r.property_id ?? '*')===id),id,dateRange,[],includeCalculations);
+        for (const key of ['state','city','other','total','imported','estimated']) totals[key] = fromCents(toCents(totals[key])+toCents(part[key]));
+        if (includeCalculations) totals.calculations.push(...(part.calculations || []));
+      }
+      if (!includeCalculations) delete totals.calculations;
       return totals;
     }
-    propertyId = propertyId || propertyIds[0] || '*';
+    propertyId = propertyId ?? propertyIds[0] ?? '*';
     const taxConfig = getTaxConfig(propertyId);
     if (!taxConfig.taxEnabled && !grossRows.length) {
       // Every key the enabled path returns, so a caller reading `.estimated` or
       // `.imported` gets 0 rather than undefined — which would become NaN the
       // moment it reached toCents() and poison the whole deduction total.
-      return { state: 0, city: 0, other: 0, total: 0, imported: 0, estimated: 0 };
+      return { state: 0, city: 0, other: 0, total: 0, imported: 0, estimated: 0, ...(includeCalculations ? {calculations:[]} : {}) };
     }
 
     // Per-date bases in integer CENTS. Grouping is by date already; the residue came
@@ -366,7 +371,7 @@ export class CalculationService {
     srcRows.forEach((r) => {
       const src = r.tax_basis_fallback ? {taxable:true} : taxConfig.sources.find((s) => s.key === classifySource(r));
       // Also respect per-source taxExempt from commission rate settings
-      const info = commissionFor(r.source || r.code, r.property_id || propertyId);
+      const info = commissionFor(r.source || r.code, r.property_id ?? propertyId);
       if (!src || !src.taxable || (!r.tax_basis_fallback && info.taxExempt)) return;
       const d = String(r.date).slice(0, 10);
       taxBase.set(d, (taxBase.get(d) || 0) + toCents(r.net_revenue));
@@ -399,6 +404,7 @@ export class CalculationService {
     // the imported portion as pass-through. `total` is unchanged for anyone
     // reporting total LIABILITY, which is a real and different question.
     let importedCents = 0, estimatedCents = 0;
+    const calculations = [];
     const dates = new Set([...taxBase.keys(), ...taxImp.keys()]);
     dates.forEach(d => {
       if (!inRange(d, dateRange.from, dateRange.to)) return;
@@ -411,6 +417,7 @@ export class CalculationService {
         cityCents += imp.city;
         otherCents += imp.other;
         importedCents += imp.state + imp.city + imp.other;
+        if (includeCalculations) calculations.push({property_id:propertyId,date:d,basis:'imported',base:null,rates:null,state:fromCents(imp.state),city:fromCents(imp.city),other:fromCents(imp.other)});
       } else if (taxConfig.taxEnabled) {
         const base = fromCents(taxBase.get(d) || 0);
         const r = getEffectiveTaxRates(propertyId, d);
@@ -421,6 +428,7 @@ export class CalculationService {
         cityCents += c;
         otherCents += o;
         estimatedCents += s + c + o;
+        if (includeCalculations) calculations.push({property_id:propertyId,date:d,basis:'estimated',base,rates:{state:r.state,city:r.city,other:r.other},state:fromCents(s),city:fromCents(c),other:fromCents(o)});
       }
     });
 
@@ -433,6 +441,7 @@ export class CalculationService {
       imported: fromCents(importedCents),
       // Owed by the owner on revenue the PMS did not tax: a real cost.
       estimated: fromCents(estimatedCents),
+      ...(includeCalculations ? {calculations} : {}),
     };
   }
 

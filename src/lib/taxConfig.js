@@ -4,7 +4,8 @@
 // Other OTA = tax exempt
 
 import { notifySettingsChanged } from "@/lib/settingsBus";
-import { getTaxSettings, saveTaxSettings } from "@/lib/taxSettings";
+import { getTaxSettings, getEffectiveTaxRates, saveTaxSettings } from "@/lib/taxSettings";
+import { getOwnerTaxDefaults } from "@/lib/ownerTaxDefaults";
 import { readObjectSetting, writeJsonSetting } from "@/lib/settingsStore";
 import { multiply, fromCents } from "@/lib/decimal";
 
@@ -26,8 +27,14 @@ const DEFAULT_CONFIG = {
 
 export function getTaxConfig(propertyId = "*") {
   const stored = readObjectSetting(TAX_KEY, {}, propertyId);
+  const profile = propertyId != null && propertyId !== "*" && propertyId !== "all"
+    ? getOwnerTaxDefaults(propertyId)[0] : null;
+  const legacyRate = typeof stored.taxRate === "number" ? stored.taxRate : DEFAULT_CONFIG.taxRate;
+  const taxRate = profile && [0.115, 0.117].some(rate => Math.abs(legacyRate - rate) < 1e-9)
+    ? profile.state_rate + profile.city_rate + profile.other_rate
+    : legacyRate;
   return {
-    taxRate: typeof stored.taxRate === "number" ? stored.taxRate : DEFAULT_CONFIG.taxRate,
+    taxRate,
     taxEnabled: stored.taxEnabled !== undefined ? stored.taxEnabled : DEFAULT_CONFIG.taxEnabled,
     sources: stored.sources?.length ? stored.sources : TAX_SOURCES,
   };
@@ -65,14 +72,18 @@ function syncDefaultTaxSetting(rate, propertyId = "*") {
   if (!defaults.length) return true;
   defaults.sort((a, b) => String(b.effective_start || "").localeCompare(String(a.effective_start || "")));
   const idx = defaults[0]._i;
+  // A combined-rate dialog must never erase a configured city/state split.
+  // Jurisdiction periods are edited in Settings and remain authoritative.
+  if (Number(list[idx].city_rate || 0) !== 0 || Number(list[idx].other_rate || 0) !== 0) return true;
   const next = [...list];
   const { _i, ...rest } = { ...next[idx], state_rate: r, city_rate: 0, other_rate: 0 };
   next[idx] = rest;
   return saveTaxSettings(next, propertyId);
 }
 
-export function getTaxRate(propertyId = "*") {
-  return getTaxConfig(propertyId).taxRate;
+export function getTaxRate(propertyId = "*", date = new Date().toISOString().slice(0, 10)) {
+  const rates = getEffectiveTaxRates(propertyId, date);
+  return rates.state + rates.city + rates.other;
 }
 
 export function isSourceTaxable(sourceKey, propertyId = "*") {
@@ -94,7 +105,8 @@ export function isSourceTaxable(sourceKey, propertyId = "*") {
 export function calculateTax(roomRent, sourceKey, propertyId = "*") {
   const rent = Number(roomRent) || 0;
   if (!isSourceTaxable(sourceKey, propertyId)) return 0;
-  return fromCents(multiply(rent, getTaxRate(propertyId)));
+  const rates = getEffectiveTaxRates(propertyId, new Date().toISOString().slice(0,10));
+  return fromCents(multiply(rent,rates.state) + multiply(rent,rates.city) + multiply(rent,rates.other));
 }
 
 export function formatTaxRate(rate) {

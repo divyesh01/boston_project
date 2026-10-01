@@ -108,18 +108,6 @@ export function buildMoneyKeptBaseData({
     const grossBasis = grossRevenueForPeriod({ grossRows: grossInPeriod, occRows });
     const gross = grossBasis.dollars;
 
-    // ── Imported PMS tax lines per day (state / city / other) ──
-    const taxImp = new Map();
-    grossInPeriod.forEach((r) => {
-      const d = String(r.date).slice(0, 10);
-      const cur = taxImp.get(d) || { state: 0, city: 0, other: 0, present:false };
-      cur.present ||= r.tax_fields_present === true || (r.tax_fields_present !== false && ["state_tax","city_tax","other_tax"].some(key=>r[key] != null));
-      cur.state += Number(r.state_tax) || 0;
-      cur.city += Number(r.city_tax) || 0;
-      cur.other += Number(r.other_tax) || 0;
-      taxImp.set(d, cur);
-    });
-
     // ── Day-level ledger ──
     const dayMap = new Map();
     const bump = (date, key, v) => {
@@ -262,19 +250,23 @@ export function buildMoneyKeptBaseData({
     pushItem('ota', 'OTA Commissions ('+labelBasis('ota')+')', costTotal('otaCommissions'), recordsFor('ota','otaCommissions','ota'));
     pushItem('cc', 'Credit Card Processing Fees ('+labelBasis('cc')+')', costTotal('ccFees'), recordsFor('credit_card_fees','ccFees','cc'));
     pushItem('refund_fee', 'CC Fee on Refunds', costTotal('refundFees'), costs.map(c=>({name:c.id || 'Property',detail:'Configured property refund fee',amount:c.value.refundFees})));
-    const estimatedTaxFromRates = costTotal('estimatedTaxes');
     const taxIsActual = labelBasis('tax') === 'actual';
     const effectiveTaxRate = undefined;
     pushItem('taxes','Business Taxes ('+labelBasis('tax')+')',costTotal('estimatedTaxes'),recordsFor('taxes','estimatedTaxes','tax'));
     const liability = {state:0,city:0,other:0};
+    const taxCalculations = [];
     for (const c of costs) {
-      const imported = CalculationService.calculateTaxLiability([],c.gross,c.id || null,{from,to});
-      const full = CalculationService.calculateTaxLiability(c.source,c.gross,c.id || null,{from,to},occRows.filter(r=>String(r.property_id ?? '')===c.id));
+      const actual = c.value.basis.tax === 'actual';
+      const full = CalculationService.calculateTaxLiability(actual ? [] : c.source,c.gross,c.id || null,{from,to},actual ? [] : occRows.filter(r=>String(r.property_id ?? '')===c.id),true);
+      taxCalculations.push(...(full.calculations || []));
       for (const [key,category] of [['state','state_taxes'],['city','city_taxes'],['other','taxes']]) {
-        const amount = c.value.basis.tax==='actual' ? imported[key] + c.exp.filter(e=>e.category===category).reduce((n,e)=>n+Number(e.amount || 0),0) : full[key];
+        const entries = actual ? c.exp.filter(e=>e.category===category) : [];
+        const amount = fromCents(toCents(full[key]) + entries.reduce((n,e)=>n+toCents(e.amount),0));
         liability[key] = fromCents(toCents(liability[key])+toCents(amount));
+        taxCalculations.push(...entries.map(e=>({property_id:c.id,date:String(e.expense_date || '').slice(0,10),basis:'actual_expense',base:null,rates:null,state:0,city:0,other:0,[key]:Number(e.amount)||0,name:e.expense_name || 'Tax expense'})));
       }
     }
+    const estimatedTaxFromRates = fromCents(taxCalculations.filter(c=>c.basis==='estimated').reduce((n,c)=>n+toCents(c.state)+toCents(c.city)+toCents(c.other),0));
 
     pushItem("payroll", "Payroll", sum(payInPeriod, "total_pay") + expAmt("payroll"), [
       ...payInPeriod.map((p) => ({
@@ -317,34 +309,19 @@ export function buildMoneyKeptBaseData({
     // {actual payments, rate estimate} is in force for the days with no imported
     // line. Adding the manual amounts on top of the estimate — as this did
     // before — counted the same liability twice.
-    const impDays = dayTotals.filter((d) => d.passTax > 0.004);
-    const estDays = dayTotals.filter((d) => d.deductTax > 0.004);
-    const sumOn = (rows, k) => rows.reduce((a, d) => a + d[k], 0);
     const liabState = liability.state;
     const liabCity = liability.city;
     const liabOther = liability.other;
-    const passThrough = sumOn(impDays, "passTax");
-
-    const dayImpImported = (d) => {
-      const imp = taxImp.get(d.date);
-      return imp?.present === true;
-    };
+    const passThrough = fromCents(taxCalculations.filter(c=>c.basis==='imported').reduce((n,c)=>n+toCents(c.state)+toCents(c.city)+toCents(c.other),0));
 
     const taxRecords = {};
-    for (const [label,key,category] of [['State Tax','state','state_taxes'],['City/Local Tax','city','city_taxes'],['Other Taxes','other','taxes']]) {
-      taxRecords[label] = costs.flatMap(c=>{
-        const records = [];
-        const dates = [...new Set([...c.source,...c.gross,...occRows.filter(r=>String(r.property_id ?? '')===c.id)].map(r=>String(r.date).slice(0,10)))];
-        for (const date of dates) {
-          const gross = c.gross.filter(r=>String(r.date).slice(0,10)===date);
-          const source = c.value.basis.tax==='actual' ? [] : c.source.filter(r=>String(r.date).slice(0,10)===date);
-          const occupancy = c.value.basis.tax==='actual' ? [] : occRows.filter(r=>String(r.property_id ?? '')===c.id && String(r.date).slice(0,10)===date);
-          const value = CalculationService.calculateTaxLiability(source,gross,c.id || null,{from:date,to:date},occupancy);
-          if (value[key]) records.push({name:date,detail:c.id+' ? imported/estimated tax liability',amount:value[key]});
-        }
-        if(c.value.basis.tax==='actual') records.push(...c.exp.filter(e=>e.category===category).map(expRecord));
-        return records;
-      });
+    for (const [label,key] of [['State Tax','state'],['City/Local Tax','city'],['Other Taxes','other']]) {
+      taxRecords[label] = taxCalculations.filter(c=>toCents(c[key])!==0).map(c=>({
+        name:c.name || c.date,
+        property_id:c.property_id,
+        detail:`${c.property_id} · ${c.date} · ${c.basis==='estimated' ? `${money2(c.base)} taxable revenue × ${pct(c.rates[key],2)} (rounded daily)` : c.basis==='imported' ? 'Imported HotelKey tax' : 'Recorded tax expense'}`,
+        amount:c[key],
+      }));
     }
 
     // Tax object consumed by the UI: per-jurisdiction liability amounts, the
@@ -359,6 +336,7 @@ export function buildMoneyKeptBaseData({
       taxIsActual,
       estimatedTaxFromRates,
       effectiveTaxRate,
+      calculations: taxCalculations,
     });
 
     return {

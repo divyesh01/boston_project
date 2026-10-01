@@ -7,7 +7,8 @@ import {
 import PieDonut from '@/components/charts/PieDonut';
 import { X, Wallet } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
-import { usePaymentData } from "@/lib/useHotelData";
+import { usePaymentData, useProperties } from "@/lib/useHotelData";
+import TaxCalculationBreakdown from "@/components/dashboard/TaxCalculationBreakdown";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { money, money2, pct, C, CHART_COLORS } from "@/lib/hotel";
 import { fromCents, toCents } from "@/lib/decimal";
@@ -31,6 +32,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
   const ccFee = getCcFeeRate();
   const ccFeeRefunds = getCcFeeOnRefunds();
   const settingsVersion = useSettingsVersion();
+  const { data: properties = [] } = useProperties();
   const [active, setActive] = useState(null);
   const [trendMode, setTrendMode] = useState("week");
 
@@ -53,7 +55,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
       occRows, srcRows, grossRows, payRecords, expenses, payroll,
       from, to, aggPayRows, aggExpenses, recurringExtras,
     }),
-    [occRows, srcRows, grossRows, payRecords, expenses, payroll, from, to, property, ccFee, ccFeeRefunds, settingsVersion, aggPayRows, aggExpenses, recurringExtras],
+    [occRows, srcRows, grossRows, payRecords, expenses, payroll, from, to, property, ccFee, ccFeeRefunds, settingsVersion, aggPayRows, aggExpenses, recurringExtras, properties],
   );
 
   // 3. Final chart/trend view model.
@@ -77,7 +79,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
   const netRevenueBase = fromCents(toCents(gross) - toCents(refundsTotal));
   const keepRate = netRevenueBase > 0 ? kept / netRevenueBase : (gross > 0 ? kept / gross : 0);
   const periodLabel = `${from || "—"} → ${to || "—"}`;
-  const taxTotal = tax.state + tax.city + tax.other;
+  const taxTotal = fromCents(toCents(tax.state) + toCents(tax.city) + toCents(tax.other));
 
   // Say which ledger the gross came from. A room-only figure and a total-revenue
   // figure differ by every ancillary charge the hotel posted, so labelling both
@@ -92,15 +94,15 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
 
   const open = (label, rows) => setActive({ label, rows: rows || [] });
 
-  const TaxRow = ({ label, amount, records, color }) => (
+  const TaxRow = ({ label, amount, records, color, rate }) => (
     <button
       onClick={() => open(label, records)}
-      className="flex w-full items-center justify-between rounded-lg px-3 py-2 transition-colors hover:bg-white/[0.04]"
+      className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-3 text-left transition-colors hover:bg-white/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
     >
       <span className="flex items-center gap-2 text-sm text-slate-300">
         <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
         {label}
-        {amount > 0 && <span className="text-[10px] text-slate-500">({pct(amount / (gross || 1))})</span>}
+        {Number.isFinite(rate) && <span className="text-xs text-slate-400">({pct(rate,2)} estimated)</span>}
       </span>
       <span className="text-sm tabular-nums text-slate-200">{money2(amount)}</span>
     </button>
@@ -245,12 +247,12 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
         title="Taxes Collected / Tax Liability"
         subtitle={`State, city, and other taxes shown separately · click a line for daily records (${periodLabel})`}
       >
-        {taxTotal > 0 ? (
+        {taxTotal !== 0 || tax.calculations?.length > 0 ? (
           <div className="grid gap-6 lg:grid-cols-2">
             <div className="space-y-1">
-              <TaxRow label="State Tax" amount={tax.state} color={CHART_COLORS[0]} records={tax.stateRecords} />
-              <TaxRow label="City/Local Tax" amount={tax.city} color={CHART_COLORS[1]} records={tax.cityRecords} />
-              <TaxRow label="Other Taxes" amount={tax.other} color={CHART_COLORS[2]} records={tax.otherRecords} />
+              <TaxRow label="State Tax" amount={tax.state} color={CHART_COLORS[0]} records={tax.stateRecords} rate={tax.rates?.state} />
+              <TaxRow label="City/Local Tax" amount={tax.city} color={CHART_COLORS[1]} records={tax.cityRecords} rate={tax.rates?.city} />
+              <TaxRow label="Other Taxes" amount={tax.other} color={CHART_COLORS[2]} records={tax.otherRecords} rate={tax.rates?.other} />
               <div className="my-2 border-t border-dashed border-white/10" />
               <div className="flex w-full items-center justify-between rounded-lg bg-[#FFB547]/[0.06] px-3 py-3">
                 <span className="flex items-center gap-2 text-sm font-medium text-[#FFB547]">
@@ -268,6 +270,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
                 )}
               </p>
             </div>
+            <TaxCalculationBreakdown calculations={tax.calculations} properties={properties} />
           </div>
         ) : (
           <p className="py-6 text-center text-sm text-slate-500">

@@ -4,7 +4,8 @@
 // Imported PMS tax lines (state_tax / city_tax / other_tax on GrossRevenueDay) always take
 // precedence; these rates are only used to estimate taxes when reports don't provide them.
 
-import { getTaxRate } from "@/lib/taxConfig";
+import { getTaxConfig } from "@/lib/taxConfig";
+import { getOwnerTaxDefaults, isLegacyCombinedTax } from "@/lib/ownerTaxDefaults";
 import { notifySettingsChanged } from "@/lib/settingsBus";
 import { readJsonSetting, reportDiscardedSetting, writeJsonSetting } from "@/lib/settingsStore";
 
@@ -17,7 +18,21 @@ const num = (v) => {
 
 export function getTaxSettings(propertyId = "*") {
   const raw = readJsonSetting(TAX_SETTINGS_KEY, [], propertyId);
-  if (Array.isArray(raw)) return raw;
+  if (Array.isArray(raw)) {
+    const defaults = getOwnerTaxDefaults(propertyId);
+    const rows = raw.map(row => {
+      const profile = defaults.find(p => String(p.property_id) === String(row.property_id));
+      return profile && isLegacyCombinedTax(row)
+        ? { ...row, state_rate: profile.state_rate, city_rate: profile.city_rate, rate_basis: profile.rate_basis }
+        : row;
+    });
+    // These defaults are visible/editable in Settings. Reading never writes or
+    // migrates storage; saving an explicit period takes precedence afterwards.
+    for (const profile of defaults) {
+      if (!rows.some(row => String(row.property_id) === String(profile.property_id) && !row.effective_start && !row.effective_end)) rows.push(profile);
+    }
+    return rows;
+  }
   // Dropping this silently discards every configured tax period, and the caller
   // then falls back to the single legacy rate as though none had been set up.
   reportDiscardedSetting(TAX_SETTINGS_KEY, `expected a list of tax periods, stored value is ${typeof raw}`);
@@ -32,7 +47,9 @@ export function getTaxSettings(propertyId = "*") {
  *   from, so a caller that reports success must check it.
  */
 export function saveTaxSettings(list, propertyId = "*") {
-  const saved = writeJsonSetting(TAX_SETTINGS_KEY, list || [], propertyId);
+  const saved = writeJsonSetting(TAX_SETTINGS_KEY, (list || []).map(row => ({
+    ...row, rate_basis: "configured_jurisdictions",
+  })), propertyId);
   notifySettingsChanged();
   return saved;
 }
@@ -41,9 +58,11 @@ export function saveTaxSettings(list, propertyId = "*") {
 // Falls back to the legacy combined tax rate (state) when nothing is configured.
 export function getEffectiveTaxRates(propertyId, dateStr) {
   const q = String(dateStr || "").slice(0, 10) || "9999-12-31";
+  const hasProperty = propertyId != null && propertyId !== "" && propertyId !== "*" && propertyId !== "all";
+  const matchesProperty = r => hasProperty && r.property_id != null && String(r.property_id) === String(propertyId);
   const allRecs = [
     ...getTaxSettings(propertyId),
-    ...(propertyId && propertyId !== "*" ? getTaxSettings("*") : []),
+    ...(hasProperty ? getTaxSettings("*") : []),
   ];
   const seen = new Set();
   const dedupedRecs = [];
@@ -57,14 +76,14 @@ export function getEffectiveTaxRates(propertyId, dateStr) {
 
   const recs = dedupedRecs.filter(
     (r) =>
-      (r.property_id === propertyId || r.property_id === "*" || !r.property_id) &&
+      (matchesProperty(r) || r.property_id === "*" || r.property_id == null || r.property_id === "") &&
       (!r.effective_start || q >= String(r.effective_start).slice(0, 10)) &&
       (!r.effective_end || q <= String(r.effective_end).slice(0, 10))
   );
-  const specific = recs.filter((r) => r.property_id === propertyId);
+  const specific = recs.filter(matchesProperty);
   const pool = specific.length ? specific : recs;
   if (!pool.length) {
-    const legacy = Math.max(0, Math.min(1, getTaxRate(propertyId) || 0));
+    const legacy = Math.max(0, Math.min(1, getTaxConfig(propertyId).taxRate || 0));
     return { state: legacy, city: 0, other: 0, legacy: true };
   }
   const best = [...pool].sort((a, b) =>

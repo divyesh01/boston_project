@@ -101,6 +101,14 @@ export default function Settings() {
   const propertiesQ = useProperties();
   const properties = propertiesQ.data ?? [];
   const refetchProps = propertiesQ.refetch;
+  useEffect(() => {
+    if (isInitialMount.current || !propertiesQ.data || isEditingSettingsLocked()) return;
+    // The owner default resolves by property code only after the roster arrives.
+    // Refresh its displayed periods without echoing a read back to cloud storage.
+    isRemoteUpdate.current = true;
+    setTaxRows(getTaxSettings());
+    setRemoteSyncEpoch(epoch => epoch + 1);
+  }, [propertiesQ.data]);
   const [newPropCode, setNewPropCode] = useState("");
   const [newPropName, setNewPropName] = useState("");
   const [newPropRooms, setNewPropRooms] = useState("100");
@@ -1055,7 +1063,7 @@ export default function Settings() {
         </div>
       </Card>
 
-      <Card title="Tax settings (per property)" subtitle="State, city/local, and other tax rates with effective dates. Imported PMS tax lines are always used when available; these rates only estimate taxes when reports don't include them. New settings apply to future dates only.">
+      <Card title="Tax settings (per property)" subtitle="State, city/local, and other tax rates with effective dates. Imported PMS tax lines remain authoritative. Estimates use the period covering each business date; a blank start applies to all dates.">
         <div className="space-y-2">
           {taxRows.map((row, i) => (
             <div

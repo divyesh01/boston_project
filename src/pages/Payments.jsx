@@ -5,6 +5,8 @@ import KpiCard from "@/components/ui-exec/KpiCard";
 import UniversalChart from "@/components/charts/UniversalChart";
 import ChartToolbar from "@/components/charts/ChartToolbar";
 import TaxConfigModal from "@/components/TaxConfigModal";
+import TaxCalculationBreakdown from "@/components/dashboard/TaxCalculationBreakdown";
+import { summarizeTaxCalculations } from "@/lib/taxLiability";
 import { ErrorState } from "@/components/ui/status";
 import { usePaymentData, useOccupancy, useClerkRecords, useSources, useGrossRevenue } from "@/lib/useHotelData";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
@@ -13,7 +15,6 @@ import { sumCents, fromCents, subtract } from "@/lib/decimal";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { PAYMENT_METHOD_FIELDS, CARD_METHODS, refundTotalFromTotals } from "@/lib/paymentNorm";
 import { getTaxConfig, formatTaxRate } from "@/lib/taxConfig";
-import { getEffectiveTaxRates } from "@/lib/taxSettings";
 import CalculationService from "@/lib/calculationService";
 import { exportReconciliationToCsv } from "@/lib/reconciliationExport";
 import { useSettingsVersion } from "@/hooks/useSettingsVersion";
@@ -232,24 +233,25 @@ export default function Payments() {
   // A single property id feeds per-property rates; "all"/an array of ids has no one
   // property to window rates by, so null selects the catch-all ("*") schedule.
   const resolvedPropertyId =
-    property && property !== "all" && !Array.isArray(property) ? property : null;
+    property != null && property !== "" && property !== "all" && !Array.isArray(property) ? property : null;
 
   // Tax configuration
   const [taxModalOpen, setTaxModalOpen] = useState(false);
-  const taxConfig = useMemo(() => getTaxConfig(resolvedPropertyId || "*"), [resolvedPropertyId, settingsVersion]);
+  const taxConfig = useMemo(() => getTaxConfig(resolvedPropertyId ?? "*"), [resolvedPropertyId, settingsVersion, properties]);
 
   const taxLiability = useMemo(
-    () => CalculationService.calculateTaxLiability(srcRows, grossRows, resolvedPropertyId, dateRange),
-    [srcRows, grossRows, resolvedPropertyId, dateRange, settingsVersion]
+    () => CalculationService.calculateTaxLiability(srcRows, grossRows, resolvedPropertyId, dateRange, occRows,true),
+    [srcRows, grossRows, occRows, resolvedPropertyId, dateRange, settingsVersion, properties]
   );
+  const taxCalculations = useMemo(() => summarizeTaxCalculations(taxLiability.calculations), [taxLiability]);
 
-  // Effective rates for the header labels only (the money above is cent-exact from
-  // the engine). Rates are date-windowed, so show the schedule in force at the end
-  // of the selected period — the most recent rate that applies to it.
-  const effectiveRates = useMemo(
-    () => getEffectiveTaxRates(resolvedPropertyId, dateRange.to || dateRange.from || ""),
-    [resolvedPropertyId, dateRange, settingsVersion]
-  );
+  const estimates = taxCalculations.filter(row=>row.basis==='estimated');
+  const rateLabel = key => {
+    const rates = new Set(estimates.map(row=>row.rates[key]));
+    return rates.size===1 ? `${formatTaxRate([...rates][0])} estimated` : rates.size>1 ? 'multiple rates' : 'reported';
+  };
+  const combinedRates = new Set(estimates.map(row=>row.rates.state+row.rates.city+row.rates.other));
+  const combinedRateLabel = combinedRates.size===1 ? formatTaxRate([...combinedRates][0]) : combinedRates.size>1 ? 'per property / period' : 'reported amounts';
 
   if (isLoading) return <p className="text-slate-500">Loading payment data…</p>;
 
@@ -289,7 +291,7 @@ export default function Payments() {
       {/* Tax Management */}
       <Card
         title="Tax Management"
-        subtitle={`Rate: ${formatTaxRate(taxConfig.taxRate)} · ${taxConfig.taxEnabled ? "Active" : "Disabled"}`}
+        subtitle={`Rate: ${combinedRateLabel} · ${resolvedPropertyId == null ? "Per-property settings" : taxConfig.taxEnabled ? "Active" : "Estimates disabled"}`}
         right={
           <button
             onClick={() => setTaxModalOpen(true)}
@@ -308,15 +310,15 @@ export default function Payments() {
             </div>
             <div className="mt-3 space-y-2">
               <div className="flex items-center justify-between rounded-lg bg-[#040D1A]/60 px-3 py-2">
-                <span className="text-sm text-slate-300">State <span className="text-slate-500">({formatTaxRate(effectiveRates.state)})</span></span>
+                <span className="text-sm text-slate-300">State <span className="text-slate-400">({rateLabel('state')})</span></span>
                 <span className="tabular-nums text-sm text-slate-100">{money2(taxLiability.state)}</span>
               </div>
               <div className="flex items-center justify-between rounded-lg bg-[#040D1A]/60 px-3 py-2">
-                <span className="text-sm text-slate-300">City <span className="text-slate-500">({formatTaxRate(effectiveRates.city)})</span></span>
+                <span className="text-sm text-slate-300">City <span className="text-slate-400">({rateLabel('city')})</span></span>
                 <span className="tabular-nums text-sm text-slate-100">{money2(taxLiability.city)}</span>
               </div>
               <div className="flex items-center justify-between rounded-lg bg-[#040D1A]/60 px-3 py-2">
-                <span className="text-sm text-slate-300">Other <span className="text-slate-500">({formatTaxRate(effectiveRates.other)})</span></span>
+                <span className="text-sm text-slate-300">Other <span className="text-slate-400">({rateLabel('other')})</span></span>
                 <span className="tabular-nums text-sm text-slate-100">{money2(taxLiability.other)}</span>
               </div>
             </div>
@@ -344,7 +346,10 @@ export default function Payments() {
             </p>
           </div>
         </div>
-        <TaxConfigModal open={taxModalOpen} onClose={() => setTaxModalOpen(false)} propertyId={resolvedPropertyId || "*"} />
+        <div className="mt-4">
+          <TaxCalculationBreakdown calculations={taxCalculations} properties={properties} />
+        </div>
+        <TaxConfigModal open={taxModalOpen} onClose={() => setTaxModalOpen(false)} propertyId={resolvedPropertyId ?? "*"} />
       </Card>
 
       {payRows.length === 0 ? (
@@ -383,8 +388,8 @@ export default function Payments() {
           >
             <div ref={chartRef}>
               <UniversalChart data={paymentData} type="donut" />
-            </div>
-          </Card>
+        </div>
+      </Card>
 
           {/* Payment Method Table */}
           <Card title="Payment Method Breakdown" subtitle="Gross amounts by method with percentage of total">

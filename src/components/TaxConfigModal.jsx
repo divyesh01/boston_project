@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { X, Percent, ToggleLeft, ToggleRight, Save } from "lucide-react";
 import { getTaxConfig, setTaxConfig, formatTaxRate } from "@/lib/taxConfig";
+import { getEffectiveTaxRates } from "@/lib/taxSettings";
+import { Link } from "react-router-dom";
 import { setEditingSettingsLock } from "@/lib/settingsStore";
 
 export default function TaxConfigModal({ open, onClose, propertyId = "*" }) {
@@ -32,6 +34,9 @@ export default function TaxConfigModal({ open, onClose, propertyId = "*" }) {
   }, [open, propertyId]);
 
   if (!open) return null;
+  const effective = getEffectiveTaxRates(propertyId, new Date().toISOString().slice(0,10));
+  const hasJurisdictionSplit = effective.city !== 0 || effective.other !== 0;
+  const effectiveCombined = effective.state + effective.city + effective.other;
 
   const handleSave = () => {
     setEditingSettingsLock(false);
@@ -71,7 +76,7 @@ export default function TaxConfigModal({ open, onClose, propertyId = "*" }) {
         <div className="mb-5 flex items-center justify-between rounded-xl border border-white/5 bg-[#0b0e14] px-4 py-3">
           <div>
             <p className="text-sm font-medium text-white">Apply Tax</p>
-            <p className="text-xs text-slate-500">Enable or disable tax calculation globally</p>
+            <p className="text-xs text-slate-500">Enable or disable estimates for this property scope</p>
           </div>
           <button onClick={() => setConfig({ ...config, taxEnabled: !config.taxEnabled })}>
             {config.taxEnabled ? (
@@ -91,33 +96,37 @@ export default function TaxConfigModal({ open, onClose, propertyId = "*" }) {
             <input
               type="number"
               step="0.01"
-              value={rateDraft}
+              value={hasJurisdictionSplit ? (effectiveCombined * 100).toFixed(2) : rateDraft}
               onChange={(e) => {
                 setRateDraft(e.target.value);
                 const pct = parseFloat(e.target.value);
                 setConfig({ ...config, taxRate: Number.isFinite(pct) ? pct / 100 : 0 });
               }}
               onBlur={() => setRateDraft(((Number(config.taxRate) || 0) * 100).toFixed(2))}
-              disabled={!config.taxEnabled}
+              disabled={!config.taxEnabled || hasJurisdictionSplit}
               className="w-full rounded-lg border border-white/10 bg-[#0b0e14] px-4 py-2.5 text-sm text-white outline-none focus:border-[#00D4FF] disabled:opacity-40"
             />
             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-500">%</span>
           </div>
           <p className="mt-1 text-xs text-slate-500">
-            Combined tax rate · Currently {formatTaxRate(config.taxRate)}
+            Combined tax rate · Currently {formatTaxRate(hasJurisdictionSplit ? effectiveCombined : config.taxRate)}
           </p>
+          {hasJurisdictionSplit && (
+            <p className="mt-2 text-xs leading-relaxed text-slate-300">
+              State {formatTaxRate(effective.state)} + city/local {formatTaxRate(effective.city)} + other {formatTaxRate(effective.other)}.
+              {" "}<Link to="/settings" onClick={onClose} className="text-cyan-300 underline">Edit each rate and its effective dates in Settings.</Link>
+            </p>
+          )}
         </div>
 
         {/* Formula Display */}
         <div className="mb-5 rounded-xl border border-[#00D4FF]/15 bg-[#00D4FF]/[0.04] p-3">
           <p className="text-xs text-slate-400">Formula</p>
           <p className="mt-1 font-mono text-sm text-[#00D4FF]">
-            Tax = Room Rent × {formatTaxRate(config.taxRate)}
+            Tax = Room Rent × {formatTaxRate(hasJurisdictionSplit ? effectiveCombined : config.taxRate)}
           </p>
           <div className="mt-2 space-y-0.5 text-xs text-slate-500">
-            <p>$100 × {formatTaxRate(config.taxRate)} = ${(100 * config.taxRate).toFixed(2)}</p>
-            <p>$200 × {formatTaxRate(config.taxRate)} = ${(200 * config.taxRate).toFixed(2)}</p>
-            <p>$300 × {formatTaxRate(config.taxRate)} = ${(300 * config.taxRate).toFixed(2)}</p>
+            {[100,200,300].map(base => <p key={base}>${base} × {formatTaxRate(hasJurisdictionSplit ? effectiveCombined : config.taxRate)} = ${(base * (hasJurisdictionSplit ? effectiveCombined : config.taxRate)).toFixed(2)}</p>)}
           </div>
         </div>
 

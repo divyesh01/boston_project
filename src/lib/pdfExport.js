@@ -1,5 +1,3 @@
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
 import { computePageBreaks, safeCanvasScale } from "./pdfPagination.js";
 
 // This exporter used to render the page to one tall canvas and then place that
@@ -60,6 +58,12 @@ function collectBlocks(root, scale, maxHeightPx) {
 
 export async function exportToPdf(element, fileName = "executive-summary.pdf") {
   if (!element) throw new Error("No content to export");
+
+  // Export tools are needed only after a click, on every page using this helper.
+  const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([
+    import("jspdf"),
+    import("html2canvas"),
+  ]);
 
   const scale = safeCanvasScale(element.scrollWidth, element.scrollHeight, 2);
   const canvas = await html2canvas(element, {

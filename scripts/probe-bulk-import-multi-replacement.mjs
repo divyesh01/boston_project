@@ -650,6 +650,8 @@ await run.check('4. Atomic many-to-one replacement: 3 predecessors superseded, 1
   assertEqual(actData.ok, true, 'Result is ok');
   assertEqual(actData.status, 'active', 'Successor bundle is active');
   assertEqual(actData.superseded_count, 3, 'superseded_count is 3');
+  assertEqual(actData.row_count, 6, 'newest-report-per-date merge preserves four predecessor-only dates');
+  assertEqual(actData.preserved_rows, 4, 'four historical rows absent from the incoming report are retained');
 
   // Verify sync revision incremented EXACTLY ONCE
   const revAfter = db.prepare('SELECT revision FROM business_sync_state WHERE account_id=?').get('ACC_MULTI_REPLACE').revision;
@@ -666,7 +668,7 @@ await run.check('4. Atomic many-to-one replacement: 3 predecessors superseded, 1
   // Verify successor manifest
   const succRow = db.prepare('SELECT status, row_count, min_date, max_date, supersedes_bundle_id FROM import_bundle_manifest WHERE id=?').get(combinedBundleId);
   assertEqual(succRow.status, 'active', 'Successor is active');
-  assertEqual(succRow.row_count, bundle.totalRowCount, 'Successor has expected rows');
+  assertEqual(succRow.row_count, actData.row_count, 'Successor manifest stores the merged row count');
   assertEqual(succRow.supersedes_bundle_id, q1.bundleId, 'Successor points to primary predecessor for backward compatibility');
 
   // Verify relational lineage table
@@ -678,7 +680,7 @@ await run.check('4. Atomic many-to-one replacement: 3 predecessors superseded, 1
   const activeReports = db.prepare("SELECT id, row_count FROM import_bundle_manifest WHERE server_property_id=? AND report_type='source' AND status='active'").all(propertyId);
   assertEqual(activeReports.length, 1, 'Exactly 1 active Source Summary report exists');
   assertEqual(activeReports[0].id, combinedBundleId, 'Active report is the combined successor');
-  assertEqual(activeReports[0].row_count, bundle.totalRowCount, 'Active report represents expected rows');
+  assertEqual(activeReports[0].row_count, actData.row_count, 'Active report represents the merged authority');
 });
 
 await run.check('5. Single-predecessor replacement backward compatibility', async () => {

@@ -20,7 +20,7 @@ let db;
 let env;
 let uploadRequests = 0;
 let failBundleDownload = false;
-let failBundleDownloadAfter = 0;
+let failBundleDownloadAfter = null;
 let hydrationMetrics = null;
 
 await localDb.delete();
@@ -41,12 +41,16 @@ globalThis.fetch = async (input, init) => {
   const url = new URL(String(input), globalThis.location.origin);
   if (url.pathname.startsWith('/api/bulk-import/raw-upload') || url.pathname.startsWith('/api/bulk-import/upload') || url.pathname.startsWith('/api/bulk-import/activate')) uploadRequests++;
   if (failBundleDownload && url.pathname.startsWith('/api/bulk-import/bundle/')) {
-    failBundleDownload = false;
     return Response.json({ error: 'Injected transient bundle outage' }, { status: 503 });
   }
-  if (failBundleDownloadAfter > 0 && url.pathname.startsWith('/api/bulk-import/bundle/')) {
-    failBundleDownloadAfter--;
-    if (failBundleDownloadAfter === 0) return Response.json({ error: 'Injected midway bundle outage' }, { status: 503 });
+  if (failBundleDownloadAfter !== null && url.pathname.startsWith('/api/bulk-import/bundle/')) {
+    if (failBundleDownloadAfter > 0) failBundleDownloadAfter--;
+    // Once the selected request fails, keep the outage active so the
+    // idempotent download retry policy is exhausted instead of hiding the
+    // page-atomicity failure being exercised by this regression.
+    if (failBundleDownloadAfter === 0) {
+      return Response.json({ error: 'Injected midway bundle outage' }, { status: 503 });
+    }
   }
   const request = new Request(url, init);
   return handleBulkImportRequest(request, env, scope, url, url.pathname.split('/').filter(Boolean));
@@ -125,6 +129,7 @@ await run.check('Active server imports reproduce the fresh-browser zero-revenue 
       invalidateQueries: async ({ queryKey }) => invalidateCalls.push(queryKey[0]),
     });
   } catch { failed = true; }
+  failBundleDownload = false;
   assert(failed, 'failed bundle download rejects startup hydration instead of returning empty data');
   assertEqual(await getLastBulkRevision(), 0, 'failed initial hydration does not advance the active manifest cursor');
   assertEqual(await localDb.GrossRevenueDay.count(), 0, 'failed initial hydration leaves ledgers unmaterialized');
@@ -194,9 +199,17 @@ await run.check('Active server imports reproduce the fresh-browser zero-revenue 
   const cursorBeforeMidwayFailure = await getLastBulkRevision();
   const aBeforeMidwayFailure = await localDb.GrossRevenueDay.where('property_id').equals('P_A').toArray();
   const bBeforeMidwayFailure = await localDb.GrossRevenueDay.where('property_id').equals('P_B').toArray();
+  // Verified local receipts are intentionally reusable in production. Mark
+  // them stale here so this scenario actually exercises the network-download
+  // path, then inject a persistent outage beginning with the second request.
+  const cachedReports = await localDb.UploadedReport.toArray();
+  for (const report of cachedReports) {
+    await localDb.UploadedReport.update(report.id, { bulk_cache_version: 0 });
+  }
   failBundleDownloadAfter = 2;
   let midwayFailure = false;
   try { await syncBulkBundles({ force: true }); } catch { midwayFailure = true; }
+  failBundleDownloadAfter = null;
   assert(midwayFailure, 'failure after one bundle download rejects the whole manifest page');
   assertEqual(await getLastBulkRevision(), cursorBeforeMidwayFailure, 'mid-page failure does not advance the all-property cursor');
   assertEqual(JSON.stringify(await localDb.GrossRevenueDay.where('property_id').equals('P_A').toArray()), JSON.stringify(aBeforeMidwayFailure), 'P_A rows stay safe after a B-side hydration failure');

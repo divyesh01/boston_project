@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "purpose": "Registry of accepted, repeatable pre-existing verification failures. This is not a waiver for new failures.",
+  "policy": {
+    "empty_means": "No accepted pre-existing failures are currently registered.",
+    "add_only_when": [
+      "The failure is repeatable.",
+      "The failure existed before the current change.",
+      "The failure has a stable suite and signature.",
+      "The owner or project workflow explicitly accepts carrying it as known debt."
+    ],
+    "never_use_for": "Do not add a newly introduced failure to make a change appear green."
+  },
+  "failures": []
+}

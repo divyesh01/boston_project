@@ -2,6 +2,7 @@
 
 Implementation branch: `codex/report-date-merge`.
 Implementation base: `60c7916`.
+Pending-save recovery follow-up base: `9ffe707`.
 The commit containing this document is the implementation head.
 
 Codex performed code changes and static source inspection only. Per the owner's
@@ -27,6 +28,7 @@ Paths below are relative to the repository root.
 | `src/lib/pmsAdapters.js` (new) | Explicit supported flat daily-summary formats for canonical CSV, SynXis, Opera and Cloudbeds; HotelKey keeps its existing parser. |
 | `src/lib/hotelDataQuery.js` (new) | Read all D1 pages through the existing entity API; detect incomplete/non-advancing responses and duplicate IDs. |
 | `src/lib/settingsStore.js` | Preserve pending drafts on conflicts/errors, require a known revision, serialize flushes, expose save status and explicit conflict review, cache parsed property settings. |
+| `src/lib/settingsDrafts.js` (new in recovery follow-up) | Store each draft separately in browser storage using a server-confirmed user/property scope; retain competing drafts and quarantine unreadable records. |
 | `src/lib/useHotelData.js`, `src/lib/dailyAggregates.js` | Paginated ledger reads; reject stale aggregate versions across the selected range. |
 | `src/lib/reportParsers.js` | Select configured PMS adapter before existing normalization and validation; retain explicit property identity, including ID zero. |
 | `src/lib/hotel.js` | Remove invented 100-room fallback from portfolio capacity calculations. |
@@ -47,7 +49,7 @@ Paths below are relative to the repository root.
 | `worker/enterprise-policy.js` (new) | Resolve reviewed labor configuration and reject below-policy hourly rates on supported server write paths. |
 | `worker/entities.js` | Combined date comparisons, deterministic paging sort, property ID zero, awaited error handling and wage guard integration. |
 | `worker/business-sync.js` | Wage guard on normal Staff/PayrollRun upserts with mapped server property identity. |
-| `worker/settings.js` | Shared payload validators, strict permissions/property targets, payroll-source checks, and transactional expected-revision guard for settings/history writes. |
+| `worker/settings.js` | Shared payload validators, strict permissions/property targets, payroll-source checks, transactional expected-revision guard, and scope-specific draft metadata/ETags. |
 | `migrations-production/0009_enterprise_settings_guard.sql` (new) | Additive settings/history/transaction guard schema. |
 | `docs/ANTIGRAVITY_ENTERPRISE_HANDOFF.md` (new) | This handoff. |
 
@@ -91,6 +93,15 @@ The owner's unrelated changes in the Desktop checkout were preserved.
     silently out-of-policy recommendation.
 12. Paginated reads must not silently return just the first 5,000 records. Old
     aggregate versions must fall back to the authoritative ledger path.
+13. Once server scope is confirmed and browser storage succeeds, pending setting
+    values survive reload. Recovery displays server values first and requires
+    explicit draft review. Competing drafts for the same key/property require a
+    choice; no candidate wins automatically. Acknowledgement clears only the
+    acknowledged operation's draft, preserving other tabs' operations.
+14. Draft scope includes account, user, role, permissions and restricted property
+    assignments. Full-portfolio scope stays stable when a property is added.
+    Switching users or access scope must not recover or submit another scope's
+    drafts. A submitted stale scope must fail at the server before any mutation.
 
 ## Verification Commands
 
@@ -147,10 +158,21 @@ remote migration. No remote command is authorized by this handoff alone.
   to different keys, one rejected multi-property batch, revision zero, missing
   revision, malformed acknowledgements, network interruption and edits during a
   GET or POST. Verify history and settings commit or roll back together.
-- Pending cloud edits are currently an in-memory queue. Local values persist, but
-  reload/crash recovery of the queued write intent is not implemented. Exercise
-  this explicitly; do not certify durable offline draft recovery. Confirmed server
-  acknowledgement is required before treating a save as complete.
+- Exercise pending-save recovery after refresh during offline operation, after
+  409, and after an unknown acknowledgement. Open two tabs, edit the same setting
+  differently and reload a third tab: both operations must be reviewable and the
+  apply action disabled until one is chosen. Test other tabs' edits during an
+  in-flight save and verify their draft IDs are retained.
+- Change account/user, restrict property assignments, change permissions and add
+  a property to an all-property owner. Confirm scope-specific recovery and ETags;
+  a stale `draft_scope` POST must return 409 without writing settings/history.
+  Pending drafts in an old restricted scope remain stored but are not recovered
+  under changed assignments. Cross-device recovery is not provided by localStorage.
+- Test full/blocked browser storage, malformed draft JSON, malformed payloads and
+  a draft changed after review. Unreadable records must be available for download
+  and explicit discard, not silently deleted. Browser storage failures must be
+  visible. Edits made before the first server-confirmed scope cannot yet be
+  persisted safely; cloud acknowledgement remains the completion condition.
 - Change dates across policy boundaries and DST. Closing the business date is an
   explicit clock operation; this implementation does not perform a full PMS night
   audit, close ledgers or post journal entries.
@@ -187,7 +209,8 @@ remote migration. No remote command is authorized by this handoff alone.
 
 - `/settings`: five configuration tabs, period selection, template precedence,
   property switch with drafts, bulk preview, save status and two-client conflict
-  review. Verify keyboard labels, small screens and read-only permissions.
+  review; recovered competing-draft selection, unreadable-record download and
+  explicit discard. Verify keyboard labels, small screens and read-only permissions.
 - `/calendar`, `/action-center`: all imported dates, contribution, gold target,
   unequal-property thresholds and missing-configuration notices.
 - `/`, `/payments`: separate state/city calculation, actual versus estimated

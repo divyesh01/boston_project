@@ -106,6 +106,20 @@ function propertyTargetAllowed(scope, propertyId) {
   return Array.isArray(scope.propertyIds) && scope.propertyIds.map(String).includes(propertyId);
 }
 
+async function settingsDraftScope(scope) {
+  let permissions = scope.user?.permissions || {};
+  if (typeof permissions === 'string') {
+    try { permissions = JSON.parse(permissions); } catch { permissions = {}; }
+  }
+  const identity = JSON.stringify([
+    scope.accountId, scope.user?.id ?? null, String(scope.user?.role || '').toLowerCase(),
+    scope.all === true, scope.all ? [] : [...(scope.propertyIds || [])].map(String).sort(),
+    Object.entries(permissions || {}).sort(([a], [b]) => a.localeCompare(b)),
+  ]);
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity));
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
 function clampSettingValue(key, val) {
   if (key === "rri_cc_fee_rate") {
     const num = Number(val);
@@ -267,6 +281,7 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
   if (!accountId) {
     return jsonResponse({ error: "missing account id" }, 400);
   }
+  const draftScope = await settingsDraftScope(scope);
 
   // ─── GET /api/settings ───
   if (request.method === "GET") {
@@ -286,7 +301,7 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
       const totalCount = Number(meta?.total_count || 0);
 
       // Edge-level ETag 304 conditional short-circuit: 0 data row reads when unchanged
-      const etag = `W/"rev-${maxRevision}-${totalCount}-${latestUpdated ? new Date(latestUpdated).getTime() : 0}"`;
+      const etag = `W/"scope-${draftScope}-rev-${maxRevision}-${totalCount}-${latestUpdated ? new Date(latestUpdated).getTime() : 0}"`;
       const clientEtag = request.headers.get("if-none-match");
       if (clientEtag && (clientEtag === etag || clientEtag === etag.replace(/^W\//, ""))) {
         return new Response(null, {
@@ -332,6 +347,7 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
         JSON.stringify({
           ok: true,
           settings,
+          draft_scope: draftScope,
           revision: maxRevision,
           updated_at: latestUpdated,
         }),
@@ -383,6 +399,9 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
 
     if (!Number.isSafeInteger(body?.expected_revision) || body.expected_revision < 0) {
       return jsonResponse({ error: "expected_revision is required; load settings before saving", code: "SETTINGS_REVISION_REQUIRED" }, 428);
+    }
+    if (body.draft_scope != null && body.draft_scope !== draftScope) {
+      return jsonResponse({ error: 'Settings session scope changed; review the current server settings.', code: 'SETTINGS_SCOPE_CHANGED' }, 409);
     }
     if (JSON.stringify(body).length > 1000000 || (Array.isArray(body.items) && body.items.length > 100)) {
       return jsonResponse({ error: "settings batch too large" }, 413);
@@ -552,6 +571,7 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
           saved: true,
           count: itemsToSave.length,
           revision,
+          draft_scope: draftScope,
           updated_at: now,
         },
         200,

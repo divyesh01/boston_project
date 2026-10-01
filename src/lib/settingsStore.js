@@ -172,6 +172,7 @@ export function readObjectSetting(key, fallback, propertyId = "*") {
 }
 
 import { notifySettingsChanged, notifySettingsConflict } from "./settingsBus.js";
+import { storeSettingsDraft, removeSettingsDraft, readSettingsDrafts, removeUnreadableSettingsDraft } from './settingsDrafts.js';
 
 // Identity-bearing records never inherit another property's/global record.
 let scopedRawCache = null, scopedParsedCache = {};
@@ -233,25 +234,77 @@ let isFlushingSettings = false;
 let settingsConflict = null;
 let settingsSyncError = null;
 let hydratedServerRevision = false;
+let confirmedDraftScope = null;
+let draftStorageError = null;
+let unreadableDrafts = [];
 const syncListeners = new Set();
 const publishSyncState = () => syncListeners.forEach(fn => {
   try { fn(); } catch (error) { console.error('[settings] sync listener:', error); }
 });
 export function subscribeSettingsSync(listener) { syncListeners.add(listener); return () => syncListeners.delete(listener); }
-export function getSettingsSyncState() { return { conflict: settingsConflict, pending: pendingCloudSync.size, saving: isFlushingSettings, error: settingsSyncError }; }
+export function getSettingsSyncState() { return { conflict: settingsConflict, pending: pendingCloudSync.size, saving: isFlushingSettings, error: settingsSyncError || draftStorageError }; }
+function persistDraft(entry) {
+  try { storeSettingsDraft(confirmedDraftScope, entry, currentServerRev); draftStorageError = null; return true; }
+  catch (error) { draftStorageError = `${error.message} Refresh recovery is unavailable for this change until it is saved.`; return false; }
+}
+function deleteDraft(entry) {
+  try { removeSettingsDraft(confirmedDraftScope, entry); }
+  catch { draftStorageError = 'A saved draft could not be cleared from browser storage. Review it if it reappears after refresh.'; }
+}
+function applyLocalDrafts(drafts) {
+  const byProperty = JSON.parse(localStorage.getItem('rri_settings_by_property') || '{}');
+  for (const draft of drafts) {
+    if (draft.propertyId === '*') {
+      const values = mirrorSettingAliases({ [draft.key]: draft.value });
+      for (const [key, value] of Object.entries(values)) localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
+    } else {
+      byProperty[draft.propertyId] = { ...byProperty[draft.propertyId], ...mirrorSettingAliases({ [draft.key]: draft.value }) };
+    }
+  }
+  localStorage.setItem('rri_settings_by_property', JSON.stringify(byProperty));
+  notifySettingsChanged();
+}
 export async function reviewSettingsConflict() {
   const res = await fetch(getSettingsUrl(), { headers: { accept: 'application/json' } });
   if (!res.ok) throw new Error('Could not load the current server settings.');
   const data = await res.json();
-  if (!data.ok || !Number.isSafeInteger(data.revision)) throw new Error('Invalid settings snapshot.');
-  return { revision: data.revision, settings: data.settings, drafts: [...pendingCloudSync.values()] };
+  if (!data.ok || !data.settings || !Number.isSafeInteger(data.revision) || data.revision < 0) throw new Error('Invalid settings snapshot.');
+  if (confirmedDraftScope && data.draft_scope !== confirmedDraftScope) {
+    pendingCloudSync.clear(); unreadableDrafts = []; settingsConflict = null; hydratedServerRevision = false;
+    settingsSyncError = null; draftStorageError = null;
+    confirmedDraftScope = null; lastKnownEtag = null; isEditingSettings = false;
+    publishSyncState();
+    await pullRemoteSettings(true);
+    throw new Error('Your settings session changed. Previous drafts remain saved for their original user and property scope.');
+  }
+  if (!confirmedDraftScope && /^[a-f0-9]{64}$/.test(data.draft_scope || '')) {
+    confirmedDraftScope = data.draft_scope;
+    for (const entry of pendingCloudSync.values()) persistDraft(entry);
+  }
+  return { revision: data.revision, scope: confirmedDraftScope, settings: data.settings, drafts: [...pendingCloudSync.values()], unreadable: unreadableDrafts };
 }
 // Only an explicit UI decision can rebase a rejected draft. Another write after
 // this review is still rejected by the server CAS; there is no force-write path.
-export async function resolveSettingsConflict(review, keepDrafts) {
+export async function resolveSettingsConflict(review, keepDrafts, selectedIds) {
   if (!review || !Number.isSafeInteger(review.revision)) throw new Error('Review the server values first.');
   if (isFlushingSettings || isPullingSettings) throw new Error('A settings request is still running.');
-  if (!keepDrafts) pendingCloudSync.clear();
+  if (review.scope !== confirmedDraftScope || review.drafts.length !== pendingCloudSync.size ||
+      review.unreadable !== unreadableDrafts || review.drafts.some(draft => ![...pendingCloudSync.values()].includes(draft))) throw new Error('Drafts changed after the review. Review the current values again.');
+  if (keepDrafts && unreadableDrafts.length) throw new Error('Download or discard unreadable draft records before applying changes.');
+  const chosen = keepDrafts ? review.drafts.filter(d => !selectedIds || selectedIds.includes(d.draftId)) : [];
+  const keys = chosen.map(d => `${d.key}::${d.propertyId}`);
+  if (new Set(keys).size !== keys.length || (keepDrafts && new Set(review.drafts.map(d => `${d.key}::${d.propertyId}`)).size !== new Set(keys).size)) {
+    throw new Error('Choose one draft for each conflicting setting.');
+  }
+  if (keepDrafts) applyLocalDrafts(chosen);
+  for (const record of unreadableDrafts) removeUnreadableSettingsDraft(confirmedDraftScope, record);
+  unreadableDrafts = [];
+  for (const draft of review.drafts) if (!chosen.includes(draft)) deleteDraft(draft);
+  for (const draft of review.drafts) if (!chosen.includes(draft)) {
+    for (const draftId of draft.supersededIds || []) deleteDraft({ draftId });
+  }
+  pendingCloudSync.clear();
+  for (const draft of chosen) pendingCloudSync.set(`${draft.key}::${draft.propertyId}`, draft);
   currentServerRev = review.revision;
   hydratedServerRevision = true;
   settingsConflict = null;
@@ -282,12 +335,16 @@ export function getPendingSyncCount() {
 }
 
 export function clearPendingCloudSyncForTest() {
+  for (const draft of pendingCloudSync.values()) deleteDraft(draft);
   pendingCloudSync.clear();
   settingsConflict = null;
   settingsSyncError = null;
   hydratedServerRevision = false;
   lastKnownEtag = null;
   currentServerRev = 0;
+  confirmedDraftScope = null;
+  draftStorageError = null;
+  unreadableDrafts = [];
   scopedRawCache = null;
   scopedParsedCache = {};
   publishSyncState();
@@ -319,7 +376,19 @@ export function queueCloudSettingSync(key, value, propertyId = "*") {
   }
   const propId = String(propertyId ?? "*");
   const queueKey = `${key}::${propId}`;
-  pendingCloudSync.set(queueKey, { key, value: val, propertyId: propId });
+  // Snapshot the payload independently of later form/object mutations.
+  try { val = JSON.parse(JSON.stringify(val)); }
+  catch { settingsSyncError = 'This setting cannot be serialized for saving.'; publishSyncState(); return; }
+  const entry = { key, value: val, propertyId: propId, draftId: crypto.randomUUID(), createdAt: Date.now(), supersededIds: [] };
+  const durable = persistDraft(entry);
+  for (const [oldKey, old] of pendingCloudSync) {
+    if (old.key === key && old.propertyId === propId) {
+      if (durable) deleteDraft(old);
+      else entry.supersededIds.push(old.draftId, ...(old.supersededIds || []));
+      pendingCloudSync.delete(oldKey);
+    }
+  }
+  pendingCloudSync.set(queueKey, entry);
   publishSyncState();
 
   if (syncTimer) clearTimeout(syncTimer);
@@ -383,6 +452,7 @@ export async function flushCloudSettingSync() {
         items,
         settings: settingsDict,
         expected_revision: currentServerRev,
+        ...(confirmedDraftScope ? { draft_scope: confirmedDraftScope } : {}),
       }),
     });
 
@@ -392,20 +462,23 @@ export async function flushCloudSettingSync() {
       const conflictData = await res.json().catch(() => ({}));
       const serverRev = Number(conflictData?.server_revision || 0);
       settingsConflict = {
-        code: "SETTINGS_CONFLICT",
+        code: conflictData.code || "SETTINGS_CONFLICT",
         serverRevision: serverRev,
         pendingKeys: items.map((i) => i.key),
       };
       notifySettingsConflict(settingsConflict);
     } else if (res.ok) {
       const data = await res.json().catch(() => null);
-      if (!data?.ok || !Number.isSafeInteger(data.revision)) {
+      if (!data?.ok || !Number.isSafeInteger(data.revision) || data.revision < 0 ||
+          (confirmedDraftScope && data.draft_scope !== confirmedDraftScope)) {
         settingsConflict = {code:'SETTINGS_ACK_UNKNOWN',pendingKeys:items.map(i=>i.key)};
         notifySettingsConflict(settingsConflict);
         return;
       }
       // Remove only items from pendingCloudSync that succeeded and were not modified during in-flight
       for (const [k, v] of inFlight.entries()) {
+        deleteDraft(v);
+        for (const draftId of v.supersededIds || []) deleteDraft({ draftId });
         if (pendingCloudSync.get(k) === v) {
           pendingCloudSync.delete(k);
         }
@@ -473,9 +546,19 @@ export async function pullRemoteSettings(force = false) {
     if (!res.ok) return false;
 
     const data = await res.json();
-    if (!data || !data.ok || !data.settings) return false;
+    if (!data || !data.ok || !data.settings || !Number.isSafeInteger(data.revision) || data.revision < 0) return false;
     // A user can start editing while the GET is in flight.
     if (isEditingSettings || pendingCloudSync.size || isFlushingSettings || settingsConflict) return false;
+
+    const draftScope = /^[a-f0-9]{64}$/.test(data.draft_scope || '') ? data.draft_scope : null;
+    let recovery;
+    try { recovery = readSettingsDrafts(draftScope, SYNCABLE_SETTING_KEYS); }
+    catch (error) {
+      draftStorageError = error.message;
+      settingsConflict = { code: 'SETTINGS_DRAFT_UNREADABLE', pendingKeys: [] };
+      publishSyncState();
+      return false;
+    }
 
     let changed = false;
     for (const [key, val] of Object.entries({ _byProperty: {}, ...data.settings })) {
@@ -516,6 +599,15 @@ export async function pullRemoteSettings(force = false) {
     lastKnownEtag = res.headers.get('ETag');
     currentServerRev = Number(data.revision) || 0;
     hydratedServerRevision = true;
+    confirmedDraftScope = draftScope;
+    unreadableDrafts = recovery.unreadable;
+    for (const draft of recovery.drafts) pendingCloudSync.set(draft.draftId, draft);
+    if (recovery.drafts.length || unreadableDrafts.length) {
+      settingsConflict = { code: 'SETTINGS_DRAFT_RECOVERED', pendingKeys: recovery.drafts.map(d => d.key) };
+      lastKnownEtag = null;
+      notifySettingsConflict(settingsConflict);
+    }
+    publishSyncState();
     if (changed) {
       notifySettingsChanged({ broadcast: true });
     }

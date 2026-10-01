@@ -40,6 +40,7 @@ const TXN_NORM = "src/lib/transactionNorm.js";
 // net follows the family across the move instead of reporting STALE the moment it
 // lands. Does not exist yet, and a candidate that does not exist is inert.
 const TXN_DEST = "src/lib/parsers/transactions.js";
+const TXN_IDENTITY = "shared/transactionIdentity.js";
 const SCAN_SUITE = "src/lib/hotelKeyParserFixtures.test.js";
 const IMPORT_SUITE = "src/lib/hotelKeyImportFixtures.test.js";
 
@@ -84,7 +85,7 @@ const MUTATIONS = [
   {
     id: "M4",
     behaviour: "dedupe (occurrence index)",
-    where: [TXN_NORM],
+    where: [TXN_NORM, TXN_IDENTITY],
     find: "    occurrence,\n  ].join(\"|\");",
     replace: "  ].join(\"|\");",
     suites: [SCAN_SUITE, IMPORT_SUITE],

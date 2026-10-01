@@ -170,9 +170,11 @@ Two dashboard cards that each outgrew "one card, one component". `MoneyKept.jsx`
 **twelve** financial lib modules inside a render function — `hotel`, `decimal`
 (`fromCents`/`toCents`/`multiply`), `commissionRates`, `taxConfig`, `taxSettings`,
 `taxLiability`, `expenseCategories`, `paymentNorm`, `payrollCalc` among them — so the
-repository's money reconciliation is partly expressed as JSX-local `useMemo` work that
-cannot be asserted without rendering. Extracting that arithmetic into a lib module is the
-actual win here; the visual split is secondary. Risk LOW-MEDIUM. Benefit: medium.
+repository's money reconciliation was partly expressed as JSX-local `useMemo` work that
+could not be asserted without rendering. **Extraction 1 completed 2026-09-30:** recurring
+expense projection, the base deduction/tax model, and trend/chart derivation now live in
+`src/lib/moneyKeptModel.js`; `MoneyKept.jsx` owns hooks, memoization, state, and rendering.
+The remaining visual split is secondary. Risk LOW-MEDIUM. Benefit: medium.
 
 ---
 

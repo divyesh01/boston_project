@@ -41,9 +41,11 @@
 //     row it identifies. Keying `row.amount ?? 0` while storing the normalized
 //     amount made an EMPTY amount key as "0" and collide with a real $0.00
 //     posting.
-// This DELIBERATELY DIVERGES from src/lib/transactionNorm.js, whose key is still
-// the forgeable `join("|")` form; mirroring it would mean keeping the defect. The
-// Phase-2 client repoint must move the client onto THIS format.
+// The browser and Worker now share their identity vocabulary/codecs in
+// shared/transactionIdentity.js, but the ENCODINGS deliberately remain versioned:
+// the browser still has historical v1 pipe-joined keys in Dexie while D1 uses this
+// injective v2 form. Phase-2 must migrate/alias existing client keys before the
+// browser can switch formats without turning every old row into a new row.
 // `occurrence` is assigned by the client over a deterministic GLOBAL file order
 // and carried on each row — NOT re-derived per chunk (per-chunk occurrence
 // would collide byte-identical rows that straddle a chunk boundary and silently
@@ -74,6 +76,7 @@
 
 import { queryAll, queryFirst, statement, batch } from "./db.js";
 import { assertPropertyInScope, ScopeError } from "./scope.js";
+import { serverTransactionDedupeKey } from "../shared/transactionIdentity.js";
 
 /**
  * @typedef {import("./index.js").Env} Env
@@ -114,31 +117,7 @@ const TXN_COLUMNS = [
  * @param {{serverPropertyId:string,date:string|null,time:string|null,folio_number:string|null,transaction_code:string|null,amount:number|null,occurrence:number}} components
  * @returns {string}
  */
-export function transactionDedupeKey(components) {
-  if (!components || typeof components !== "object" || Array.isArray(components)) {
-    throw new TypeError("dedupe components are required");
-  }
-  const { serverPropertyId, date, time, folio_number, transaction_code, amount, occurrence } = components;
-  if (typeof serverPropertyId !== "string" || serverPropertyId.length === 0) {
-    throw new TypeError("serverPropertyId is required");
-  }
-  if (!Number.isInteger(occurrence) || occurrence < 0) throw new TypeError("occurrence is invalid");
-  if (amount !== null && (typeof amount !== "number" || !Number.isFinite(amount))) {
-    throw new TypeError("amount must already be normalized");
-  }
-  const encode = (value) => {
-    if (value === null) return "n:0:";
-    if (typeof value === "number") {
-      const text = String(value);
-      return `d:${text.length}:${text}`;
-    }
-    const text = String(value);
-    return `s:${text.length}:${text}`;
-  };
-  return [serverPropertyId, date, time, folio_number, transaction_code, amount, occurrence]
-    .map(encode)
-    .join("|");
-}
+export const transactionDedupeKey = serverTransactionDedupeKey;
 
 /**
  * A batched property resolver. Built ONCE per chunk from a single D1 read, then

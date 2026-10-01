@@ -204,9 +204,12 @@ The remaining visual split is secondary. Risk LOW-MEDIUM. Benefit: medium.
 
 ## Cross-cutting debt that is not a file
 
-1. **Dedup keys live in two modules.** `src/lib/reportParsers.js` and
-   `src/lib/transactionNorm.js` both participate in the no-double-count invariant. Whoever
-   splits either one must first write down which module owns the key.
+1. **Transaction identity is centralized, but the client/server encoding migration remains.**
+   Completed 2026-10-01: `shared/transactionIdentity.js` now owns the exact identity
+   field tuple plus both versioned codecs. Browser/Dexie deliberately remains on legacy
+   v1 pipe-joined bytes because existing rows already store those keys; Worker/D1 remains
+   on collision-safe v2 length-prefixed bytes. The next project is an explicit v1→v2
+   alias/migration, not another copy of the key algorithm.
 2. **Verification discovery is now pinned against silent omissions.** Completed
    2026-10-01: `verify_cross_module_impact.mjs` was promoted to the discovered
    `verify-cross-module-impact.mjs` suite with an explicit PASS/FAIL contract, and

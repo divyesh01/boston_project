@@ -1548,34 +1548,61 @@ async function runLocalAutoPayroll(params = {}) {
     };
   }
 
-  let staff = await localDb.Staff.filter((s) => s.active !== false).toArray();
-  if (params.propertyId) staff = staff.filter((s) => s.property_id === params.propertyId);
+  // Resolve the current caller before accessing payroll. The normal entity
+  // methods enforce property access and queue the generated records for sync.
+  await primePropertyAccess({ force: true });
+  const requestedProperty = params.propertyId != null && params.propertyId !== "";
+  if (requestedProperty && !(
+    (typeof params.propertyId === "string" && params.propertyId.trim() !== "" && params.propertyId !== "all") ||
+    (typeof params.propertyId === "number" && Number.isFinite(params.propertyId))
+  )) throw new Error("Select one identified property for payroll, or omit propertyId for the authorized portfolio.");
+
+  const propertyKey = (id) => JSON.stringify([typeof id, id]);
+  const employeeKey = (value) => String(value ?? "").trim().toLowerCase();
+  const payrollKey = (row) => JSON.stringify([propertyKey(row.property_id), employeeKey(row.employee_name)]);
+  const properties = await db.entities.Property.filter({});
+  const allowedProperties = new Set(properties.map((p) => propertyKey(p.id)));
+  const requestedKey = requestedProperty ? propertyKey(params.propertyId) : null;
+  if (requestedProperty && !allowedProperties.has(requestedKey)) {
+    throw new Error("Access denied: the selected payroll property is unavailable or outside your access.");
+  }
+  const inPayrollScope = (row) => row.property_id != null && row.property_id !== "" &&
+    allowedProperties.has(propertyKey(row.property_id)) &&
+    (!requestedProperty || propertyKey(row.property_id) === requestedKey);
+  const filter = requestedProperty ? { property_id: params.propertyId } : {};
+  const staff = (await db.entities.Staff.filter(filter)).filter((s) => s.active !== false && inPayrollScope(s));
   if (staff.length === 0) {
     return { data: { status: "ok", message: "No active staff found — nothing to process.", periodStart, periodEnd, createdCount: 0, skippedCount: 0 } };
   }
 
-  const existing = await localDb.PayrollRun.filter((r) => r.pay_period_end === periodEnd).toArray();
-  const paidKeys = new Set(existing.map((r) => `${r.property_id || "all"}::${String(r.employee_name || "").toLowerCase()}`));
+  const existing = (await db.entities.PayrollRun.filter({ ...filter, pay_period_end: periodEnd })).filter(inPayrollScope);
+  const paidKeys = new Set(existing.map(payrollKey));
 
-  let timecardWeeks = [];
-  try {
-    const allPunches = await localDb.TimecardPunch.toArray() || [];
-    const punches = allPunches.filter(
-      (p) =>
-        (!params.propertyId || p.property_id === params.propertyId) &&
-        String(p.shift_date || "").slice(0, 10) >= periodStart &&
-        String(p.shift_date || "").slice(0, 10) <= periodEnd
-    );
-    if (punches.length) {
-      const staffNames = new Set(staff.map((s) => String(s.employee_name).trim().toLowerCase()));
-      timecardWeeks = reconcileTimecards(punches).filter((w) => staffNames.has(String(w.employeeKey || "").toLowerCase()));
-    }
-  } catch (err) {
-    timecardWeeks = [];
+  // Read failures abort before the first payroll write. A failed timecard read
+  // is not evidence that there were no punches and configured hours should win.
+  const punches = (await db.entities.TimecardPunch.filter(filter)).filter((p) =>
+    inPayrollScope(p) &&
+    String(p.shift_date || p.date || "").slice(0, 10) >= periodStart &&
+    String(p.shift_date || p.date || "").slice(0, 10) <= periodEnd
+  );
+  const punchesByProperty = new Map();
+  for (const punch of punches) {
+    const key = propertyKey(punch.property_id);
+    if (!punchesByProperty.has(key)) punchesByProperty.set(key, []);
+    punchesByProperty.get(key).push(punch);
+  }
+  const weeksByProperty = new Map();
+  for (const [key, propertyPunches] of punchesByProperty) {
+    weeksByProperty.set(key, reconcileTimecards(propertyPunches));
   }
 
-  const byEmployee = (low) => {
-    const weeks = timecardWeeks.filter((w) => String(w.employeeKey || "").toLowerCase() === low);
+  const byEmployee = (staffMember) => {
+    const name = employeeKey(staffMember.employee_name);
+    const id = employeeKey(staffMember.employee_id);
+    const weeks = (weeksByProperty.get(propertyKey(staffMember.property_id)) || []).filter((w) => {
+      const key = employeeKey(w.employeeKey);
+      return (id && key === id) || key === name || (!id && employeeKey(w.employeeName) === name);
+    });
     if (!weeks.length) return null;
     return weeks.reduce(
       (acc, w) => ({
@@ -1589,17 +1616,17 @@ async function runLocalAutoPayroll(params = {}) {
   const created = [];
   const skipped = [];
   for (const s of staff) {
-    const key = `${s.property_id || "all"}::${String(s.employee_name || "").toLowerCase()}`;
+    const key = payrollKey(s);
     if (paidKeys.has(key)) {
-      skipped.push({ employee_name: s.employee_name, reason: "already processed for this period" });
+      skipped.push({ property_id: s.property_id, property_name: s.property_name || "", employee_name: s.employee_name, reason: "already processed for this period" });
       continue;
     }
     if (!s.employee_name || !(Number(s.base_rate) > 0)) {
-      skipped.push({ employee_name: s.employee_name, reason: "missing pay configuration" });
+      skipped.push({ property_id: s.property_id, property_name: s.property_name || "", employee_name: s.employee_name, reason: "missing pay configuration" });
       continue;
     }
     const baseRate = Number(s.base_rate) || 0;
-    const tc = byEmployee(String(s.employee_name || "").toLowerCase());
+    const tc = byEmployee(s);
     const hours = tc ? Number(tc.hours) || 0 : Number(s.hours) || 0;
     const otHours = tc ? Number(tc.overtime_hours) || 0 : Number(s.overtime_hours) || 0;
     const otRate = Number(s.overtime_rate) || baseRate * 1.5;
@@ -1612,7 +1639,7 @@ async function runLocalAutoPayroll(params = {}) {
     const totalPayCents = regularPayCents + overtimePayCents + toCents(bonus) - toCents(deductions);
 
     const record = {
-      property_id: s.property_id || "",
+      property_id: s.property_id,
       property_name: s.property_name || "",
       employee_name: s.employee_name,
       department: s.department || "",
@@ -1633,7 +1660,8 @@ async function runLocalAutoPayroll(params = {}) {
       timecard_derived: !!tc,
       auto_generated: true,
     };
-    await localDb.PayrollRun.add({ ...record, created_date: now.toISOString(), updated_date: now.toISOString() });
+    await db.entities.PayrollRun.create(record);
+    paidKeys.add(key);
     created.push(record);
   }
 

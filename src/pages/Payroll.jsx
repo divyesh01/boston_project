@@ -194,10 +194,6 @@ function PropertyPayroll() {
     if (running) return;
     const p = requireWriteProperty();
     if (!p) return;
-    if (!p.id) {
-      toast.error("Automatic payroll is unavailable for this property identifier. Use a manual payroll entry until the payroll engine is updated.");
-      return;
-    }
     setRunning(true);
     setEngineMsg(null);
     try {

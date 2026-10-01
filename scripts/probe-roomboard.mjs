@@ -16,8 +16,8 @@ assert(rooms[0].room_type === "Standard", "first room is Standard");
 
 const date = "2026-08-06";
 const stays = [
-  { room_number: "100", guest_name: "Maria G.", date, check_in: date, check_out: "2026-08-09", rate_cents: toRateCents(139.5), status: "occupied" },
-  { room_number: "101", guest_name: "James T.", date, check_in: date, check_out: "2026-08-07", rate_cents: 14900, status: "occupied" },
+  { property_id: "p1", room_number: "100", guest_name: "Maria G.", date, check_in: date, check_out: "2026-08-09", rate_cents: toRateCents(139.5), status: "occupied" },
+  { property_id: "p1", room_number: "101", guest_name: "James T.", date, check_in: date, check_out: "2026-08-07", rate_cents: 14900, status: "occupied" },
 ];
 
 assert(toRateCents("139.5") === 13950, "139.5 dollars -> 13950 cents");

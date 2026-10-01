@@ -3,6 +3,7 @@ import {
   canTransition, defaultChecklist, checklistComplete, checklistProgress,
   housekeepingRollup, overdueTasks, roomHkStatus, roomHkByRoom,
 } from "../src/lib/housekeepingService.js";
+import { roomIdentityKey } from "../src/lib/roomBoard.js";
 
 let passed = 0;
 let failed = 0;
@@ -43,8 +44,8 @@ const room = { room_number: "200", status: "available" };
 assert(roomHkStatus(room, null) === "available", "no task -> room status available");
 assert(roomHkStatus(room, { status: "dirty" }) === "dirty", "task status dirty wins");
 
-const byRoom = roomHkByRoom([{ room_number: "A", status: "pending", task_date: "2026-08-01" }, { room_number: "A", status: "in_progress", task_date: "2026-08-02" }]);
-assert(byRoom["A"].status === "in_progress", "most recent task per room wins");
+const byRoom = roomHkByRoom([{ property_id: "p1", room_number: "A", status: "pending", task_date: "2026-08-01" }, { property_id: "p1", room_number: "A", status: "in_progress", task_date: "2026-08-02" }]);
+assert(byRoom[roomIdentityKey({ property_id: "p1", room_number: "A" })].status === "in_progress", "most recent task per property and room wins");
 
 console.log(failed ? `\n${failed} assertion(s) FAILED` : "\nALL HOUSEKEEPING ASSERTIONS PASSED");
 console.log(`\n${failed === 0 ? "PASSED" : "FAILED"}: ${passed} passed, ${failed} failed`);

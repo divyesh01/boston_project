@@ -1,0 +1,9 @@
+Date,Time,Confirmation Number,Guest Name,Room Number,Folio Number,Transaction Code,Transaction Description,Last 4 Digits,Transaction Type,Charge Type Category,Sub Charge Type name,Outlet Name,Amount,Username,Remarks,POS Check Number,Tax Invoice Number,Company Name
+2026-01-01,09:00 AM,GOLD0001,Alex Example,101,F-GOLD-1,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,400.00,golden.owner@example.invalid,,,,
+2026-01-01,06:00 PM,GOLD0001,Alex Example,101,F-GOLD-1,FPCC,Credit Card Settlement,1111,REFUND,,,Front Desk,400.00,hkcrsuser,,,,
+2026-01-02,09:00 AM,GOLD0002,Taylor Example,102,F-GOLD-2,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,300.00,golden.owner@example.invalid,,,,
+2026-01-02,09:05 AM,GOLD0002,Taylor Example,102,F-GOLD-2,PETFEE,Pet Fee,,CHARGE,Other,Pet Fee,Front Desk,50.00,golden.owner@example.invalid,,,,
+2026-01-02,06:00 PM,GOLD0002,Taylor Example,102,F-GOLD-2,FPCC,Credit Card Settlement,2222,REFUND,,,Front Desk,350.00,hkcrsuser,,,,
+2026-01-03,09:00 AM,GOLD0003,Jordan Example,103,F-GOLD-3,RENT,Room Charge,,CHARGE,Room,Transient,Front Desk,300.00,golden.owner@example.invalid,,,,
+2026-01-03,06:00 PM,GOLD0003,Jordan Example,103,F-GOLD-3,FPCC,Credit Card Settlement,3333,REFUND,,,Front Desk,300.00,hkcrsuser,,,,
+,,,,,,,,,,,,,2100.00,,,,,

@@ -17,6 +17,7 @@ exists and each command still resolves.
 | HotelKey import | `scripts/probe-hotelkey-mutations.mjs` | probe | `npm run hotelkey:mutate` |
 | HotelKey import | `scripts/probe-hotelkey-mutation-crashsafe.mjs` | probe | `npm run hotelkey:crashsafe` |
 | Revenue/KPIs | `scripts/probe-financial-invariant.mjs` | probe | `node --import ./scripts/_loader-boot.mjs scripts/probe-financial-invariant.mjs` |
+| Revenue/KPIs | `src/lib/goldenHotelOwnerJourney.test.js` | vitest | `npx vitest run src/lib/goldenHotelOwnerJourney.test.js` |
 | Revenue/KPIs | `scripts/probe-decimal-integration.mjs` | probe | `node --import ./scripts/_loader-boot.mjs scripts/probe-decimal-integration.mjs` |
 | Revenue/KPIs | `scripts/verify-money-kept.mjs` | verify | `node --import ./scripts/_loader-boot.mjs scripts/verify-money-kept.mjs` |
 | Transactions | `scripts/verify-transactions.mjs` | verify | `node --import ./scripts/_loader-boot.mjs scripts/verify-transactions.mjs` |

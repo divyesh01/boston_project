@@ -46,10 +46,7 @@ check("canonical policy uses the real typecheck command", canonical.includes("np
 check("canonical policy forbids direct ordinary work on main", canonical.includes("directly on `main`"));
 check("canonical policy protects synthetic-only HotelKey fixtures", canonical.includes("no real guest, hotel, PMS, or production data"));
 check("canonical policy does not recommend the broken bare tsc command", !canonical.includes("\n\`\`\`bash\nnpx tsc --noEmit"));
-check("canonical policy makes Codex the implementation owner", canonical.includes("Codex is the implementation owner"));
-check("canonical policy makes Antigravity the verification owner", canonical.includes("Antigravity is the verification owner"));
-check("Codex role split applies to every model", canonical.includes("every Codex model or variant"));
-check("Codex avoids duplicate broad verification", canonical.includes("must **not** spend substantial context or execution budget duplicating verification"));
+check("canonical policy requires every Codex model to load role contract", canonical.includes("Every Codex model and every Gemini/Antigravity model must read"));
 check("canonical policy requires the shared Codex/Antigravity contract", canonical.includes(coordinationPath));
 check("shared role contract exists", coordination.length > 2000);
 check("shared role contract applies to every Codex and Antigravity model", coordination.includes("every model, size, reasoning level, and variant"));

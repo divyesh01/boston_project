@@ -89,11 +89,13 @@ The old statement that "a committed in-repo fixture corpus does not exist yet" i
 therefore obsolete and must not be used as a blocker or as a reason to recreate the same
 fixtures elsewhere.
 
-**Responsibility still remaining here.** The central registry/row plumbing, clerk and
-timecard scanning, shared scan dispatch, dedupe/persistence behavior, and import
-orchestration still make this a high-consequence ingestion file. It remains easy to
-change one report path while accidentally changing another because the dispatch and
-persistence contracts converge here.
+**Responsibility still remaining here.** The central registry/row plumbing, shared scan
+dispatch, dedupe/persistence behavior, and import orchestration still make this a
+high-consequence ingestion file. Clerk and timecard scanning were extracted on
+2026-10-01 to `src/lib/parsers/clerk.js` and `src/lib/parsers/timecard.js` after their
+synthetic regression fixtures and mutation guards were pinned. It remains easy to change
+one persistence path while accidentally changing another because the import contracts
+still converge here.
 
 **Coverage reality.** The committed corpus is real protection, but it does **not** mean
 every historical local-data probe became portable. Real PMS exports under
@@ -102,11 +104,10 @@ Clean-clone CI must use the committed synthetic corpus; workstation-only probes 
 private exports must declare an honest `SKIP:` when those files are absent. Never commit
 real hotel exports to make a probe green.
 
-**Next safe boundaries.** Expand synthetic parser fixtures for any remaining report shape
-before moving that shape, then extract the clerk and timecard scanners under
-`src/lib/parsers/`. Move import orchestration only after its dedupe/idempotency behavior
-is pinned independently. `mapRow` / `COLUMN_MAP` still have source-contract probes, so
-moving them requires updating those guards in the same verified change.
+**Next safe boundaries.** The clerk and timecard scanner extraction is complete. The next
+safe parser work is to pin dedupe/idempotency behavior independently before moving import
+orchestration. `mapRow` / `COLUMN_MAP` still have source-contract probes, so moving them
+requires updating those guards in the same verified change.
 
 **Risk.** HIGH. HotelKey behavior must remain byte/semantic-equivalent for accepted
 inputs, malformed rows must still fail or quarantine the same way, re-import must remain

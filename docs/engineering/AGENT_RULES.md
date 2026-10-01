@@ -54,6 +54,11 @@ For a bug or risky change:
 
 A test that cannot fail is not evidence. Never weaken an assertion merely to make CI green.
 
+When the owner is using the Codex + Antigravity split defined in section 8, these are
+**team obligations**, not duplicate work for both agents: Codex owns investigation,
+planning, implementation, and fixes; Antigravity owns reproduction, test execution,
+regression verification, and the final evidence that the change is green.
+
 ## 5. Required engineering invariants
 
 ### Security and tenancy
@@ -112,6 +117,15 @@ npm run verify:v3
 If the full verification sweep is too long for one command, shard it with
 `npm run verify:all -- --shard i/n`. Do not reduce timeouts just to make a run fit.
 
+When Antigravity is assigned and available as the verification agent, the command list
+above is primarily Antigravity's responsibility. Codex should not run broad suites such
+as full `npm test`, Playwright/browser suites, mutation suites, production builds, or
+`npm run verify:all` merely to duplicate Antigravity. Codex still performs required
+startup/governance checks such as `npm run verify:v3`, reviews its diff, and may run one
+small targeted syntax/type/import sanity check when that is necessary to avoid handing off
+obviously broken code. If Antigravity is unavailable or the owner explicitly asks Codex
+to verify, the normal verification rules apply.
+
 ## 7. Production and remote-data safety
 
 Do not mutate production infrastructure, production databases, production credentials,
@@ -122,6 +136,49 @@ Staging or fixture work must still preserve property isolation and must never co
 guest data into the repository.
 
 ## 8. Documentation and agent coordination
+
+### Codex + Antigravity division of labor
+
+When both Codex and Antigravity are available for a task, this split is the default unless
+the repository owner explicitly overrides it. It applies to **every Codex model or variant**.
+
+**Codex is the implementation owner.** Spend Codex reasoning/context budget on the work
+that changes the product:
+
+- inspect the relevant implementation and architecture,
+- plan the smallest correct solution and its fallback,
+- write and edit production code,
+- fix root causes rather than symptoms,
+- perform refactors, migrations, documentation changes, and integration work required by
+  the requested change,
+- review the final diff for correctness and unintended changes,
+- respond to Antigravity findings with additional code fixes.
+
+Codex must **not** spend substantial context or execution budget duplicating verification
+that Antigravity can perform. Do not use Codex for exhaustive test runs, repeated CI-style
+verification, browser/Playwright sweeps, mutation testing, stress testing, or long test-log
+debugging when Antigravity is assigned and available. A tiny implementation sanity check
+is allowed when needed, but it is not a substitute for Antigravity verification.
+
+**Antigravity is the verification owner.** Antigravity should:
+
+- reproduce the reported failure when useful,
+- run targeted tests and the relevant regression gates,
+- run browser, integration, mutation, security, performance, and broader verification when
+  the task calls for them,
+- inspect failures independently rather than accepting Codex's success claim,
+- return concrete failing commands, logs, files, and scenarios to Codex for repair,
+- provide the final verification evidence after Codex's implementation is ready.
+
+The normal loop is:
+
+`Codex plans/implements -> Antigravity tests/verifies -> Codex fixes findings -> Antigravity re-verifies`.
+
+Before handoff, Codex must provide Antigravity with the branch/commit, changed files,
+intended behavior, risky boundaries, expected invariants, and the tests or scenarios that
+need verification. Codex must label unrun verification as pending and must not claim a
+change is green merely because implementation is complete. Antigravity must not rewrite
+production code merely to make a test pass when the failure belongs back with Codex.
 
 - Update documentation when a contract, architecture boundary, verification command, or
   behavior actually changes.

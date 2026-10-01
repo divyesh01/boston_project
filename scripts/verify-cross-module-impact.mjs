@@ -361,10 +361,11 @@ async function testStorageKeyCollisions() {
   console.log('✓ Storage Key Collision Check PASSED');
 }
 
-// Run all tests
+// Run all tests through a normal verify-* contract so verify-all and the
+// suite-integrity auditor can both prove this file actually ran.
 async function runAllTests() {
   console.log('Starting Cross-Module Integration Verification...\n');
-  
+
   try {
     await testSideEffectIsolation();
     await testPasswordHashConsistency();
@@ -374,21 +375,20 @@ async function runAllTests() {
     await testPermissionIsolation();
     await testRouteNonConflict();
     await testStorageKeyCollisions();
-    
+
     console.log('\n========================================');
     console.log('ALL INTEGRATION TESTS PASSED ✓');
     console.log('========================================\n');
-    
-    // Run static checks
-    console.log('Running static diagnostics...\n');
-    
+    console.log('PASSED: 8 cross-module integration checks passed, 0 failed');
+    process.exit(0);
   } catch (error) {
     console.error('\n========================================');
     console.error('INTEGRATION TEST FAILED ✗');
     console.error('========================================\n');
     console.error(error);
+    console.error('FAILED: 0 passed, 1 failed');
     process.exit(1);
   }
 }
 
-runAllTests();
+await runAllTests();

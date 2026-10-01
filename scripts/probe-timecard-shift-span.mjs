@@ -476,12 +476,13 @@ console.log("\n--- 12. every flag reaches a human ---");
 // the new flag needs no UI work — but it does need that loop to stay generic.
 
 const parsers = codeOnly(src("src/lib/reportParsers.js"));
+const timecardParser = codeOnly(src("src/lib/parsers/timecard.js"));
 check("the import path normalises every stored punch", () => /const\s+n\s*=\s*normalisePunch\(p\)/.test(parsers));
 check("it raises an alert per flag rather than per known flag name", () => /for\s*\(const flag of n\.flags\)/.test(parsers));
 check("the alert is high severity", () => /severity:\s*["']high["']/.test(parsers));
 check(
   "and the CSV parser keeps time values verbatim, so a dated punch survives import",
-  () => /clock_in:\s*inTime/.test(parsers) && /const inTime = String\(out\.clock_in \|\| ""\)\.trim\(\)/.test(parsers)
+  () => /clock_in:\s*inTime/.test(timecardParser) && /const inTime = String\(out\.clock_in \|\| ""\)\.trim\(\)/.test(timecardParser)
 );
 
 // ---------------------------------------------------------------------------

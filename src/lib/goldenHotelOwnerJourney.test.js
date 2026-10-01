@@ -164,9 +164,9 @@ beforeEach(async () => {
     permissions: "all",
     property_access: "all",
     is_active: true,
-    password: "GoldenPassword1!",
+    password: "Password1!",
   });
-  await db.auth.login("golden-owner@example.invalid", "GoldenPassword1!", true);
+  await db.auth.login("golden-owner@example.invalid", "Password1!", true);
 });
 
 describe("Golden Hotel owner journey — committed synthetic oracle", () => {

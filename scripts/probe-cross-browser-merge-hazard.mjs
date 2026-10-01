@@ -13,7 +13,7 @@
 // per-browser counter with no global meaning:
 //
 // 1. SAME HOTEL, DIFFERENT LOCAL id  ->  DOUBLE COUNT
-//    transactionDedupeKey() in src/lib/transactionNorm.js is
+//    the legacy v1 transaction identity owned by shared/transactionIdentity.js is
 //      [property_id, date, time, folio_number, transaction_code, amount, occurrence]
 //    joined with "|". property_id leads it. Two browsers that both hold the
 //    Middleborough property, one as id 1 and one as id 2 because that browser
@@ -158,8 +158,11 @@ console.log("\n[1] transactionDedupeKey is prefixed by property_id");
     transactionDedupeKey({ ...row, property_id: 1 }, 0) !== transactionDedupeKey({ ...row, property_id: 2 }, 0));
   ok("the occurrence index is the LAST segment (so identical postings survive)",
     transactionDedupeKey({ ...row, property_id: 7 }, 3).endsWith("|3"));
-  ok("the source of truth is src/lib/transactionNorm.js",
-    /row\.property_id \?\? ""/.test(fs.readFileSync(path.join(REPO, "src/lib/transactionNorm.js"), "utf8")));
+  const identitySource = fs.readFileSync(path.join(REPO, "shared/transactionIdentity.js"), "utf8");
+  const normSource = fs.readFileSync(path.join(REPO, "src/lib/transactionNorm.js"), "utf8");
+  ok("the source of truth is shared/transactionIdentity.js and transactionNorm delegates to it",
+    /row\?\.property_id \?\? ""/.test(identitySource) &&
+    /legacyClientTransactionDedupeKey\(row, occurrence\)/.test(normSource));
 }
 
 // ── 2. Same hotel, different local id: DOUBLE COUNT ─────────────────────────

@@ -486,6 +486,13 @@ catch.
    normal query matches. Pinned by *"accepts an id that only needs trimming to be non-empty"*,
    which asserts the rows are invisible under the clean id and present under the padded one. Two
    callers disagreeing about whitespace would silently split one hotel's ledger in two.
+3.5 **Transaction identity encoding is versioned in one shared module.**
+   `shared/transactionIdentity.js` owns the field tuple used by both runtimes.
+   Browser/Dexie keeps the historical v1 pipe-joined encoding until existing stored
+   keys can be migrated safely; Worker/D1 uses the injective v2 length-prefixed
+   encoding. The difference is intentional and tested — never copy either algorithm
+   into a third file.
+
 4. **The occurrence index is counted per batch, not against history.** `assignDedupeKeys`
    starts a fresh `Map` on every call (`transactionNorm.js:180`), so identical postings are
    numbered 0,1,2… within one file. Idempotence therefore depends on the same file replaying

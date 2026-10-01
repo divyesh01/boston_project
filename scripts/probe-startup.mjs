@@ -104,6 +104,18 @@ const sourceFiles = [];
   }
 })(join(ROOT, "worker"));
 
+// Pure cross-runtime modules live under shared/. They are deliberately outside
+// src/ so the Cloudflare Worker and browser can consume the same implementation
+// without making worker/ depend on browser-only source. Inventory them for exact-
+// case resolution, but do not scan them as React/browser source.
+(function inventoryShared(dir) {
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) inventoryShared(full);
+    else everyFile.add(posix(relative(ROOT, full)));
+  }
+})(join(ROOT, "shared"));
+
 console.log(`  ${sourceFiles.length} source files, ${everyFile.size} files in the resolution universe\n`);
 
 // Anti-vacuity floors, deliberately far below the measured 275 / 276. These are

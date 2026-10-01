@@ -1,0 +1,5 @@
+Employee,Employee ID,Department,Date,Clock In,Clock Out,Break Minutes,Overtime
+Jane Example,E001,Front Desk,2026-01-01,09:00 AM,05:00 PM,30,0
+John Example,E002,Housekeeping,2026.01.02,08:00,16:00,15,0
+Ava Example,E003,Front Desk,2026-02-31,08:00,16:00,0,0
+Bob Example,E004,Maintenance,2026-01-03,07:30,15:30,0,1.5

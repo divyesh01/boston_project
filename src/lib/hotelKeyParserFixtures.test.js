@@ -524,3 +524,103 @@ describe("HotelKey occupancy — the five branches of the 2026-08-20 fix", () =>
     expect(result.debug.dateParseErrors).toBeUndefined();
   });
 });
+
+
+describe("HotelKey clerk — stacked payment, drop and employee sections", () => {
+  const NAME = "clerk-stacked-sections.csv";
+
+  it("auto-detects clerk shape and preserves payment sections independently", async () => {
+    const result = await scan(NAME, { sourceFile: "operator-export.csv" });
+
+    expect(result.type).toBe("clerk");
+    expect(result.sections.map((/** @type {any} */ s) => [s.name, s.rows])).toEqual([
+      ["Payment Summary", 3],
+      ["Deposit Drops", 1],
+      ["Clerk Payments", 2],
+    ]);
+    expect(result.payments.map((/** @type {any} */ p) => [p.payment_type, p.actual, p.adjusted, p.net_today])).toEqual([
+      ["CASH", 100, 5, 95],
+      ["VISA", 200, 0, 200],
+      ["CASH", 80, 0, 80],
+    ]);
+  });
+
+  it("keeps drop evidence and employee payment detail instead of folding it into summary totals", async () => {
+    const result = await scan(NAME);
+
+    expect(result.drops).toEqual([
+      {
+        record_type: "drop",
+        shift_date: "2026-03-07 03:21 PM",
+        clerk_name: "Alex Example",
+        amount: 50,
+      },
+    ]);
+    expect(result.clerkPayments).toEqual([
+      {
+        record_type: "clerk_payment",
+        clerk_name: "Alex Example",
+        payment_type: "CASH",
+        amount: 25,
+        transaction_count: 1,
+        _sectionKey: "Username|Payment Type|Amount",
+      },
+      {
+        record_type: "clerk_payment",
+        clerk_name: "Taylor Example",
+        payment_type: "VISA",
+        amount: 40,
+        transaction_count: 1,
+        _sectionKey: "Username|Payment Type|Amount",
+      },
+    ]);
+    expect(result.totalRows).toBe(6);
+  });
+});
+
+describe("HotelKey timecard — canonical aliases and date rejection", () => {
+  const NAME = "timecard-date-guards.csv";
+
+  it("imports valid punches and preserves payroll-relevant fields verbatim", async () => {
+    const result = await scan(NAME, { sourceFile: "neutral-export.csv" });
+
+    expect(result.type).toBe("timecard");
+    expect(result.rowsToImport).toEqual([
+      {
+        employee_name: "Jane Example",
+        employee_id: "E001",
+        department: "Front Desk",
+        shift_date: "2026-01-01",
+        clock_in: "09:00 AM",
+        clock_out: "05:00 PM",
+        break_minutes: 30,
+        overtime_hours: undefined,
+      },
+      {
+        employee_name: "Bob Example",
+        employee_id: "E004",
+        department: "Maintenance",
+        shift_date: "2026-01-03",
+        clock_in: "07:30",
+        clock_out: "15:30",
+        break_minutes: undefined,
+        overtime_hours: 1.5,
+      },
+    ]);
+  });
+
+  it("rejects unrecognised and calendar-impossible dates rather than persisting them", async () => {
+    const result = await scan(NAME);
+
+    expect(result.totalRows).toBe(4);
+    expect(result.rowsToImport).toHaveLength(2);
+    expect(result.skipped).toHaveLength(2);
+    expect(result.skipped.map((/** @type {any} */ r) => r.shift_date)).toEqual([
+      "2026.01.02",
+      "2026-02-31",
+    ]);
+    expect(result.skipped.every((/** @type {any} */ r) =>
+      r._reason === "missing employee, date, or in/out time"
+    )).toBe(true);
+  });
+});

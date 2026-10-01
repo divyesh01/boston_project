@@ -1,0 +1,12 @@
+Payment Type,Actual,Adjusted,Net Today,Period Jan
+CASH,$100.00,$5.00,$95.00,
+VISA,$200.00,$0.00,$200.00,
+2026-03-07 03:21 PM - Alex Example,,,$50.00,
+TOTAL CASH DROPS,,,$50.00,
+
+Payment Type,Actual,Adjusted,Net Today,Period Feb
+CASH,$80.00,$0.00,$80.00,
+
+Username,Payment Type,Amount
+Alex Example,CASH,$25.00
+Taylor Example,VISA,$40.00

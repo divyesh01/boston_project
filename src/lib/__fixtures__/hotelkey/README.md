@@ -16,9 +16,9 @@ exists, and `src/lib/hotelKeyRegression.test.js` — despite the name — import
 
 | Path | Layer | Tests |
 | --- | --- | --- |
-| `src/lib/hotelKeyParserFixtures.test.js` | scan / parse | 21 |
+| `src/lib/hotelKeyParserFixtures.test.js` | scan / parse | 25 |
 | `src/lib/hotelKeyImportFixtures.test.js` | import / persist / isolation | 30 |
-| `scripts/probe-hotelkey-mutations.mjs` | proves the two suites bite | 11 mutations |
+| `scripts/probe-hotelkey-mutations.mjs` | proves the two suites bite | 13 mutations |
 
 ```bash
 npx vitest run src/lib/hotelKeyParserFixtures.test.js src/lib/hotelKeyImportFixtures.test.js
@@ -28,8 +28,8 @@ npx vitest run src/lib/hotelKeyParserFixtures.test.js src/lib/hotelKeyImportFixt
 npm run hotelkey:mutate
 ```
 
-The mutation harness reintroduces one real defect at a time into
-`reportParsers.js`, `transactionNorm.js` or `importValidation.js`, runs the
+The mutation harness reintroduces one real defect at a time into the active
+parser/identity/validation owner (including extracted parser modules), runs the
 suites, asserts they **fail**, then restores the file from git. It refuses to
 start if a target file is already dirty, and it requires a green baseline first —
 otherwise a `KILLED` verdict means nothing.
@@ -63,6 +63,8 @@ every column except `Amount`.
 | `transactions-checksum-mismatch.csv` | A truncated download. Both totals and the signed difference must be named, never hidden. |
 | `transactions-identical-rows.csv` | Three byte-identical postings are three real nights. The occurrence index keeps all three; the file-hash and row-level guards stop the false duplicates. |
 | `occupancy-percent-branches.csv` | The five branches of the 2026-08-20 occupancy fix, including the underivable row and the refused above-1 value. This is the flat-table shape, which carries no trailer checksum. |
+| `clerk-stacked-sections.csv` | Two payment-summary sections with the same payment types but different section headers, one deposit drop, and employee payment detail. Pins section-aware payment dedupe and the three distinct output legs. |
+| `timecard-date-guards.csv` | Two valid punches plus one unrecognised date shape and one impossible calendar date. Pins canonical field mapping, verbatim clock values, break/overtime handling, and fail-closed date rejection. |
 
 ## Adding a fixture
 

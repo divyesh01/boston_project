@@ -173,21 +173,20 @@ console.log('\n6. The headline figure is computed in integer cents');
     Math.round(centsKept * 100) === toCents(gross) - centsTotal,
     `centsKept=${centsKept}`);
 
-  // Static half: bind the component, because the arithmetic above is a mirror
-  // and a mirror cannot notice the original changing. A revert to the float
-  // expression fails these two.
-  const src = readFileSync(
+  // Static half: bind both the React adapter and the extracted model.
+  const widgetSrc = readFileSync(
     new URL('../src/components/dashboard/MoneyKept.jsx', import.meta.url), 'utf8');
-  check('MoneyKept computes `kept` from cents, not float dollars',
-    /const kept = fromCents\(toCents\(gross\) - totalDeductionsCents\)/.test(src),
+  const modelSrc = readFileSync(
+    new URL('../src/lib/moneyKeptModel.js', import.meta.url), 'utf8');
+  check('MoneyKept delegates its financial model instead of re-implementing it in JSX',
+    /buildMoneyKeptBaseData/.test(widgetSrc) && /buildMoneyKeptPresentation/.test(widgetSrc) &&
+    !/CalculationService\.calculateMoneyKept/.test(widgetSrc));
+  check('moneyKeptModel computes `kept` from cents, not float dollars',
+    /const kept = fromCents\(toCents\(gross\) - totalDeductionsCents\)/.test(modelSrc),
     'expected `const kept = fromCents(toCents(gross) - totalDeductionsCents)`');
   check('MoneyKept computes the keep-rate denominator from cents',
-    /const netRevenueBase = fromCents\(toCents\(gross\) - toCents\(refundsTotal\)\)/.test(src),
+    /const netRevenueBase = fromCents\(toCents\(gross\) - toCents\(refundsTotal\)\)/.test(widgetSrc),
     'expected netRevenueBase to route through toCents/fromCents');
-  // Anchored on the assignment, not on the substring: a comment that *explains*
-  // the old float expression must not be able to fail this.
-  check('neither headline figure is assigned straight from float dollars',
-    !/const\s+kept\s*=\s*gross\b/.test(src) && !/const\s+netRevenueBase\s*=\s*gross\b/.test(src));
 }
 
 console.log(`\n${failures.length ? 'FAILED' : 'PASSED'}: ${pass} checks passed, ${failures.length} failed`);

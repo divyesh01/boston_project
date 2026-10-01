@@ -235,7 +235,7 @@ These are the files in `src/lib/` -- the brains of the app. Grouped by what they
 ### Dashboard Widgets (src/components/dashboard/)
 | Component | What It Shows | Key Data Source |
 |-----------|-------------|----------------|
-| `MoneyKept.jsx` | Net revenue bridge: deductions for commissions, fees, taxes | `dailyAggregates.js` -> `room_revenue` |
+| `MoneyKept.jsx` | Net revenue bridge UI; pure financial/view model in `moneyKeptModel.js` | `dailyAggregates.js` -> `room_revenue` |
 | `PaymentMethodChart.jsx` | Pie chart of payment methods | `PaymentDay` entity |
 | `RevenueTrend.jsx` | Revenue over time line chart | `GrossRevenueDay` entity |
 | `PropertyRanking.jsx` | Properties ranked by revenue | `calculationService.js` |

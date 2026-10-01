@@ -47,13 +47,11 @@
  * property under test: adding a $D invoice for a cost already estimated at $E
  * must move total deductions by (D − E), not by D.
  *
- * WHAT THIS PROBE CANNOT DO. It cannot execute the widget: MoneyKept.jsx's math
- * lives in a ~400-line useMemo inside a React component, so there is no headless
- * entry point. verify-money-kept.mjs made the same call and mirrors the rules
- * instead. Rather than add a THIRD mirror — which is the very defect this item
- * names — section 6 asserts that the widget and the service now import their
- * bucketing vocabulary and their actual-beats-estimate rule from one shared
- * module, so the two cannot drift apart without deleting an import.
+ * HEADLESS BOUNDARY. The live widget now delegates its calculations to
+ * src/lib/moneyKeptModel.js, so React no longer owns a second hidden copy of the
+ * financial model. Section 8 asserts that the model consumes the shared bucketing
+ * vocabulary and delegates actual-vs-estimate selection to CalculationService,
+ * while the component delegates to the model.
  */
 import { CalculationService } from '../src/lib/calculationService.js';
 import * as commissionRates from '../src/lib/commissionRates.js';
@@ -268,14 +266,11 @@ console.log('\n[7] keep-rate guard');
 }
 
 // ── Section 8: one shared rule, so the two surfaces cannot drift ────────────
-// Structural, because the widget has no headless entry point (see the header).
-// Run on comment-stripped source: a probe that fails because a file DOCUMENTS
-// its own former defect punishes the fix. The [^:] guard keeps "https://" out of
-// the line-comment rule.
-console.log('\n[8] the widget and the service share one rule module');
+console.log('\n[8] the model and the service share one rule boundary');
 {
   const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
   const svc = strip(readFileSync(path.join(REPO, 'src', 'lib', 'calculationService.js'), 'utf8'));
+  const model = strip(readFileSync(path.join(REPO, 'src', 'lib', 'moneyKeptModel.js'), 'utf8'));
   const widget = strip(readFileSync(path.join(REPO, 'src', 'components', 'dashboard', 'MoneyKept.jsx'), 'utf8'));
   const rules = strip(readFileSync(path.join(REPO, 'src', 'lib', 'expenseCategories.js'), 'utf8'));
 
@@ -285,12 +280,16 @@ console.log('\n[8] the widget and the service share one rule module');
 
   ok('the service imports expenseBucket', /import \{[^}]*expenseBucket[^}]*\} from '@\/lib\/expenseCategories'/.test(svc));
   ok('the service imports the chooser', /import \{[^}]*chooseActualOrEstimate[^}]*\} from '@\/lib\/expenseCategories'/.test(svc));
-  ok('the widget imports expenseBucket', /import \{[^}]*expenseBucket[^}]*\} from "@\/lib\/expenseCategories"/.test(widget));
-  ok('the widget imports the chooser', /import \{[^}]*chooseActualOrEstimate[^}]*\} from "@\/lib\/expenseCategories"/.test(widget));
+  ok('the model imports expenseBucket', /import \{[^}]*expenseBucket[^}]*\} from "@\/lib\/expenseCategories"/.test(model));
+  ok('the model imports the shared derived-cost bucket list', /import \{[^}]*DERIVED_COST_BUCKETS[^}]*\} from "@\/lib\/expenseCategories"/.test(model));
+  ok('the model delegates actual-vs-estimate selection to CalculationService',
+    /CalculationService\.calculateMoneyKept\(/.test(model));
+  ok('the React widget delegates to the extracted model',
+    /buildMoneyKeptBaseData/.test(widget) && /buildMoneyKeptPresentation/.test(widget));
 
-  ok('the widget no longer defines its own bucketOf', !/const bucketOf = \(cat\)/.test(widget));
-  ok('the widget no longer defines its own special-bucket set',
-    !/new Set\(\["ota", "payroll", "taxes", "credit_card_fees"\]\)/.test(widget));
+  ok('the model does not define its own bucketOf', !/const bucketOf = \(cat\)/.test(model));
+  ok('the model does not define its own special-bucket set',
+    !/new Set\(\["ota", "payroll", "taxes", "credit_card_fees"\]\)/.test(model));
   ok('the service no longer excludes only the payroll category',
     !/filter\(e => !\(String\(e\.category \|\| ''\)\.toLowerCase\(\) === 'payroll'\)\)/.test(svc));
   ok('the service no longer deducts the combined tax liability',

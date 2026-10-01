@@ -229,11 +229,11 @@ const FLOAT_DOLLAR_ROUND = /Math\.round\s*\([^;]*\*\s*100\s*\)\s*\/\s*100/;
 // Keyed by file with an exact expected count: a NEW site in one of these files
 // pushes the count over `max` and fails, which forces the next agent to triage it
 // rather than inherit the exemption for free. Counts are LINES, not occurrences —
-// MoneyKept.jsx:615 rounds two fields on one line and counts once.
+// moneyKeptModel.js keeps the same display-only chart/list rounding after extraction.
 const DISPLAY_ROUNDING_ALLOWLIST = {
-  "src/components/dashboard/MoneyKept.jsx": {
+  "src/lib/moneyKeptModel.js": {
     max: 7,
-    why: "chart slice + deduction-row values (lines 414/615/637/649/657/666/667); the cents figures they derive from are unchanged, and the headline total is computed in cents (see probe-money-kept-fix.mjs)",
+    why: "chart slice + deduction-row display values moved intact from MoneyKept.jsx; the cents figures they derive from are unchanged, and the headline total is computed in cents (see verify-money-kept.mjs)",
   },
   "src/lib/hotel.js": {
     max: 1,

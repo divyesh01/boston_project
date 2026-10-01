@@ -605,3 +605,11 @@ CalculationService.calculateMoneyKept chooses actual versus estimated costs sepa
 aggregateDays and buildSyntheticRows preserve zero-ledger presence, source refunds and unavailable rooms. Missing server dimensions decline the cache fast path, and Dashboard retains actual expense records. MoneyKept uses the canonical service for property-specific deductions and tax drilldowns.
 
 Regression coverage: src/tests/productionTakeover.test.js, the finance probes, and probe-aggregate-rebuild.mjs. Final local application suite passed 734 tests; build, lint, typecheck, audit, V3 and map passed. docs/PRODUCTION_TAKEOVER_REPORT.md records the 201 passing probe results across sweep/reruns, the unverified running-backend check, scheduling containment, and staging/rollback requirements. A local green application suite does not authorize production sign-off.
+
+
+### Parser ownership update — 2026-10-01
+
+Clerk and timecard scan logic now live in `src/lib/parsers/clerk.js` and
+`src/lib/parsers/timecard.js`. `reportParsers.js` remains the dispatch/import
+orchestrator. The committed HotelKey fixture corpus and mutation harness pin both scanner
+contracts; do not copy either scanner back into the orchestrator.

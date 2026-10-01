@@ -1,3 +1,4 @@
+import { classifyPortfolioDay } from '@/lib/thresholdEngine';
 import React, { useMemo, useState } from "react";
 import {
   DollarSign, Percent, Gauge, TrendingUp, TrendingDown, X,
@@ -9,7 +10,7 @@ import { useOccupancy, useSources } from "@/lib/useHotelData";
 import { useGlobalFilters, MONTHS_LONG } from "@/lib/useGlobalFilters";
 import { Link } from "react-router-dom";
 import { money, money2, pct, num, inRange, C, occupancyStats, commissionFor, formatDayLabel } from "@/lib/hotel";
-import { getRevenueThresholds, getRevenueColor, getRevenueGroup, getRevenueGroupLabel } from "@/lib/revenueThresholds";
+import { getRevenueGroupLabel } from "@/lib/revenueThresholds";
 import { calendarMonths, daysInMonth, MAX_GRIDS } from "@/lib/calendarGrids";
 import { getEventsInRange, DEMAND_ORDER, DEMAND_COLORS, peakDemand, distanceColor } from "@/lib/eventSchedule";
 import { ErrorState } from "@/components/ui/status";
@@ -27,7 +28,7 @@ export default function MonthlyCalendar() {
   const [selectedDay, setSelectedDay] = useState(null);
   const [eventPopupDay, setEventPopupDay] = useState(null);
   // Read the configured thresholds so the legend cannot drift from the colours.
-  const revThresholds = useMemo(() => getRevenueThresholds(), [settingsVersion]);
+
 
   const occRows = useMemo(
     () => occ.filter((r) => inRange(r.date, dateRange.from, dateRange.to)),
@@ -48,7 +49,8 @@ export default function MonthlyCalendar() {
     });
     const map = new Map();
     groups.forEach((rows, d) => {
-      if (rows.length === 1) { map.set(d, rows[0]); return; }
+      const performance = classifyPortfolioDay(rows, properties);
+      if (rows.length === 1) { map.set(d, {...rows[0],performance}); return; }
       // Reuse the SAME aggregator the KPI cards use (occupancyStats) so a cell can
       // never drift from the header. occupancy comes back as a 0..1 fraction, which
       // both the cell and the day modal already normalise.
@@ -57,6 +59,7 @@ export default function MonthlyCalendar() {
         ...rows[0],
         date: d,
         property_id: "all",
+        performance,
         property_name: `${rows.length} properties`,
         room_revenue: s.revenue,
         rooms_sold: s.roomsSold,
@@ -67,7 +70,7 @@ export default function MonthlyCalendar() {
       });
     });
     return map;
-  }, [occRows, properties]);
+  }, [occRows, properties, settingsVersion]);
 
   const srcByDate = useMemo(() => {
     const map = new Map();
@@ -166,7 +169,7 @@ export default function MonthlyCalendar() {
         // `c.data.total_revenue`, which the CSV importer never writes (the export's
         // "Total Revenue" column is stored as total_revenue_with_misc), so every
         // imported day was grouped "low" while its cell was painted green.
-        const group = getRevenueGroup(c.data.room_revenue || 0);
+        const group = c.data.performance.group;
         g[group].push(c);
       });
     });
@@ -258,7 +261,7 @@ export default function MonthlyCalendar() {
         <Card
           key={`${grid.year}-${grid.month}`}
           title={`${MONTHS_LONG[grid.month]} ${grid.year} Calendar`}
-          subtitle={`Green ≥ ${money(revThresholds.highRevenueThreshold)} · Gray ${money(revThresholds.mediumRevenueThreshold)}–${money(revThresholds.highRevenueThreshold)} · Red < ${money(revThresholds.mediumRevenueThreshold)} (editable in Settings)`}
+          subtitle="Green: high room revenue ? gray: medium ? red: low ? gold: configured room contribution target met. Targets use each property?s capacity and dated policy; exact targets appear in each day."
         >
           <div className="mb-3 flex flex-wrap items-center gap-3 text-[10px] text-slate-400">
             <span className="uppercase tracking-wider text-slate-500">Event demand:</span>
@@ -290,7 +293,8 @@ export default function MonthlyCalendar() {
             {grid.cells.map((cell, i) => {
               if (!cell) return <div key={i} className="min-h-[90px] sm:min-h-[120px]" />;
               const revenue = cell.data?.room_revenue || 0;
-              const color = cell.data ? getRevenueColor(revenue) : "transparent";
+              const performance = cell.data?.performance;
+              const color = cell.data ? (performance.marginHigh ? '#D4AF37' : {high:'#00E096',medium:'#6B7280',low:'#FF6B6B'}[performance.group]) : 'transparent';
               const occPct = cell.data?.occupancy ? (cell.data.occupancy > 1 ? cell.data.occupancy : cell.data.occupancy * 100) : 0;
               const cellEvents = eventsByDate.get(cell.date) || [];
               const cellDemand = peakDemand(cellEvents);
@@ -332,6 +336,8 @@ export default function MonthlyCalendar() {
                       <div className="font-heading font-semibold text-sm tabular-nums text-white">{money(revenue)}</div>
                       <div>ADR {money2(cell.data.adr || 0)}</div>
                       <div>RevPAR {money2(cell.data.revpar || 0)}</div>
+                      {performance.contribution != null && <div className={performance.marginHigh ? 'text-amber-300' : 'text-slate-300'}>Est. room contribution {money2(performance.contribution)}</div>}
+                      <div className="text-slate-400">High ? {money(performance.high)} ? medium ? {money(performance.medium)}</div>
                     </div>
                   ) : (
                     <div className="mt-2 text-[10px] text-slate-600">No Data</div>

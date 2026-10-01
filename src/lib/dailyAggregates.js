@@ -1,3 +1,4 @@
+import { readHotelDataRows } from '@/lib/hotelDataQuery';
 // Materialized daily financial aggregates.
 //
 // The Dashboard turns four daily ledgers (occupancy / source / gross / payment)
@@ -94,7 +95,7 @@ async function fetchLedger(name, propertyId, from, to) {
   let rows;
   if (propertyId != null && propertyId !== '' && propertyId !== 'all') {
     query.property_id = Array.isArray(propertyId) ? { $in: propertyId } : propertyId;
-    rows = await db.entities[name].filter(query);
+    rows = await readHotelDataRows(db.entities[name], query);
   } else {
     // No 200000 cap. list() sorted by -created_date and then sliced, so once a
     // table passed that many rows the OLDEST rows fell out of the rebuild — and
@@ -102,7 +103,7 @@ async function fetchLedger(name, propertyId, from, to) {
     // dropped would have shown as revenue that quietly went missing. The cap
     // never bounded memory either: the proxy materializes the whole table before
     // slicing it.
-    rows = await db.entities[name].filter(query, '-created_date');
+    rows = await readHotelDataRows(db.entities[name], query, '-created_date');
   }
   return rows.filter((r) => inRange(r.date || r.business_date || r.expense_date, from, to));
 }
@@ -360,13 +361,14 @@ export async function getDailyAggregates({ propertyId = 'all', from = '', to = '
   // fallback reads hundreds of rows rather than the ledgers' tens of thousands.
   const bound = dateBound(from, to);
   if (bound) query.business_date = bound;
-  const rows = await db.entities.DailyFinancialAggregate.filter(query);
+  const rows = await readHotelDataRows(db.entities.DailyFinancialAggregate, query, 'business_date');
   // Rows written before DAILY_AGGREGATE_VERSION used a different money-unit
   // contract. Do not guess whether a legacy row is dollars or cents: ignore it so
   // the caller falls back to raw ledgers. Guessing here is how the dashboard can
   // display an impossible commission larger than total revenue.
-  return rows.filter((r) => r.aggregate_version === DAILY_AGGREGATE_VERSION)
-    .filter((r) => inRange(r.business_date, from, to));
+  const selectedRows = rows.filter((r) => inRange(r.business_date, from, to));
+  if (selectedRows.some((r) => r.aggregate_version !== DAILY_AGGREGATE_VERSION)) return [];
+  return selectedRows;
 }
 
 // Turn cached aggregates back into the synthetic per-day row shape the Dashboard

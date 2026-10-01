@@ -86,7 +86,7 @@ export function blendWithCompetitor(rateCents, competitorCents, weight) {
 
 // ─── Single-date, single-room-type recommendation ───
 
-export function recommendRate({ baseCents, occupancy, isWeekend, weatherCondition, config }) {
+export function recommendRate({ baseCents, occupancy, isWeekend, weatherCondition, config, rateBounds }) {
   const cfg = { ...DEFAULT_PRICING_CONFIG, ...(config || {}) };
   const demandBps = demandMultiplierBps(occupancy, cfg.demandSensitivity);
   const seasonBps = seasonalityMultiplierBps(isWeekend, cfg);
@@ -94,15 +94,31 @@ export function recommendRate({ baseCents, occupancy, isWeekend, weatherConditio
   const { bps, clamped, minBps, maxBps } = combineMultipliers({ demandBps, seasonBps, weatherBps, config: cfg });
   const demandCents = applyMultiplier(baseCents, bps);
   const competitorCents = blendWithCompetitor(demandCents, cfg.competitorRateCents, cfg.competitorWeight);
+  const bounded = applyRateBounds(competitorCents, rateBounds);
   return {
     baseCents: Math.round(baseCents),
-    recommendedCents: competitorCents,
+    recommendedCents: bounded.rateCents,
     multiplierBps: bps,
-    clamped,
+    clamped: clamped || bounded.clamped,
+    rateBounds: bounded.bounds,
     minBps,
     maxBps,
     breakdown: { demandBps, seasonBps, weatherBps },
   };
+}
+
+// Property/date policy bounds apply after every demand and competitor adjustment.
+// Dollars enter at configuration; all recommendation arithmetic stays in cents.
+export function applyRateBounds(rateCents, policy = {}) {
+  const cents = key => policy?.[key] == null ? null : Math.round(Number(policy[key]) * 100);
+  const floor = cents('rate_floor'), ceiling = cents('rate_ceiling');
+  if ((floor != null && (!Number.isSafeInteger(floor) || floor < 0)) ||
+      (ceiling != null && (!Number.isSafeInteger(ceiling) || ceiling < 0)) ||
+      (floor != null && ceiling != null && floor > ceiling)) {
+    throw new Error('Property rate floor and ceiling need review.');
+  }
+  const rate = clamp(Math.round(rateCents), floor ?? 0, ceiling ?? Infinity);
+  return { rateCents: rate, clamped: rate !== rateCents, bounds: { floorCents: floor, ceilingCents: ceiling } };
 }
 
 // ─── Occupancy signal derivation ───
@@ -143,7 +159,7 @@ export function isWeekend(isoDate) {
 // Look up the configured base rate for a room type and produce a full
 // recommendation (integer cents). Used by the Room Board "suggested rate"
 // indicator when an operator is checking a guest in.
-export function suggestedRateForDate({ roomType, date, occupancy, reservations, rooms, weatherByDate, config }) {
+export function suggestedRateForDate({ roomType, date, occupancy, reservations, rooms, weatherByDate, config, rateBounds }) {
   const cfg = { ...DEFAULT_PRICING_CONFIG, ...(config || {}) };
   const base = cfg.baseRates[roomType] || 0;
   const occ = Number.isFinite(occupancy)
@@ -155,6 +171,7 @@ export function suggestedRateForDate({ roomType, date, occupancy, reservations, 
     isWeekend: isWeekend(date),
     weatherCondition: (weatherByDate || {})[date] || null,
     config: cfg,
+    rateBounds,
   });
   return { ...rec, occupancy: occ };
 }
@@ -168,10 +185,10 @@ export function suggestedRateForDate({ roomType, date, occupancy, reservations, 
 //
 // Returns an array of day rows, each carrying the per-type recommendations and
 // an aggregate ADR + projected revenue for the day.
-export function predictiveRate({ occupancyHistory, events, baseCents, config }) {
+export function predictiveRate({ occupancyHistory, events, baseCents, config, rateBounds }) {
   const forecasted = predictDemand(occupancyHistory, events);
   const forecastOcc = Math.min(forecasted, 1);
-  const rec = recommendRate({ baseCents, occupancy: forecastOcc, isWeekend: false, weatherCondition: null, config });
+  const rec = recommendRate({ baseCents, occupancy: forecastOcc, isWeekend: false, weatherCondition: null, config, rateBounds });
   return { ...rec, forecastedDemand: forecasted };
 }
 
@@ -215,12 +232,13 @@ export function netRevenuePerBooking(priceCents, commissionRate) {
   return { publishedRateCents: Math.round(priceCents), netYieldCents: net, commissionPercent: Math.round((Number(commissionRate) || 0) * 100) };
 }
 
-export function optimizeChannelRate({ baseCents, currentOccupancy, daysToArrival, historicalPaceOccupancy, weatherRiskFactor = 0, channelCosts }) {
+export function optimizeChannelRate({ baseCents, currentOccupancy, daysToArrival, historicalPaceOccupancy, weatherRiskFactor = 0, channelCosts, rateBounds }) {
   const paceMult = demandMultiplierFromPace(currentOccupancy, historicalPaceOccupancy, daysToArrival);
   const urgency = daysToArrival === 0 ? (currentOccupancy > 90 ? 1.35 : (currentOccupancy < 70 ? 0.88 : 1.0)) : (daysToArrival <= 3 && currentOccupancy > 85 ? 1.20 : 1.0);
   const shock = 1.0 + (clamp(Number(weatherRiskFactor) || 0, 0, 1) * 0.25);
   let target = Math.round(baseCents * paceMult * urgency * shock);
   target = Math.max(Math.round(baseCents * 0.75), Math.min(Math.round(baseCents * 2.0), target));
+  target = applyRateBounds(target, rateBounds).rateCents;
 
   const recommendations = (channelCosts || [
     { channel: 'Direct_Web', commissionRate: 0.02 },
@@ -255,7 +273,7 @@ export function weatherShockMultiplier(weatherCondition, eventImpactFactor = 0) 
   return baseMult * (1 + shock * 0.2);
 }
 
-export function buildPricingForecast({ rooms, reservations, weatherByDate = {}, config, days = 14, fromDate }) {
+export function buildPricingForecast({ rooms, reservations, weatherByDate = {}, config, days = 14, fromDate, policyForDate }) {
   const cfg = { ...DEFAULT_PRICING_CONFIG, ...(config || {}) };
   const start = fromDate || new Date().toISOString().slice(0, 10);
   const presentTypes = (Array.isArray(rooms) && rooms.length > 0)
@@ -265,6 +283,7 @@ export function buildPricingForecast({ rooms, reservations, weatherByDate = {}, 
   const out = [];
   for (let i = 0; i < days; i += 1) {
     const date = addDays(start, i);
+    const rateBounds = policyForDate?.(date);
     const weekend = isWeekend(date);
     const occupancy = forecastOccupancy({ reservations, rooms, date, defaultOccupancy: cfg.forecastDefaultOccupancy });
     const condition = weatherByDate[date] || null;
@@ -281,7 +300,7 @@ export function buildPricingForecast({ rooms, reservations, weatherByDate = {}, 
     for (const type of presentTypes) {
       const base = cfg.baseRates[type] || 0;
       baseAdrNum += base * rooms.filter(r => r.room_type === type).length;
-      const rec = recommendRate({ baseCents: base, occupancy, isWeekend: weekend, weatherCondition: condition, config: cfg });
+      const rec = recommendRate({ baseCents: base, occupancy, isWeekend: weekend, weatherCondition: condition, config: cfg, rateBounds });
       types[type] = rec;
       if (rec.recommendedCents > 0) {
         adrNum += rec.recommendedCents * rooms.filter(r => r.room_type === type).length;

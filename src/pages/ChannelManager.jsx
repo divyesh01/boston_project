@@ -1,3 +1,4 @@
+import PromotionSimulator from '@/components/channels/PromotionSimulator';
 import React, { useState } from "react";
 import Card from "@/components/ui-exec/Card";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
@@ -119,6 +120,8 @@ export default function ChannelManager() {
           Manage OTA connections and perform two-way sync for {propName}.
         </p>
       </header>
+
+      {!isPortfolio && property != null && <PromotionSimulator key={String(property)} propertyId={property} />}
 
       <div className="grid gap-6 md:grid-cols-2">
         <Card title="OTA Connections" subtitle="Connect your channel accounts to sync rates and availability.">

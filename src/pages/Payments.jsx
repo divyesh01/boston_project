@@ -1,3 +1,4 @@
+import TaxRemittanceRecords from '@/components/payments/TaxRemittanceRecords';
 import React, { useMemo, useRef, useState } from "react";
 import { CreditCard, DollarSign, Receipt, RefreshCw, AlertTriangle, Percent, Settings, Download } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
@@ -348,6 +349,7 @@ export default function Payments() {
         </div>
         <div className="mt-4">
           <TaxCalculationBreakdown calculations={taxCalculations} properties={properties} />
+          {resolvedPropertyId != null && <TaxRemittanceRecords key={String(resolvedPropertyId)} propertyId={resolvedPropertyId} dateRange={dateRange} />}
         </div>
         <TaxConfigModal open={taxModalOpen} onClose={() => setTaxModalOpen(false)} propertyId={resolvedPropertyId ?? "*"} />
       </Card>

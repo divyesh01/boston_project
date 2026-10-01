@@ -10,6 +10,10 @@ import { useRooms, useReservations, useWeatherSnapshots } from "./useHotelData";
 import { useGlobalFilters } from "./useGlobalFilters";
 import { getPricingConfig } from "./pricingSettings.js";
 import { buildPricingForecast } from "./pricingEngine.js";
+import { getEnterpriseConfig, getPropertyProfile } from './enterpriseConfigEngine.js';
+import { propertyLocalDate } from './businessDate.js';
+import { singleSelectedProperty } from './propertySelection.js';
+import { useSettingsVersion } from '@/hooks/useSettingsVersion';
 
 // Build a { [isoDate]: conditionString } map from cached weather snapshots so
 // the engine can apply the weather signal where a snapshot exists.
@@ -27,7 +31,10 @@ function weatherByDate(snapshots) {
 // Compute a pricing forecast for the active property using live data.
 //   days — how many days ahead (default 14)
 export function usePricingForecast(days = 14) {
-  const { property, latestDate } = useGlobalFilters();
+  const { property, properties, latestDate } = useGlobalFilters();
+  const settingsVersion = useSettingsVersion();
+  const selectedProperty = singleSelectedProperty(property, properties);
+  const propertyId = selectedProperty?.id ?? null;
   const roomsQ = useRooms(property);
   const reservationsQ = useReservations(null, property);
   const snapshotsQ = useWeatherSnapshots(property);
@@ -35,13 +42,16 @@ export function usePricingForecast(days = 14) {
   const { data: reservations = [] } = reservationsQ;
   const { data: snapshots = [] } = snapshotsQ;
 
-  const config = getPricingConfig(typeof property === "string" && property !== "all" ? property : "*");
+  const config = useMemo(() => getPricingConfig(propertyId ?? '*'), [propertyId, settingsVersion]);
   const wByDate = useMemo(() => weatherByDate(snapshots), [snapshots]);
 
-  const calendarToday = new Intl.DateTimeFormat("en-CA", {timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
-  const forecastStartDate = calendarToday;
+  const profile = propertyId == null ? null : getPropertyProfile(propertyId);
+  const clockConfigured = Boolean(profile?.timezone || profile?.current_business_date);
+  const calendarToday = profile?.timezone ? propertyLocalDate(profile.timezone) : profile?.current_business_date || new Date().toISOString().slice(0, 10);
+  const forecastStartDate = profile?.current_business_date || calendarToday;
+  const policyForDate = useMemo(() => date => getEnterpriseConfig(propertyId, date, selectedProperty || {}), [propertyId, selectedProperty, settingsVersion]);
   const isHistoricalSimulation = false;
-  const unavailable = property === "all" || Array.isArray(property) || roomsQ.isPending || reservationsQ.isPending || roomsQ.isError || reservationsQ.isError;
+  const unavailable = propertyId == null || roomsQ.isPending || reservationsQ.isPending || roomsQ.isError || reservationsQ.isError;
 
   const forecast = useMemo(
     () =>
@@ -52,8 +62,9 @@ export function usePricingForecast(days = 14) {
         config,
         days,
         fromDate: forecastStartDate,
+        policyForDate,
       }),
-    [rooms, reservations, wByDate, config, days, forecastStartDate, unavailable]
+    [rooms, reservations, wByDate, config, days, forecastStartDate, unavailable, policyForDate]
   );
 
   // The three reads have to be reported to the caller, not just consumed. Each of
@@ -72,8 +83,8 @@ export function usePricingForecast(days = 14) {
   };
 
   return {
-    availabilityMessage: property === "all" || Array.isArray(property) ? "Select one property for pricing recommendations." : roomsQ.isPending || reservationsQ.isPending ? "Loading room inventory and reservations?" : "No room register yet. Create one on the Room Board.",
-    freshnessNotice: latestDate && latestDate < calendarToday ? `Imported financial data ends ${latestDate}. Rates are model estimates from the stored room register and reservation book; confirm current bookings before use.` : "Rates are model estimates from the stored room register and reservation book.",
+    availabilityMessage: propertyId == null ? "Select one property for pricing recommendations." : roomsQ.isPending || reservationsQ.isPending ? "Loading room inventory and reservations…" : "No room register yet. Create one on the Room Board.",
+    freshnessNotice: `${!clockConfigured ? 'Configure the property time zone and business date; this preview uses UTC dates. ' : ''}${latestDate && latestDate < calendarToday ? `Imported financial data ends ${latestDate}. ` : ''}Rates are model estimates from the stored room register and reservation book; confirm current bookings before use.`,
     forecast,
     config,
     enabled: Boolean(config.enabled),

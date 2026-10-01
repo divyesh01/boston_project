@@ -1,3 +1,7 @@
+import { readHotelDataRows } from '@/lib/hotelDataQuery';
+import SharedServiceStatements from '@/components/payroll/SharedServiceStatements';
+import { assessWage } from '@/lib/laborPolicy';
+import { getPropertyProfile } from '@/lib/enterpriseConfigEngine';
 import { db, runInTransaction } from '@/api/base44Client';
 
 import React, { useState } from "react";
@@ -61,7 +65,7 @@ function usePayroll(propertyId) {
           filter.property_id = propertyId;
         }
       }
-      return db.entities.PayrollRun.filter(filter, "-pay_period_start", 100000);
+      return readHotelDataRows(db.entities.PayrollRun, filter, "-pay_period_start");
     },
   });
 }
@@ -70,7 +74,7 @@ function useStaff(propertyId) {
   return useQuery({
     queryKey: ["staff", propertyId],
     queryFn: async () => {
-      const rows = (await db.entities.Staff.list("employee_name", 100000)) || [];
+      const rows = (await readHotelDataRows(db.entities.Staff, {}, "employee_name")) || [];
       if (propertyId == null || propertyId === "" || propertyId === "all") return rows;
       const targetIds = Array.isArray(propertyId) ? propertyId.map(String) : [String(propertyId)];
       return rows.filter((r) => {
@@ -97,7 +101,7 @@ function useOccupancyRange(from, to, propertyId) {
           filter.property_id = propertyId;
         }
       }
-      return db.entities.OccupancyDay.filter(filter, "date", 100000);
+      return readHotelDataRows(db.entities.OccupancyDay, filter, "date");
     },
   });
 }
@@ -110,7 +114,7 @@ export default function Payroll() {
 }
 
 function PropertyPayroll() {
-  const { property, properties } = useGlobalFilters();
+  const { property, properties, dateRange } = useGlobalFilters();
   const selectedProperty = singleSelectedProperty(property, properties);
   const qc = useQueryClient();
   useRealtimeInvalidation(["staff", "payroll"]);
@@ -226,6 +230,8 @@ function PropertyPayroll() {
 
     const p = requireWriteProperty();
     if (!p) return;
+    const wage = assessWage(form, p.id, form.pay_period_end || dateRange.to);
+    if (wage.configured && wage.issues.length) { toast.error(wage.issues.join(' ')); return; }
     const propertyId = p.id;
     await db.entities.PayrollRun.create({
       ...form,
@@ -363,6 +369,8 @@ function PropertyPayroll() {
     if (!p) return;
     // Reserved before the create so two rapid clicks cannot both be issued the
     // same id, and so a departed employee's id is never reissued.
+    const wage = assessWage(staffForm, p.id, getPropertyProfile(p.id)?.current_business_date || staffForm.hire_date || dateRange.to);
+    if (wage.configured && wage.issues.length) { toast.error(wage.issues.join(' ')); return; }
     const reservedId = await reserveEmployeeId(staffForm.employee_name, staff);
     await db.entities.Staff.create({
       ...staffForm,
@@ -867,6 +875,8 @@ function PropertyPayroll() {
         </p>
         {!selectedProperty && <p className="mt-2 text-sm text-amber-300">Select one property to add staff or post payroll. Portfolio totals remain available below.</p>}
       </header>
+
+      <SharedServiceStatements properties={properties} businessDate={dateRange?.to} />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard label="Total Payroll" value={money2(totalPay)} sub={`${payroll.length} runs · OT ${money2(totalOT)}`} accent={C.green} icon={DollarSign} />

@@ -1,3 +1,5 @@
+import EnterpriseSettings from '@/components/settings/EnterpriseSettings';
+import SettingsConflictNotice from '@/components/settings/SettingsConflictNotice';
 import { db } from '@/api/base44Client';
 
 import React, { useState, useEffect, useRef } from "react";
@@ -111,14 +113,14 @@ export default function Settings() {
   }, [propertiesQ.data]);
   const [newPropCode, setNewPropCode] = useState("");
   const [newPropName, setNewPropName] = useState("");
-  const [newPropRooms, setNewPropRooms] = useState("100");
+  const [newPropRooms, setNewPropRooms] = useState("");
   const [propMsg, setPropMsg] = useState("");
   const [propMsgType, setPropMsgType] = useState("info");
   const [isAddingProp, setIsAddingProp] = useState(false);
   const [propDeleteTarget, setPropDeleteTarget] = useState(null);
   const [propEditTarget, setPropEditTarget] = useState(null);
   const [editPropName, setEditPropName] = useState("");
-  const [editPropRooms, setEditPropRooms] = useState("100");
+  const [editPropRooms, setEditPropRooms] = useState("");
   const [editPropCity, setEditPropCity] = useState("");
   const [editPropState, setEditPropState] = useState("");
   const [isSavingEditProp, setIsSavingEditProp] = useState(false);
@@ -603,7 +605,7 @@ export default function Settings() {
       setPropMsgType("success");
       setNewPropCode("");
       setNewPropName("");
-      setNewPropRooms("100");
+      setNewPropRooms("");
       refetchProps();
       queryClientInstance.invalidateQueries({ queryKey: ["properties"] });
       rotateCsrfToken();
@@ -945,6 +947,9 @@ export default function Settings() {
           Commission rates, alert thresholds, user access, and account management.
         </p>
       </header>
+
+      <SettingsConflictNotice />
+      <EnterpriseSettings />
 
       {/* A failed property read is surfaced, not swallowed. The dropdown below
           would otherwise show only "All properties (default)" and read as a

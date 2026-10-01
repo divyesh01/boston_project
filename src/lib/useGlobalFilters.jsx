@@ -1,3 +1,5 @@
+import { getPropertyProfile } from '@/lib/enterpriseConfigEngine';
+import { useSettingsVersion } from '@/hooks/useSettingsVersion';
 // @refresh reset
 import React, { createContext, useContext, useState, useMemo, useCallback } from "react";
 import { useProperties, useLatestDate } from "@/lib/useHotelData";
@@ -65,7 +67,7 @@ const pad = (n) => String(n).padStart(2, "0");
 const iso = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
 const lastDay = (y, m) => new Date(y, m + 1, 0).getDate();
 
-function computeRangeFromMonths(year, months, latestDate) {
+function computeRangeFromMonths(year, months, latestDate, anchorDate) {
   if (!months || months.length === 0) {
     // The control says All Months. Never hide historical imports by silently
     // narrowing this selection to the computer's current month.
@@ -73,28 +75,28 @@ function computeRangeFromMonths(year, months, latestDate) {
   }
   const minM = Math.min(...months);
   const maxM = Math.max(...months);
-  const today = new Date();
+  const today = anchorDate ? new Date(`${anchorDate}T12:00:00Z`) : new Date();
   let to = iso(year, maxM, lastDay(year, maxM));
   // If the max month is in the current year and in the future, cap to latest data or today
-  if (year >= today.getFullYear() && maxM >= today.getMonth()) {
-    to = latestDate || iso(today.getFullYear(), today.getMonth(), today.getDate());
+  if (year >= (anchorDate ? today.getUTCFullYear() : today.getFullYear()) && maxM >= (anchorDate ? today.getUTCMonth() : today.getMonth())) {
+    to = latestDate || iso((anchorDate ? today.getUTCFullYear() : today.getFullYear()), (anchorDate ? today.getUTCMonth() : today.getMonth()), (anchorDate ? today.getUTCDate() : today.getDate()));
     // But don't go before the start of the range
     if (to < iso(year, minM, 1)) to = iso(year, maxM, lastDay(year, maxM));
   }
   return { from: iso(year, minM, 1), to };
 }
 
-function computeRange(period, year, month, latestDate, customFrom, customTo) {
+function computeRange(period, year, month, latestDate, customFrom, customTo, anchorDate) {
   const y = year || CUR_YEAR;
-  const today = new Date();
+  const today = anchorDate ? new Date(`${anchorDate}T12:00:00Z`) : new Date();
 
   if (period === "custom") return { from: customFrom || "", to: customTo || "" };
 
   if (period === "ytd") {
     const from = iso(y, 0, 1);
     let to;
-    if (y >= today.getFullYear()) {
-      to = latestDate || iso(today.getFullYear(), today.getMonth(), today.getDate());
+    if (y >= (anchorDate ? today.getUTCFullYear() : today.getFullYear())) {
+      to = latestDate || iso((anchorDate ? today.getUTCFullYear() : today.getFullYear()), (anchorDate ? today.getUTCMonth() : today.getMonth()), (anchorDate ? today.getUTCDate() : today.getDate()));
     } else {
       to = iso(y, 11, 31);
     }
@@ -106,7 +108,7 @@ function computeRange(period, year, month, latestDate, customFrom, customTo) {
   if (period === "monthly") {
     // Multi-month: handled by computeRangeFromMonths via the months array
     // This fallback handles the case where months is not passed
-    const m = month !== null ? month : (y === today.getFullYear() ? today.getMonth() : 0);
+    const m = month !== null ? month : (y === (anchorDate ? today.getUTCFullYear() : today.getFullYear()) ? (anchorDate ? today.getUTCMonth() : today.getMonth()) : 0);
     return { from: iso(y, m, 1), to: iso(y, m, lastDay(y, m)) };
   }
 
@@ -116,14 +118,14 @@ function computeRange(period, year, month, latestDate, customFrom, customTo) {
   }
 
   if (period === "daily") {
-    const m = month !== null ? month : today.getMonth();
-    const d = today.getDate();
+    const m = month !== null ? month : (anchorDate ? today.getUTCMonth() : today.getMonth());
+    const d = (anchorDate ? today.getUTCDate() : today.getDate());
     return { from: iso(y, m, d), to: iso(y, m, d) };
   }
 
   if (period === "weekly") {
-    const m = month !== null ? month : today.getMonth();
-    const ref = new Date(y, m, month !== null ? 15 : today.getDate());
+    const m = month !== null ? month : (anchorDate ? today.getUTCMonth() : today.getMonth());
+    const ref = new Date(y, m, month !== null ? 15 : (anchorDate ? today.getUTCDate() : today.getDate()));
     const day = ref.getDay();
     const start = new Date(ref);
     start.setDate(ref.getDate() - day);
@@ -191,22 +193,25 @@ export function GlobalFiltersProvider({ children }) {
 
   const { data: latestDate = "" } = useLatestDate(property);
 
+  const settingsVersion = useSettingsVersion();
+  const businessDate = useMemo(() => effectiveProperties.length === 1 ? getPropertyProfile(effectiveProperties[0])?.current_business_date || '' : '', [effectiveProperties, settingsVersion]);
+
   // Compute date range
   const dateRange = useMemo(() => {
     if (period === "custom") return { from: customFrom, to: customTo };
     if (period === "ytd" || period === "yearly" || period === "quarterly" || period === "daily" || period === "weekly") {
-      return computeRange(period, year, null, latestDate, customFrom, customTo);
+      return computeRange(period, year, null, latestDate, customFrom, customTo, businessDate);
     }
     // "monthly" = Multi-Month mode
-    return computeRangeFromMonths(year, months, latestDate);
-  }, [period, year, months, latestDate, customFrom, customTo]);
+    return computeRangeFromMonths(year, months, latestDate, businessDate);
+  }, [period, year, months, latestDate, customFrom, customTo, businessDate]);
 
   const compareDateRange = useMemo(() => {
     if (comparePeriod === "monthly") {
-      return computeRangeFromMonths(compareYear, compareMonths, latestDate);
+      return computeRangeFromMonths(compareYear, compareMonths, latestDate, businessDate);
     }
-    return computeRange(comparePeriod, compareYear, null, latestDate, "", "");
-  }, [comparePeriod, compareYear, compareMonths, latestDate]);
+    return computeRange(comparePeriod, compareYear, null, latestDate, "", "", businessDate);
+  }, [comparePeriod, compareYear, compareMonths, latestDate, businessDate]);
 
   // Check if a date falls in one of the selected months
   const isMonthSelected = useCallback((dateStr) => {
@@ -335,6 +340,7 @@ export function GlobalFiltersProvider({ children }) {
     compareDateRange,
     isMonthSelected,
     latestDate,
+    businessDate,
     reset,
     prevMonth,
     nextMonth,

@@ -27,7 +27,7 @@
 // definition, and the next settings module added to the app gets it for free.
 //
 // Continuous Cross-Browser Cloud Sync Enhancements:
-// - Cloudflare D1 ETag 304 conditional short-circuit caching (0 D1 reads when unchanged)
+// - Cloudflare D1 ETag caching (metadata read without full hydration when unchanged)
 // - Input-state editing lock (prevents remote overwriting during active typing)
 // - Compare-And-Swap (CAS) expected revision handling
 // - Automatic BroadcastChannel cross-tab notifications
@@ -91,7 +91,7 @@ export function reportFailedWrite(key, err) {
  * @returns {*} the stored string, or `fallback`
  */
 export function readRawSetting(key, fallback = null, propertyId = "*") {
-  if (propertyId && propertyId !== "*") {
+  if (propertyId != null && propertyId !== "" && propertyId !== "*") {
     try {
       const byPropRaw = localStorage.getItem("rri_settings_by_property");
       if (byPropRaw) {
@@ -120,7 +120,7 @@ export function readRawSetting(key, fallback = null, propertyId = "*") {
  * @returns {*} the parsed value, or `fallback`
  */
 export function readJsonSetting(key, fallback, propertyId = "*") {
-  if (propertyId && propertyId !== "*") {
+  if (propertyId != null && propertyId !== "" && propertyId !== "*") {
     try {
       const byPropRaw = localStorage.getItem("rri_settings_by_property");
       if (byPropRaw) {
@@ -173,7 +173,21 @@ export function readObjectSetting(key, fallback, propertyId = "*") {
 
 import { notifySettingsChanged, notifySettingsConflict } from "./settingsBus.js";
 
+// Identity-bearing records never inherit another property's/global record.
+let scopedRawCache = null, scopedParsedCache = {};
+export function readScopedJsonSetting(key, fallback, propertyId) {
+  if (propertyId == null || Array.isArray(propertyId) || ['', '*', 'all'].includes(String(propertyId))) return fallback;
+  try {
+    const raw = localStorage.getItem('rri_settings_by_property') || '{}';
+    if (raw !== scopedRawCache) { const parsed = JSON.parse(raw); scopedParsedCache = parsed; scopedRawCache = raw; }
+    return scopedParsedCache?.[String(propertyId)]?.[key] ?? fallback;
+  }
+  catch (err) { reportFailedRead(key, err); return fallback; }
+}
+
 export const SYNCABLE_SETTING_KEYS = Object.freeze(new Set([
+  "rri_enterprise_profile_v1", "rri_enterprise_templates_v1", "rri_enterprise_defaults_v1",
+  "rri_promotion_scenario_v1", "rri_service_statements_v1", "rri_tax_remittance_v1",
   "rri_commission_rates_v2",
   "rri_cc_fee_rate",
   "rri_cc_fee_refunds_v1",
@@ -215,6 +229,39 @@ const pendingCloudSync = new Map();
 let lastKnownEtag = null;
 let currentServerRev = 0;
 let isEditingSettings = false;
+let isFlushingSettings = false;
+let settingsConflict = null;
+let settingsSyncError = null;
+let hydratedServerRevision = false;
+const syncListeners = new Set();
+const publishSyncState = () => syncListeners.forEach(fn => {
+  try { fn(); } catch (error) { console.error('[settings] sync listener:', error); }
+});
+export function subscribeSettingsSync(listener) { syncListeners.add(listener); return () => syncListeners.delete(listener); }
+export function getSettingsSyncState() { return { conflict: settingsConflict, pending: pendingCloudSync.size, saving: isFlushingSettings, error: settingsSyncError }; }
+export async function reviewSettingsConflict() {
+  const res = await fetch(getSettingsUrl(), { headers: { accept: 'application/json' } });
+  if (!res.ok) throw new Error('Could not load the current server settings.');
+  const data = await res.json();
+  if (!data.ok || !Number.isSafeInteger(data.revision)) throw new Error('Invalid settings snapshot.');
+  return { revision: data.revision, settings: data.settings, drafts: [...pendingCloudSync.values()] };
+}
+// Only an explicit UI decision can rebase a rejected draft. Another write after
+// this review is still rejected by the server CAS; there is no force-write path.
+export async function resolveSettingsConflict(review, keepDrafts) {
+  if (!review || !Number.isSafeInteger(review.revision)) throw new Error('Review the server values first.');
+  if (isFlushingSettings || isPullingSettings) throw new Error('A settings request is still running.');
+  if (!keepDrafts) pendingCloudSync.clear();
+  currentServerRev = review.revision;
+  hydratedServerRevision = true;
+  settingsConflict = null;
+  settingsSyncError = null;
+  lastKnownEtag = null;
+  isEditingSettings = false;
+  publishSyncState();
+  if (keepDrafts && pendingCloudSync.size) await flushCloudSettingSync();
+  if (!pendingCloudSync.size && !settingsConflict) await pullRemoteSettings(true);
+}
 
 /**
  * Activate or deactivate the edit lock while user is modifying form fields.
@@ -236,6 +283,14 @@ export function getPendingSyncCount() {
 
 export function clearPendingCloudSyncForTest() {
   pendingCloudSync.clear();
+  settingsConflict = null;
+  settingsSyncError = null;
+  hydratedServerRevision = false;
+  lastKnownEtag = null;
+  currentServerRev = 0;
+  scopedRawCache = null;
+  scopedParsedCache = {};
+  publishSyncState();
 }
 
 export function getCurrentServerRev() {
@@ -244,6 +299,7 @@ export function getCurrentServerRev() {
 
 export function setCurrentServerRev(rev) {
   currentServerRev = Number(rev) || 0;
+  hydratedServerRevision = true;
 }
 
 /**
@@ -261,9 +317,10 @@ export function queueCloudSettingSync(key, value, propertyId = "*") {
   if (typeof value === "string") {
     try { val = JSON.parse(value); } catch {}
   }
-  const propId = String(propertyId || "*");
+  const propId = String(propertyId ?? "*");
   const queueKey = `${key}::${propId}`;
   pendingCloudSync.set(queueKey, { key, value: val, propertyId: propId });
+  publishSyncState();
 
   if (syncTimer) clearTimeout(syncTimer);
   syncTimer = setTimeout(flushCloudSettingSync, 300);
@@ -283,11 +340,22 @@ const isTestEnv = () => typeof globalThis !== "undefined" && Boolean(globalThis.
  * Preserves pending state across network failures and CAS 409 conflicts.
  */
 export async function flushCloudSettingSync() {
-  if (!pendingCloudSync.size || typeof fetch === "undefined") return;
+  if (!pendingCloudSync.size || typeof fetch === "undefined" || isFlushingSettings || settingsConflict || isPullingSettings) return;
   if (syncTimer) {
     clearTimeout(syncTimer);
     syncTimer = null;
   }
+  // Without an acknowledged initial snapshot, a cached/offline draft has no
+  // known base. Revision zero is a real CAS token, never an omitted token.
+  if (!hydratedServerRevision) {
+    settingsConflict = { code: 'SETTINGS_BASE_UNKNOWN', pendingKeys: [...pendingCloudSync.values()].map(i => i.key) };
+    notifySettingsConflict(settingsConflict);
+    publishSyncState();
+    return;
+  }
+  isFlushingSettings = true;
+  settingsSyncError = null;
+  publishSyncState();
   const inFlight = new Map(pendingCloudSync);
 
   const items = Array.from(inFlight.values()).map((entry) => ({
@@ -314,7 +382,7 @@ export async function flushCloudSettingSync() {
       body: JSON.stringify({
         items,
         settings: settingsDict,
-        expected_revision: currentServerRev || undefined,
+        expected_revision: currentServerRev,
       }),
     });
 
@@ -323,33 +391,48 @@ export async function flushCloudSettingSync() {
       // Preserve pendingCloudSync so user edits are not lost.
       const conflictData = await res.json().catch(() => ({}));
       const serverRev = Number(conflictData?.server_revision || 0);
-      if (serverRev) currentServerRev = serverRev;
-      notifySettingsConflict({
+      settingsConflict = {
         code: "SETTINGS_CONFLICT",
         serverRevision: serverRev,
         pendingKeys: items.map((i) => i.key),
-      });
+      };
+      notifySettingsConflict(settingsConflict);
     } else if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (!data?.ok || !Number.isSafeInteger(data.revision)) {
+        settingsConflict = {code:'SETTINGS_ACK_UNKNOWN',pendingKeys:items.map(i=>i.key)};
+        notifySettingsConflict(settingsConflict);
+        return;
+      }
       // Remove only items from pendingCloudSync that succeeded and were not modified during in-flight
       for (const [k, v] of inFlight.entries()) {
         if (pendingCloudSync.get(k) === v) {
           pendingCloudSync.delete(k);
         }
       }
-      const data = await res.json().catch(() => null);
-      if (data?.revision) currentServerRev = Number(data.revision);
-      const etag = res.headers.get("ETag");
-      if (etag) lastKnownEtag = etag;
+      currentServerRev = data.revision;
+      // A write acknowledges only our batch, not another workstation's full
+      // settings snapshot. Never cache an ETag for values we have not read.
+      lastKnownEtag = null;
     } else {
+      const data = await res.json().catch(() => null);
+      settingsSyncError = data?.error || `Server save failed (${res.status}).`;
       console.warn("[settings] cloud sync returned status", res.status);
     }
   } catch (err) {
+    settingsSyncError = 'Could not reach the settings server. Your draft is still pending.';
     if (
       !err?.message?.includes("Failed to parse URL") &&
       !err?.message?.includes("fetch failed") &&
       !isTestEnv()
     ) {
       console.warn("[settings] cloud sync network error:", err?.message);
+    }
+  } finally {
+    isFlushingSettings = false;
+    publishSyncState();
+    if (!settingsConflict && pendingCloudSync.size && [...inFlight].some(([k, v]) => pendingCloudSync.get(k) !== v)) {
+      syncTimer = setTimeout(flushCloudSettingSync, 300);
     }
   }
 }
@@ -359,14 +442,14 @@ let lastPullTs = 0;
 
 /**
  * Pull latest settings from Cloudflare D1 and update local storage if changed.
- * Uses HTTP conditional ETag (If-None-Match) to achieve 0 D1 reads when unchanged.
+ * Uses conditional ETags to skip data-row reads when metadata is unchanged.
  *
  * @param {boolean} [force]
  * @returns {Promise<boolean>} true if settings were updated from cloud or already up-to-date (304)
  */
 export async function pullRemoteSettings(force = false) {
   if (typeof window === "undefined" || typeof fetch === "undefined") return false;
-  if (isEditingSettings && !force) return false;
+  if (isEditingSettings || pendingCloudSync.size || isFlushingSettings || settingsConflict) return false;
 
   const now = Date.now();
   if (!force && now - lastPullTs < 5000) return false;
@@ -382,24 +465,20 @@ export async function pullRemoteSettings(force = false) {
 
     const res = await fetch(getSettingsUrl(), { headers });
 
-    // Edge 304 Not Modified short-circuit: 0 D1 reads, state is identical
+    // The metadata check confirmed the cached snapshot; no row hydration needed.
     if (res.status === 304) {
       return true;
     }
 
     if (!res.ok) return false;
 
-    const etag = res.headers.get("ETag");
-    if (etag) lastKnownEtag = etag;
-
-    const rev = res.headers.get("x-settings-rev");
-    if (rev) currentServerRev = Number(rev);
-
     const data = await res.json();
     if (!data || !data.ok || !data.settings) return false;
+    // A user can start editing while the GET is in flight.
+    if (isEditingSettings || pendingCloudSync.size || isFlushingSettings || settingsConflict) return false;
 
     let changed = false;
-    for (const [key, val] of Object.entries(data.settings)) {
+    for (const [key, val] of Object.entries({ _byProperty: {}, ...data.settings })) {
       if (key === "_byProperty") {
         if (typeof val === "object" && val !== null) {
           const normalizedByProperty = {};
@@ -434,6 +513,9 @@ export async function pullRemoteSettings(force = false) {
       }
     }
 
+    lastKnownEtag = res.headers.get('ETag');
+    currentServerRev = Number(data.revision) || 0;
+    hydratedServerRevision = true;
     if (changed) {
       notifySettingsChanged({ broadcast: true });
     }
@@ -449,6 +531,9 @@ export async function pullRemoteSettings(force = false) {
     return false;
   } finally {
     isPullingSettings = false;
+    if (pendingCloudSync.size && !settingsConflict && !isFlushingSettings) {
+      syncTimer = setTimeout(flushCloudSettingSync, 300);
+    }
   }
 }
 
@@ -463,7 +548,7 @@ export async function pullRemoteSettings(force = false) {
 export function writeRawSetting(key, value, propertyId = "*") {
   try {
     const str = String(value);
-    if (propertyId && propertyId !== "*") {
+    if (propertyId != null && propertyId !== "" && propertyId !== "*") {
       let byProp = {};
       try {
         const existing = localStorage.getItem("rri_settings_by_property");
@@ -511,7 +596,7 @@ export function writeJsonSetting(key, value, propertyId = "*") {
     return false;
   }
   try {
-    if (propertyId && propertyId !== "*") {
+    if (propertyId != null && propertyId !== "" && propertyId !== "*") {
       let byProp = {};
       try {
         const existing = localStorage.getItem("rri_settings_by_property");

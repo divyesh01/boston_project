@@ -1,3 +1,4 @@
+import { readHotelDataRows } from '@/lib/hotelDataQuery';
 import { db } from '@/api/base44Client';
 
 import { useQuery } from "@tanstack/react-query";
@@ -11,7 +12,7 @@ export function useReservations(dateRange, propertyId) {
     queryKey: ["reservations", dateRange, propertyId],
     queryFn: async () => {
       const filter = buildFilter(null, propertyId);
-      const allRes = await db.entities.Reservation.filter(filter);
+      const allRes = await readHotelDataRows(db.entities.Reservation, filter);
 
       return allRes.filter(r => {
         if (!dateRange || (!dateRange.from && !dateRange.to)) return true;
@@ -65,7 +66,7 @@ export function useOccupancy(dateRange, propertyId, months = [], enabled = true)
     enabled,
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
-      const rows = await db.entities.OccupancyDay.filter(filter, "date");
+      const rows = await readHotelDataRows(db.entities.OccupancyDay, filter, "date");
       return filterByMonths(rows, months);
     },
   });
@@ -76,7 +77,7 @@ export function useSources(dateRange, propertyId, months = []) {
     queryKey: ["sources", dateRange?.from, dateRange?.to, propertyId, (months || []).join(",")],
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
-      const rows = await db.entities.SourceDay.filter(filter, "date");
+      const rows = await readHotelDataRows(db.entities.SourceDay, filter, "date");
       return filterByMonths(rows, months);
     },
   });
@@ -92,7 +93,7 @@ export function useGrossRevenue(dateRange, propertyId, months = [], enabled = tr
     enabled,
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
-      const rows = await db.entities.GrossRevenueDay.filter(filter, "date");
+      const rows = await readHotelDataRows(db.entities.GrossRevenueDay, filter, "date");
       return filterByMonths(rows, months);
     },
   });
@@ -105,7 +106,7 @@ export function useClerkRecords(dateRange, propertyId) {
       // ClerkShiftRecord carries an indexed shift_date (YYYY-MM-DD); scope by
       // the selected period so the Clerk Audit agrees with the dashboard range.
       const filter = buildFilter(dateRange, propertyId, 'shift_date');
-      const raw = await db.entities.ClerkShiftRecord.filter(filter, "-shift_date");
+      const raw = await readHotelDataRows(db.entities.ClerkShiftRecord, filter, "-shift_date");
       // Deduplicate: repeated imports of the same CSV create duplicate rows.
       // Canonical key preserves record identity across imports — earliest
       // created_date wins so the oldest import's copy is kept.
@@ -140,7 +141,7 @@ export function useAdjustmentsRefunds(dateRange, propertyId) {
     queryKey: ["adjustments-refunds", dateRange?.from, dateRange?.to, propertyId],
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
-      return db.entities.AdjustmentRefund.filter(filter, "date");
+      return readHotelDataRows(db.entities.AdjustmentRefund, filter, "date");
     },
   });
 }
@@ -150,7 +151,7 @@ export function useClerkAnomalies(dateRange, propertyId) {
     queryKey: ["clerk-anomalies", dateRange?.from, dateRange?.to, propertyId],
     queryFn: async () => {
       const filter = buildFilter(null, propertyId);
-      const rows = await db.entities.AnomalyAlert.filter(filter, "date");
+      const rows = await readHotelDataRows(db.entities.AnomalyAlert, filter, "date");
       return rows.filter((r) => {
         if (!dateRange || (!dateRange.from && !dateRange.to)) return true;
         if (dateRange.from && r.date && String(r.date).slice(0, 10) < String(dateRange.from).slice(0, 10)) return false;
@@ -166,7 +167,7 @@ export function usePaymentData(dateRange, propertyId, months = []) {
     queryKey: ["payments", dateRange?.from, dateRange?.to, propertyId, (months || []).join(",")],
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
-      const rows = await db.entities.PaymentDay.filter(filter, "date");
+      const rows = await readHotelDataRows(db.entities.PaymentDay, filter, "date");
       return filterByMonths(rows, months);
     },
   });
@@ -237,7 +238,7 @@ export function useHotelMetrics(dateRange, propertyId, enabled = true) {
     enabled,
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId, 'business_date');
-      return db.entities.HotelMetric.filter(filter, "business_date");
+      return readHotelDataRows(db.entities.HotelMetric, filter, "business_date");
     },
   });
 }
@@ -253,7 +254,7 @@ export function useMetricDates(propertyId) {
     queryKey: ["hotel-metric-dates", propertyId],
     queryFn: async () => {
       const filter = buildFilter(null, propertyId);
-      const rows = await db.entities.HotelMetric.filter(filter, "-business_date");
+      const rows = await readHotelDataRows(db.entities.HotelMetric, filter, "-business_date");
       return [...new Set(rows.map((r) => String(r.business_date || "").slice(0, 10)).filter(Boolean))]
         .sort((a, b) => (a < b ? 1 : -1));
     },
@@ -331,7 +332,7 @@ export function useTransactions(dateRange, propertyId, months = [], enabled = tr
     enabled,
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
-      const rows = await db.entities.TransactionLine.filter(filter, "date");
+      const rows = await readHotelDataRows(db.entities.TransactionLine, filter, "date");
       return filterByMonths(rows, months);
     },
   });
@@ -353,7 +354,7 @@ export function useRooms(propertyId) {
           filter.property_id = propertyId;
         }
       }
-      return db.entities.Room.filter(filter, "room_number");
+      return readHotelDataRows(db.entities.Room, filter, "room_number");
     },
   });
 }
@@ -371,7 +372,7 @@ export function useRoomStays(dateRange, propertyId, months = []) {
     ],
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId);
-      const rows = await db.entities.RoomStay.filter(filter, "date");
+      const rows = await readHotelDataRows(db.entities.RoomStay, filter, "date");
       return filterByMonths(rows, months);
     },
   });
@@ -388,7 +389,7 @@ export function useHousekeepingTasks(dateRange, propertyId) {
     ],
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId, 'task_date');
-      return db.entities.HousekeepingTask.filter(filter, "-task_date");
+      return readHotelDataRows(db.entities.HousekeepingTask, filter, "-task_date");
     },
   });
 }
@@ -404,7 +405,7 @@ export function useReviews(dateRange, propertyId) {
     ],
     queryFn: async () => {
       const filter = buildFilter(dateRange, propertyId, 'review_date');
-      return db.entities.Review.filter(filter, "-review_date");
+      return readHotelDataRows(db.entities.Review, filter, "-review_date");
     },
   });
 }
@@ -422,7 +423,7 @@ export function useWeatherSnapshots(propertyId) {
           filter.property_id = propertyId;
         }
       }
-      return db.entities.WeatherSnapshot.filter(filter, "-date");
+      return readHotelDataRows(db.entities.WeatherSnapshot, filter, "-date");
     },
     staleTime: 60 * 1000,
   });

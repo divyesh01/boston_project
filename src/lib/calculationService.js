@@ -1,3 +1,5 @@
+import { allocateDocumentedRemittance } from '@/lib/taxRemittance';
+import { estimateEnterpriseTax } from '@/lib/taxEngine';
 import {
   toCents, fromCents, fromRate, add, subtract, multiply, divide, divideRate,
   sumCents
@@ -117,8 +119,8 @@ export class CalculationService {
     const revenue = sumCents(occRows.map(r => r.room_revenue));
     const roomsSold = sumCents(occRows.map(r => r.rooms_sold));
 
-    const totalCapacity = capacityCents(occRows, (pid) => propertyRoomCounts?.[pid] ?? 100, { excludeOoo: false });
-    const availableCapacity = capacityCents(occRows, (pid) => propertyRoomCounts?.[pid] ?? 100, { excludeOoo: true });
+    const totalCapacity = capacityCents(occRows, (pid) => propertyRoomCounts?.[pid] ?? 0, { excludeOoo: false });
+    const availableCapacity = capacityCents(occRows, (pid) => propertyRoomCounts?.[pid] ?? 0, { excludeOoo: true });
     const oooCapacity = Math.max(0, totalCapacity - availableCapacity);
 
     // Option to calculate based on available rooms vs total physical rooms
@@ -151,7 +153,7 @@ export class CalculationService {
     const results = [];
     byProp.forEach((rows, pid) => {
       const prop = properties.find((p) => p.id === pid);
-      const fallbackRooms = prop?.rooms || 100;
+      const fallbackRooms = prop?.rooms || 0;
       const revenue = sumCents(rows.map(r => r.room_revenue));
       const roomsSold = sumCents(rows.map(r => r.rooms_sold));
       // Same per-DAY inventory rule as calculateOccupancyMetrics — see capacityCents
@@ -347,7 +349,7 @@ export class CalculationService {
     if (propertyIds.length > 1) {
       const totals = {state:0,city:0,other:0,total:0,imported:0,estimated:0,calculations:[]};
       for (const id of propertyIds) {
-        const part = this.calculateTaxLiability(srcRows.filter(r=>(r.property_id ?? '*')===id),grossRows.filter(r=>(r.property_id ?? '*')===id),id,dateRange,[],includeCalculations);
+        const part = this.calculateTaxLiability(srcRows.filter(r=>(r.property_id ?? '*')===id),grossRows.filter(r=>(r.property_id ?? '*')===id),id,dateRange,occupancyRows.filter(r=>(r.property_id ?? '*')===id),includeCalculations);
         for (const key of ['state','city','other','total','imported','estimated']) totals[key] = fromCents(toCents(totals[key])+toCents(part[key]));
         if (includeCalculations) totals.calculations.push(...(part.calculations || []));
       }
@@ -417,18 +419,26 @@ export class CalculationService {
         cityCents += imp.city;
         otherCents += imp.other;
         importedCents += imp.state + imp.city + imp.other;
-        if (includeCalculations) calculations.push({property_id:propertyId,date:d,basis:'imported',base:null,rates:null,state:fromCents(imp.state),city:fromCents(imp.city),other:fromCents(imp.other)});
+        if (includeCalculations) {
+          const remittance = allocateDocumentedRemittance(propertyId,d,fromCents(taxBase.get(d) || 0),{state:fromCents(imp.state),city:fromCents(imp.city),other:fromCents(imp.other)});
+          calculations.push({property_id:propertyId,date:d,basis:'imported',base:null,rates:null,state:fromCents(imp.state),city:fromCents(imp.city),other:fromCents(imp.other),remittance});
+        }
       } else if (taxConfig.taxEnabled) {
         const base = fromCents(taxBase.get(d) || 0);
         const r = getEffectiveTaxRates(propertyId, d);
-        const s = multiply(base, r.state);
-        const c = multiply(base, r.city);
-        const o = multiply(base, r.other);
+        const enterprise = estimateEnterpriseTax(propertyId, d, base, occupancyRows);
+        const s = enterprise ? toCents(enterprise.state) : multiply(base, r.state);
+        const c = enterprise ? toCents(enterprise.city) : multiply(base, r.city);
+        const o = enterprise ? toCents(enterprise.other) : multiply(base, r.other);
         stateCents += s;
         cityCents += c;
         otherCents += o;
-        estimatedCents += s + c + o;
-        if (includeCalculations) calculations.push({property_id:propertyId,date:d,basis:'estimated',base,rates:{state:r.state,city:r.city,other:r.other},state:fromCents(s),city:fromCents(c),other:fromCents(o)});
+        const remittance = allocateDocumentedRemittance(propertyId,d,base,{state:fromCents(s),city:fromCents(c),other:fromCents(o)});
+        estimatedCents += toCents(remittance.hotel);
+        if (includeCalculations) {
+          const rates = enterprise ? enterprise.lines.reduce((out, line) => { if (line.type === 'percentage') out[['state','city'].includes(line.kind) ? line.kind : 'other'] += line.rate; return out; }, {state:0,city:0,other:0}) : {state:r.state,city:r.city,other:r.other};
+          calculations.push({property_id:propertyId,date:d,basis:'estimated',base,rates,state:fromCents(s),city:fromCents(c),other:fromCents(o),jurisdictions:enterprise?.lines,remittance,hotel_estimate:remittance.hotel,incomplete:enterprise?.incomplete || (!enterprise && r.unconfigured === true)});
+        }
       }
     });
 

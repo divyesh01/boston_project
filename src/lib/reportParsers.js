@@ -1,3 +1,5 @@
+import { adaptPmsGrid } from '@/lib/pmsAdapters';
+import { getPropertyProfile } from '@/lib/enterpriseConfigEngine';
 import {parseWorkbookInWorker} from "./workbookParser";
 import { db, runInTransaction, createImportSession, completeImportSession, failImportSession, addImportRecordIds } from '@/api/base44Client';
 
@@ -319,7 +321,7 @@ function mapRow(obj, coercions) {
 function addMeta(obj, meta) {
   return {
     ...obj,
-    property_id: meta.propertyId || "",
+    property_id: meta.propertyId ?? "",
     property_name: meta.propertyName || "",
     import_id: meta.importId || "",
     source_file: meta.sourceFile || "",
@@ -424,10 +426,15 @@ async function getRowsArray(type, fileUrl, meta) {
 export async function scanReport(type, fileUrl, meta = {}) {
   // Note: `source.objects` is a lazy getter — destructuring it here would defeat
   // the point, so it is read only inside the branches that need object form.
-  const source = await getRowsArray(type, fileUrl, meta);
+  const original = await getRowsArray(type, fileUrl, meta);
+  const adapter = meta.pmsAdapter || getPropertyProfile(meta.propertyId)?.pms || 'hotelkey';
+  const adapted = adaptPmsGrid(original.rawRows, {adapter,type,propertyId:meta.propertyId});
+  if (adapter !== 'hotelkey' && !original.rawRows.length) throw new Error('This PMS adapter needs a CSV with a business-date header.');
+  const source = adapter === 'hotelkey' ? original : withLazyObjects(adapted.rawRows);
   const rawRows = source.rawRows;
-  const resolvedType = !type || type === "auto" ? detectReportType(fileUrl, rawRows, meta) : type;
-  const fullMeta = { ...meta, type: resolvedType };
+  const requestedType = adapter === 'hotelkey' ? type : adapted.type;
+  const resolvedType = !requestedType || requestedType === 'auto' ? detectReportType(fileUrl, rawRows, meta) : requestedType;
+  const fullMeta = { ...meta, type: resolvedType, pms_adapter: adapter };
 
   if (resolvedType === "hotel_statistics") {
     return scanHotelStatistics(rawRows, fileUrl, fullMeta);

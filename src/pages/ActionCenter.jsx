@@ -1,3 +1,5 @@
+import { useSettingsVersion } from '@/hooks/useSettingsVersion';
+import { readHotelDataRows } from '@/lib/hotelDataQuery';
 import React, { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
@@ -101,16 +103,17 @@ export default function ActionCenter() {
   const { data: sources = [] } = sourcesQ;
   const { data: payRows = [] } = payQ;
 
+  const settingsVersion = useSettingsVersion();
   const propertyKey = Array.isArray(property) ? property.join(",") : property;
   const propFilter = useMemo(() => buildPropertyFilter(property), [property]);
 
   const expensesQ = useQuery({
     queryKey: ["expenses", propertyKey],
-    queryFn: () => db.entities.Expense.filter(propFilter, "-expense_date", 100000),
+    queryFn: () => readHotelDataRows(db.entities.Expense, propFilter, "-expense_date"),
   });
   const payrollQ = useQuery({
     queryKey: ["payroll", propertyKey],
-    queryFn: () => db.entities.PayrollRun.filter(propFilter, "-pay_period_start", 100000),
+    queryFn: () => readHotelDataRows(db.entities.PayrollRun, propFilter, "-pay_period_start"),
   });
   const { data: expenses = [] } = expensesQ;
   const { data: payroll = [] } = payrollQ;
@@ -150,10 +153,10 @@ export default function ActionCenter() {
   const roomCounts = useMemo(() => {
     if (property === "all" || Array.isArray(property)) {
       const map = {};
-      properties.forEach((p) => { map[p.id] = p.rooms || 100; });
+      properties.forEach((p) => { map[p.id] = p.rooms || 0; });
       return map;
     }
-    return { [property]: properties.find((p) => p.id === property)?.rooms || 100 };
+    return { [property]: properties.find((p) => p.id === property)?.rooms || 0 };
   }, [property, properties]);
 
   const model = useMemo(() => {
@@ -173,12 +176,13 @@ export default function ActionCenter() {
       payRows,
       expenses,
       payroll,
+      properties,
       roomCounts,
       dateRange,
       prevOccRows: prevOcc,
       eventsInRange,
     });
-  }, [occ, sources, payRows, expenses, payroll, roomCounts, dateRange, prevOcc, channel, eventsInRange]);
+  }, [occ, sources, payRows, expenses, payroll, roomCounts, dateRange, prevOcc, channel, eventsInRange, properties, settingsVersion]);
 
   const { premise, buckets, top3, meta } = model;
   const propName = property === "all"

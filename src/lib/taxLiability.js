@@ -3,14 +3,26 @@ import { toCents, fromCents, multiply } from "@/lib/decimal";
 export function summarizeTaxCalculations(calculations = []) {
   const groups = new Map();
   for (const row of calculations) {
-    const key = JSON.stringify([row.property_id,row.basis,row.rates]);
+    const key = JSON.stringify([row.property_id,row.basis,row.rates,(row.jurisdictions || []).map(j=>[j.id,j.type,j.rate,j.remitter])]);
     const group = groups.get(key) || {
       property_id:row.property_id,basis:row.basis,rates:row.rates,
-      baseCents:0,stateCents:0,cityCents:0,otherCents:0,dates:new Set(),
+      baseCents:0,stateCents:0,cityCents:0,otherCents:0,dates:new Set(),lines:new Map(),incomplete:false,hotelCents:0,marketplaceCents:0,references:new Set(),staleRemittance:false,
     };
     group.baseCents += toCents(row.base);
     for (const name of ['state','city','other']) group[name+'Cents'] += toCents(row[name]);
     if (row.date) group.dates.add(row.date);
+    group.incomplete ||= row.incomplete === true;
+    group.hotelCents += toCents(row.remittance?.hotel ?? (Number(row.state || 0) + Number(row.city || 0) + Number(row.other || 0)));
+    group.marketplaceCents += toCents(row.remittance?.marketplace);
+    group.staleRemittance ||= row.remittance?.stale === true;
+    for (const reference of row.remittance?.references || []) group.references.add(reference);
+    for (const line of row.jurisdictions || []) {
+      const cur = group.lines.get(line.id) || {...line,base:0,amountCents:0,incomplete:false};
+      cur.base += Number(line.base) || 0;
+      cur.amountCents += toCents(line.amount);
+      cur.incomplete ||= line.amount == null;
+      group.lines.set(line.id,cur);
+    }
     groups.set(key,group);
   }
   return [...groups.values()].map(group => {
@@ -18,7 +30,9 @@ export function summarizeTaxCalculations(calculations = []) {
     const base = fromCents(group.baseCents);
     return {
       property_id:group.property_id,basis:group.basis,rates:group.rates,base,
-      from:dates[0],to:dates.at(-1),days:dates.length,
+      from:dates[0],to:dates.at(-1),days:dates.length,incomplete:group.incomplete,
+      remittance:{hotel:fromCents(group.hotelCents),marketplace:fromCents(group.marketplaceCents),references:[...group.references],stale:group.staleRemittance},
+      jurisdictions:[...group.lines.values()].map(line=>({...line,amount:line.incomplete ? null : fromCents(line.amountCents)})),
       ...Object.fromEntries(['state','city','other'].map(key=>[key,fromCents(group[key+'Cents'])])),
       rounding:Object.fromEntries(['state','city','other'].map(key=>[key,group.rates ? fromCents(group[key+'Cents']-multiply(base,group.rates[key])) : 0])),
     };

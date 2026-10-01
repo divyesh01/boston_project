@@ -12,6 +12,8 @@ import { isPricingEnabled, getPricingConfig, ROOM_TYPES } from "@/lib/pricingSet
 import { useRealtimeInvalidation } from "@/lib/realtime";
 import { ErrorState } from "@/components/ui/status";
 import { singleSelectedProperty } from "@/lib/propertySelection";
+import { getEnterpriseConfig } from '@/lib/enterpriseConfigEngine';
+import { useSettingsVersion } from '@/hooks/useSettingsVersion';
 import { motion, AnimatePresence } from "framer-motion";
 const KIND_STYLE = {
   occupied: { color: C.purple, label: "Occupied" },
@@ -22,6 +24,7 @@ const KIND_STYLE = {
 };
 
 export default function RoomBoard() {
+  useSettingsVersion();
   const { dateRange, property, properties, months, latestDate } = useGlobalFilters();
   const selectedProperty = singleSelectedProperty(property, properties);
   const singlePropertyId = selectedProperty?.id ?? null;
@@ -79,9 +82,9 @@ export default function RoomBoard() {
     }
     const occ = forecastOccupancy({ reservations, rooms, date: boardDate, defaultOccupancy: pricingConfig.forecastDefaultOccupancy });
     return suggestedRateForDate({
-      roomType: room.room_type, date: boardDate, occupancy: occ, reservations, rooms, weatherByDate, config: pricingConfig,
+      roomType: room.room_type, date: boardDate, occupancy: occ, reservations, rooms, weatherByDate, config: pricingConfig, rateBounds: getEnterpriseConfig(singlePropertyId, boardDate, selectedProperty),
     });
-  }, [pricingEnabled, singlePropertyId, newRoom, boardDate, rooms, reservations, weatherSnapshots, pricingConfig]);
+  }, [pricingEnabled, singlePropertyId, selectedProperty, newRoom, boardDate, rooms, reservations, weatherSnapshots, pricingConfig]);
 
   // Recommended rate per room type for the selected board date — shown as a
   // "Suggested" badge on vacant tiles.
@@ -95,10 +98,10 @@ export default function RoomBoard() {
     const occ = forecastOccupancy({ reservations, rooms, date: boardDate, defaultOccupancy: pricingConfig.forecastDefaultOccupancy });
     const out = {};
     for (const type of ROOM_TYPES) {
-      out[type] = suggestedRateForDate({ roomType: type, date: boardDate, occupancy: occ, reservations, rooms, weatherByDate, config: pricingConfig });
+      out[type] = suggestedRateForDate({ roomType: type, date: boardDate, occupancy: occ, reservations, rooms, weatherByDate, config: pricingConfig, rateBounds: getEnterpriseConfig(singlePropertyId, boardDate, selectedProperty) });
     }
     return out;
-  }, [pricingEnabled, boardDate, rooms, reservations, weatherSnapshots, pricingConfig]);
+  }, [pricingEnabled, singlePropertyId, selectedProperty, boardDate, rooms, reservations, weatherSnapshots, pricingConfig]);
 
   const inventory = inventoryInScope(property, properties);
   const propName = isPortfolio

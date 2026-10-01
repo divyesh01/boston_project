@@ -1,3 +1,4 @@
+import { classifyPropertyDay } from '@/lib/thresholdEngine';
 import { CalculationService } from '@/lib/calculationService';
 import { getCcFeeRate, getCcFeeOnRefunds } from '@/lib/commissionRates';
 import { getOccThreshold, money, money2, pct } from '@/lib/hotel';
@@ -68,7 +69,7 @@ const moneyTimesCount = (dollars, count) => {
 export function buildActionCenter({
   occRows = [], srcRows = [], payRows = [],
   expenses = [], payroll = [],
-  roomCounts = {}, dateRange = { from: '', to: '' },
+  properties = [], roomCounts = {}, dateRange = { from: '', to: '' },
   prevOccRows = [],
   eventsInRange = [],
 }) {
@@ -206,6 +207,10 @@ export function buildActionCenter({
   const investigate = [];
   const opportunity = [];
   const keepDoing = [];
+  const negativeContributions = occRows.map(row => ({row,performance:classifyPropertyDay(row,properties.find(p=>String(p.id)===String(row.property_id)) || {})})).filter(item=>item.performance.contribution != null && item.performance.contribution < 0);
+  if (negativeContributions.length) investigate.push({tone:'amber',key:'room-contribution',title:'Room revenue is below configured occupied-room cost',detail:`${negativeContributions.length} property-days have negative estimated room contribution. Review room costs and promotion stacking before changing rates.`,impact:fromCents(negativeContributions.reduce((n,item)=>n-toCents(item.performance.contribution),0)),to:'/calendar'});
+  const missingInventory = occRows.filter(row=>!(Number(row.total_rooms)>0) && !(Number(roomCounts[row.property_id])>0));
+  if (missingInventory.length) fix.push({tone:'red',key:'missing-capacity',title:'Property room inventory needs configuration',detail:`${missingInventory.length} daily rows have no reported or configured capacity. Occupancy and RevPAR cannot be considered complete.`,to:'/settings'});
 
   // 🔴 FIX — pain in the property, costs money today
   if (oosLoss > 0) {

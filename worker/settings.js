@@ -6,15 +6,18 @@
 // across all browser sessions and devices.
 //
 // Optimized for Cloudflare D1 quotas:
-// - Conditional HTTP ETag 304 short-circuit (0 D1 reads when unchanged)
+// - Conditional HTTP ETag 304 short-circuit (one metadata read; no data-row reads)
 // - Compare-And-Swap (CAS) monotonic revision concurrency protection
 // - Mathematical input value clamping
 // - Immutable app_setting_history audit trail
 // ===========================================================================
 
 import { queryAll, queryFirst } from "./db.js";
+import { validateEnterpriseProfile, validateEnterpriseTemplates, validatePeriods, ENTERPRISE_PROFILE_KEY, ENTERPRISE_TEMPLATE_KEY, ENTERPRISE_DEFAULT_KEY, SERVICE_STATEMENT_KEY, PROMOTION_KEY, TAX_REMITTANCE_KEY, validateRemittanceRecords, validateServiceStatements } from "../src/lib/enterpriseSchema.js";
+import { calculatePromotionStack } from '../src/lib/promotionStacking.js';
 
 const ALLOWED_SETTING_KEYS = new Set([
+  ENTERPRISE_PROFILE_KEY, ENTERPRISE_TEMPLATE_KEY, ENTERPRISE_DEFAULT_KEY, SERVICE_STATEMENT_KEY, PROMOTION_KEY, TAX_REMITTANCE_KEY,
   "rri_commission_rates_v2",
   "rri_cc_fee_rate",
   "rri_cc_fee_refunds_v1",
@@ -39,6 +42,38 @@ const SETTING_KEY_ALIASES = Object.freeze({
 });
 
 const canonicalSettingKey = (key) => SETTING_KEY_ALIASES[key] || key;
+
+async function validateServiceSources(env, scope, propertyId, statements) {
+  const allocation = new Map();
+  for (const statement of statements) for (const line of statement.lines) {
+    const id = String(line.source_id);
+    const cur = allocation.get(id) || { hours:0, overtime:0, lines:[], identities:new Set() };
+    cur.hours += line.hours; cur.overtime += line.overtime_hours;
+    cur.lines.push(line); cur.identities.add(statement.employee_identity);
+    allocation.set(id,cur);
+  }
+  const pointer = await queryFirst(env,'SELECT active_generation_id FROM business_dataset_pointer WHERE account_id = ?',[scope.accountId]);
+  if (allocation.size > 200) throw new Error('Archive older service statements before adding more payroll references.');
+  const sources = new Map();
+  const ids = [...allocation.keys()];
+  for (let offset = 0; offset < ids.length; offset += 50) {
+    const part = ids.slice(offset,offset+50), placeholders = part.map(()=>'?').join(',');
+    if (pointer) {
+      const rows = await queryAll(env,`SELECT record_key,row_json FROM business_record WHERE account_id = ? AND generation_id = ? AND entity_name = 'PayrollRun' AND server_property_id = ? AND record_key IN (${placeholders})`,[scope.accountId,pointer.active_generation_id,propertyId,...part]);
+      for (const row of rows) sources.set(String(row.record_key),JSON.parse(row.row_json));
+    } else {
+      const rows = await queryAll(env,`SELECT * FROM payroll_run WHERE property_id = ? AND id IN (${placeholders})`,[propertyId,...part]);
+      for (const row of rows) sources.set(String(row.id),row);
+    }
+  }
+  for (const [id, allocated] of allocation) {
+    const source = sources.get(id);
+    if (!source || !['paid','approved'].includes(source.payroll_status) || source.pay_type !== 'hourly') throw new Error('Statement requires a synced paid or approved hourly payroll source.');
+    if (allocated.hours > Number(source.hours) || allocated.overtime > Number(source.overtime_hours || 0) || allocated.identities.size !== 1) throw new Error('Statement allocations exceed the payroll source or conflict on employee identity.');
+    if (source.employee_id && ![...allocated.identities].every(identity=>String(identity)===`${propertyId}:${source.employee_id}`)) throw new Error('Statement employee identity does not match its payroll source.');
+    if (allocated.lines.some(line=>Math.round(line.rate*100)!==Math.round(Number(source.base_rate)*100) || Math.round(line.overtime_rate*100)!==Math.round(Number(source.overtime_rate || Number(source.base_rate)*1.5)*100))) throw new Error('Statement rates must match the source payroll run.');
+  }
+}
 
 const jsonResponse = (body, status = 200, extraHeaders = {}) =>
   new Response(JSON.stringify(body), {
@@ -126,7 +161,7 @@ function clampSettingValue(key, val) {
   ) {
     return val.map((row) => ({
       ...row,
-      property_id: String(row.property_id || "*"),
+      property_id: String(row.property_id ?? "*"),
       state_rate: Math.max(0, Math.min(0.35, Number(row.state_rate) || 0)),
       city_rate: Math.max(0, Math.min(0.35, Number(row.city_rate) || 0)),
       other_rate: Math.max(0, Math.min(0.35, Number(row.other_rate) || 0)),
@@ -164,10 +199,11 @@ function clampSettingValue(key, val) {
   return val;
 }
 
-let tableEnsured = false;
+const ensuredDatabases = new WeakSet();
 
 async function ensureSettingsTable(env) {
-  if (tableEnsured || !env.DB) return;
+  if (!env.DB) throw new Error("Settings database unavailable");
+  if (ensuredDatabases.has(env.DB)) return;
   try {
     await env.DB.prepare(`
       CREATE TABLE IF NOT EXISTS app_setting (
@@ -204,9 +240,15 @@ async function ensureSettingsTable(env) {
       ON app_setting_history (account_id, setting_key, property_id, revision)
     `).run();
 
-    tableEnsured = true;
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS app_setting_write_guard (
+      account_id TEXT NOT NULL, request_id TEXT NOT NULL, next_revision INTEGER NOT NULL,
+      valid INTEGER NOT NULL CONSTRAINT settings_revision_match CHECK (valid = 1),
+      PRIMARY KEY (account_id, request_id)
+    )`).run();
+    ensuredDatabases.add(env.DB);
   } catch (e) {
     console.warn("[settings] ensure table:", e?.message);
+    throw e;
   }
 }
 
@@ -219,7 +261,7 @@ async function ensureSettingsTable(env) {
  * @returns {Promise<Response>}
  */
 export async function handleSettingsRequest(request, env, scope, url, parts) {
-  await ensureSettingsTable(env);
+  try { await ensureSettingsTable(env); } catch { return jsonResponse({ error: "settings storage unavailable" }, 503); }
 
   const accountId = scope.accountId;
   if (!accountId) {
@@ -271,7 +313,8 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
       for (const row of rows) {
         if (!ALLOWED_SETTING_KEYS.has(row.setting_key)) continue;
         try {
-          const parsed = JSON.parse(row.value_json);
+          let parsed = JSON.parse(row.value_json);
+          if (!scope.all && ["rri_tax_settings_v1","rri_tax_settings_v2"].includes(row.setting_key) && Array.isArray(parsed)) parsed = parsed.filter(period => period.property_id == null || ["*", ""].includes(String(period.property_id)) || propertyTargetAllowed(scope, String(period.property_id)));
           const key = canonicalSettingKey(row.setting_key);
           if (row.property_id === "*") {
             settings[key] = parsed;
@@ -323,7 +366,7 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
       }
     } catch {}
 
-    const hasSettingPermission = isFullAdmin || Boolean(userPermissions.manage_settings);
+    const hasSettingPermission = isFullAdmin || userPermissions.manage_settings === true;
     const hasCommissionPermission = isFullAdmin || userPermissions.manage_ota_commissions === true;
     const hasPricingPermission = isFullAdmin || userPermissions.manage_pricing === true;
 
@@ -338,6 +381,12 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
       return jsonResponse({ error: "invalid JSON body" }, 400);
     }
 
+    if (!Number.isSafeInteger(body?.expected_revision) || body.expected_revision < 0) {
+      return jsonResponse({ error: "expected_revision is required; load settings before saving", code: "SETTINGS_REVISION_REQUIRED" }, 428);
+    }
+    if (JSON.stringify(body).length > 1000000 || (Array.isArray(body.items) && body.items.length > 100)) {
+      return jsonResponse({ error: "settings batch too large" }, 413);
+    }
     const now = new Date().toISOString();
     const updatedBy = scope.user?.id || "unknown";
 
@@ -349,7 +398,7 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
           itemsToSave.push({
             key: canonicalSettingKey(item.key),
             value: clampSettingValue(item.key, item.value),
-            propertyId: String(item.property_id || item.propertyId || "*"),
+            propertyId: String(item.property_id ?? item.propertyId ?? "*"),
           });
         }
       }
@@ -358,11 +407,11 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
         itemsToSave.push({
           key: canonicalSettingKey(body.key),
           value: clampSettingValue(body.key, body.value),
-          propertyId: String(body.property_id || "*"),
+          propertyId: String(body.property_id ?? "*"),
         });
       }
     } else if (body.settings && typeof body.settings === "object") {
-      const defaultPropId = String(body.property_id || "*");
+      const defaultPropId = String(body.property_id ?? "*");
       for (const [k, v] of Object.entries(body.settings)) {
         if (k === "_byProperty" && typeof v === "object" && v !== null) {
           for (const [propId, propSettings] of Object.entries(v)) {
@@ -396,11 +445,43 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
     // lookup or mutation. Global settings are portfolio-wide and therefore need
     // an all-property scope; property overrides must name an assigned property.
     for (const item of itemsToSave) {
-      item.propertyId = String(item.propertyId || "*").trim() || "*";
+      item.propertyId = String(item.propertyId ?? "*").trim() || "*";
       if (!propertyTargetAllowed(scope, item.propertyId)) {
         return jsonResponse({ error: "forbidden: setting property is outside caller scope" }, 403);
       }
     }
+
+    try {
+      for (const item of itemsToSave) {
+        if (item.key === ENTERPRISE_PROFILE_KEY) {
+          if (item.propertyId === '*') throw new Error('Property profiles require an explicit property.');
+          validateEnterpriseProfile(item.value);
+        }
+        if ([ENTERPRISE_DEFAULT_KEY, ENTERPRISE_TEMPLATE_KEY].includes(item.key) && item.propertyId !== '*') throw new Error('Templates require portfolio scope.');
+        if (item.key === ENTERPRISE_DEFAULT_KEY) validatePeriods(item.value);
+        if (item.key === ENTERPRISE_TEMPLATE_KEY) validateEnterpriseTemplates(item.value);
+        if (['rri_tax_settings_v1', 'rri_tax_settings_v2'].includes(item.key)) {
+          for (const row of item.value || []) {
+            if (!propertyTargetAllowed(scope, String(row.property_id ?? '*')) || (item.propertyId !== '*' && String(row.property_id) !== item.propertyId)) throw new Error('Tax period property is outside this setting scope.');
+          }
+        }
+        if (item.key === TAX_REMITTANCE_KEY) { if (item.propertyId === '*') throw new Error('Tax evidence needs an explicit property.'); validateRemittanceRecords(item.value); }
+        if (item.key === PROMOTION_KEY) {
+          if (item.propertyId === '*' || !Array.isArray(item.value?.discounts) || item.value.discounts.length > 20) throw new Error('Invalid property promotion scenario.');
+          calculatePromotionStack(item.value);
+        }
+        if (item.key === SERVICE_STATEMENT_KEY) {
+          if (item.propertyId === '*') throw new Error('Service statements require an employer property.');
+          validateServiceStatements(item.value);
+          for (const row of item.value) {
+            if (String(row.employer_property_id) !== item.propertyId || !propertyTargetAllowed(scope, String(row.service_property_id))) throw new Error('Statement property is outside caller scope.');
+          }
+          await validateServiceSources(env,scope,item.propertyId,item.value);
+        }
+      }
+    } catch (err) { return jsonResponse({ error: err.message }, 400); }
+
+    if (itemsToSave.length > 100) return jsonResponse({ error: "settings batch too large" }, 413);
 
     // Last value wins inside one request, but duplicate input cannot create two
     // history rows with the same key/revision and trip the concurrency guard.
@@ -412,7 +493,7 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
     if (!hasSettingPermission) {
       const unpermitted = itemsToSave.filter((item) => {
         if (
-          ["rri_commission_rates_v2", "rri_cc_fee_rate", "rri_cc_fee_refunds_v1"].includes(item.key) &&
+          ["rri_commission_rates_v2", "rri_cc_fee_rate", "rri_cc_fee_refunds_v1", PROMOTION_KEY].includes(item.key) &&
           hasCommissionPermission
         ) {
           return false;
@@ -431,97 +512,39 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
     }
 
     try {
-      // A restricted caller receives a scoped revision on GET. Compare against
-      // that same visible scope so an update to an inaccessible property cannot
-      // trap the caller in an unresolvable 409 loop. The stored next revision is
-      // still derived from the account-wide maximum to remain monotonic.
+      if (typeof env.DB.batch !== 'function') return jsonResponse({ error: 'Atomic settings writes unavailable' }, 503);
       const writeScope = settingsScopeClause(scope);
-      const visibleRevRow = await queryFirst(
-        env,
-        `SELECT MAX(revision) as max_rev FROM app_setting
-         WHERE account_id = ? AND ${writeScope.sql}`,
-        [accountId, ...writeScope.params]
-      );
-      const globalRevRow = await queryFirst(
-        env,
-        `SELECT MAX(revision) as max_rev FROM app_setting WHERE account_id = ?`,
-        [accountId]
-      );
-      const visibleRevision = Number(visibleRevRow?.max_rev || 0);
-      const globalRevision = Number(globalRevRow?.max_rev || 0);
-      if (body.expected_revision !== undefined && Number(body.expected_revision) !== visibleRevision) {
-        return jsonResponse(
-          {
-            error: "settings conflict: remote version has advanced",
-            code: "SETTINGS_CONFLICT",
-            server_revision: visibleRevision,
-          },
-          409
-        );
-      }
-      const nextRevision = globalRevision + 1;
-
-      // Look up existing rows for the keys being saved to record old_value and calculate next revision
-      const existingRows = await queryAll(
-        env,
-        `SELECT setting_key, property_id, value_json, revision
-         FROM app_setting
-         WHERE account_id = ?`,
-        [accountId]
-      );
-      const existingMap = new Map();
-      for (const row of existingRows) {
-        existingMap.set(`${row.setting_key}::${row.property_id}`, row);
-      }
-
-      const historyStmts = [];
-      const upsertStmts = [];
-
+      const requestId = crypto.randomUUID();
+      // D1 batch is a transaction. The CHECK aborts the ENTIRE batch when a
+      // concurrent write advanced the visible snapshot. Allocate the account
+      // revision inside that same transaction, not in an earlier JS read.
+      const revisionSql = `(SELECT next_revision FROM app_setting_write_guard WHERE account_id = ? AND request_id = ?)`;
+      const stmts = [env.DB.prepare(`
+        INSERT INTO app_setting_write_guard (account_id, request_id, next_revision, valid)
+        VALUES (?, ?,
+          (SELECT COALESCE(MAX(revision), 0) + 1 FROM app_setting WHERE account_id = ?),
+          CASE WHEN (SELECT COALESCE(MAX(revision), 0) FROM app_setting WHERE account_id = ? AND ${writeScope.sql}) = ? THEN 1 ELSE 0 END)
+        RETURNING next_revision
+      `).bind(accountId, requestId, accountId, accountId, ...writeScope.params, body.expected_revision)];
       for (const item of itemsToSave) {
-        const itemKey = `${item.key}::${item.propertyId}`;
-        const existing = existingMap.get(itemKey);
-        const oldValue = existing ? existing.value_json : null;
         const valJson = JSON.stringify(item.value);
-
-        historyStmts.push(
-          env.DB.prepare(`
-            INSERT INTO app_setting_history (
-              account_id, setting_key, property_id, old_value, new_value, revision, changed_by, changed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          `).bind(accountId, item.key, item.propertyId, oldValue, valJson, nextRevision, updatedBy, now)
-        );
-
-        upsertStmts.push(
-          env.DB.prepare(`
-            INSERT INTO app_setting (account_id, setting_key, property_id, value_json, revision, updated_by, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(account_id, setting_key, property_id) DO UPDATE SET
-              value_json = excluded.value_json,
-              revision = excluded.revision,
-              updated_by = excluded.updated_by,
-              updated_at = excluded.updated_at
-          `).bind(accountId, item.key, item.propertyId, valJson, nextRevision, updatedBy, now)
-        );
+        stmts.push(env.DB.prepare(`
+          INSERT INTO app_setting_history (account_id, setting_key, property_id, old_value, new_value, revision, changed_by, changed_at)
+          VALUES (?, ?, ?, (SELECT value_json FROM app_setting WHERE account_id = ? AND setting_key = ? AND property_id = ?), ?, ${revisionSql}, ?, ?)
+        `).bind(accountId, item.key, item.propertyId, accountId, item.key, item.propertyId, valJson, accountId, requestId, updatedBy, now));
+        stmts.push(env.DB.prepare(`
+          INSERT INTO app_setting (account_id, setting_key, property_id, value_json, revision, updated_by, updated_at)
+          VALUES (?, ?, ?, ?, ${revisionSql}, ?, ?)
+          ON CONFLICT(account_id, setting_key, property_id) DO UPDATE SET
+            value_json = excluded.value_json, revision = excluded.revision,
+            updated_by = excluded.updated_by, updated_at = excluded.updated_at
+        `).bind(accountId, item.key, item.propertyId, valJson, accountId, requestId, updatedBy, now));
       }
-
-      const allStmts = [...historyStmts, ...upsertStmts];
-      if (env.DB.batch) {
-        await env.DB.batch(allStmts);
-      } else {
-        for (const s of allStmts) await s.run();
-      }
-
-      const readScope = settingsScopeClause(scope);
-      const responseMeta = await queryFirst(
-        env,
-        `SELECT COUNT(1) as total_count, MAX(revision) as max_rev, MAX(updated_at) as latest_updated
-         FROM app_setting WHERE account_id = ? AND ${readScope.sql}`,
-        [accountId, ...readScope.params]
-      );
-      const revision = Number(responseMeta?.max_rev || nextRevision);
-      const totalCount = Number(responseMeta?.total_count || 0);
-      const latestUpdated = responseMeta?.latest_updated ? new Date(responseMeta.latest_updated).getTime() : new Date(now).getTime();
-      const etag = `W/"rev-${revision}-${totalCount}-${latestUpdated}"`;
+      stmts.push(env.DB.prepare('DELETE FROM app_setting_write_guard WHERE account_id = ? AND request_id = ?').bind(accountId, requestId));
+      const results = await env.DB.batch(stmts);
+      const nextRevision = Number(results[0]?.results?.[0]?.next_revision);
+      if (!Number.isSafeInteger(nextRevision)) throw new Error('Missing settings commit revision');
+      const revision = nextRevision;
 
       return jsonResponse(
         {
@@ -533,21 +556,18 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
         },
         200,
         {
-          ETag: etag,
           "x-settings-rev": String(revision),
         }
       );
     } catch (err) {
-      // The unique history guard is the atomic compare-and-swap barrier. If a
-      // competing request claimed this setting/revision first, its batch committed
-      // and ours rolled back in full; report a conflict so the client keeps edits.
+      // The transactional CHECK guard rolls the whole batch back on stale snapshots.
       const latest = await queryFirst(
         env,
-        `SELECT MAX(revision) as max_rev FROM app_setting WHERE account_id = ?`,
-        [accountId]
+        `SELECT MAX(revision) as max_rev FROM app_setting WHERE account_id = ? AND ${settingsScopeClause(scope).sql}`,
+        [accountId, ...settingsScopeClause(scope).params]
       ).catch(() => null);
       const latestRevision = Number(latest?.max_rev || 0);
-      if (/unique|constraint/i.test(String(err?.message || ""))) {
+      if (/settings_revision_match/.test([err?.message, err?.cause?.message].join(" "))) {
         return jsonResponse(
           {
             error: "settings conflict: remote version has advanced",

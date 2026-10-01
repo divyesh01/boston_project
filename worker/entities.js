@@ -1,5 +1,6 @@
 import { assertPropertyInScope, ScopeError, scopeConstraint } from "./scope.js";
 import { queryAll, queryFirst } from "./db.js";
+import { assertConfiguredWage } from './enterprise-policy.js';
 
 const JSON_FIELDS = new Set(["columns", "raw_rows", "payload"]);
 const BOOLEAN_FIELDS = new Set(["active", "recurring", "taxable"]);
@@ -169,9 +170,10 @@ function compileFilter(contract, filter = {}) {
     if (!contract.columns.includes(field)) throw new EntityRequestError(`filter field not allowed: ${field}`);
     if (condition && typeof condition === "object" && !Array.isArray(condition)) {
       const entries = Object.entries(condition);
-      if (entries.length !== 1) throw new EntityRequestError(`invalid filter for ${field}`);
-      const [operator, operand] = entries[0];
+      if (!entries.length) throw new EntityRequestError(`invalid filter for ${field}`);
+      for (const [operator, operand] of entries) {
       if (operator === "$in") {
+        if (entries.length !== 1) throw new EntityRequestError(`invalid filter for ${field}`);
         if (!Array.isArray(operand) || operand.length === 0 || operand.length > 50) {
           clauses.push("1 = 0");
         } else {
@@ -180,9 +182,10 @@ function compileFilter(contract, filter = {}) {
         }
       } else {
         const sqlOperator = ({ $gte: ">=", $gt: ">", $lte: "<=", $lt: "<" })[operator];
-        if (!sqlOperator) throw new EntityRequestError(`filter operator not allowed: ${operator}`);
+        if (!sqlOperator || operand == null || typeof operand === 'object') throw new EntityRequestError(`filter operator not allowed: ${operator}`);
         clauses.push(`${field} ${sqlOperator} ?`);
         params.push(encodeValue(field, operand));
+      }
       }
     } else {
       clauses.push(`${field} = ?`);
@@ -208,7 +211,7 @@ function normalizedSort(contract, sort) {
   const fallback = contract.columns.includes("created_date") ? "created_date" : "id";
   const selected = field && contract.columns.includes(field) ? field : fallback;
   if (field && !contract.columns.includes(field)) throw new EntityRequestError(`sort field not allowed: ${field}`);
-  return `${selected} ${desc ? "DESC" : "ASC"}`;
+  return `${selected} ${desc ? "DESC" : "ASC"}${selected === 'id' ? '' : ', id ASC'}`;
 }
 
 function sanitizeData(contract, data, { update = false } = {}) {
@@ -354,7 +357,7 @@ async function createRows(env, scope, entityName, contract, rows) {
       data.account_id = scope.accountId;
       writeKey = scope.accountId;
     } else {
-      const propertyId = String(data.property_id || "");
+      const propertyId = String(data.property_id ?? "");
       if (!propertyId) throw new EntityRequestError("property_id is required", 422);
       assertPropertyInScope(scope, propertyId);
       writeKey = propertyId;
@@ -364,6 +367,8 @@ async function createRows(env, scope, entityName, contract, rows) {
     // then found that pre-existing row, answering 201 with someone else's record
     // while the requested row was never written.
     const id = String(await stableId(scope, entityName, data));
+    try { await assertConfiguredWage(env, scope.accountId, data, entityName); }
+    catch (err) { throw new EntityRequestError(err.message, 422); }
     const createdDate = /** @type {Record<string, unknown>} */ (data).created_date || new Date().toISOString();
     /** @type {Record<string, unknown>} */
     const row = { ...data, id };
@@ -414,6 +419,8 @@ async function mutateById(request, env, scope, contract, id, method) {
   }
   const body = await readBody(request);
   const data = sanitizeData(contract, body.data || body, { update: true });
+  try { await assertConfiguredWage(env, scope.accountId, { ...current, ...data }, contract.table === 'staff' ? 'Staff' : contract.table === 'payroll_run' ? 'PayrollRun' : ''); }
+  catch (err) { throw new EntityRequestError(err.message, 422); }
   const entries = Object.entries(data);
   if (entries.length === 0) return Response.json(decodeRow(current));
   const c = scopeConstraint(scope, contract.scopeColumn);
@@ -427,7 +434,7 @@ export async function handleEntityRequest(request, env, scope, pathParts) {
     const entityName = decodeURIComponent(pathParts[2] || "");
     const contract = contractFor(entityName);
     const action = pathParts[3] || "";
-    if (action === "query" && request.method === "POST") return queryEntity(request, env, scope, contract);
+    if (action === "query" && request.method === "POST") return await queryEntity(request, env, scope, contract);
     if (action === "count" && request.method === "POST") {
       const body = await readBody(request);
       const where = scopedWhere(contract, scope, body.filter || {});
@@ -467,7 +474,7 @@ export async function handleEntityRequest(request, env, scope, pathParts) {
       const row = await findScoped(env, contract, scope, decodeURIComponent(action));
       return row ? Response.json(decodeRow(row)) : errorResponse("not found", 404);
     }
-    if (action && ["PATCH", "DELETE"].includes(request.method)) return mutateById(request, env, scope, contract, decodeURIComponent(action), request.method);
+    if (action && ["PATCH", "DELETE"].includes(request.method)) return await mutateById(request, env, scope, contract, decodeURIComponent(action), request.method);
     return errorResponse("method not allowed", 405);
   } catch (error) {
     if (error instanceof ScopeError) return errorResponse("forbidden", 403);

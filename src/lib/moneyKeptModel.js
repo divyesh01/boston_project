@@ -257,7 +257,7 @@ export function buildMoneyKeptBaseData({
     const taxCalculations = [];
     for (const c of costs) {
       const actual = c.value.basis.tax === 'actual';
-      const full = CalculationService.calculateTaxLiability(actual ? [] : c.source,c.gross,c.id || null,{from,to},actual ? [] : occRows.filter(r=>String(r.property_id ?? '')===c.id),true);
+      const full = CalculationService.calculateTaxLiability(actual ? [] : c.source,c.gross,c.id ?? null,{from,to},actual ? [] : occRows.filter(r=>String(r.property_id ?? '')===c.id),true);
       taxCalculations.push(...(full.calculations || []));
       for (const [key,category] of [['state','state_taxes'],['city','city_taxes'],['other','taxes']]) {
         const entries = actual ? c.exp.filter(e=>e.category===category) : [];
@@ -266,7 +266,7 @@ export function buildMoneyKeptBaseData({
         taxCalculations.push(...entries.map(e=>({property_id:c.id,date:String(e.expense_date || '').slice(0,10),basis:'actual_expense',base:null,rates:null,state:0,city:0,other:0,[key]:Number(e.amount)||0,name:e.expense_name || 'Tax expense'})));
       }
     }
-    const estimatedTaxFromRates = fromCents(taxCalculations.filter(c=>c.basis==='estimated').reduce((n,c)=>n+toCents(c.state)+toCents(c.city)+toCents(c.other),0));
+    const estimatedTaxFromRates = fromCents(taxCalculations.filter(c=>c.basis==='estimated').reduce((n,c)=>n+(c.hotel_estimate != null ? toCents(c.hotel_estimate) : toCents(c.state)+toCents(c.city)+toCents(c.other)),0));
 
     pushItem("payroll", "Payroll", sum(payInPeriod, "total_pay") + expAmt("payroll"), [
       ...payInPeriod.map((p) => ({
@@ -312,7 +312,7 @@ export function buildMoneyKeptBaseData({
     const liabState = liability.state;
     const liabCity = liability.city;
     const liabOther = liability.other;
-    const passThrough = fromCents(taxCalculations.filter(c=>c.basis==='imported').reduce((n,c)=>n+toCents(c.state)+toCents(c.city)+toCents(c.other),0));
+    const passThrough = fromCents(taxCalculations.filter(c=>c.basis==='imported').reduce((n,c)=>n+(c.hotel_estimate != null ? toCents(c.hotel_estimate) : toCents(c.state)+toCents(c.city)+toCents(c.other)),0));
 
     const taxRecords = {};
     for (const [label,key] of [['State Tax','state'],['City/Local Tax','city'],['Other Taxes','other']]) {

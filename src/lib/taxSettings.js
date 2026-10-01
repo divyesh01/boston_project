@@ -7,7 +7,7 @@
 import { getTaxConfig } from "@/lib/taxConfig";
 import { getOwnerTaxDefaults, isLegacyCombinedTax } from "@/lib/ownerTaxDefaults";
 import { notifySettingsChanged } from "@/lib/settingsBus";
-import { readJsonSetting, reportDiscardedSetting, writeJsonSetting } from "@/lib/settingsStore";
+import { readJsonSetting, readScopedJsonSetting, reportDiscardedSetting, writeJsonSetting } from "@/lib/settingsStore";
 
 const TAX_SETTINGS_KEY = "rri_tax_settings_v1";
 
@@ -83,6 +83,7 @@ export function getEffectiveTaxRates(propertyId, dateStr) {
   const specific = recs.filter(matchesProperty);
   const pool = specific.length ? specific : recs;
   if (!pool.length) {
+    if (hasProperty && !readScopedJsonSetting('rri_tax_config_v1', null, propertyId)) return {state:0,city:0,other:0,legacy:true,unconfigured:true};
     const legacy = Math.max(0, Math.min(1, getTaxConfig(propertyId).taxRate || 0));
     return { state: legacy, city: 0, other: 0, legacy: true };
   }

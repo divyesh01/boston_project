@@ -409,7 +409,7 @@ function capacityRoomNightsBy(rows, roomsFor) {
   /** @type {Map<string, { pid: string, explicit: number }>} */
   const byDay = new Map();
   (rows || []).forEach((r) => {
-    const pid = r.property_id || "_default";
+    const pid = r.property_id ?? "_default";
     // A row with no date cannot be grouped by date. It gets its own bucket keyed
     // on the row's position, which reproduces the old per-row behaviour for that
     // row alone — the honest answer when the data does not say which day it is.
@@ -446,7 +446,7 @@ export function portfolioStats(occRows, roomCounts) {
   // Capacity is per DAY, not per row. See capacityRoomNightsBy above for the
   // measured consequence of the per-row version this replaced.
   const rooms = roomCountsFrom(roomCounts); // normalizes both properties arrays and plain maps
-  const capacity = capacityRoomNightsBy(safeRows, (pid) => rooms[pid] ?? PROPERTY.rooms) * 100;
+  const capacity = capacityRoomNightsBy(safeRows, (pid) => rooms[pid] ?? 0) * 100;
 
   const occupancy = capacity ? divideRate(roomsSold, capacity) : 0;
   const adr = roomsSold ? divide(revenue, roomsSold) : 0;
@@ -458,7 +458,7 @@ export function portfolioStats(occRows, roomCounts) {
 // property genuinely has no configured inventory.
 export function roomsForProperty(propertyId, properties) {
   const found = (properties || []).find((p) => p.id === propertyId);
-  return Number(found?.rooms) || PROPERTY.rooms;
+  return Number(found?.rooms) || 0;
 }
 
 // Build a { property_id: rooms } map once, for the capacity helpers below.
@@ -466,7 +466,7 @@ export function roomsForProperty(propertyId, properties) {
 // Defensively normalizes either shape callers pass for room inventory:
 //   - Array of property objects [{ id, rooms|room_count|total_rooms }, ...]
 //   - Plain key-value map { property_id: rooms, ... }
-// Unknown shapes degrade to {} so downstream `?? PROPERTY.rooms` guards keep
+// Unknown shapes degrade to {} so downstream guards can report missing inventory,
 // legacy rows at the default inventory.
 export function roomCountsFrom(input) {
   if (!input) return {};
@@ -475,8 +475,8 @@ export function roomCountsFrom(input) {
   if (Array.isArray(input)) {
     const map = {};
     for (const prop of input) {
-      if (prop && prop.id) {
-        map[prop.id] = Number(prop.rooms || prop.room_count || prop.total_rooms) || PROPERTY.rooms;
+      if (prop && prop.id != null) {
+        map[prop.id] = Number(prop.rooms || prop.room_count || prop.total_rooms) || 0;
       }
     }
     return map;
@@ -501,7 +501,7 @@ export function roomCountsFrom(input) {
 // and RevPAR on any export with more than one section per date.
 export function capacityRoomNights(occRows, properties) {
   const rooms = roomCountsFrom(properties);
-  return capacityRoomNightsBy(occRows, (pid) => rooms[pid] ?? PROPERTY.rooms);
+  return capacityRoomNightsBy(occRows, (pid) => rooms[pid] ?? 0);
 }
 
 // Physical room inventory in scope: one property's rooms, or the sum across the
@@ -511,10 +511,10 @@ export function inventoryInScope(property, properties) {
   if (Array.isArray(property)) {
     const ids = new Set(property);
     const sel = list.filter((p) => ids.has(p.id));
-    return sel.reduce((a, p) => a + (Number(p.rooms) || PROPERTY.rooms), 0) || PROPERTY.rooms;
+    return sel.reduce((a, p) => a + (Number(p.rooms) || 0), 0);
   }
   if (!property || property === "all") {
-    return list.reduce((a, p) => a + (Number(p.rooms) || PROPERTY.rooms), 0) || PROPERTY.rooms;
+    return list.reduce((a, p) => a + (Number(p.rooms) || 0), 0);
   }
   return roomsForProperty(property, list);
 }
@@ -545,7 +545,7 @@ export function occupancyStats(occRows, properties) {
 export function perPropertyStats(occRows = [], properties = []) {
   const byProp = new Map();
   (occRows || []).forEach((r) => {
-    const pid = r.property_id || "_default";
+    const pid = r.property_id ?? "_default";
     if (!byProp.has(pid)) byProp.set(pid, []);
     byProp.get(pid).push(r);
   });
@@ -553,7 +553,7 @@ export function perPropertyStats(occRows = [], properties = []) {
   const results = [];
   byProp.forEach((rows, pid) => {
     const prop = properties.find((p) => p.id === pid);
-    const fallbackRooms = prop?.rooms || PROPERTY.rooms;
+    const fallbackRooms = prop?.rooms || 0;
     const revenue = sumCents(rows.map(r => r.room_revenue));
     const roomsSold = sumCents(rows.map(r => r.rooms_sold));
     // Inventory per DAY, not per row — see capacityRoomNightsBy above. This

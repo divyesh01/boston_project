@@ -41,6 +41,8 @@ const TXN_NORM = "src/lib/transactionNorm.js";
 // lands. Does not exist yet, and a candidate that does not exist is inert.
 const TXN_DEST = "src/lib/parsers/transactions.js";
 const TXN_IDENTITY = "shared/transactionIdentity.js";
+const CLERK_DEST = "src/lib/parsers/clerk.js";
+const TIMECARD_DEST = "src/lib/parsers/timecard.js";
 const SCAN_SUITE = "src/lib/hotelKeyParserFixtures.test.js";
 const IMPORT_SUITE = "src/lib/hotelKeyImportFixtures.test.js";
 
@@ -153,6 +155,22 @@ const MUTATIONS = [
     where: [TXN_NORM],
     find: '  out.ledger_side = type === "REFUND" ? LEDGER_SIDE_PAYMENT : LEDGER_SIDE_CHARGE;',
     replace: "  out.ledger_side = LEDGER_SIDE_CHARGE;",
+    suites: [SCAN_SUITE],
+  },
+  {
+    id: "M12",
+    behaviour: "clerk stacked sections stay distinct",
+    where: [PARSERS, CLERK_DEST],
+    find: "    const key = \`${p.payment_type}|${p._sectionKey || 'unknown'}\`;",
+    replace: "    const key = p.payment_type;",
+    suites: [SCAN_SUITE],
+  },
+  {
+    id: "M13",
+    behaviour: "timecard rejects non-ISO punch dates",
+    where: [PARSERS, TIMECARD_DEST],
+    find: "    if (!employee || !isIsoDate(date) || !inTime || !outTime) {",
+    replace: "    if (!employee || !date || !inTime || !outTime) {",
     suites: [SCAN_SUITE],
   },
 ];

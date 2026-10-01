@@ -44,6 +44,11 @@ check("canonical policy uses the real typecheck command", canonical.includes("np
 check("canonical policy forbids direct ordinary work on main", canonical.includes("directly on `main`"));
 check("canonical policy protects synthetic-only HotelKey fixtures", canonical.includes("no real guest, hotel, PMS, or production data"));
 check("canonical policy does not recommend the broken bare tsc command", !canonical.includes("\n\`\`\`bash\nnpx tsc --noEmit"));
+check("canonical policy makes Codex the implementation owner", canonical.includes("Codex is the implementation owner"));
+check("canonical policy makes Antigravity the verification owner", canonical.includes("Antigravity is the verification owner"));
+check("Codex role split applies to every model", canonical.includes("every Codex model or variant"));
+check("Codex avoids duplicate broad verification", canonical.includes("must **not** spend substantial context or execution budget duplicating verification"));
+check("Codex hands verification to Antigravity", canonical.includes("Codex plans/implements -> Antigravity tests/verifies"));
 
 for (const adapter of adapters) {
   const text = read(adapter);

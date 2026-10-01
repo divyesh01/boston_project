@@ -4,6 +4,10 @@ The canonical shared policy for all coding agents is:
 
 [`docs/engineering/AGENT_RULES.md`](./docs/engineering/AGENT_RULES.md)
 
+Mandatory Codex + Antigravity role contract:
+
+[`docs/engineering/CODEX_ANTIGRAVITY_WORKFLOW.md`](./docs/engineering/CODEX_ANTIGRAVITY_WORKFLOW.md)
+
 The short version remains:
 
 1. **Never guess; prove.**

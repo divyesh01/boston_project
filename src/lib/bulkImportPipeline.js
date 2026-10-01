@@ -669,6 +669,7 @@ export async function executeBulkImport(scanResult, meta = {}) {
   // ============================================================================
   let rawArchiveId = resumeManifest?.id || `raw_${crypto.randomUUID()}`;
   let rawObjectKey = '';
+  let recordedArchive = null;
 
   if (!resumeManifest) {
     onStageChange?.('archiving', 'Uploading original to permanent archive…');
@@ -684,7 +685,7 @@ export async function executeBulkImport(scanResult, meta = {}) {
     rawObjectKey = uploadRawRes.raw_object_key;
 
     // Record raw archive in D1 manifest (1 D1 write)
-    const recorded = await recordRawArchiveOnServer({
+    recordedArchive = await recordRawArchiveOnServer({
       raw_archive_id: rawArchiveId,
       id: rawArchiveId,
       server_property_id: propertyId,
@@ -695,7 +696,7 @@ export async function executeBulkImport(scanResult, meta = {}) {
       file_size: rawBytes.byteLength,
       mime_type: mimeType,
     });
-    rawArchiveId = recorded.bundle_id;
+    rawArchiveId = recordedArchive.bundle_id;
     onStageChange?.('archived', 'Original safely archived');
   }
 
@@ -704,8 +705,18 @@ export async function executeBulkImport(scanResult, meta = {}) {
   // ============================================================================
   onStageChange?.('processing', 'Processing and normalising records…');
 
-  // Build normalized bundle
-  let bundleId = rawArchiveId || `imp_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  // Build normalized bundle. When Force Import reuses an immutable raw
+  // source that is already the active manifest, the analytics successor needs
+  // a fresh manifest id. Reusing the active source id would exclude that row
+  // from overlap detection and later collide on the manifest primary key,
+  // surfacing a misleading IMPORT_REVISION_CONFLICT instead of the explicit
+  // replacement decision the UI is designed to request.
+  const reusingActiveRaw = !resumeManifest &&
+    recordedArchive?.status === 'already_recorded' &&
+    recordedArchive?.processing_status === 'active';
+  let bundleId = reusingActiveRaw
+    ? `raw_${crypto.randomUUID()}`
+    : (rawArchiveId || `imp_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`);
   const bundle = buildNormalizedBundle(scanResult, meta, bundleId);
 
   // Compute normalized hash without duplicating huge arrays/strings:
@@ -741,8 +752,10 @@ export async function executeBulkImport(scanResult, meta = {}) {
       expectedRevision = predecessors[0].expected_revision ?? predecessors[0].revision ?? null;
     }
   }
-  // The server discovers and verifies all overlapping reports atomically,
-  // preserving old-only dates. Force Import uses the same date merge policy.
+  // Overlap discovery is authoritative on the server. A caller must pass
+  // explicit predecessor ids after the server returns IMPORT_REPLACEMENT_REQUIRED;
+  // Force Import bypasses duplicate preflight only and does not silently replace
+  // active analytical authority.
 
   if (supersedesBundleId === bundleId || (Array.isArray(predecessors) && predecessors.some(p => (typeof p === 'string' ? p : p.id) === bundleId))) {
     bundleId = `raw_${crypto.randomUUID()}`;

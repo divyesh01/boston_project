@@ -920,9 +920,16 @@ async function activateBundle(requestOrBody, env, scope) {
     [scope.accountId, propertyId, String(body.report_type || ''), bundleId, rawHash, maxDate || '', minDate || '']) : [];
 
   if (requestedPredecessors.length === 0 && activeOverlaps.length > 0) {
-    // Owner policy: every successful new report wins on its own dates. The
-    // server discovers predecessors; clients cannot widen property scope.
-    requestedPredecessors = activeOverlaps.map(report => ({ id: report.id, expected_revision: report.revision }));
+    // Overlapping authority must never be replaced implicitly. Return the full
+    // candidate set so the caller can make an explicit replacement choice.
+    // This also makes concurrent races fail closed: after a transaction guard
+    // collision, retryRevision re-evaluates state and the loser lands here.
+    throw new BulkImportError('Report overlaps an active import; select its replacement explicitly', 409, {
+      code: 'IMPORT_REPLACEMENT_REQUIRED',
+      existing_bundle_id: activeOverlaps[0].id,
+      existing_bundle: activeOverlaps[0],
+      candidates: activeOverlaps,
+    });
   }
 
   const validatedPredecessors = [];

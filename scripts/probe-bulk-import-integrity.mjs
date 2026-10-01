@@ -33,6 +33,29 @@ async function setup() {
 const scan = (total = 100, date = '2026-09-01') => ({ type: 'payments', totalRows: 1, rowsToImport: [{date,total}] });
 const meta = bytes => ({propertyId:'P_A',sourceFile:'payments.csv',rawBytes:new TextEncoder().encode(bytes)});
 async function post(action, body) { return fetch(`/api/bulk-import/${action}`, {method:'POST',body:JSON.stringify(body)}); }
+
+async function executeWithExplicitReplacement(scanResult, options) {
+  let conflict = null;
+  try {
+    return await executeBulkImport(scanResult, options);
+  } catch (error) {
+    conflict = error;
+  }
+  assertEqual(conflict?.code, 'IMPORT_REPLACEMENT_REQUIRED', 'overlap requires an explicit replacement decision');
+  const candidates = Array.isArray(conflict?.candidates) ? conflict.candidates : [];
+  assert(candidates.length > 0, 'replacement conflict returns candidate authority');
+  const predecessors = candidates.map(candidate => ({
+    id: candidate.id,
+    expected_revision: candidate.revision,
+  }));
+  return executeBulkImport(scanResult, {
+    ...options,
+    forceImport: true,
+    predecessors,
+    supersedesBundleId: candidates[0].id,
+    expectedRevision: candidates[0].revision,
+  });
+}
 await run.check('Populated 0005 to 0006 preserves all prior columns, indexes and constraints', async () => {
   const migrationDb = new DatabaseSync(':memory:');
   try {
@@ -96,7 +119,7 @@ await run.check('Stable identity, duplicate retry and atomic correction keep exa
   assertEqual(await hash(a),await hash(b));
   await executeBulkImport(scan(),{...meta('v1'),forceImport:true});
   assertEqual(db.prepare("SELECT COUNT(*) n FROM import_bundle_manifest WHERE status='active'").get().n,1);
-  const correction = await executeBulkImport(scan(125),{...meta('v2'),forceImport:true});
+  const correction = await executeWithExplicitReplacement(scan(125),{...meta('v2'),forceImport:true});
   assertEqual(db.prepare('SELECT status FROM import_bundle_manifest WHERE id=?').get(first.bundle_id).status,'superseded');
   assertEqual(db.prepare("SELECT COUNT(*) n FROM import_bundle_manifest WHERE status='active'").get().n,1);
   assertEqual((await localDb.PaymentDay.toArray())[0].total,125);
@@ -105,7 +128,7 @@ await run.check('Stable identity, duplicate retry and atomic correction keep exa
 await run.check('Parser correction reuses immutable source while creating new analytics version', async () => {
   await setup();
   const first = await executeBulkImport(scan(),meta('unchanged source'));
-  const second = await executeBulkImport(scan(120),{...meta('unchanged source'),forceImport:true});
+  const second = await executeWithExplicitReplacement(scan(120),{...meta('unchanged source'),forceImport:true});
   assert(first.bundle_id !== second.bundle_id);
   assertEqual(db.prepare("SELECT COUNT(*) n FROM import_bundle_manifest WHERE status='active'").get().n,1);
   const rows = db.prepare('SELECT raw_object_key FROM import_bundle_manifest').all();
@@ -296,6 +319,10 @@ await run.check('Legacy cache overlap is reconciled and bulk-only reset prevents
 await run.check('Older all-property hydration cannot resurrect a newer property tombstone', async () => {
   await setup();
   const result = await executeBulkImport(scan(), meta('stale-hydration'));
+  // The production cache may legitimately reuse an already verified report.
+  // This race probe specifically needs an in-flight bundle download so it can
+  // pause the older all-property hydration before the newer tombstone commits.
+  await localDb.UploadedReport.update(result.bundle_id, { bulk_cache_version: 0 });
   const routeFetch = globalThis.fetch;
   let release, started;
   const paused = new Promise(resolve => { started = resolve; });

@@ -1,5 +1,5 @@
 // scripts/probe-bulk-import-replacement-flow.mjs
-// Verifies automatic newest-report-per-date merging, retained historical dates,
+// Verifies explicit newest-report-per-date replacement, retained historical dates,
 // immutable raw archives, property isolation, stale revision guards, and legacy
 // replacement error fidelity for hotel_statistics and source reports.
 
@@ -68,7 +68,7 @@ function setupWorker() {
   return { db, env, stats, owner };
 }
 
-await run.check("1. Hotel Statistics: automatic overlap merge retains dates absent from the new report", async () => {
+await run.check("1. Hotel Statistics: explicit overlap replacement retains dates absent from the new report", async () => {
   const { db, env, owner } = setupWorker();
   const propertyId = "PROP_MIDDELBORO";
 
@@ -221,7 +221,8 @@ await run.check("1. Hotel Statistics: automatic overlap merge retains dates abse
   });
   await handleBulkImportRequest(upNorm2, env, owner, new URL(upNorm2.url), ["api", "bulk-import", "upload"]);
 
-  // Step 1C: The server discovers predecessors and preserves omitted dates automatically.
+  // Step 1C: Omitted predecessor selection fails closed, then an explicit
+  // replacement preserves historical dates absent from the incoming report.
   const act2NoReplace = new Request("http://localhost/api/bulk-import/activate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -235,8 +236,27 @@ await run.check("1. Hotel Statistics: automatic overlap merge retains dates abse
     }),
   });
   const act2NoReplaceRes = await handleBulkImportRequest(act2NoReplace, env, owner, new URL(act2NoReplace.url), ["api", "bulk-import", "activate"]);
-  assertEqual(act2NoReplaceRes.status, 201, "Overlap activates automatically");
-  const act2ReplaceJson = await act2NoReplaceRes.json();
+  assertEqual(act2NoReplaceRes.status, 409, "Overlap requires explicit predecessor selection");
+  const replacementRequired = await act2NoReplaceRes.json();
+  assertEqual(replacementRequired.code, "IMPORT_REPLACEMENT_REQUIRED", "Overlap returns the replacement-required contract");
+  assert(replacementRequired.candidates?.some(candidate => candidate.id === v1BundleId), "Existing v1 authority is returned as a replacement candidate");
+
+  const act2Replace = new Request("http://localhost/api/bulk-import/activate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: v2BundleId,
+      server_property_id: propertyId,
+      report_type: "hotel_statistics",
+      raw_file_hash: v2RawHash,
+      normalized_hash: v2NormHash,
+      row_count: 2,
+      predecessors: [{ id: v1BundleId, expected_revision: v1Revision }],
+    }),
+  });
+  const act2ReplaceRes = await handleBulkImportRequest(act2Replace, env, owner, new URL(act2Replace.url), ["api", "bulk-import", "activate"]);
+  assertEqual(act2ReplaceRes.status, 201, "Explicit overlap replacement succeeds");
+  const act2ReplaceJson = await act2ReplaceRes.json();
   assertEqual(act2ReplaceJson.status, "active", "New bundle is active");
   assertEqual(act2ReplaceJson.revision, 2, "Sync state revision is incremented to 2");
   assertEqual(act2ReplaceJson.row_count, 4, "Composite includes both old and new rows");
@@ -535,7 +555,8 @@ await run.check("2. Source Summary pattern: scope isolation & lineage conflict g
 
   assertEqual(db.prepare("SELECT status FROM import_bundle_manifest WHERE id=?").get(bundleMidId).status, "active", "Stale request leaves the existing report active");
 
-  // Automatic discovery also succeeds after a rejected stale explicit request.
+  // A corrected explicit predecessor revision succeeds after the stale request.
+  const currentMidRevision = db.prepare("SELECT revision FROM import_bundle_manifest WHERE id=?").get(bundleMidId).revision;
   const actCorrect = new Request("http://localhost/api/bulk-import/activate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -546,10 +567,12 @@ await run.check("2. Source Summary pattern: scope isolation & lineage conflict g
       raw_file_hash: rawMid1Hash,
       normalized_hash: mid1NormHash,
       row_count: 2,
+      supersedes_bundle_id: bundleMidId,
+      expected_revision: currentMidRevision,
     }),
   });
   const actCorrectRes = await handleBulkImportRequest(actCorrect, env, owner, new URL(actCorrect.url), ["api", "bulk-import", "activate"]);
-  assertEqual(actCorrectRes.status, 201, "Automatic Source Summary merge succeeded");
+  assertEqual(actCorrectRes.status, 201, "Explicit Source Summary replacement succeeded");
   const mergedItems = await downloadItems(env, owner, bundleMid1Id, propertyId);
   assertEqual(mergedItems.length, 2, "Overlapping dates are replaced rather than appended");
   for (const [date, rooms] of [["2026-08-01", 22], ["2026-08-02", 28]]) {

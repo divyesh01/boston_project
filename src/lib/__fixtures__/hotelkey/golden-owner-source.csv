@@ -1,0 +1,4 @@
+Date,Code,Source,Net Revenue,Stays,ADR,Occupancy Contribution,RevPAR Contribution
+2026-01-01,DIR,Direct,400.00,4,100.00,0.04,4.00
+2026-01-02,EXP,Expedia,300.00,3,100.00,0.03,3.00
+2026-01-03,BDC,Booking.com,300.00,3,100.00,0.03,3.00

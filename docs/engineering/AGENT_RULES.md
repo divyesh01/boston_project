@@ -11,11 +11,13 @@ Before substantive repository work:
 
 1. Read `PROTECTED_FILES.md`.
 2. Run `npm run verify:v3`.
-3. Read `docs/divyesh-v3/KERNEL.md`, `docs/divyesh-v3/ROUTER.md`, and only the
+3. Read `docs/engineering/CODEX_ANTIGRAVITY_WORKFLOW.md`. This is mandatory for
+   every Codex and Gemini/Antigravity model before substantive work.
+4. Read `docs/divyesh-v3/KERNEL.md`, `docs/divyesh-v3/ROUTER.md`, and only the
    role/domain/workflow packs selected by the router.
-4. Read `BRAIN.md` and the relevant spoke instead of scanning unrelated parts of
+5. Read `BRAIN.md` and the relevant spoke instead of scanning unrelated parts of
    the repository.
-5. Check the working tree and current branch before editing.
+6. Check the working tree and current branch before editing.
 
 If V3 verification fails, report `SYSTEM_DRIFT = BLOCKED` and do not claim the
 repository is in a verified state.
@@ -53,6 +55,10 @@ For a bug or risky change:
 6. Report observed results separately from checks that were not run.
 
 A test that cannot fail is not evidence. Never weaken an assertion merely to make CI green.
+
+The mandatory Codex + Antigravity contract in
+`docs/engineering/CODEX_ANTIGRAVITY_WORKFLOW.md` defines who owns each part of this
+evidence loop. These are team obligations, not duplicate work for both agents.
 
 ## 5. Required engineering invariants
 
@@ -112,6 +118,11 @@ npm run verify:v3
 If the full verification sweep is too long for one command, shard it with
 `npm run verify:all -- --shard i/n`. Do not reduce timeouts just to make a run fit.
 
+When Codex and Antigravity are both available, verification ownership follows
+`docs/engineering/CODEX_ANTIGRAVITY_WORKFLOW.md`. Codex keeps mandatory startup checks,
+diff review, and only the small implementation sanity checks allowed by that contract;
+Antigravity owns the broader verification work.
+
 ## 7. Production and remote-data safety
 
 Do not mutate production infrastructure, production databases, production credentials,
@@ -122,6 +133,16 @@ Staging or fixture work must still preserve property isolation and must never co
 guest data into the repository.
 
 ## 8. Documentation and agent coordination
+
+### Mandatory Codex + Antigravity contract
+
+Every Codex model and every Gemini/Antigravity model must read
+`docs/engineering/CODEX_ANTIGRAVITY_WORKFLOW.md` before substantive work. That file is
+the authoritative role contract for implementation, verification, handoff, rework, and
+completion.
+
+The short version is: **Codex owns implementation; Antigravity owns verification.**
+Do not duplicate the detailed role rules here; update the shared contract instead.
 
 - Update documentation when a contract, architecture boundary, verification command, or
   behavior actually changes.

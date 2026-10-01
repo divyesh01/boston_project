@@ -296,6 +296,10 @@ await run.check('Legacy cache overlap is reconciled and bulk-only reset prevents
 await run.check('Older all-property hydration cannot resurrect a newer property tombstone', async () => {
   await setup();
   const result = await executeBulkImport(scan(), meta('stale-hydration'));
+  // The production cache may legitimately reuse an already verified report.
+  // This race probe specifically needs an in-flight bundle download so it can
+  // pause the older all-property hydration before the newer tombstone commits.
+  await localDb.UploadedReport.update(result.bundle_id, { bulk_cache_version: 0 });
   const routeFetch = globalThis.fetch;
   let release, started;
   const paused = new Promise(resolve => { started = resolve; });

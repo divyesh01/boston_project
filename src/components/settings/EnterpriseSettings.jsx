@@ -10,7 +10,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { money2 } from '@/lib/hotel';
 
 const inputClass = 'w-full rounded-lg border border-white/15 bg-[#0A1628] px-3 py-2 text-sm text-white';
-function Field({ label, value, onChange, type = 'text', disabled = false, step }) {
+function Field({ label, value, onChange, type = 'text', disabled = false, step = undefined }) {
   return <label className="space-y-1 text-xs text-slate-400"><span>{label}</span><input className={inputClass} type={type} value={value ?? ''} disabled={disabled} step={step} onChange={e => onChange(e.target.value)} /></label>;
 }
 const numeric = value => value === '' ? undefined : Number(value);

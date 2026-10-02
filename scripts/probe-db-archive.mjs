@@ -766,6 +766,11 @@ console.log("\n9. Invariants that live in another file");
     "src/components/Layout.jsx": "not localStorage — rri_tab_history in sessionStorage, transient",
     "src/pages/Setup.jsx": "not localStorage — setup_attempts in sessionStorage, transient",
     "src/lib/featureFlags.js": "skipped — rri_feature_flags, local client-side UI progressive rollout toggles",
+    "src/components/channels/PromotionSimulator.jsx": "archived — property-scoped promotion scenario through settingsStore (rri_ key)",
+    "src/components/payments/TaxRemittanceRecords.jsx": "archived — property-scoped tax remittance evidence through settingsStore (rri_ key)",
+    "src/components/payroll/SharedServiceStatements.jsx": "archived — property-scoped shared-service statement drafts through settingsStore (rri_ key)",
+    "src/lib/enterpriseConfigEngine.js": "archived — enterprise profiles/templates/defaults and rri_settings_by_property through settingsStore",
+    "src/lib/settingsDrafts.js": "archived — settings-cloud-draft:v1: recoverable unsynced settings drafts",
   };
   const writers = [];
   const walk = (dir) => {

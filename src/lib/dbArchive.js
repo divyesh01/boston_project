@@ -123,7 +123,7 @@ export const SECURE_SLOT_KEYS = Object.freeze(["rri_import_sessions"]);
  * scripts/probe-db-archive.mjs holds a reviewed manifest of every file in src/
  * that writes localStorage and fails when an unclassified writer appears.
  */
-export const LOCAL_SLOT_PREFIXES = Object.freeze(["rri_", "manual_draft_"]);
+export const LOCAL_SLOT_PREFIXES = Object.freeze(["rri_", "manual_draft_", "settings-cloud-draft:v1:"]);
 
 /** Prefixes that match LOCAL_SLOT_PREFIXES but must never be archived. */
 export const SKIPPED_LOCAL_SLOT_PREFIXES = Object.freeze({

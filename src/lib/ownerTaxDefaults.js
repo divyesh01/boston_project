@@ -4,7 +4,9 @@ import { queryClientInstance } from "@/lib/query-client";
 // Resolve its database ID from the authorized property roster; another hotel's
 // rates must not change just because it is added to this portfolio.
 export function getOwnerTaxDefaults(propertyId = "*") {
-  const properties = queryClientInstance.getQueryData(["properties"]) || [];
+  const properties = /** @type {Array<{ id: string | number, code?: string }>} */ (
+    queryClientInstance.getQueryData(["properties"]) || []
+  );
   const matches = properties.filter(p => String(p.code || "").trim().toUpperCase() === "RRI274");
   if (matches.length !== 1 || matches[0].id == null || matches[0].id === "") return [];
   const property = matches[0];

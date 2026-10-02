@@ -115,7 +115,13 @@ class D1Shim {
       const out = [];
       for (const s of statements) {
         recordQuery(this._stats, s._sql, s._params);
-        out.push(this._db.prepare(s._sql).run(...normalizeParams(s._params)));
+        const stmt = this._db.prepare(s._sql);
+        const params = normalizeParams(s._params);
+        if (/\bRETURNING\b/i.test(s._sql)) {
+          out.push({ results: stmt.all(...params) });
+        } else {
+          out.push(stmt.run(...params));
+        }
       }
       this._db.exec("COMMIT");
       return out;

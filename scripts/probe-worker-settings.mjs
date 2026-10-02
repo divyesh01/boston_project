@@ -44,7 +44,7 @@ async function read(scope) {
   return handleSettingsRequest(request, env, scope, url, ["settings"]);
 }
 
-const first = await save(owner, { key: "rri_cc_fee_rate", value: 0.03 });
+const first = await save(owner, { key: "rri_cc_fee_rate", value: 0.03, expected_revision: 0 });
 check("first write owns revision 1", first.status === 200 && first.headers.get("x-settings-rev") === "1");
 
 const second = await save(owner, { key: "rri_tax_config_v1", value: { taxRate: 0.12, taxEnabled: true }, expected_revision: 1 });
@@ -64,10 +64,12 @@ const revisionThreeHistory = sqlite.prepare(
 ).get();
 check("the losing race left no second history row", Number(revisionThreeHistory.n) === 1, `rows=${revisionThreeHistory.n}`);
 
+const managerRevision = Number((await read(manager)).headers.get("x-settings-rev"));
 const managerOwn = await save(manager, {
   key: "rri_commission_rates_v2",
   property_id: "P_A",
   value: { booking: { type: "fixed", rate: 50000, taxExempt: "false" } },
+  expected_revision: managerRevision,
 });
 check("explicitly permitted manager can write an assigned property", managerOwn.status === 200, `status=${managerOwn.status}`);
 const storedCommission = JSON.parse(sqlite.prepare(
@@ -75,13 +77,13 @@ const storedCommission = JSON.parse(sqlite.prepare(
 ).get().value_json);
 check("fixed commission is capped and string false stays false", storedCommission.booking.rate === 10000 && storedCommission.booking.taxExempt === false);
 
-check("manager cannot write another property", (await save(manager, { key: "rri_cc_fee_rate", property_id: "P_B", value: 0.02 })).status === 403);
-check("manager cannot write portfolio-global settings", (await save(manager, { key: "rri_cc_fee_rate", property_id: "*", value: 0.02 })).status === 403);
+check("manager cannot write another property", (await save(manager, { key: "rri_cc_fee_rate", property_id: "P_B", value: 0.02, expected_revision: Number((await read(manager)).headers.get("x-settings-rev")) })).status === 403);
+check("manager cannot write portfolio-global settings", (await save(manager, { key: "rri_cc_fee_rate", property_id: "*", value: 0.02, expected_revision: Number((await read(manager)).headers.get("x-settings-rev")) })).status === 403);
 const strippedManager = { ...manager, user: { ...manager.user, permissions: { manage_ota_commissions: false, manage_pricing: false } } };
-check("role name alone cannot restore an explicitly removed permission", (await save(strippedManager, { key: "rri_cc_fee_rate", property_id: "P_A", value: 0.02 })).status === 403);
+check("role name alone cannot restore an explicitly removed permission", (await save(strippedManager, { key: "rri_cc_fee_rate", property_id: "P_A", value: 0.02, expected_revision: Number((await read(strippedManager)).headers.get("x-settings-rev")) })).status === 403);
 
 const managerRevisionBeforeInvisibleWrite = Number((await read(manager)).headers.get("x-settings-rev"));
-await save(owner, { key: "rri_pricing_config", property_id: "P_B", value: { minMultiplier: 0.8 } });
+await save(owner, { key: "rri_pricing_config", property_id: "P_B", value: { minMultiplier: 0.8 }, expected_revision: Number((await read(owner)).headers.get("x-settings-rev")) });
 const managerAfterInvisibleWrite = await save(manager, {
   key: "rri_pricing_config",
   property_id: "P_A",

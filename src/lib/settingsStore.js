@@ -241,7 +241,10 @@ const syncListeners = new Set();
 const publishSyncState = () => syncListeners.forEach(fn => {
   try { fn(); } catch (error) { console.error('[settings] sync listener:', error); }
 });
-export function subscribeSettingsSync(listener) { syncListeners.add(listener); return () => syncListeners.delete(listener); }
+export function subscribeSettingsSync(listener) {
+  syncListeners.add(listener);
+  return () => { syncListeners.delete(listener); };
+}
 export function getSettingsSyncState() { return { conflict: settingsConflict, pending: pendingCloudSync.size, saving: isFlushingSettings, error: settingsSyncError || draftStorageError }; }
 function persistDraft(entry) {
   try { storeSettingsDraft(confirmedDraftScope, entry, currentServerRev); draftStorageError = null; return true; }

@@ -461,7 +461,7 @@ check(
 );
 check(
   "runLocalAutoPayroll calls it rather than reimplementing it",
-  () => /reconcileTimecards\(punches\)/.test(clientCode) && !/function\s+minutesBetween/.test(clientCode)
+  () => /reconcileTimecards\(propertyPunches\)/.test(clientCode) && !/function\s+minutesBetween/.test(clientCode)
 );
 check(
   "base44Client.js is still listed as protected",

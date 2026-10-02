@@ -28,6 +28,9 @@ const mocks = vi.hoisted(() => ({
   rebuild: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("@/components/settings/EnterpriseSettings", () => ({ default: () => null }));
+vi.mock("@/components/settings/SettingsConflictNotice", () => ({ default: () => null }));
+
 vi.mock("@/lib/AuthContext", () => ({
   useAuth: () => ({
     user: {

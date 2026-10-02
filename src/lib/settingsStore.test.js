@@ -7,6 +7,8 @@ import {
   pullRemoteSettings,
   flushCloudSettingSync,
   setEditingSettingsLock,
+  setCurrentServerRev,
+  clearPendingCloudSyncForTest,
   SYNCABLE_SETTING_KEYS,
 } from "./settingsStore";
 import { subscribeSettingsChange } from "./settingsBus";
@@ -18,6 +20,7 @@ describe("settingsStore cloud sync and persistence", () => {
   beforeEach(() => {
     store = {};
     fetchMock = vi.fn();
+    clearPendingCloudSyncForTest();
     setEditingSettingsLock(false);
     vi.stubGlobal("localStorage", {
       getItem: vi.fn((k) => store[k] ?? null),
@@ -48,10 +51,11 @@ describe("settingsStore cloud sync and persistence", () => {
   });
 
   it("writes locally and flushes to cloud endpoint", async () => {
+    setCurrentServerRev(0);
     fetchMock.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ ok: true }),
-      headers: new Headers(),
+      json: async () => ({ ok: true, revision: 1 }),
+      headers: new Headers({ "x-settings-rev": "1" }),
     });
 
     const success = writeJsonSetting("rri_commission_rates_v2", {
@@ -85,6 +89,8 @@ describe("settingsStore cloud sync and persistence", () => {
       headers: new Headers({ ETag: 'W/"rev-5-12345"', "x-settings-rev": "5" }),
       json: async () => ({
         ok: true,
+        revision: 5,
+        draft_scope: "a".repeat(64),
         settings: {
           rri_commission_rates_v2: { "booking.com": 0.15 },
           rri_cc_fee_rate: 0.03,

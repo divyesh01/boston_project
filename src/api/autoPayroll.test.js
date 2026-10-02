@@ -75,6 +75,13 @@ beforeEach(async () => {
   // sees an authorized actor. Done AFTER clearing storage so the session lands
   // in a clean store.
   await loginOwner();
+  // Payroll fails closed against the authorized Property roster. Seed the
+  // two properties used below so these tests reach payroll behavior rather than
+  // the deliberately denied nonexistent-property path.
+  await localDb.Property.bulkAdd([
+    { id: "P1", code: "P1", name: "Pin Prop", rooms: 50 },
+    { id: "P2", code: "P2", name: "P2 Prop", rooms: 50 },
+  ]);
 });
 
 describe("autoPayroll timecard integration (local path)", () => {

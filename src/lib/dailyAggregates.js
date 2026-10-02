@@ -307,18 +307,25 @@ export async function rebuildDailyAggregates({ propertyId = 'all', from = '', to
 
   let written = 0;
   await localDb.transaction('rw', localDb.DailyFinancialAggregate, async () => {
-    const existing = await localDb.DailyFinancialAggregate.toArray();
-    const existingMap = new Map(existing.map((row) => [`${row.property_id}|${row.business_date}`, row.id]));
-    const toPut = [];
+    // Resolve prior ids THROUGH THE COMPOUND INDEX, never with toArray().
+    // toArray() reads every aggregate row in the database just to build this map,
+    // so a 7-day rebuild scanned the whole table — the exact regression
+    // scripts/probe-ledger-index.mjs asserts against ("…and no ledger fell back
+    // to a table scan"). where([property_id+business_date]).equals([...]) touches
+    // only the days being rewritten.
+    const existingMap = new Map();
     for (const agg of days) {
-      const priorId = existingMap.get(`${agg.property_id}|${agg.business_date}`);
-      if (priorId != null) {
-        toPut.push({ ...agg, id: priorId });
-      } else {
-        toPut.push(agg);
-      }
-      written++;
+      const prior = await localDb.DailyFinancialAggregate
+        .where('[property_id+business_date]')
+        .equals([agg.property_id, agg.business_date])
+        .first();
+      if (prior) existingMap.set(`${agg.property_id}|${agg.business_date}`, prior.id);
     }
+    const toPut = days.map((agg) => {
+      const priorId = existingMap.get(`${agg.property_id}|${agg.business_date}`);
+      written++;
+      return priorId != null ? { ...agg, id: priorId } : agg;
+    });
     if (toPut.length > 0) {
       await localDb.DailyFinancialAggregate.bulkPut(toPut);
     }

@@ -419,8 +419,13 @@ async function DexieDelete() {
 
 const PROP = { code: 'RRI1416', name: 'Red Roof Inn & Suites Middleborough', rooms: 100 };
 const PROP2 = { code: 'RRI9999', name: 'Red Roof Inn & Suites Testville', rooms: 50 };
-const pid1 = await localDb.Property.add({ ...PROP, active: 1, created_date: new Date().toISOString() });
-const pid2 = await localDb.Property.add({ ...PROP2, active: 1, created_date: new Date().toISOString() });
+// Dexie's auto-increment returns a NUMBER, but importReport's isolation boundary
+// requires a string propertyId (src/lib/reportParsers.js:648) — the production
+// Import.jsx path normalizes with String(...) before calling it (Import.jsx:390).
+// Without this coercion the harness reproduced a caller shape production never
+// produces, and the guard correctly refused it.
+const pid1 = String(await localDb.Property.add({ ...PROP, active: 1, created_date: new Date().toISOString() }));
+const pid2 = String(await localDb.Property.add({ ...PROP2, active: 1, created_date: new Date().toISOString() }));
 console.log(`Properties seeded: #${pid1} ${PROP.name}, #${pid2} ${PROP2.name}\n`);
 
 // Sign in before the first db.entities call.

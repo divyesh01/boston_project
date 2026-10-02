@@ -643,3 +643,41 @@ Automated tests and probes deferred to owner Antigravity per explicit task direc
 
 3. **Tax Date Grouping Verification (`src/lib/moneyKeptModel.js`)**:
    Narrow inspection confirmed that `CalculationService.calculateTaxLiability` (lines 346–350) and `calculateMoneyKept` (lines 441–449) strictly partition incoming rows by `property_id` before evaluating property-specific tax configs (`getTaxConfig`) and effective tax rates (`getEffectiveTaxRates`). Per-property deductions in `moneyKeptModel.js` (lines 250–256) and liabilities (lines 269–277) similarly evaluate per-property before accumulating. No cross-property tax mix occurs; `moneyKeptModel.js` was preserved without code modifications.
+
+### Daily-aggregate rebuild stopped scanning the whole table — 2026-10-02
+
+Commit `d091e2a` ("perf: optimize startup hydration load time") batched the
+aggregate write half into a single `bulkPut`, but it first called
+`localDb.DailyFinancialAggregate.toArray()` to build an id lookup map. `toArray()`
+reads **every** aggregate row in the database, so rebuilding a 7-day window
+materialized the entire table: `scripts/probe-ledger-index.mjs` measured **449 rows
+and 1 table scan** where the contract is **56 rows and 0 scans**. The windowing work
+the probe exists to protect was silently undone by the batching.
+
+The fix keeps the batching and restores the indexed lookup. Prior ids are now
+resolved per day through `.where('[property_id+business_date]').equals([...])`,
+touching only the days being rewritten, and the rows are still written with one
+`bulkPut`. Measured after the fix: **56 rows, 0 scans** — identical to `main`.
+
+The rule this re-establishes: a write-path optimization that reaches the id map by
+reading more than the rows it is about to write is not an optimization. Do not use
+`toArray()` (or any unfiltered read) to resolve primary keys for a bounded
+rebuild; go through the compound index.
+
+### Acceptance harness passed a numeric propertyId — 2026-10-02
+
+`scripts/acceptance-harness.mjs` seeded properties with
+`localDb.Property.add(...)` and passed the return value straight into
+`importReport`. Dexie's auto-increment returns a **number**, but the isolation
+boundary at `src/lib/reportParsers.js:648` requires a **string** `propertyId`, so
+the harness died with `IMPORT_PROPERTY_REQUIRED`.
+
+The guard is correct and must not be relaxed: `hotelKeyImportFixtures.test.js:247`
+pins the refusal of an empty id, and the production path already normalizes with
+`String(...)` before calling (`src/pages/Import.jsx:390`). The harness was the only
+caller producing a shape production never emits, so the harness was fixed, not the
+boundary. `pid1` / `pid2` are now coerced once at creation.
+
+Harness result: **82 passed, 0 failed**. Note it needs ~9 minutes — a shorter
+timeout kills it mid-run and the SIGTERM is reported as a failure that looks like a
+defect.

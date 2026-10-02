@@ -29,7 +29,7 @@
 //   npm run verify:all -- --bail             stop at the first failure
 //   npm run verify:all -- --require-all      fail on skipped or partial checks
 //   npm run verify:all -- --json             machine-readable summary
-//   npm run verify:all -- --timeout 300      per-suite timeout in seconds
+//   npm run verify:all -- --timeout 600      per-suite timeout in seconds (default 900)
 //   npm run verify:all -- --shard 2/7        run the 2nd of 7 slices of the list
 //
 // Use --shard, NOT a reduced --timeout, when a single command's wall clock is
@@ -118,7 +118,15 @@ if (ONLY_REQUESTED && (hasOption("filter") || hasOption("shard"))) {
   process.exit(1);
 }
 const FILTER = value("filter", null);
-const TIMEOUT_RAW = value("timeout", "240");
+// 900s, not the old 240s. scripts/acceptance-harness.mjs drives the full import →
+// rollback → re-import lifecycle against real files and needs ~530s on this
+// machine; 240s killed it mid-run and the runner reported TIMEOUT, which reads as
+// a broken suite rather than a budget that was too small. Sharding does not help
+// here — one suite cannot be split across shards — so the per-suite default has
+// to clear the slowest suite. CI inherits this default (deep-verification.yml runs
+// `verify:all -- --shard i/12` with no --timeout), which is why the fix belongs
+// here rather than in a local flag.
+const TIMEOUT_RAW = value("timeout", "900");
 const TIMEOUT_S = Number(TIMEOUT_RAW);
 if (!Number.isFinite(TIMEOUT_S) || TIMEOUT_S <= 0 || TIMEOUT_S * 1000 > 2_147_483_647) {
   console.error(`--timeout must be a positive finite number of seconds no greater than 2147483.647 (got ${JSON.stringify(TIMEOUT_RAW)}).`);

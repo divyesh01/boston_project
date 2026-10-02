@@ -18,6 +18,7 @@ vi.mock('@/lib/useHotelData', () => ({
   useOccupancy: () => ({ data: data.occ, isLoading: false }),
   useGrossRevenue: () => ({ data: data.gross, isLoading: false }),
   usePaymentData: () => ({ data: [] }),
+  useProperties: () => ({ data: [], isLoading: false }),
 }));
 vi.mock('@/lib/useGlobalFilters', () => ({ useGlobalFilters: () => ({
   dateRange: { from: '2026-01-01', to: '2026-09-25' }, property: 'P_A', months: [],

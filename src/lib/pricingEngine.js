@@ -273,7 +273,7 @@ export function weatherShockMultiplier(weatherCondition, eventImpactFactor = 0) 
   return baseMult * (1 + shock * 0.2);
 }
 
-export function buildPricingForecast({ rooms, reservations, weatherByDate = {}, config, days = 14, fromDate, policyForDate }) {
+export function buildPricingForecast({ rooms, reservations, weatherByDate = {}, config, days = 14, fromDate, policyForDate = undefined }) {
   const cfg = { ...DEFAULT_PRICING_CONFIG, ...(config || {}) };
   const start = fromDate || new Date().toISOString().slice(0, 10);
   const presentTypes = (Array.isArray(rooms) && rooms.length > 0)

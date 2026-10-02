@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
     mediumRevenueThreshold: 3200,
   },
   refuseRevenueWrite: false,
+  properties: [],
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -48,7 +49,7 @@ vi.mock("@/lib/AuthContext", () => ({
 
 vi.mock("@/lib/useHotelData", () => ({
   useProperties: () => ({
-    data: [],
+    data: state.properties,
     isError: false,
     isFetching: false,
     refetch: vi.fn(),
@@ -200,6 +201,7 @@ describe("Settings page persistence contract", () => {
       mediumRevenueThreshold: 3200,
     };
     state.refuseRevenueWrite = false;
+    state.properties = [];
     vi.clearAllMocks();
   });
 

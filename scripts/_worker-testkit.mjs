@@ -98,6 +98,18 @@ class PreparedStatement {
   bind(...params) {
     return new BoundStatement(this._db, this._sql, params, this._stats);
   }
+  // Cloudflare D1 permits prepare(sql).run()/first()/all() when a statement has
+  // no bound parameters. Keep the shim faithful to that surface instead of
+  // forcing production code to add a meaningless .bind().
+  async first() {
+    return new BoundStatement(this._db, this._sql, [], this._stats).first();
+  }
+  async all() {
+    return new BoundStatement(this._db, this._sql, [], this._stats).all();
+  }
+  async run() {
+    return new BoundStatement(this._db, this._sql, [], this._stats).run();
+  }
 }
 
 class D1Shim {

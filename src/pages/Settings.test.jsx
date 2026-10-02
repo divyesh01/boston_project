@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
     mediumRevenueThreshold: 3200,
   },
   refuseRevenueWrite: false,
+  properties: [],
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -27,6 +28,9 @@ const mocks = vi.hoisted(() => ({
   invalidateQueries: vi.fn(),
   rebuild: vi.fn().mockResolvedValue(undefined),
 }));
+
+vi.mock("@/components/settings/EnterpriseSettings", () => ({ default: () => null }));
+vi.mock("@/components/settings/SettingsConflictNotice", () => ({ default: () => null }));
 
 vi.mock("@/lib/AuthContext", () => ({
   useAuth: () => ({
@@ -45,7 +49,7 @@ vi.mock("@/lib/AuthContext", () => ({
 
 vi.mock("@/lib/useHotelData", () => ({
   useProperties: () => ({
-    data: [],
+    data: state.properties,
     isError: false,
     isFetching: false,
     refetch: vi.fn(),
@@ -110,6 +114,10 @@ vi.mock("@/lib/settingsStore", () => ({
   flushCloudSettingSync: (...args) => mocks.flush(...args),
   setEditingSettingsLock: vi.fn(),
   isEditingSettingsLocked: () => false,
+  getSettingsSyncState: () => ({ conflict: null, pending: 0, saving: false, error: null }),
+  subscribeSettingsSync: () => () => {},
+  reviewSettingsConflict: vi.fn(),
+  resolveSettingsConflict: vi.fn(),
 }));
 
 vi.mock("@/lib/settingsBus", () => ({
@@ -193,6 +201,7 @@ describe("Settings page persistence contract", () => {
       mediumRevenueThreshold: 3200,
     };
     state.refuseRevenueWrite = false;
+    state.properties = [];
     vi.clearAllMocks();
   });
 

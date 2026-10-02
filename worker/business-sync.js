@@ -1368,7 +1368,7 @@ async function mutate(request, env, scope) {
     assertPropertyInScope(scope, mappedServerPropertyId);
   }
   const current = isBootstrap ? null : await queryFirst(env, "SELECT row_hash,property_key,server_property_id,row_json FROM business_record WHERE account_id=? AND generation_id=? AND entity_name=? AND record_key=?", [scope.accountId, generationId, entity, recordKey]);
-  if (operation === 'upsert' && ['Staff', 'PayrollRun'].includes(entity)) {
+  if (operation === 'upsert' && ['Staff', 'PayrollRun'].includes(entity) && !isGlobalRecord) {
     if (!mappedServerPropertyId) throw new SyncRequestError('Payroll and staff require an explicit property.', 422);
     try { await assertConfiguredWage(env, scope.accountId, { ...(body.row || {}), property_id: mappedServerPropertyId }, entity); }
     catch (err) { throw new SyncRequestError(err.message, 422); }

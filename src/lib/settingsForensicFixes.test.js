@@ -73,10 +73,18 @@ function createMockD1({ existingSettings = [], scalarMeta = null } = {}) {
     batch: async (stmts) => {
       batchCalled = true;
       executedStmts.push(...stmts);
-      const history = stmts.filter((s) => s.sql.includes("INSERT INTO app_setting_history"));
-      for (const stmt of history) currentRevision = Math.max(currentRevision, Number(stmt.args[5] || 0));
+      const guard = stmts.find((s) => s.sql.includes("INSERT INTO app_setting_write_guard"));
+      const expectedRevision = Number(guard?.args?.at(-1));
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision !== currentRevision) {
+        throw new Error("settings_revision_match");
+      }
+      const nextRevision = currentRevision + 1;
+      const history = stmts.filter((stmt) => stmt.sql.includes("INSERT INTO app_setting_history"));
+      currentRevision = nextRevision;
       if (history.length) currentCount = Math.max(currentCount, history.length);
-      return stmts.map(() => ({ success: true }));
+      return stmts.map((stmt, index) => index === 0
+        ? { success: true, results: [{ next_revision: nextRevision }] }
+        : { success: true, results: [] });
     },
   };
 
@@ -175,7 +183,10 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
     });
 
     const mockScope = /** @type {any} */ ({ accountId: "acc_test", all: true, propertyIds: ["prop_boston_1"], user: { role: "owner" } });
-    const matchingEtag = `W/"rev-12-5-${new Date("2026-09-08T00:00:00.000Z").getTime()}"`;
+    const scopeIdentity = JSON.stringify(["acc_test", null, "owner", true, [], []]);
+    const scopeDigest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(scopeIdentity)))]
+      .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const matchingEtag = `W/"scope-${scopeDigest}-rev-12-5-${new Date("2026-09-08T00:00:00.000Z").getTime()}"`;
 
     const request = new Request("https://example.com/api/settings", {
       method: "GET",
@@ -223,7 +234,9 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
     expect(conflictEvent).not.toBeNull();
     expect(conflictEvent?.code).toBe("SETTINGS_CONFLICT");
     expect(conflictEvent?.serverRevision).toBe(5);
-    expect(getCurrentServerRev()).toBe(5);
+    // A conflict reports the remote revision but does not silently rebase our
+    // rejected draft. Only the explicit review flow may advance its CAS base.
+    expect(getCurrentServerRev()).toBe(3);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(store["rri_cc_fee_rate"]).toBe("0.035");
 
@@ -237,6 +250,8 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
       headers: new Headers({ ETag: 'W/"rev-7-999"', "x-settings-rev": "7" }),
       json: async () => ({
         ok: true,
+        revision: 7,
+        draft_scope: "a".repeat(64),
         settings: {
           rri_cc_fee_rate: 0.029,
         },
@@ -259,7 +274,8 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
 
   // ─── Fix 5: Multi-Property Scope Preservation ──────────────────────────────
   it("Fix 5: preserves propertyId in sync payload and parses _byProperty on pull", async () => {
-    clearPendingCloudSyncForTest();
+    // beforeEach already reset the queue and hydrated revision zero; do not clear
+    // it again here because that deliberately marks the CAS base unknown.
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ ok: true, revision: 10 }),
@@ -283,6 +299,8 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
       headers: new Headers({ ETag: 'W/"rev-11-100"', "x-settings-rev": "11" }),
       json: async () => ({
         ok: true,
+        revision: 11,
+        draft_scope: "a".repeat(64),
         settings: {
           _byProperty: {
             prop_boston_1: { rri_cc_fee_rate: 0.028 },
@@ -306,6 +324,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        expected_revision: 0,
         key: "rri_cc_fee_rate",
         value: 0.03,
       }),
@@ -317,14 +336,15 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
 
     const historyStmt = executedStmts.find((s) => s.sql.includes("INSERT INTO app_setting_history"));
     expect(historyStmt).toBeDefined();
-    // args: [accountId, setting_key, property_id, oldValue, valJson, nextRev, updatedBy, now]
+    // The old value is selected inside the transaction; the revision comes from
+    // the write guard so neither can race a concurrent writer.
     expect(historyStmt.args[0]).toBe("acc_test");
     expect(historyStmt.args[1]).toBe("rri_cc_fee_rate");
     expect(historyStmt.args[2]).toBe("*");
-    expect(historyStmt.args[3]).toBeNull(); // old_value must be null for brand new setting!
-    expect(historyStmt.args[4]).toBe("0.03");
-    expect(historyStmt.args[5]).toBe(1); // revision must start at 1
-    expect(historyStmt.args[6]).toBe("user_owner");
+    expect(historyStmt.sql).toContain("(SELECT value_json FROM app_setting");
+    expect(historyStmt.args[6]).toBe("0.03");
+    expect(historyStmt.sql).toContain("SELECT next_revision FROM app_setting_write_guard");
+    expect(historyStmt.args[9]).toBe("user_owner");
   });
 
   // ─── Fix 7: Granular RBAC for Manager Role ──────────────────────────────────
@@ -343,6 +363,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        expected_revision: 0,
         key: "rri_commission_rates_v2",
         value: { expedia: 0.16 },
       }),
@@ -355,6 +376,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        expected_revision: 0,
         key: "rri_tax_settings_v1",
         value: [{ state_rate: 0.057 }],
       }),
@@ -414,6 +436,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        expected_revision: 0,
         key: "rri_commission_rates_v2",
         value: ratePayload,
       }),
@@ -452,6 +475,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        expected_revision: 0,
         key: "rri_tax_config_v1",
         value: taxConfigPayload,
       }),
@@ -496,6 +520,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        expected_revision: 0,
         key: "rri_pricing_config",
         value: { minRate: 75, maxRate: 450, targetOccupancy: 80 },
       }),
@@ -506,7 +531,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
   });
 
   // ─── Fix 12: ETag on POST response ─────────────────────────────────────────
-  it("Fix 12: POST /api/settings returns computed ETag and x-settings-rev in response headers", async () => {
+  it("Fix 12: POST /api/settings returns the committed revision without caching an unread snapshot", async () => {
     const { mockDb } = createMockD1({ existingSettings: [] });
     const mockEnv = /** @type {any} */ ({ DB: mockDb });
     const mockScope = /** @type {any} */ ({ accountId: "acc_test", all: true, propertyIds: ["prop_boston_1"], user: { id: "user_owner", role: "owner" } });
@@ -515,6 +540,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        expected_revision: 0,
         key: "rri_cc_fee_rate",
         value: 0.029,
       }),
@@ -522,7 +548,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
 
     const res = await handleSettingsRequest(req, mockEnv, mockScope, new URL(req.url), ["settings"]);
     expect(res.status).toBe(200);
-    expect(res.headers.get("ETag")).toMatch(/^W\/"rev-1-/);
+    expect(res.headers.get("ETag")).toBeNull();
     expect(res.headers.get("x-settings-rev")).toBe("1");
   });
 
@@ -575,6 +601,8 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
       headers: new Headers({ ETag: 'W/"rev-20-100"', "x-settings-rev": "20" }),
       json: async () => ({
         ok: true,
+        revision: 20,
+        draft_scope: "a".repeat(64),
         settings: {
           rri_alert_thresholds_v1: { occupancy_drop_pct: 20 },
           rri_pricing_config_v1: { minRate: 80 },
@@ -621,7 +649,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
       new Request("https://example.com/api/settings", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ key: "rri_cc_fee_rate", value: 0.03, property_id: propertyId }),
+        body: JSON.stringify({ expected_revision: 0, key: "rri_cc_fee_rate", value: 0.03, property_id: propertyId }),
       }),
       mockEnv,
       managerScope,
@@ -642,7 +670,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
       new Request("https://example.com/api/settings", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ key, value, ...(expectedRevision === undefined ? {} : { expected_revision: expectedRevision }) }),
+        body: JSON.stringify({ key, value, expected_revision: expectedRevision ?? 0 }),
       }),
       mockEnv,
       ownerScope,
@@ -665,6 +693,7 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        expected_revision: 0,
         key: "rri_commission_rates_v2",
         value: { booking: { type: "fixed", rate: 50000, taxExempt: "false" } },
       }),
@@ -680,6 +709,8 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
       headers: new Headers({ ETag: 'W/"rev-21-1"', "x-settings-rev": "21" }),
       json: async () => ({
         ok: true,
+        revision: 21,
+        draft_scope: "a".repeat(64),
         settings: { _byProperty: { prop_a: { rri_pricing_config_v1: { minRate: 88 } } } },
       }),
     });

@@ -64,7 +64,7 @@ const MUTATIONS = [
     id: "M1",
     behaviour: "property assignment",
     where: [PARSERS],
-    find: '    property_id: meta.propertyId || "",',
+    find: '    property_id: meta.propertyId ?? "",',
     replace: '    property_id: "",',
     suites: [IMPORT_SUITE],
   },

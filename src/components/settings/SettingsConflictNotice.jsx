@@ -5,7 +5,10 @@ export default function SettingsConflictNotice() {
   const [state, setState] = useState(getSettingsSyncState);
   const [review, setReview] = useState(null), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [choices, setChoices] = useState({});
-  useEffect(() => subscribeSettingsSync(() => { setState(getSettingsSyncState()); setReview(null); setChoices({}); }), []);
+  useEffect(() => {
+    const unsubscribe = subscribeSettingsSync(() => { setState(getSettingsSyncState()); setReview(null); setChoices({}); });
+    return () => { unsubscribe(); };
+  }, []);
   const act = async fn => { setBusy(true); setError(''); try { await fn(); } catch (e) { setError(e.message); } finally { setBusy(false); } };
   if (!state.conflict && !state.pending && !state.error) return null;
   const groups = new Map();

@@ -77,7 +77,11 @@ jobs:
         run: npm run map:verify
 
       - name: Run Tests
-        run: npm test
+        # Keep a broken/open-handle test from occupying a runner for hours. The
+        # normal suite is well under this ceiling; verbose output leaves the last
+        # completed test visible if teardown ever wedges again.
+        timeout-minutes: 3
+        run: npm test -- --reporter=verbose
 
       - name: Security Vulnerability Audit
         # Was `npm audit --audit-level=high`, which cannot pass while `xlsx`

@@ -501,7 +501,10 @@ export function roomCountsFrom(input) {
 // and RevPAR on any export with more than one section per date.
 export function capacityRoomNights(occRows, properties) {
   const rooms = roomCountsFrom(properties);
-  return capacityRoomNightsBy(occRows, (pid) => rooms[pid] ?? 0);
+  // Legacy/unmapped occupancy rows still represent a real hotel day. Preserve
+  // the long-standing default inventory rather than turning their denominator
+  // into zero just because the current property roster has not resolved the id.
+  return capacityRoomNightsBy(occRows, (pid) => rooms[pid] ?? PROPERTY.rooms);
 }
 
 // Physical room inventory in scope: one property's rooms, or the sum across the

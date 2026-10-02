@@ -560,7 +560,7 @@ export async function handleSettingsRequest(request, env, scope, url, parts) {
         `).bind(accountId, item.key, item.propertyId, valJson, accountId, requestId, updatedBy, now));
       }
       stmts.push(env.DB.prepare('DELETE FROM app_setting_write_guard WHERE account_id = ? AND request_id = ?').bind(accountId, requestId));
-      const results = await env.DB.batch(stmts);
+      const results = /** @type {Array<{results?: Array<{next_revision?: number}>}>} */ (await env.DB.batch(stmts));
       const nextRevision = Number(results[0]?.results?.[0]?.next_revision);
       if (!Number.isSafeInteger(nextRevision)) throw new Error('Missing settings commit revision');
       const revision = nextRevision;

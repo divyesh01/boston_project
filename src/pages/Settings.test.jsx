@@ -110,6 +110,10 @@ vi.mock("@/lib/settingsStore", () => ({
   flushCloudSettingSync: (...args) => mocks.flush(...args),
   setEditingSettingsLock: vi.fn(),
   isEditingSettingsLocked: () => false,
+  getSettingsSyncState: () => ({ conflict: null, pending: 0, saving: false, error: null }),
+  subscribeSettingsSync: () => () => {},
+  reviewSettingsConflict: vi.fn(),
+  resolveSettingsConflict: vi.fn(),
 }));
 
 vi.mock("@/lib/settingsBus", () => ({

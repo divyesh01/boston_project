@@ -15,6 +15,7 @@ const aliases = Object.freeze({
   'direct bill': 'DIRECT BILL', 'wire transfer': 'WIRE TRANSFER', 'payment total': 'Total', total: 'Total',
   'system charge': 'System', food: 'Food', beverage: 'Beverage', laundry: 'Laundry', bar: 'Bar', event: 'Event', phone: 'Phone', other: 'Other',
 });
+/** @param {any[][]} rawRows @param {{adapter?: string, type?: string, propertyId?: string|number|null}} [options] */
 export function adaptPmsGrid(rawRows, { adapter = 'hotelkey', type = 'auto', propertyId } = {}) {
   if (!PMS_ADAPTERS.includes(adapter)) throw new Error('Unsupported PMS adapter. Configure a mapped daily CSV export.');
   if (adapter === 'hotelkey') return { rawRows, adapter, type };

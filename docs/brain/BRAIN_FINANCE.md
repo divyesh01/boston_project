@@ -613,3 +613,33 @@ Clerk and timecard scan logic now live in `src/lib/parsers/clerk.js` and
 `src/lib/parsers/timecard.js`. `reportParsers.js` remains the dispatch/import
 orchestrator. The committed HotelKey fixture corpus and mutation harness pin both scanner
 contracts; do not copy either scanner back into the orchestrator.
+
+### Fail-closed aggregate selection for portfolio scopes — 2026-10-01
+
+`useDailyFinancialAggregates` in `src/lib/useHotelData.js` now enforces fail-closed
+aggregate selection for portfolio and multi-property queries. When `propertyId` is `"all"`,
+an array of IDs, empty, null, or unset, the hook bypasses local/server daily aggregates and
+guarantees `data: null`. To eliminate the risk of React Query exposing stale warm cache
+from previous queries under the legacy query key, the hook:
+1. Namespaces active single-property queries under `["daily-aggregates", "single", ...]` and
+   disabled portfolio scopes under `["daily-aggregates", "portfolio-disabled", ...]`.
+2. Applies a `select: (data) => (isSingleProperty ? data : null)` projection.
+3. Explicitly returns `{ ...query, data: null }` for non-single-property queries (`enabled: false`).
+
+Neither local IndexedDB `DailyFinancialAggregate` nor the `/api/aggregates/daily` fast-path
+proves full portfolio property cardinality, date continuity, or subledger completeness across
+all properties. Preserving the single-property fast-path ensures <1s rendering for single-property
+views while guaranteeing callers always query property-scoped raw ledgers
+(`useOccupancy`, `useSources`, `useGrossRevenue`, `usePaymentData`) without seeing partial caches.
+Automated tests and probes deferred to owner Antigravity per explicit task directive.
+
+### Multi-property financial corrections — 2026-10-01
+
+1. **Per-Property Room Revenue Fallback (`src/lib/hotel.js#grossRevenueForPeriod`)**:
+   `grossRevenueForPeriod` now resolves room revenue by property partition instead of portfolio-wide existence. When a multi-property selection includes properties with occupancy data alongside properties with only Gross Revenue data, properties lacking occupancy rows safely fall back to `room_rent` without double-counting room nights for properties that possess occupancy rows. Ancillary revenue continues to aggregate across all gross rows, and calculations remain in integer cents.
+
+2. **Portfolio-Correct Revenue Trends (`src/components/dashboard/RevenueTrend.jsx#buildRevenueTrendData`)**:
+   `buildRevenueTrendData` now accumulates revenue in integer cents using `toCents` / `fromCents`. To prevent ratio distortion in partial capacity coverage, physical rooms sold and available are aggregated strictly from capacity-covered rows (`avail > 0`). For rows lacking capacity (`avail === 0`), occupancy is inferred strictly when defensible implied capacity exists (`sold / occupancy`); unsupported occupancy-only source rows or sold counts lacking capacity/occupancy are excluded from portfolio occupancy when no weight exists, and dates with no defensible denominator return 0 to cleanly hide the chart line. When `allRoomsSold === 0`, fallback ADR weights by revenue and implied rooms sold (or portfolio mean of reported ADRs), completely eliminating last-row-wins order bias.
+
+3. **Tax Date Grouping Verification (`src/lib/moneyKeptModel.js`)**:
+   Narrow inspection confirmed that `CalculationService.calculateTaxLiability` (lines 346–350) and `calculateMoneyKept` (lines 441–449) strictly partition incoming rows by `property_id` before evaluating property-specific tax configs (`getTaxConfig`) and effective tax rates (`getEffectiveTaxRates`). Per-property deductions in `moneyKeptModel.js` (lines 250–256) and liabilities (lines 269–277) similarly evaluate per-property before accumulating. No cross-property tax mix occurs; `moneyKeptModel.js` was preserved without code modifications.

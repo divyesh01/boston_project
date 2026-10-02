@@ -363,11 +363,31 @@ export function useMetricDates(propertyId) {
 // IndexedDB; if empty (fresh browser context), queries server /api/aggregates/daily
 // fast-path so the dashboard paints in <1s. Returns null when both are empty so
 // callers fall back to live computation.
+//
+// Fail-closed aggregate selection: portfolio (all, array selections, null/empty/unset)
+// returns null so callers always query property-scoped raw ledgers. Neither local
+// nor server summary proves full portfolio property/date/subledger freshness.
 export function useDailyFinancialAggregates(dateRange, propertyId, enabled = true) {
-  return useQuery({
-    queryKey: ["daily-aggregates", DAILY_AGGREGATE_VERSION, dateRange?.from, dateRange?.to, Array.isArray(propertyId) ? propertyId.join(",") : propertyId],
-    enabled,
+  const isSingleProperty = typeof propertyId === "string" && propertyId.trim() !== "" && propertyId !== "all";
+
+  // Use a dedicated namespace for single-property queries to avoid colliding with
+  // any legacy or warm cache keys for portfolio/all/arrays.
+  // In addition, select projection and explicit result projection guarantee data: null
+  // when not a single property, even if old cached data exists in React Query.
+  const query = useQuery({
+    queryKey: [
+      "daily-aggregates",
+      isSingleProperty ? "single" : "portfolio-disabled",
+      DAILY_AGGREGATE_VERSION,
+      dateRange?.from,
+      dateRange?.to,
+      isSingleProperty ? propertyId : (Array.isArray(propertyId) ? propertyId.join(",") : (propertyId || "all")),
+    ],
+    enabled: Boolean(enabled && isSingleProperty),
+    select: (data) => (isSingleProperty ? data : null),
     queryFn: async () => {
+      if (!isSingleProperty) return null;
+
       const aggs = await getDailyAggregates({
         propertyId,
         from: dateRange?.from || "",
@@ -377,7 +397,7 @@ export function useDailyFinancialAggregates(dateRange, propertyId, enabled = tru
 
       // Fast-path for clean browser contexts: query server-authoritative daily summaries
       try {
-        const propParam = Array.isArray(propertyId) ? propertyId.join(",") : (propertyId || "all");
+        const propParam = propertyId;
         const url = new URL("/api/aggregates/daily", globalThis.location?.origin || "http://localhost");
         if (propParam && propParam !== "all") url.searchParams.set("property_id", propParam);
         if (dateRange?.from) url.searchParams.set("from", dateRange.from);
@@ -403,6 +423,8 @@ export function useDailyFinancialAggregates(dateRange, propertyId, enabled = tru
     },
     staleTime: 30 * 1000,
   });
+
+  return isSingleProperty ? query : { ...query, data: null };
 }
 
 //

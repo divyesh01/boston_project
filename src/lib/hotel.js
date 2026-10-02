@@ -137,12 +137,23 @@ export function grossRevenueForPeriod({ grossRows = [], occRows = [] } = {}) {
   const gRows = grossRows || [];
   const oRows = occRows || [];
 
-  // Room revenue from the room ledger. Only when there is no occupancy data at
-  // all does `room_rent` on the gross rows stand in for it — never both, or the
-  // same room night would be counted twice.
-  const roomCents = oRows.length
-    ? sumCents(oRows.map((r) => r.room_revenue))
-    : sumCents(gRows.map((r) => r.room_rent));
+  // Partition by property so that if a selected property only has Gross Revenue
+  // data (no occupancy rows), its room_rent fallback is preserved without
+  // double-counting room nights for properties that DO have occupancy data.
+  const oProps = new Set(oRows.map((r) => r.property_id ?? ""));
+  const gProps = new Set(gRows.map((r) => r.property_id ?? ""));
+  const allProps = new Set([...oProps, ...gProps]);
+
+  let roomCents = 0;
+  for (const pid of allProps) {
+    const oForProp = oRows.filter((r) => (r.property_id ?? "") === pid);
+    if (oForProp.length > 0) {
+      roomCents += sumCents(oForProp.map((r) => r.room_revenue));
+    } else {
+      const gForProp = gRows.filter((r) => (r.property_id ?? "") === pid);
+      roomCents += sumCents(gForProp.map((r) => r.room_rent));
+    }
+  }
 
   const ancillaryCents = ancillaryRevenueCents(gRows);
   const cents = roomCents + ancillaryCents;

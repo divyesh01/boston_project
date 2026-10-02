@@ -3,6 +3,7 @@ import Card from "@/components/ui-exec/Card";
 import ChartToolbar from "@/components/charts/ChartToolbar";
 import { AreaChart, Area, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from "recharts";
 import { C, money, getOccThreshold } from "@/lib/hotel";
+import { toCents, fromCents } from "@/lib/decimal";
 
 /**
  * Normalizes and groups daily report rows into chronologically sorted,
@@ -24,25 +25,51 @@ export function buildRevenueTrendData(rows) {
 
     const existing = byDate.get(isoDate) || {
       fullDate: isoDate,
-      revenue: 0,
-      roomsSold: 0,
-      roomsAvailable: 0,
-      occSum: 0,
-      rowCount: 0,
-      fallbackAdr: 0,
+      revenueCents: 0,
+      allRoomsSold: 0,
+      // Known occupied and available counts only from capacity-covered rows
+      coveredRoomsSold: 0,
+      coveredRoomsAvailable: 0,
+      // Uncovered rows (no capacity) with roomsSold & occupancy (defensible implied capacity)
+      uncoveredRoomsSold: 0,
+      uncoveredCapacityWeight: 0,
+      // Fallback ADR weighting tracking
+      adrRevenueCents: 0,
+      impliedRoomsSold: 0,
+      adrSumCents: 0,
+      adrCount: 0,
     };
 
-    const rev = Number(r.room_revenue ?? r.revenue) || 0;
+    const revCents = toCents(r.room_revenue ?? r.revenue);
     const sold = Number(r.rooms_sold) || 0;
-    const avail = Number(r.rooms_available) || 0;
+    const avail = Number(r.rooms_available ?? r.total_rooms) || 0;
     const occ = Number(r.occupancy) || 0;
+    const adr = Number(r.adr) || 0;
+    const adrCents = toCents(adr);
 
-    existing.revenue += rev;
-    existing.roomsSold += sold;
-    existing.roomsAvailable += avail;
-    existing.occSum += occ;
-    existing.rowCount += 1;
-    if (r.adr) existing.fallbackAdr = Number(r.adr);
+    existing.revenueCents += revCents;
+    existing.allRoomsSold += sold;
+
+    // Compute portfolio occupancy strictly from rows with explicit capacity or
+    // defensible implied capacity (sold / occupancy). Unsupported occupancy-only
+    // source rows or sold counts lacking capacity/occupancy cannot infer capacity
+    // and are omitted from the portfolio denominator to prevent distortion.
+    if (avail > 0) {
+      existing.coveredRoomsSold += sold;
+      existing.coveredRoomsAvailable += avail;
+    } else if (sold > 0 && occ > 0) {
+      existing.uncoveredRoomsSold += sold;
+      existing.uncoveredCapacityWeight += sold / occ;
+    }
+
+    if (adrCents > 0) {
+      existing.adrSumCents += adrCents;
+      existing.adrCount += 1;
+      if (revCents > 0) {
+        existing.adrRevenueCents += revCents;
+        existing.impliedRoomsSold += revCents / adrCents;
+      }
+    }
 
     byDate.set(isoDate, existing);
   }
@@ -52,26 +79,32 @@ export function buildRevenueTrendData(rows) {
 
   return sortedDates.map((isoDate) => {
     const item = byDate.get(isoDate);
+
     let adr = 0;
-    if (item.roomsSold > 0) {
-      adr = item.revenue / item.roomsSold;
-    } else if (item.fallbackAdr > 0) {
-      adr = item.fallbackAdr;
+    if (item.allRoomsSold > 0) {
+      adr = fromCents(Math.round(item.revenueCents / item.allRoomsSold));
+    } else if (item.impliedRoomsSold > 0) {
+      adr = fromCents(Math.round(item.adrRevenueCents / item.impliedRoomsSold));
+    } else if (item.adrCount > 0) {
+      adr = fromCents(Math.round(item.adrSumCents / item.adrCount));
     }
 
     let occupancy = 0;
-    if (item.roomsAvailable > 0) {
-      occupancy = item.roomsSold / item.roomsAvailable;
-    } else if (item.rowCount > 0) {
-      occupancy = item.occSum / item.rowCount;
+    const totalCapacityWeight = item.coveredRoomsAvailable + item.uncoveredCapacityWeight;
+    const totalOccupiedRooms = item.coveredRoomsSold + item.uncoveredRoomsSold;
+
+    // When no defensible denominator exists across rows for this date, return 0
+    // so the chart safely hides the occupancy line.
+    if (totalCapacityWeight > 0) {
+      occupancy = totalOccupiedRooms / totalCapacityWeight;
     }
     occupancy = Math.max(0, Math.min(1, occupancy));
 
     return {
       date: isoDate.slice(5),
       fullDate: isoDate,
-      revenue: Math.round(item.revenue * 100) / 100,
-      adr: Math.round(adr * 100) / 100,
+      revenue: fromCents(item.revenueCents),
+      adr,
       occupancyPct: Math.round(occupancy * 100),
     };
   });

@@ -32,11 +32,18 @@ protect one of them:
    a server-side secret, so altering history breaks verification instead of
    silently rewriting it.
 
-**Size, as observed on this branch:** 41 page components under `src/pages/`,
-**37 routed** in `src/App.jsx`; 16 Base44 entities; 19 serverless functions; 75
-shadcn/ui primitives in `src/components/ui/`; 152 modules in `src/lib/`; 20 Worker
+**Size, as observed on this branch:** **34 page components** under `src/pages/`,
+**all 34 routed** in `src/App.jsx`; 16 Base44 entities; 19 serverless functions;
+56 shadcn/ui primitives in `src/components/ui/`; 152 modules in `src/lib/`; 20 Worker
 JavaScript modules plus a `schema.sql`; 8 D1 migrations. `package.json` is `private: true` at version `0.0.0` —
 this is not a published npm package.
+
+> [!NOTE]
+> **These counts exclude tests.** Unit tests are colocated beside the code they
+> cover — 7 `*.test.jsx` under `src/pages/` and 19 under `src/components/ui/` —
+> so a plain directory listing overstates both. `src/App.jsx` declares 37
+> `<Route>` elements, but three are not pages: a redirect, a layout wildcard, and
+> the 404 catch-all.
 
 > [!NOTE]
 > This repository has **no `LICENSE` file and no `CONTRIBUTING.md`.** It is
@@ -232,7 +239,7 @@ Three harnesses verify the verification suite itself — that the checks can fai
 ```mermaid
 graph TD
     subgraph Browser["User's Browser"]
-        UI["React SPA<br/>41 pages · 37 routed"]
+        UI["React SPA<br/>34 pages · 34 routed"]
         DB_Local[("Dexie / IndexedDB<br/>offline cache")]
         UI <--> DB_Local
     end
@@ -257,7 +264,7 @@ Grouped by domain:
 | Property & tenancy | `Property` |
 | Identity & access | `User`, `Session`, `RateLimit` |
 | Financial core | `GrossRevenueDay`, `PaymentDay`, `Expense`, `PayrollRun` |
-| Operations | `OccupancyDay`, `SourceDay`, `TimecardPunch`, `ClerkShiftRecord` |
+| Operations | `OccupancyDay`, `SourceDay`, `Staff`, `TimecardPunch`, `ClerkShiftRecord` |
 | Ingestion & audit | `UploadedReport`, `AuditLog`, `Channel` |
 
 Each is a `.jsonc` schema in `base44/entities/`.

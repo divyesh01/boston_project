@@ -8,7 +8,12 @@ import PropertyRanking from './PropertyRanking';
 
 const data = vi.hoisted(() => ({ occ: [], gross: [], payroll: [] }));
 vi.mock('@/api/base44Client', () => ({ db: { entities: {} } }));
-vi.mock('@tanstack/react-query', () => ({ useQuery: () => ({ data: data.payroll }) }));
+vi.mock('@tanstack/react-query', () => ({
+  QueryClient: class {
+    getQueryData() { return undefined; }
+  },
+  useQuery: () => ({ data: data.payroll }),
+}));
 vi.mock('@/lib/useHotelData', () => ({
   useOccupancy: () => ({ data: data.occ, isLoading: false }),
   useGrossRevenue: () => ({ data: data.gross, isLoading: false }),

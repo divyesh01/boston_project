@@ -234,7 +234,9 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
     expect(conflictEvent).not.toBeNull();
     expect(conflictEvent?.code).toBe("SETTINGS_CONFLICT");
     expect(conflictEvent?.serverRevision).toBe(5);
-    expect(getCurrentServerRev()).toBe(5);
+    // A conflict reports the remote revision but does not silently rebase our
+    // rejected draft. Only the explicit review flow may advance its CAS base.
+    expect(getCurrentServerRev()).toBe(3);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(store["rri_cc_fee_rate"]).toBe("0.035");
 
@@ -248,6 +250,8 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
       headers: new Headers({ ETag: 'W/"rev-7-999"', "x-settings-rev": "7" }),
       json: async () => ({
         ok: true,
+        revision: 7,
+        draft_scope: "a".repeat(64),
         settings: {
           rri_cc_fee_rate: 0.029,
         },
@@ -270,7 +274,8 @@ describe("Settings Forensic Fixes Verification Suite (All 8 Findings)", () => {
 
   // ─── Fix 5: Multi-Property Scope Preservation ──────────────────────────────
   it("Fix 5: preserves propertyId in sync payload and parses _byProperty on pull", async () => {
-    clearPendingCloudSyncForTest();
+    // beforeEach already reset the queue and hydrated revision zero; do not clear
+    // it again here because that deliberately marks the CAS base unknown.
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ ok: true, revision: 10 }),

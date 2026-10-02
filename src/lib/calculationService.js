@@ -343,13 +343,18 @@ export class CalculationService {
 
   static calculateTaxLiability(srcRows = [], grossRows = [], propertyId = null, dateRange = { from: '', to: '' }, occupancyRows = [], includeCalculations = false) {
     if (propertyId === 'all' || Array.isArray(propertyId)) propertyId = null;
-    const sourceDays = new Set(srcRows.map(row=>JSON.stringify([row.property_id ?? '*',String(row.date).slice(0,10)])));
-    srcRows = [...srcRows,...occupancyRows.filter(row=>!sourceDays.has(JSON.stringify([row.property_id ?? '*',String(row.date).slice(0,10)]))).map(row=>({...row,source:'__ROOM_REVENUE_ESTIMATE__',tax_basis_fallback:true,net_revenue:row.room_revenue}))];
-    const propertyIds = [...new Set([...srcRows,...grossRows].map(row=>row.property_id ?? '*'))];
+    // Historical/imported rows represent an unscoped property both as "" and as
+    // an absent property_id. They are the same bucket, not two hotels. Keep real
+    // IDs (including numeric/string zero) distinct while normalising only those
+    // two legacy "no property" forms.
+    const rowPropertyId = row => row?.property_id == null || row.property_id === '' ? (propertyId ?? '*') : row.property_id;
+    const sourceDays = new Set(srcRows.map(row=>JSON.stringify([rowPropertyId(row),String(row.date).slice(0,10)])));
+    srcRows = [...srcRows,...occupancyRows.filter(row=>!sourceDays.has(JSON.stringify([rowPropertyId(row),String(row.date).slice(0,10)]))).map(row=>({...row,source:'__ROOM_REVENUE_ESTIMATE__',tax_basis_fallback:true,net_revenue:row.room_revenue}))];
+    const propertyIds = [...new Set([...srcRows,...grossRows].map(row=>rowPropertyId(row)))];
     if (propertyIds.length > 1) {
       const totals = {state:0,city:0,other:0,total:0,imported:0,estimated:0,calculations:[]};
       for (const id of propertyIds) {
-        const part = this.calculateTaxLiability(srcRows.filter(r=>(r.property_id ?? '*')===id),grossRows.filter(r=>(r.property_id ?? '*')===id),id,dateRange,occupancyRows.filter(r=>(r.property_id ?? '*')===id),includeCalculations);
+        const part = this.calculateTaxLiability(srcRows.filter(r=>rowPropertyId(r)===id),grossRows.filter(r=>rowPropertyId(r)===id),id,dateRange,occupancyRows.filter(r=>rowPropertyId(r)===id),includeCalculations);
         for (const key of ['state','city','other','total','imported','estimated']) totals[key] = fromCents(toCents(totals[key])+toCents(part[key]));
         if (includeCalculations) totals.calculations.push(...(part.calculations || []));
       }

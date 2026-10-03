@@ -60,7 +60,7 @@ export function buildOwnerPerformancePacketWorkbook({
     ['Portfolio Occupancy', fmtPct((kpis.occupancy || 0) * 100), 'Weighted by available room capacity'],
     ['Average Daily Rate (ADR)', fmtMoney(kpis.adr || 0), 'Revenue per occupied room night'],
     ['Revenue Per Available Room (RevPAR)', fmtMoney(kpis.revpar || 0), 'Total room revenue / total capacity'],
-    ['Total Net Kept Revenue', kpis.netKept == null ? 'UNAVAILABLE' : fmtMoney(kpis.netKept), 'Net take-home after OTA commissions & fees'],
+    [(kpis.taxIncomplete || kpis.isPartial) ? 'Total Net Kept Revenue (Partial Estimate)' : 'Total Net Kept Revenue', kpis.netKept == null ? 'UNAVAILABLE' : fmtMoney(kpis.netKept), (kpis.taxIncomplete || kpis.isPartial) ? 'Partial estimate: tax calculations incomplete (missing rates or room nights)' : 'Net take-home after OTA commissions & fees'],
     ['OTA Commission Drag', fmtMoney(kpis.commissionTotal || 0), 'Total distribution commission deducted'],
     ['OTA Commission Ratio', fmtPct((kpis.commissionRate || 0) * 100), 'Commission as % of gross revenue'],
     ['Direct Booking Share', fmtPct((kpis.directShare || 0) * 100), 'Share of revenue from direct and brand web'],
@@ -303,8 +303,11 @@ export function buildOwnerPerformancePacketWorkbook({
   }
 
   let invariantCheck = 'Reconciliation Pending / Unverified';
+  const isPartialNetKept = Boolean(kpis.taxIncomplete || kpis.isPartial);
   if (isReconciled && hasNonZeroActivity) {
-    invariantCheck = 'Integer Cent Balance Verified; Rate Card Controls Not Evaluated';
+    invariantCheck = isPartialNetKept
+      ? 'Integer Cent Balance Verified; Business Taxes Incomplete (Partial Estimate)'
+      : 'Integer Cent Balance Verified; Rate Card Controls Not Evaluated';
   } else if (reconciliation.difference > 0) {
     invariantCheck = `Reconciliation Variance Detected: ${fmtMoney(reconciliation.difference)} Drift`;
   } else if (reconciliation.status === 'incomplete') {
@@ -326,7 +329,7 @@ export function buildOwnerPerformancePacketWorkbook({
     ['Properties Scoped:', properties.map((p) => p.name || p.id).join(', ')],
     ['Property Count:', properties.length],
     ['Total Portfolio Room Revenue:', fmtMoney(kpis.revenue || 0)],
-    ['Total Net Kept Revenue:', kpis.netKept == null ? 'UNAVAILABLE' : fmtMoney(kpis.netKept)],
+    ['Total Net Kept Revenue:', kpis.netKept == null ? 'UNAVAILABLE' : isPartialNetKept ? `${fmtMoney(kpis.netKept)} (PARTIAL - TAX INCOMPLETE)` : fmtMoney(kpis.netKept)],
     ['Reconciliation Variance:', fmtMoney(reconciliation.difference || 0)],
     ['Reconciliation Status:', reconStatusLabel],
     ['Portfolio Health Score:', healthScoreDisplay],

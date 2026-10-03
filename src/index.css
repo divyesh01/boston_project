@@ -1,8 +1,38 @@
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap');
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.js";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --default-ring-width: 3px;
+  --default-ring-color: var(--color-blue-500);
+  --radius-full: 9999px;
+  --color-slate-200: #e2e8f0;
+  --color-blue-500: oklch(62.3% 0.214 259.815);
+}
+
+@utility outline-none {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+@layer utilities {
+  .outline-none {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+  }
+}
+
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentColor);
+  }
+}
 
 @layer base {
   :root {

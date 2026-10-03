@@ -1159,3 +1159,22 @@ When a consolidated or multi-quarter report (such as `Source Summary (1).csv` co
 The Import page reads active bulk manifests from the server when business sync is enabled. This lets a fresh browser show a completed Source Summary or Hotel Statistics report even when its local history cache is empty. A failed queue card is cleared when the same property's file hash is active on the server. Repeated legacy Gross Revenue history rows with the same file hash show as one row, keeping the first import session that owns the data. Gross Revenue's parser type (`gross`) now uses the bulk path under the server's `gross_revenue` type for future imports.
 
 The production Hotel Statistics successor had already written its revision-2403 change event and superseded its predecessor, but its manifest still said `raw_archived`. A guarded one-row D1 repair marked that successor active; no source archive or report rows were deleted. The pending count then fell to zero.
+
+## Worker Fast-Path Aggregate Availability Contract & Schema Migration Status (2026-10-03)
+
+### Fast-Path Query Invariants & Table Absence Guards
+The `/api/aggregates/daily` handler in `worker/aggregates.js` provides server-authoritative daily aggregate summaries for headline KPI and dashboard rendering. In production environments where migrations `0008_property_day_summary.sql` and `0009_enterprise_settings_guard.sql` are pending owner APPROVAL (authenticated owner UI acceptance is a separate required proof), the handler enforces graceful degradation:
+
+1. **Narrow Table Absence Guards**: The primary query against `property_day_summary` parses the exact table identifier and is guarded strictly against exact missing-table errors (`no such table: property_day_summary` with observed SQLite/D1 wrappers, quotes, `: SQLITE_ERROR`, closed numeric error codes, or `main`/`temp` schema qualification). Punctuation and suffix lookalikes (`property_day_summary_backup`, `property_day_summary-history`, `property_day_summary.backup`, `property_day_summary(backup)`, `property_day_summary:backup`), foreign schemas, views (`no such view`), and unexpected engine errors (disk I/O, D1 quotas, syntax errors, missing `property` table) are never swallowed and are rethrown immediately.
+2. **Business Sync State Optimization**: When primary rows are empty (`rows.length === 0`) or absent, the secondary query against `business_sync_state` is skipped entirely, preventing spurious table or query errors on unmigrated accounts.
+3. **Graceful Fallback to Legacy Aggregates**: If the primary table is absent, empty, or stale (`source_manifest_revision` mismatch against `business_sync_state.revision`), the handler queries `daily_financial_aggregate` with an equivalent exact table-absence guard (`no such table: daily_financial_aggregate`).
+4. **Explicit Availability Contract & Client Fallback**:
+   - When valid current primary records exist: `{ ok: true, summaries: [...], count: N, source: "property_day_summary", available: true }`.
+   - When valid historical legacy records exist: `{ ok: true, summaries: [...], count: N, source: "daily_financial_aggregate", available: true }` with exact integer-cents conversion.
+   - When both tables are absent, empty, or stale with no fallback: `{ ok: true, summaries: [], count: 0, source: "empty", available: false }` with HTTP 200.
+   - Client consumers (`useHotelData.js`, `Dashboard.jsx`) require a non-empty complete property summary and source validation (`source === 'property_day_summary'`). The explicit `available: false` API contract combined with empty rows (`summaries: []`) forces client fallback to live ledger reconciliation without synthesizing false zero KPIs.
+
+### Schema Migration Status & Fallback Candidate
+- **Production Baseline**: The production database ledger reflects migrations `0001` through `0007`. Neither `property_day_summary` nor `daily_financial_aggregate` exists in the baseline production ledger.
+- **Additive DDL Rehearsal**: Migrations `0008_property_day_summary.sql` and `0009_enterprise_settings_guard.sql` have been rehearsed and verified as strictly additive, idempotent, and non-destructive on synthetic fixtures (74/74 assertions PASS).
+- **Deployment Status**: Migrations `0008` and `0009` have **NOT** been applied to production, pending owner APPROVAL (authenticated owner UI acceptance is a separate required proof). In the interim, the guarded Worker fast-path availability contract serves as the active, safe fallback candidate.

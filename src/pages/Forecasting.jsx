@@ -22,7 +22,7 @@ function buildPropertyFilter(property) {
   const filter = {};
   if (property && property !== "all") {
     if (Array.isArray(property)) {
-      if (property.length > 0) filter.property_id = { $in: property };
+      filter.property_id = { $in: property };
     } else {
       filter.property_id = property;
     }

@@ -417,6 +417,8 @@ export default function Dashboard() {
           adr,
           revpar,
           netKept: moneyKeptResult.kept,
+          taxIncomplete: Boolean(moneyKeptResult?.taxIncomplete || moneyKeptResult?.isPartial),
+          isPartial: Boolean(moneyKeptResult?.isPartial || moneyKeptResult?.taxIncomplete),
           commissionTotal: commissionTotalDollars,
           commissionRate,
           directShare,

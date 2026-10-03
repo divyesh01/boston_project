@@ -42,6 +42,57 @@ function toCents(val) {
 }
 
 /**
+ * Detect SQLite / Cloudflare D1 missing table errors strictly matching the expected table name.
+ * Allows observed SQLite/D1 wrapper prefixes, trailing ": SQLITE_ERROR", error codes, quotes,
+ * and valid schema qualification ("main" or "temp").
+ * Strictly rejects views, suffix lookalikes (e.g. table_backup, table-history, table.backup),
+ * and foreign schema names.
+ * @param {any} err
+ * @param {string} tableName
+ * @returns {boolean}
+ */
+function isMissingTableError(err, tableName) {
+  const msg = String(err?.message || err || "").trim();
+  const prefixMatch = msg.match(/(?:^|\b)no such table:\s+(.*)$/i);
+  if (!prefixMatch) return false;
+
+  let rest = prefixMatch[1].trim();
+
+  // Strip the known observed D1 engine metadata suffix (": SQLITE_ERROR" with optional
+  // trailing "(code N)" / "(code: N)" / "(N)") ONLY when the full message carries an
+  // explicit D1 wrapper prefix ("D1_ERROR:" / "D1_EXEC_ERROR:", optionally led by
+  // "Error: "). A naked ": SQLITE_ERROR" may instead be a genuine native SQLite
+  // identifier (e.g. a quoted table literally named "property_day_summary: SQLITE_ERROR"),
+  // so without the wrapper prefix nothing is stripped and the error rethrows.
+  const hasD1Wrapper = /^\s*(?:Error:\s*)?D1_(?:EXEC_)?ERROR:/i.test(msg);
+  if (hasD1Wrapper) {
+    rest = rest.replace(/:\s*SQLITE_ERROR(?:\s*\((?:code\s*:?\s*)?\d+\))?$/i, "");
+    rest = rest.trim();
+  }
+
+  const unquote = (s) => {
+    if ((s.startsWith('"') && s.endsWith('"')) ||
+        (s.startsWith("'") && s.endsWith("'")) ||
+        (s.startsWith('`') && s.endsWith('`'))) {
+      return s.slice(1, -1);
+    }
+    return s;
+  };
+
+  const parts = rest.split(".");
+  if (parts.length === 1) {
+    return unquote(parts[0]) === tableName;
+  }
+  if (parts.length === 2) {
+    const schema = unquote(parts[0]).toLowerCase();
+    const table = unquote(parts[1]);
+    return (schema === "main" || schema === "temp") && table === tableName;
+  }
+
+  return false;
+}
+
+/**
  * Handle /api/aggregates/* routes.
  *
  * @param {Request} request
@@ -118,18 +169,27 @@ async function getDailySummaries(request, env, scope, url) {
      ORDER BY business_date ASC, property_id ASC
   `;
 
-  const rows = await queryAll(env, sql, [scope.accountId, ...params, ...dateParams]);
+  let rows = [];
+  try {
+    rows = await queryAll(env, sql, [scope.accountId, ...params, ...dateParams]);
+  } catch (err) {
+    if (!isMissingTableError(err, "property_day_summary")) throw err;
+    rows = [];
+  }
 
-  const currentSnapshot = await queryFirst(env, "SELECT revision FROM business_sync_state WHERE account_id=?", [scope.accountId]);
-  const stale = rows.some(row => Number(row.source_manifest_revision) !== (Number(currentSnapshot?.revision)||0));
-  // Reject summaries from an older ledger snapshot.
-  if (rows && rows.length > 0 && !stale) {
-    return Response.json({
-      ok: true,
-      summaries: rows,
-      count: rows.length,
-      source: "property_day_summary",
-    }, { status: 200 });
+  if (rows && rows.length > 0) {
+    const currentSnapshot = await queryFirst(env, "SELECT revision FROM business_sync_state WHERE account_id=?", [scope.accountId]);
+    const stale = rows.some(row => Number(row.source_manifest_revision) !== (Number(currentSnapshot?.revision) || 0));
+    // Reject summaries from an older ledger snapshot.
+    if (!stale) {
+      return Response.json({
+        ok: true,
+        summaries: rows,
+        count: rows.length,
+        source: "property_day_summary",
+        available: true,
+      }, { status: 200 });
+    }
   }
 
   // Fallback: check if D1 daily_financial_aggregate has historical rows
@@ -142,7 +202,13 @@ async function getDailySummaries(request, env, scope, url) {
        ${dateSql}
      ORDER BY business_date ASC
   `;
-  const dfaRows = await queryAll(env, dfaSql, [scope.accountId, ...params, ...dateParams]);
+  let dfaRows = [];
+  try {
+    dfaRows = await queryAll(env, dfaSql, [scope.accountId, ...params, ...dateParams]);
+  } catch (err) {
+    if (!isMissingTableError(err, "daily_financial_aggregate")) throw err;
+    dfaRows = [];
+  }
 
   if (dfaRows && dfaRows.length > 0) {
     const converted = dfaRows.map((r) => {
@@ -178,6 +244,7 @@ async function getDailySummaries(request, env, scope, url) {
       summaries: converted,
       count: converted.length,
       source: "daily_financial_aggregate",
+      available: true,
     }, { status: 200 });
   }
 
@@ -186,6 +253,7 @@ async function getDailySummaries(request, env, scope, url) {
     summaries: [],
     count: 0,
     source: "empty",
+    available: false,
   }, { status: 200 });
 }
 

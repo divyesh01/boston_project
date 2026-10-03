@@ -227,6 +227,37 @@ assertions were mutation-tested against the pre-fix source and each fails on it.
 node --import ./scripts/_loader-boot.mjs scripts/verify-money-kept.mjs   # 29/0
 ```
 
+## 12.5.3 Tax Completeness and Uncertainty Propagation — RESOLVED 2026-10-03
+
+Estimated Money Kept cannot claim complete precision when business taxes are unconfigured or partially estimated. Previously, if tax rates were unconfigured or required occupied room nights were missing for flat fees, `calculateMoneyKept` dropped the incomplete tax status and silently treated tax deductions as $0.00, rendering an unqualified, complete-looking headline figure and keep-rate while `TaxCalculationBreakdown` warned of an incomplete estimate.
+
+The financial contracts now propagate uncertainty from the earliest calculation boundary to all downstream consumers:
+
+1. **Model Boundary (`calculateTaxLiability` & `calculateMoneyKept`)**:
+   - `calculateTaxLiability` returns `incomplete: Boolean(incomplete)` across single and multi-property queries.
+   - `calculateMoneyKept` checks if tax calculations are incomplete or tax is unconfigured. If incomplete, it sets `taxIncomplete: true`, `isPartial: true`, and reflects the basis as `'partial estimate'`.
+   - Known deductions from complete properties or configured percentage taxes are preserved to the exact cent; unknown taxes are never silently converted into zero complete cost.
+   - Explicit 0% configured tax is distinguished from unconfigured/unknown tax (`unconfigured: true`).
+
+2. **Money Kept Presentation (`moneyKeptModel.js` & `MoneyKept.jsx`)**:
+   - Headline and KPI card explicitly state "Estimated Money Kept (Partial)" and display a "Partial Estimate" badge when `taxIncomplete || isPartial`.
+   - Subtitle explicitly warns: *"Partial estimate: configure missing rates or supply occupied room-night counts. Keep rate and profit are not final."*
+   - Keep rate label states "partial keep rate".
+   - Deduction list displays "Unknown (tax inputs incomplete)" when tax is incomplete with $0 known tax, and adds `(partial)` when a partial tax estimate exists.
+   - Donut and bar charts qualify the bottom-line slice as `"Estimated Money Kept (partial)"` and tax wedge as `"Business Taxes (partial)"`.
+   - Trend chart title and tooltip are qualified as partial when incomplete.
+   - The deductions-exceed-gross warning requires strictly negative money kept. Empty periods and positive break-even periods do not warn; losses still warn. `MoneyKept.warning.test.jsx` renders all three cases without changing the financial model or integer-cents calculations.
+   - Empty property selection yields no local Payroll, Expenses, or Forecasting input rows, including Payroll occupancy inputs; current-query/facade regressions preserve date and nonempty selection behavior. Financial formulas and account-global inclusion semantics are unchanged.
+
+3. **Owner Exports (`ownerPacketExport.js`)**:
+   - Executive Summary (Sheet 1) labels the metric as `'Total Net Kept Revenue (Partial Estimate)'` and contextual notes state: *"Partial estimate: tax calculations incomplete (missing rates or room nights)"*.
+   - Data Provenance (Sheet 5) flags the value as `(PARTIAL - TAX INCOMPLETE)` and marks the deterministic invariant check with: *"Integer Cent Balance Verified; Business Taxes Incomplete (Partial Estimate)"*.
+
+Asserted by:
+```
+node --import ./scripts/_loader-boot.mjs scripts/probe-money-kept-tax-completeness.mjs   # 48/0
+```
+
 ## 12.6 Real Numbers — RESOLVED 2026-08-20
 
 Measured, not transcribed. `scripts/probe-money-kept-gross.mjs` drives the real

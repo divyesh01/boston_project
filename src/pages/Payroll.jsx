@@ -60,7 +60,7 @@ function usePayroll(propertyId) {
       const filter = {};
       if (propertyId != null && propertyId !== "" && propertyId !== "all") {
         if (Array.isArray(propertyId)) {
-          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
+          filter.property_id = { $in: propertyId };
         } else {
           filter.property_id = propertyId;
         }
@@ -96,7 +96,7 @@ function useOccupancyRange(from, to, propertyId) {
       if (from && to) filter.date = { $gte: from, $lte: to };
       if (propertyId != null && propertyId !== "" && propertyId !== "all") {
         if (Array.isArray(propertyId)) {
-          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
+          filter.property_id = { $in: propertyId };
         } else {
           filter.property_id = propertyId;
         }

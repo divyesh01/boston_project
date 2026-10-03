@@ -72,6 +72,20 @@ export async function exportToPdf(element, fileName = "executive-summary.pdf") {
     useCORS: true,
     logging: false,
     windowWidth: element.scrollWidth,
+    onclone: (clonedDoc, clonedElement) => {
+      const target = clonedDoc || clonedElement;
+      if (!target) return;
+      if ("matches" in target && target.matches(".u-figure.truncate")) {
+        target.style.overflow = "visible";
+        target.style.textOverflow = "clip";
+      }
+      if (target.querySelectorAll) {
+        for (const el of /** @type {NodeListOf<HTMLParagraphElement>} */ (target.querySelectorAll(".u-figure.truncate"))) {
+          el.style.overflow = "visible";
+          el.style.textOverflow = "clip";
+        }
+      }
+    },
   });
   // A canvas over the browser's limit comes back empty rather than throwing. Say
   // so instead of saving a blank PDF the operator would only discover on paper.

@@ -56,7 +56,7 @@ check(auth.protected_query_matches?.includes('src/lib/AuthContext.jsx'), 'AuthCo
 check(auth.risk?.level === 'PROTECTED', 'AuthContext raises PROTECTED risk');
 check(auth.decision?.warnings?.some((warning) => warning.includes('protected files')), 'protected-file warning is explicit');
 
-const checkMode = runContext(['--check', 'Dashboard YTD revenue'], 'post-edit check mode');
+const checkMode = runContext(['--check', '--base', 'origin/main', 'Dashboard YTD revenue'], 'post-edit check mode');
 check(checkMode.mode === 'check', 'check invocation enters check mode');
 check(Array.isArray(checkMode.changed_scope), 'check mode emits classified diff scope');
 check(Array.isArray(checkMode.handoff?.verify_commands), 'check mode emits handoff commands');

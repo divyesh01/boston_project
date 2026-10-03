@@ -31,7 +31,7 @@ function buildFilter(dateRange, propertyId, dateField = 'date') {
   if (bound) filter[dateField] = bound;
   if (propertyId != null && propertyId !== "" && propertyId !== "all") {
     if (Array.isArray(propertyId)) {
-      if (propertyId.length > 0) filter.property_id = { $in: propertyId };
+      filter.property_id = { $in: propertyId };
     } else {
       filter.property_id = propertyId;
     }
@@ -204,7 +204,7 @@ export function useLatestDate(propertyId) {
       const filter = {};
       if (propertyId != null && propertyId !== "" && propertyId !== "all") {
         if (Array.isArray(propertyId)) {
-          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
+          filter.property_id = { $in: propertyId };
         } else {
           filter.property_id = propertyId;
         }
@@ -268,12 +268,30 @@ export function useMetricDates(propertyId) {
 // from a few hundred rows instead of scanning the raw ledgers. First checks local
 // IndexedDB; if empty (fresh browser context), queries server /api/aggregates/daily
 // fast-path so the dashboard paints in <1s. Returns null when both are empty so
-// callers fall back to live computation.
+// Fail-closed aggregate selection: portfolio (all, array selections, null/empty/unset)
+// returns null so callers always query property-scoped raw ledgers. Neither local
+// nor server summary proves full portfolio property/date/subledger freshness.
 export function useDailyFinancialAggregates(dateRange, propertyId, enabled = true) {
-  return useQuery({
-    queryKey: ["daily-aggregates", DAILY_AGGREGATE_VERSION, dateRange?.from, dateRange?.to, propertyId],
-    enabled,
+  const isSingleProperty = typeof propertyId === "string" && propertyId.trim() !== "" && propertyId !== "all";
+
+  // Use a dedicated namespace for single-property queries to avoid colliding with
+  // any legacy or warm cache keys for portfolio/all/arrays.
+  // In addition, select projection and explicit result projection guarantee data: null
+  // when not a single property, even if old cached data exists in React Query.
+  const query = useQuery({
+    queryKey: [
+      "daily-aggregates",
+      isSingleProperty ? "single" : "portfolio-disabled",
+      DAILY_AGGREGATE_VERSION,
+      dateRange?.from,
+      dateRange?.to,
+      isSingleProperty ? propertyId : (Array.isArray(propertyId) ? propertyId.join(",") : (propertyId || "all")),
+    ],
+    enabled: Boolean(enabled && isSingleProperty),
+    select: (data) => (isSingleProperty ? data : null),
     queryFn: async () => {
+      if (!isSingleProperty) return null;
+
       const aggs = await getDailyAggregates({
         propertyId,
         from: dateRange?.from || "",
@@ -283,7 +301,7 @@ export function useDailyFinancialAggregates(dateRange, propertyId, enabled = tru
 
       // Fast-path for clean browser contexts: query server-authoritative daily summaries
       try {
-        const propParam = Array.isArray(propertyId) ? propertyId.join(",") : (propertyId || "all");
+        const propParam = propertyId;
         const url = new URL("/api/aggregates/daily", globalThis.location?.origin || "http://localhost");
         if (propParam && propParam !== "all") url.searchParams.set("property_id", propParam);
         if (dateRange?.from) url.searchParams.set("from", dateRange.from);
@@ -309,6 +327,8 @@ export function useDailyFinancialAggregates(dateRange, propertyId, enabled = tru
     },
     staleTime: 30 * 1000,
   });
+
+  return isSingleProperty ? query : { ...query, data: null };
 }
 
 //
@@ -349,7 +369,7 @@ export function useRooms(propertyId) {
       const filter = {};
       if (propertyId != null && propertyId !== "" && propertyId !== "all") {
         if (Array.isArray(propertyId)) {
-          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
+          filter.property_id = { $in: propertyId };
         } else {
           filter.property_id = propertyId;
         }
@@ -360,35 +380,66 @@ export function useRooms(propertyId) {
 }
 
 // Per-room nightly ledger (RoomStay). Same property/date/month idiom as the
-// other hooks.
+// other hooks. Supports boardDate overlap queries so multiday stays are preserved.
 export function useRoomStays(dateRange, propertyId, months = []) {
+  const isSingleDate = typeof dateRange === "string";
+  const targetDate = isSingleDate ? dateRange : (dateRange?.boardDate || (dateRange?.from && dateRange.from === dateRange.to ? dateRange.from : null));
+  const rangeFrom = isSingleDate ? dateRange : (dateRange?.from || targetDate || "");
+  const rangeTo = isSingleDate ? dateRange : (dateRange?.to || targetDate || "");
+
   return useQuery({
     queryKey: [
       "room-stays",
-      dateRange?.from,
-      dateRange?.to,
+      targetDate || rangeFrom,
+      targetDate || rangeTo,
       propertyId,
       (months || []).join(","),
     ],
     queryFn: async () => {
-      const filter = buildFilter(dateRange, propertyId);
+      const filter = buildFilter(null, propertyId);
       const rows = await readHotelDataRows(db.entities.RoomStay, filter, "date");
-      return filterByMonths(rows, months);
+
+      const matching = rows.filter((r) => {
+        const checkIn = String(r.check_in || r.date || "").slice(0, 10);
+        const checkOut = String(r.check_out || r.date || "").slice(0, 10);
+        const stayDate = String(r.date || "").slice(0, 10);
+
+        if (targetDate) {
+          if (checkIn && checkOut) {
+            if (checkIn <= targetDate && checkOut > targetDate) return true;
+            if (checkIn === targetDate && checkOut === targetDate) return true;
+          }
+          if (stayDate === targetDate) return true;
+          if (checkIn === targetDate) return true;
+          return false;
+        }
+
+        if (rangeFrom && checkOut && checkOut < rangeFrom) return false;
+        if (rangeTo && checkIn && checkIn > rangeTo) return false;
+        return true;
+      });
+
+      const aligned = targetDate
+        ? matching.map((s) => (s.date === targetDate ? s : { ...s, date: targetDate, stay_date: s.date }))
+        : matching;
+
+      return filterByMonths(aligned, months);
     },
   });
 }
 
 // Housekeeping task queue.
 export function useHousekeepingTasks(dateRange, propertyId) {
+  const range = typeof dateRange === "string" ? { from: dateRange, to: dateRange } : dateRange;
   return useQuery({
     queryKey: [
       "housekeeping",
-      dateRange?.from,
-      dateRange?.to,
+      range?.from,
+      range?.to,
       propertyId,
     ],
     queryFn: async () => {
-      const filter = buildFilter(dateRange, propertyId, 'task_date');
+      const filter = buildFilter(range, propertyId, 'task_date');
       return readHotelDataRows(db.entities.HousekeepingTask, filter, "-task_date");
     },
   });
@@ -418,7 +469,7 @@ export function useWeatherSnapshots(propertyId) {
       const filter = {};
       if (propertyId != null && propertyId !== "" && propertyId !== "all") {
         if (Array.isArray(propertyId)) {
-          if (propertyId.length > 0) filter.property_id = { $in: propertyId };
+          filter.property_id = { $in: propertyId };
         } else {
           filter.property_id = propertyId;
         }

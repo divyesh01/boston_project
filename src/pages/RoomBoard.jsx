@@ -34,10 +34,15 @@ export default function RoomBoard() {
   const queryClient = useQueryClient();
   useRealtimeInvalidation(["rooms", "room-stays", "housekeeping"]);
 
+  const [boardDate, setBoardDate] = useState(latestDate || new Date().toISOString().slice(0, 10));
+  useEffect(() => {
+    if (latestDate && !boardDate) setBoardDate(latestDate);
+  }, [latestDate, boardDate]);
+
   const occQ = useOccupancy(dateRange, property, months);
   const roomsQ = useRooms(property);
-  const staysQ = useRoomStays(dateRange, property, months);
-  const tasksQ = useHousekeepingTasks(dateRange, property);
+  const staysQ = useRoomStays(boardDate, property);
+  const tasksQ = useHousekeepingTasks(boardDate, property);
   const { data: occ = [], isLoading } = occQ;
   const { data: rooms = [], isLoading: roomsLoading } = roomsQ;
   const { data: stays = [] } = staysQ;
@@ -45,24 +50,25 @@ export default function RoomBoard() {
   const { data: reservations = [], isLoading: reservationsLoading } = useReservations(dateRange, property);
   const { data: weatherSnapshots = [] } = useWeatherSnapshots(property);
 
-  const [boardDate, setBoardDate] = useState(latestDate || new Date().toISOString().slice(0, 10));
-  useEffect(() => {
-    if (latestDate && !boardDate) setBoardDate(latestDate);
-  }, [latestDate, boardDate]);
-
   const [newGuest, setNewGuest] = useState("");
   const [newRoom, setNewRoom] = useState("");
   const [newRate, setNewRate] = useState("");
-  const [newIn, setNewIn] = useState(boardDate);
+  const [newIn, setNewIn] = useState("");
+  const [isManualCheckIn, setIsManualCheckIn] = useState(false);
   const [newOut, setNewOut] = useState("");
   const [newFolio, setNewFolio] = useState("");
   const [notice, setNotice] = useState(null);
+
+  const effectiveCheckIn = isManualCheckIn && newIn ? newIn : boardDate;
+
   useEffect(() => {
     setNewRoom("");
     setNewGuest("");
     setNewRate("");
     setNewFolio("");
     setNewOut("");
+    setNewIn("");
+    setIsManualCheckIn(false);
     setNotice(null);
   }, [singlePropertyId]);
 
@@ -191,12 +197,12 @@ export default function RoomBoard() {
       await db.entities.RoomStay.create({
         property_id: singlePropertyId,
         property_name: prop?.name || "",
-        date: newIn || boardDate,
+        date: effectiveCheckIn,
         room_number: String(newRoom),
         guest_name: newGuest,
         room_type: room?.room_type || "Standard",
-        check_in: newIn || boardDate,
-        check_out: newOut || boardDate,
+        check_in: effectiveCheckIn,
+        check_out: newOut || effectiveCheckIn,
         rate_cents: toRateCents(newRate),
         folio_number: newFolio || "",
         status: "occupied",
@@ -227,7 +233,7 @@ export default function RoomBoard() {
     }
 
     invalidateBoard();
-    setNewGuest(""); setNewRate(""); setNewFolio(""); setNewOut("");
+    setNewGuest(""); setNewRate(""); setNewFolio(""); setNewOut(""); setNewIn(""); setIsManualCheckIn(false);
     setNotice(
       statusWarning
         ? {
@@ -258,7 +264,9 @@ export default function RoomBoard() {
     invalidateBoard();
   };
 
-  if (isLoading || roomsLoading) return <p className="text-slate-500">Loading property board…</p>;
+  if (isLoading || roomsLoading || staysQ.isLoading || tasksQ.isLoading) {
+    return <p className="text-slate-500">Loading property board…</p>;
+  }
 
   // On a failed read of the room register, stays, housekeeping tasks or
   // occupancy, this page used to draw the whole board anyway: every tile in the
@@ -510,7 +518,15 @@ export default function RoomBoard() {
           </label>
           <label className="flex flex-col gap-1 text-xs text-slate-400">
             Check-in
-            <input type="date" value={newIn} onChange={(e) => setNewIn(e.target.value)} className="rounded-lg border border-white/10 bg-[#0A1628] px-2 py-2 text-sm text-white" />
+            <input
+              type="date"
+              value={effectiveCheckIn}
+              onChange={(e) => {
+                setIsManualCheckIn(true);
+                setNewIn(e.target.value);
+              }}
+              className="rounded-lg border border-white/10 bg-[#0A1628] px-2 py-2 text-sm text-white"
+            />
           </label>
           <label className="flex flex-col gap-1 text-xs text-slate-400">
             Check-out

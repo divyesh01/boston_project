@@ -126,7 +126,7 @@ Before reviewing live numbers in the web application, ensure property configurat
 ---
 
 ## 6. Forthcoming Release Matrix
-Verified repair candidate, 2026-10-03:
+Repair verification matrix, updated 2026-10-04 (individual historical scopes retained):
 
 | Gate | Result | Scope |
 | --- | --- | --- |
@@ -137,7 +137,7 @@ Verified repair candidate, 2026-10-03:
 | Financial / operations / aggregate / authorization probes | PASS in documented scopes | Synthetic fixtures and actual handlers; not production owner acceptance |
 | Normal PDF / workbook | PASS for the recorded two-property case | Eight PDF pages reviewed; workbook reconciles 2,452,500 cents with completeness warnings |
 | Route body coverage | 36 recorded PASS | Local synthetic normal-auth fixtures; historical public render and expected redirects distinguished |
-| Primary browser actions | 7 PASS, 1 FAIL, 99 NOT_RUN | Exact exports, expense/payroll filtering, check-in and confirmed property deletion tested; import fails in the native R2 path and remains under repair |
+| Primary browser actions | 10 PASS, 1 FAIL, 95 NOT_RUN, 1 N_A | Recorded exports, expense/payroll filtering, check-in, property deletion, housekeeping retrieval/save and bootstrap checks; N_A is a separately inventoried route action. Historical native import failure awaits replay on the applied repair |
 | Production owner acceptance | NOT_RUN | No production authenticated owner acceptance claimed |
 
 The candidate is not an owner-ready declaration. The larger-number PDF case preserves the full $1,234,567.89 figure and completeness warnings across reviewed pages. Outstanding browser actions, the R2 import failure, private-fixture checks and production acceptance remain separate open gates. Zero-active financial rendering and selected-night room carry have additional scoped browser evidence. The broad mutation sweep passed the earlier candidate snapshot; it is not a full mutation claim for the added warning, empty-selection and PDF callback changes. Their focused regressions and the final standard suite pass.
@@ -155,9 +155,24 @@ ENABLE_D1_DATA_API=false, and S3_ENABLED=true. S3/GCS secret names and
 bindings were present; no native R2 bucket binding was present. The local
 native-R2 upload failure establishes a portability defect in that storage
 branch and does not prove a failure in production's preferred S3 branch.
-The isolated streaming candidate has not been accepted or deployed.
+At this metadata refresh (evidence E099), the isolated streaming candidate had not been accepted or deployed. The native repair described below has since been accepted and applied to the repair branch; it has not been deployed by this task.
 
-Local browser evidence currently records **7 PASS, 1 FAIL, 99 NOT_RUN**
+The earlier October 4 browser snapshot recorded **7 PASS, 1 FAIL, 99 NOT_RUN**
 primary actions. Selected-property Remove and zero-active-property supplements
 remain scoped checks, not blanket coverage of every action. Authenticated
 production owner acceptance remains **NOT_RUN**.
+## Native R2 upload repair candidate
+
+The native R2 path has been repaired with known-length streaming; the preferred
+S3 path retains its existing 50 MiB bounded-stream contract. Native requests
+without Content-Length return 411. The recorded normal browser request reached
+the local Worker with Content-Length 184, so an explicit client size header was
+not added. The local native regression has twelve passing groups, including
+checksum, consumed limits, mismatch/abort and invalid-object absence checks.
+The existing S3 adapter probe has 287 passing synthetic checks; cloud storage
+credentials/access and authenticated production owner acceptance remain unproven.
+
+Replay of the same normal Upload flow on this applied source is pending. The
+historical import failure is retained until that actual browser replay completes.
+The portable local-only fixture is documented in tests/fixtures/native-r2/README.md;
+its mock scope/database is not authentication acceptance.

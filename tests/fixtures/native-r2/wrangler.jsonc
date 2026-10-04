@@ -1,0 +1,11 @@
+{
+  "name": "r2-harness",
+  "main": "proof-worker.js",
+  "compatibility_date": "2026-08-31",
+  "r2_buckets": [
+    {
+      "binding": "RAW_ARCHIVE",
+      "bucket_name": "test-raw-archive"
+    }
+  ]
+}

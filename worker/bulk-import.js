@@ -328,6 +328,18 @@ async function uploadRawArchive(request, env, scope) {
     }
   }
 
+  const nativeR2 = !isR2S3Enabled(env);
+  let nativeLength = null;
+  if (nativeR2) {
+    if (!contentLengthHeader) {
+      throw new BulkImportError("Content-Length is required for native R2 raw upload", 411, { code: "LENGTH_REQUIRED" });
+    }
+    nativeLength = Number(contentLengthHeader);
+    if (!/^\d+$/.test(contentLengthHeader.trim()) || !Number.isSafeInteger(nativeLength) || nativeLength <= 0) {
+      throw new BulkImportError("invalid Content-Length", 400, { code: "INVALID_CONTENT_LENGTH" });
+    }
+  }
+
   if (!request.body) {
     throw new BulkImportError("raw file payload cannot be empty", 400, { code: "IMPORT_EMPTY_PAYLOAD" });
   }
@@ -374,8 +386,19 @@ async function uploadRawArchive(request, env, scope) {
 
     // Direct streaming to R2 with native Cloudflare SHA-256 verification and bounded stream
     const bounded = createBoundedStream(request.body, MAX_RAW_FILE_SIZE_BYTES, "IMPORT_EMPTY_PAYLOAD");
+    let uploadBody = bounded.stream;
+    let pump = null;
+    const pumpAbort = new AbortController();
+    if (nativeR2) {
+      const NativeFixedLengthStream = /** @type {{ FixedLengthStream: new (length: number) => TransformStream }} */ (/** @type {unknown} */ (globalThis)).FixedLengthStream;
+      const fixed = new NativeFixedLengthStream(nativeLength);
+      uploadBody = fixed.readable;
+      pump = bounded.stream.pipeTo(fixed.writable, { signal: pumpAbort.signal });
+      // Observe immediately, including synchronous put failures below.
+      pump.catch(() => {});
+    }
     try {
-      const created = await rawStore.put(rawObjectKey, bounded.stream, {
+      const put = rawStore.put(rawObjectKey, uploadBody, {
         customMetadata,
         httpMetadata: {
           contentType: mimeType,
@@ -383,7 +406,10 @@ async function uploadRawArchive(request, env, scope) {
         sha256: rawHash,
         onlyIf: { etagDoesNotMatch: "*" },
       });
+      // A failed pump must reject promptly even when native put is still waiting.
+      const created = pump ? await Promise.race([put, pump.then(() => put)]) : await put;
       if (created === null) {
+        pumpAbort.abort();
         const existing = await rawStore.head(rawObjectKey);
         verifyObject(existing, scope, propertyId, rawHash, true);
         return Response.json({
@@ -395,7 +421,9 @@ async function uploadRawArchive(request, env, scope) {
           byte_length: existing.size,
         }, { status: 200 });
       }
+      if (pump) await pump;
     } catch (err) {
+      pumpAbort.abort(err);
       if (err instanceof BulkImportError) throw err;
       if (err?.code === "PAYLOAD_TOO_LARGE" || String(err?.message || "").includes("PAYLOAD_TOO_LARGE")) {
         throw new BulkImportError("file exceeds maximum allowed size of 50 MB", 413, {
@@ -413,6 +441,9 @@ async function uploadRawArchive(request, env, scope) {
           code: "RAW_HASH_MISMATCH",
           expected: rawHash,
         });
+      }
+      if (nativeR2 && String(err?.message || "").includes("FixedLengthStream")) {
+        throw new BulkImportError("raw stream length does not match Content-Length", 400, { code: "STREAM_LENGTH_MISMATCH" });
       }
       throw err;
     }

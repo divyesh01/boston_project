@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   BULK_ENTITIES,
   REPORT_ENTITY,
@@ -390,12 +390,34 @@ describe("Bulk Import Identity, Validation & Wire Invariants", () => {
     let rawPutCalls;
 
     beforeEach(() => {
+      vi.stubGlobal("FixedLengthStream", class extends TransformStream {
+        constructor(declaredSize) {
+          let bytesWritten = 0;
+          super({
+            transform(chunk, controller) {
+              if (bytesWritten + chunk.byteLength > declaredSize) {
+                controller.error(new RangeError("Exceeds declared size"));
+                return;
+              }
+              bytesWritten += chunk.byteLength;
+              controller.enqueue(chunk);
+            },
+            flush(controller) {
+              if (bytesWritten !== declaredSize) {
+                controller.error(new RangeError("Size mismatch on flush"));
+              }
+            },
+          });
+        }
+      });
+
       rawPutCalls = [];
       mockEnv = {
         RAW_ARCHIVE: {
           head: vi.fn().mockResolvedValue(null),
           get: vi.fn().mockResolvedValue(null),
           put: vi.fn().mockImplementation(async (key, stream, options) => {
+            await new Response(stream).arrayBuffer();
             rawPutCalls.push({ key, options });
             return {};
           }),
@@ -413,6 +435,10 @@ describe("Bulk Import Identity, Validation & Wire Invariants", () => {
         user: { id: "u-1", role: "owner" },
         propertyIds: ["prop-1"],
       };
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
     });
 
     it("streams an authorized raw archive to storage", async () => {

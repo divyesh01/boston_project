@@ -28,3 +28,6 @@ Use `ANTIGRAVITY_UI_UX_HANDOFF.md` for all changed files, expected invariants, e
 
 
 October 4 release follow-up: fixed the ledger ErrorState prop required by CI; preserved legacy review handling metrics while adding explicit provider-publication metrics; retained numeric-dollar channel payloads behind a verified-publishing capability and provider receipt requirement. The current mock adapter remains disabled. Antigravity: run npm run typecheck, node scripts/probe-reviews.mjs and node scripts/probe-cents-unit-mismatch.mjs, then inspect /Pricing, /Reviews and /DataIntelligence. Codex did not run these checks locally.
+
+
+Latest status: build succeeded for b51d07f; inactive Cloudflare version d2a5bc20-d1a6-49db-95b2-2e1fef8307c6 uploaded. Production traffic remains on prior deployment. Standard CI is blocked by four UI assertions described in ANTIGRAVITY_UI_UX_HANDOFF.md. No merge or production activation performed. Antigravity verification handoff is required before activation.

@@ -179,3 +179,49 @@ Antigravity should check the integrated version, especially the APIs named above
 
 
 October 4 release follow-up: fixed the ledger ErrorState prop required by CI; preserved legacy review handling metrics while adding explicit provider-publication metrics; retained numeric-dollar channel payloads behind a verified-publishing capability and provider receipt requirement. The current mock adapter remains disabled. Antigravity: run npm run typecheck, node scripts/probe-reviews.mjs and node scripts/probe-cents-unit-mismatch.mjs, then inspect /Pricing, /Reviews and /DataIntelligence. Codex did not run these checks locally.
+
+
+## Current release status - October 4, 2026
+
+This section supersedes the original workspace and release-status notes above.
+
+Release checkout: `C:/Users/Divyesh/.codex/worktrees/owner-ux-production/boston_project`.
+Source: `b51d07f45625808775a9c8557ebf39aacc0993d1`; PR https://github.com/divyesh01/boston_project/pull/43.
+Production artifact build succeeded. Cloudflare inactive version uploaded: `d2a5bc20-d1a6-49db-95b2-2e1fef8307c6`.
+Production activation has NOT happened. Previous live version: `d11352f9-e80e-4a52-9d01-f37067ed37ed`.
+Codex ran the artifact build for the authorized deployment, but no local tests, lint, typecheck or browser acceptance. GitHub automatically ran CI.
+
+### Files changed in the release follow-up
+- `src/pages/DataIntelligence.jsx`: complete ErrorState prop contract; retain pending/error ledger guard.
+- `src/lib/reputationService.js`, `src/pages/Reviews.jsx`: preserve legacy handled-status metrics; use separate provider receipt-backed published-response metrics in UI.
+- `src/pages/Pricing.jsx`: preserve numeric-dollar publishing payload and override contract; disable console-only adapter; require verified capability and provider receipt before success/audit.
+- `docs/brain/BRAIN_FRONTEND.md`, this handoff and release record: release evidence and verification limits.
+
+### Remaining CI assertions for Antigravity
+Standard run https://github.com/divyesh01/boston_project/actions/runs/37179574720: 831 passed, 4 failed, 98 files total. Lint, typecheck and repository-map gate passed before the test step.
+- `src/tests/dataIntelligence.test.jsx`: three tests use synchronous getBy queries immediately after starting asynchronous ledger/report reads. Await loaded evidence before asserting matrix, reconciliation or gap inspection. Add a pending/error assertion to preserve the safeguard; do not remove the loading/error guard to satisfy immediate rendering.
+- `src/tests/luxuryUiComponents.test.jsx`: SmartButtonGroup expects Schedule Delivery; actual action is Report Download Options. Assert truthful current action and callback; do not restore an automated-delivery claim when no delivery service is connected.
+Codex did not modify or run these tests. All 12 deep-verification shards passed on this source. Browser synchronization/deep gate completion is separate from owner browser acceptance.
+
+### Verification commands
+```powershell
+Set-Location -LiteralPath 'C:/Users/Divyesh/.codex/worktrees/owner-ux-production/boston_project'
+npm test -- --run src/tests/dataIntelligence.test.jsx src/tests/luxuryUiComponents.test.jsx
+npm run typecheck
+node scripts/probe-reviews.mjs
+node scripts/probe-cents-unit-mismatch.mjs
+gh pr checks 43
+```
+
+After Antigravity repairs/verifies the test assertions, push and await green required CI. Merge PR 43 normally. If production code changes, rebuild and upload a new version; never deploy the old uploaded artifact after source changes. If only verification files change, this uploaded production artifact remains applicable. Confirm the Cloudflare Git deployment path does not supersede a manually selected version.
+
+### Deployment and rollback commands (not executed)
+```powershell
+npx --yes wrangler versions deploy d2a5bc20-d1a6-49db-95b2-2e1fef8307c6@100% --config wrangler.jsonc --yes
+# Restore prior code/assets if release acceptance fails:
+npx --yes wrangler versions deploy d11352f9-e80e-4a52-9d01-f37067ed37ed@100% --config wrangler.jsonc --yes
+```
+No migrations, schema changes, secret changes or hotel data mutations are part of this release.
+
+### Edge cases and UI checks
+Inspect DataIntelligence while queries are pending, fail, or partially succeed; do not report false completeness or zero financial totals. Inspect Reviews with handled drafts but no provider receipt, invalid ratings and confirmed provider replies. Inspect Pricing with unavailable connector, portfolio selection, historical business date and failed demand reads; no mock success or override audit should occur. Use the full route checklist above for authenticated desktop/mobile owner acceptance.

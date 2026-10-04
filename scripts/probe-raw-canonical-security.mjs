@@ -17,6 +17,7 @@ import {
   seedUser,
   scopeAll,
   scopeSpecific,
+  withFixedLengthStream,
 } from "./_worker-testkit.mjs";
 import { handleBulkImportRequest } from "../worker/bulk-import.js";
 import { clearMockStore, getMockStore, testR2Binding } from "./_r2-testkit.mjs";
@@ -58,8 +59,9 @@ function setupWorker() {
   return { db, env, stats, owner, managerA };
 }
 
-// 1. Malicious x-raw-object-key header is ignored (cannot override destination R2 key)
-await run.check("1. malicious x-raw-object-key header is ignored; server enforces canonical key", async () => {
+async function runAllChecks() {
+  // 1. Malicious x-raw-object-key header is ignored (cannot override destination R2 key)
+  await run.check("1. malicious x-raw-object-key header is ignored; server enforces canonical key", async () => {
   const { env, owner } = setupWorker();
   const mockStore = getMockStore();
   const fileBytes = new TextEncoder().encode("Date,Rooms,Revenue\n2025-08-01,100,5000\n");
@@ -76,6 +78,7 @@ await run.check("1. malicious x-raw-object-key header is ignored; server enforce
       "x-file-name": "normal.csv",
       "x-raw-object-key": maliciousKey,
       "Content-Type": "text/csv",
+      "Content-Length": String(fileBytes.byteLength),
     },
     body: fileBytes,
   });
@@ -106,6 +109,7 @@ await run.check("2. malicious raw_object_key query parameter is ignored; server 
       "x-archive-id": "arch_malicious_query",
       "x-file-name": "normal.csv",
       "Content-Type": "text/csv",
+      "Content-Length": String(fileBytes.byteLength),
     },
     body: fileBytes,
   });
@@ -287,6 +291,7 @@ await run.check("6. same account + property + SHA always produces exactly one ca
       "x-file-name": "report.csv",
       "x-report-date": "2025-08-06",
       "Content-Type": "text/csv",
+      "Content-Length": String(fileBytes.byteLength),
     },
     body: fileBytes,
   });
@@ -306,6 +311,7 @@ await run.check("6. same account + property + SHA always produces exactly one ca
       "x-report-date": "2026-09-12",
       "x-raw-object-key": "some/arbitrary/path.xlsx",
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "Content-Length": String(fileBytes.byteLength),
     },
     body: fileBytes,
   });
@@ -338,6 +344,7 @@ await run.check("7. concurrent upload & manifest creation of identical raw bytes
         "x-archive-id": `race_arch_${i}`,
         "x-file-name": `client_${i}_report.csv`,
         "Content-Type": "text/csv",
+        "Content-Length": String(fileBytes.byteLength),
       },
       body: fileBytes,
     });
@@ -398,6 +405,7 @@ await run.check("8. recordRawArchive ignores malicious raw_object_key and stores
       "x-raw-hash": rawHash,
       "x-archive-id": "arch_honest_upload",
       "Content-Type": "text/csv",
+      "Content-Length": String(fileBytes.byteLength),
     },
     body: fileBytes,
   });
@@ -544,7 +552,12 @@ await run.check("11. downloadRawArchive rejects manifest with foreign raw_object
   assertEqual(code, "IMPORT_OBJECT_SCOPE_MISMATCH", "Error code is IMPORT_OBJECT_SCOPE_MISMATCH");
 });
 
-run.done();
+}
+
+await withFixedLengthStream(async () => {
+  await runAllChecks();
+  run.done();
+});
 if (process.exitCode) process.exit(1);
 console.log("PASSED: probe-raw-canonical-security completed.");
 process.exit(0);

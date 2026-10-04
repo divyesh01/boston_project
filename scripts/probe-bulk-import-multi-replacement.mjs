@@ -17,6 +17,7 @@ import {
   makeRunner,
   seedUser,
   scopeAll,
+  withFixedLengthStream,
 } from './_worker-testkit.mjs';
 import { handleBulkImportRequest } from '../worker/bulk-import.js';
 import { clearMockStore, testR2Binding } from './_r2-testkit.mjs';
@@ -80,6 +81,7 @@ async function seedActiveReport(env, owner, db, propertyId, opts) {
       'x-raw-hash': rawHash,
       'x-archive-id': archiveId,
       'x-file-name': fileName,
+      'Content-Length': String(rawBytes.byteLength),
     },
     body: rawBytes,
   });
@@ -159,6 +161,8 @@ async function seedActiveReport(env, owner, db, propertyId, opts) {
   return { bundleId, rawHash, normHash, revision: actData.revision, rawKey };
 }
 
+await withFixedLengthStream(async () => {
+
 await run.check('1. Multiple active overlaps return 409 with all candidates listed', async () => {
   const { db, env, owner } = setupWorker();
   const propertyId = 'PROP_MIDDELBORO';
@@ -208,6 +212,7 @@ await run.check('1. Multiple active overlaps return 409 with all candidates list
       'x-raw-hash': combinedHash,
       'x-archive-id': combinedArchiveId,
       'x-file-name': 'Source Summary (1).csv',
+      'Content-Length': String(combinedBytes.byteLength),
     },
     body: combinedBytes,
   });
@@ -321,6 +326,7 @@ await run.check('2. Omission of any active overlapping predecessor fails closed'
       'x-raw-hash': combinedHash,
       'x-archive-id': combinedArchiveId,
       'x-file-name': 'Source Summary.csv',
+      'Content-Length': String(combinedBytes.byteLength),
     },
     body: combinedBytes,
   });
@@ -437,6 +443,7 @@ await run.check('3. Invalid, stale revision, or cross-property predecessors fail
       'x-raw-hash': testRawHash,
       'x-archive-id': testArchiveId,
       'x-file-name': 'Source.csv',
+      'Content-Length': String(testBytes.byteLength),
     },
     body: testBytes,
   });
@@ -576,6 +583,7 @@ await run.check('4. Atomic many-to-one replacement: 3 predecessors superseded, 1
       'x-raw-hash': combinedHash,
       'x-archive-id': combinedArchiveId,
       'x-file-name': 'Source Summary (1).csv',
+      'Content-Length': String(combinedBytes.byteLength),
     },
     body: combinedBytes,
   });
@@ -711,6 +719,7 @@ await run.check('5. Single-predecessor replacement backward compatibility', asyn
       'x-raw-hash': v2Hash,
       'x-archive-id': v2ArchiveId,
       'x-file-name': 'Single Report v2.csv',
+      'Content-Length': String(v2Bytes.byteLength),
     },
     body: v2Bytes,
   });
@@ -787,6 +796,7 @@ await run.check('5. Single-predecessor replacement backward compatibility', asyn
 });
 
 run.done();
+});
 if (process.exitCode) process.exit(1);
 console.log('PASSED: probe-bulk-import-multi-replacement completed all tests successfully.');
 process.exit(0);

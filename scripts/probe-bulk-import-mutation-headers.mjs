@@ -29,6 +29,7 @@ import {
   seedUser,
   scopeAll,
   scopeSpecific,
+  withFixedLengthStream,
 } from "./_worker-testkit.mjs";
 import worker from "../worker/index.js";
 import { handleBulkImportRequest } from "../worker/bulk-import.js";
@@ -116,6 +117,7 @@ function setupEnv() {
   return { db, env, stats, owner, admin, managerAllowed, gmAllowed, managerDenied, staff };
 }
 
+async function runAllChecks() {
 // ---------------------------------------------------------------------------
 // TEST 1: Worker sameOriginMutation rejects mutations missing X-Requested-With
 // ---------------------------------------------------------------------------
@@ -277,6 +279,7 @@ await run.check("Role authorization: owner, admin, and manager/gm with import_re
       "x-server-property-id": "P_A",
       "x-raw-hash": rawHash,
       "x-report-type": "occupancy",
+      "Content-Length": String(payload.byteLength),
     },
     body: payload,
   });
@@ -326,6 +329,7 @@ await run.check("raw-destroy strictly requires owner role", async () => {
       "x-server-property-id": "P_A",
       "x-raw-hash": rawHash,
       "x-archive-id": "raw_destroy_test",
+      "Content-Length": String(payload.byteLength),
     },
     body: payload,
   });
@@ -416,6 +420,11 @@ await run.check("Duplicate detection marks duplicate bundle and check-duplicate 
   assertEqual(data2.existing_bundle.id, "b_dup_1");
 });
 
+}
+
+await withFixedLengthStream(async () => {
+  await runAllChecks();
+});
 run.done();
 if (process.exitCode) process.exit(1);
 console.log("PASSED: probe-bulk-import-mutation-headers completed.");

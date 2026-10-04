@@ -425,6 +425,59 @@ export function tamperPayload(token, newPayload) {
   return `${h}.${b64urlStr(JSON.stringify(newPayload))}.${s}`;
 }
 
+/**
+ * Node-compatible FixedLengthStream for test fixtures only.
+ * Closure-based TransformStream that enforces exact byte count and aborts on mismatch.
+ */
+export class FixedLengthStream extends TransformStream {
+  constructor(declaredSize) {
+    let bytesWritten = 0;
+    super({
+      transform(chunk, controller) {
+        const chunkByteLength =
+          chunk instanceof ArrayBuffer || ArrayBuffer.isView(chunk)
+            ? chunk.byteLength
+            : NaN;
+        if (!Number.isFinite(chunkByteLength) || chunkByteLength < 0) {
+          controller.error(new TypeError("INVALID_STREAM_CHUNK"));
+          return;
+        }
+        if (bytesWritten + chunkByteLength > declaredSize) {
+          controller.error(new RangeError("STREAM_LENGTH_MISMATCH"));
+          return;
+        }
+        bytesWritten += chunkByteLength;
+        controller.enqueue(chunk);
+      },
+      flush(controller) {
+        if (bytesWritten !== declaredSize) {
+          controller.error(new RangeError("STREAM_LENGTH_MISMATCH"));
+        }
+      },
+    });
+  }
+}
+
+/**
+ * Scoped installer for globalThis.FixedLengthStream.
+ * Preserves existing global (if any), installs fixture version only if absent, restores in try/finally.
+ */
+export async function withFixedLengthStream(fn) {
+  const original = globalThis.FixedLengthStream;
+  if (original === undefined) {
+    globalThis.FixedLengthStream = FixedLengthStream;
+  }
+  try {
+    return await fn();
+  } finally {
+    if (original === undefined) {
+      delete globalThis.FixedLengthStream;
+    } else {
+      globalThis.FixedLengthStream = original;
+    }
+  }
+}
+
 /** A Request carrying the Access JWT in the assertion header. */
 export function reqWithToken(token, extraHeaders = {}) {
   return new Request("https://api.test/api/properties", {

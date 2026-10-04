@@ -934,3 +934,33 @@ October 4 release follow-up: fixed the ledger ErrorState prop required by CI; pr
 
 
 Release continuation: updated existing DataIntelligence UI test code to await real asynchronous reads before asserting loaded content, with an initial pending-state assertion preserved. Updated SmartButtonGroup callback test to the actual Report Download Options label. No assertions removed, product loading guards unchanged, no verification commands executed locally. GitHub CI owns automatic execution; Antigravity owns authenticated owner acceptance. Production artifact is unchanged by these test-only edits.
+
+### Clerk Audit persisted approval and refresh guard (owner launch correction, 2026-10-04)
+
+`src/pages/Employees.jsx` derives each current clerk group's Signed Off state from a nonempty set of records whose `review_status` values are all `RESOLVED`. Both the sign-off handler and expanded-row controls use the same persistence helper. Resolution notes load from persisted reviewed records in stable record-ID order; an explicit local draft, including an empty string, takes precedence for its current review key. Scope changes keep the existing selection, draft, and notice reset. A newly pending record makes the current group eligible for review again.
+
+After successful sign-off updates, the handler awaits `recordsQ.refetch()` before releasing its signing lock. This is a TanStack Query promise over the local data facade in the normal server-sync configuration; it is not an HTTP business-sync query. The retained probes `scripts/probe-clerk-persistence-helper.mjs` and `scripts/probe-clerk-signoff-refetch.mjs` import the actual production helper/component. They cover 11 helper cases and the deferred-refetch lock, with an await-stripped control required to fail at the specific signing-lock assertion. The component probe uses public hook/sign-off stubs and does not establish authentication or database behavior. A separate normal local Auth/server-sync browser replay passed all 25 existing checks, including persisted notes and Signed Off controls after reload, unchanged original record fields, and byte-identical captured rows for the other property. This evidence covers Clerk Audit; it does not certify every operational page or production owner acceptance.
+
+
+Frontend import hydration correction (source HEAD 2cbe candidate)
+Normal Upload selected a property alias (for example prop_fixture_a). The authenticated Worker resolved it to a canonical server property ID and published only unambiguous current-account property_aliases. Client hydration previously required exact canonical equality with the requested alias and threw Manifest scope mismatch after a successful server activation, leaving the upload marked Failed until a later unscoped refresh.
+The corrected client guard accepts exact canonical equality or strict typed equality with an explicitly server-published alias. It keeps foreign/unpublished/wrong-typed manifests denied and preserves the existing falsy propertyId behavior. No Worker mapping or monetary calculation changed.
+The same normal synthetic Upload flow on seven migrations now completes immediately: raw/archive/bulk/activation201, scoped history200, UI3rows/import1file, native Jan1-3 revenue100000c and205/300rooms persist reload with identical history NDJSON. Original generic A/B occupancy records remain unchanged; populated B occupancy is one control, transaction arrays are empty controls only. The reconstructed history payload uses canonical property IDs; substituting only the original UIalias through actual normalizedContent/contentHash exactly reproduces original manifest normalized_hash, so that hash distinction is expected.
+Verification: worker-authored helper13cases PASS; real normal pipeline/hydration browser replay R20 plus independent Codex financial/native/pixel checks. Actual syncBulkBundles foreign/wrong-typed before-commit regression is being added before commit. No claim that all website functions are covered.
+
+
+# Final Validation Note — 2026-10-04
+Production unchanged; owner acceptance NOT_RUN; no owner-ready claim.
+
+- Base 2cbe with approved uncommitted follow-ups.
+- Root: 100 files, 846 tests PASS. Prod build/typecheck/lint/brain/map 194 refs 0/V3 PASS 8998c0c8b7363198bd601111a088dee96b526583b5fdbc47b6e9a0f7212ce003.
+- Native: 15 probes, 266 checks PASS after scoped fix; helper guard 32 PASS; no native/S3 production fallback.
+- Portable Clerk helper 11 PASS; component actual 8 PASS / expected-mutant lock reject-after-5 PASS via verify-all runner.
+- Only the component probe forks isolated dev React (helper does not) under production parent; PASSED after assertions; no weakening.
+- Manifest helper 13 PASS via --only runner.
+- syncBulkBundles post-alias hydration PASS 1 ($12000/$7000, no uploads); R20 alias UI/native Jan1-3 proof preserved.
+- Retained 13-case probe exercises the actual helper strict canonical/server-published/typed-alias/foreign/wrong-type/malformed, NOT standalone service integration. Cloned alias-service probe withdrawn; do not promote copy.
+- Caller review: false-guard throw before download/commit, static-only.
+- CURRENT 212/99cc2842 shard3 17PASS 1SKIP, no 5173, exit 0. MAIN 211/c3388821 shard2 17PASS 1SKIP stale-dist, 7/8 18PASS each; after-build 11PASS recovers stale-dist. Baseline 2cbe 209/2c9c1972 4-shard 70PASS 2SKIP historical. Do not sum or claim all-212 PASS; remote all-12 CI pending.
+- Clerk NODE_ENV act error + NO_VERDICT failures resolved harness-only; keep failure evidence. Filter/Chart recovery ongoing; weather invocation 403 observed, cause unproven, no weather PASS.
+- Supersedes only prior MAIN-shards-not-run / pending-Clerk / probe-being-added phrases; preserves historical source/unit/production facts.

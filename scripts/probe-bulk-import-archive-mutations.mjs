@@ -22,6 +22,7 @@ import {
   seedUser,
   scopeAll,
   scopeSpecific,
+  withFixedLengthStream,
 } from "./_worker-testkit.mjs";
 import { handleBulkImportRequest } from "../worker/bulk-import.js";
 import { clearMockStore, getMockStore, testR2Binding } from "./_r2-testkit.mjs";
@@ -62,6 +63,8 @@ function setupWorker() {
   return { db, env, stats, owner, managerA };
 }
 
+await withFixedLengthStream(async () => {
+
 // A1: replace raw object in place
 await run.check("A1 mutant killed: in-place raw overwrite is rejected with 403 scope rejection", async () => {
   const { env, owner } = setupWorker();
@@ -71,7 +74,7 @@ await run.check("A1 mutant killed: in-place raw overwrite is rejected with 403 s
 
   const req1 = new Request("http://localhost/api/bulk-import/raw-upload", {
     method: "PUT",
-    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": hash, "x-archive-id": archiveId, "x-file-name": "a1.csv" },
+    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": hash, "x-archive-id": archiveId, "x-file-name": "a1.csv", "Content-Length": String(fileBytes.byteLength) },
     body: fileBytes,
   });
   const res1 = await handleBulkImportRequest(req1, env, owner, new URL(req1.url), ["api", "bulk-import", "raw-upload"]);
@@ -85,7 +88,7 @@ await run.check("A1 mutant killed: in-place raw overwrite is rejected with 403 s
 
   const req2 = new Request("http://localhost/api/bulk-import/raw-upload", {
     method: "PUT",
-    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": hash, "x-archive-id": archiveId, "x-file-name": "a1.csv" },
+    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": hash, "x-archive-id": archiveId, "x-file-name": "a1.csv", "Content-Length": String(fileBytes.byteLength) },
     body: fileBytes,
   });
   const res2 = await handleBulkImportRequest(req2, env, owner, new URL(req2.url), ["api", "bulk-import", "raw-upload"]);
@@ -104,7 +107,7 @@ await run.check("A2 mutant killed: Delete Import leaves raw source 100% intact i
 
   const upRaw = new Request("http://localhost/api/bulk-import/raw-upload", {
     method: "PUT",
-    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": hash, "x-archive-id": archiveId, "x-file-name": "a2.csv" },
+    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": hash, "x-archive-id": archiveId, "x-file-name": "a2.csv", "Content-Length": String(fileBytes.byteLength) },
     body: fileBytes,
   });
   const upRawRes = await handleBulkImportRequest(upRaw, env, owner, new URL(upRaw.url), ["api", "bulk-import", "raw-upload"]);
@@ -176,7 +179,7 @@ await run.check("A3 mutant killed: server archive can be resumed without local F
 
   const upRaw = new Request("http://localhost/api/bulk-import/raw-upload", {
     method: "PUT",
-    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": hash, "x-archive-id": archiveId, "x-file-name": "a3.csv" },
+    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": hash, "x-archive-id": archiveId, "x-file-name": "a3.csv", "Content-Length": String(fileBytes.byteLength) },
     body: fileBytes,
   });
   const upRawRes = await handleBulkImportRequest(upRaw, env, owner, new URL(upRaw.url), ["api", "bulk-import", "raw-upload"]);
@@ -219,7 +222,7 @@ await run.check("A4 mutant killed: identical filename with different content cre
 
   const req1 = new Request("http://localhost/api/bulk-import/raw-upload", {
     method: "PUT",
-    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": hash1, "x-archive-id": "arch_same_name_1", "x-file-name": "Report.csv" },
+    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": hash1, "x-archive-id": "arch_same_name_1", "x-file-name": "Report.csv", "Content-Length": String(file1.byteLength) },
     body: file1,
   });
   const res1 = await handleBulkImportRequest(req1, env, owner, new URL(req1.url), ["api", "bulk-import", "raw-upload"]);
@@ -227,7 +230,7 @@ await run.check("A4 mutant killed: identical filename with different content cre
 
   const req2 = new Request("http://localhost/api/bulk-import/raw-upload", {
     method: "PUT",
-    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": hash2, "x-archive-id": "arch_same_name_2", "x-file-name": "Report.csv" },
+    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": hash2, "x-archive-id": "arch_same_name_2", "x-file-name": "Report.csv", "Content-Length": String(file2.byteLength) },
     body: file2,
   });
   const res2 = await handleBulkImportRequest(req2, env, owner, new URL(req2.url), ["api", "bulk-import", "raw-upload"]);
@@ -278,7 +281,7 @@ await run.check("A6 mutant killed: fresh Browser B discovers and resumes pending
 
   const upRaw = new Request("http://localhost/api/bulk-import/raw-upload", {
     method: "PUT",
-    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": hash, "x-archive-id": archiveId, "x-file-name": "a6.csv" },
+    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": hash, "x-archive-id": archiveId, "x-file-name": "a6.csv", "Content-Length": String(fileBytes.byteLength) },
     body: fileBytes,
   });
   const upRawRes = await handleBulkImportRequest(upRaw, env, owner, new URL(upRaw.url), ["api", "bulk-import", "raw-upload"]);
@@ -321,7 +324,7 @@ await run.check("A7 mutant killed: raw download hash exactly matches original by
 
   const upRaw = new Request("http://localhost/api/bulk-import/raw-upload", {
     method: "PUT",
-    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": hash, "x-archive-id": archiveId, "x-file-name": "binary.xlsx" },
+    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": hash, "x-archive-id": archiveId, "x-file-name": "binary.xlsx", "Content-Length": String(binaryBuffer.byteLength) },
     body: binaryBuffer,
   });
   const upRawRes = await handleBulkImportRequest(upRaw, env, owner, new URL(upRaw.url), ["api", "bulk-import", "raw-upload"]);
@@ -360,7 +363,7 @@ await run.check("A8 mutant killed: raw archive download across property boundari
 
   const upRaw = new Request("http://localhost/api/bulk-import/raw-upload", {
     method: "PUT",
-    headers: { "x-server-property-id": "P_B", "x-report-type": "occupancy", "x-raw-hash": hash, "x-archive-id": archiveId, "x-file-name": "b.csv" },
+    headers: { "x-server-property-id": "P_B", "x-report-type": "occupancy", "x-raw-hash": hash, "x-archive-id": archiveId, "x-file-name": "b.csv", "Content-Length": String(fileBytes.byteLength) },
     body: fileBytes,
   });
   await handleBulkImportRequest(upRaw, env, owner, new URL(upRaw.url), ["api", "bulk-import", "raw-upload"]);
@@ -477,6 +480,7 @@ await run.check("A10 mutant killed: 'safely archived' stage only reported AFTER 
 });
 
 run.done();
+});
 if (process.exitCode) process.exit(1);
 console.log("PASSED: probe-bulk-import-archive-mutations completed.");
 process.exit(0);

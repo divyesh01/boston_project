@@ -7115,3 +7115,60 @@ prevention: for the whole 35s→settle window both files were in flight.
   authoritative `UploadedReport.create` history write really settles; and a batch whose rollback fails
   breaks after the first file and leaves the later files `Ready to import`.
 
+## 2026-10-04 — Deep Verification 411 incident: fixture correction and candidate verification note (append-only)
+
+Root commit `2cbeaf97eb17f8b2056f0556f7180faac3905aca` repaired native R2
+known-length streaming; the preferred S3 path is unchanged. Node synthetic
+valid raw-upload Requests omitted wire Content-Length and Node had no native
+FixedLengthStream, so 15 Deep Verification suites failed via 411 with
+downstream missing archive/manifest cascades. Scripts were corrected to use
+valid UTF8 actual encoded byte lengths only and install a scoped,
+byte-enforcing, test-only fixture. Intentional no-length 411s,
+malformed/oversize headers, and the original status/hash/scope/isolation/
+idempotency/concurrency assertions remain. No production stream fallback was
+added and the consuming R2 testkit put was not changed.
+
+Baseline evidence (Observed): all 15 affected probes run 266 checks PASS. The
+four affected verify:all shards 2/12, 3/12, 7/12, 8/12 exit 0 — 17PASS1SKIP,
+17PASS1SKIP, 18PASS0SKIP, 18PASS0SKIP — i.e. 70 suites PASS and 2 SKIP (the
+two skips are the absent local dist/build-chunk check and the absent
+localhost5173 config-exposure check; this is not 72PASS). Discovered list 209,
+list hash 2c9c1972. A canary `new URL(...).pathname` statement tripped the
+unchanged repo-root static checker; local URL extraction was split into two
+statements and canary182, repo-root28, and shard8 checks PASS. A shared
+helper was guarded against invalid non-byte chunks, but only after a fresh
+independent read-only review; keep that follow-up status separate until the
+actual final MAIN shards complete (MAIN scripts are being copied by the sole
+writer; the FINAL MAIN four shards have not yet been run). The prior
+100files846 local unit pass is historical, not a current broad claim. Import
+replay and Clerk product refinements remain pending in independent lanes.
+Production was not changed by this task; authenticated production owner
+acceptance is NOT_RUN and no owner-ready declaration is made. The baseline
+source SHA above is a provenance coordinate, not deployed production source.
+
+Packet fixture correction (companion file `scripts/_worker-testkit.mjs`):
+a minimal guard now rejects invalid non-byte chunks — strings, plain
+objects, Blobs, or any chunk without a finite non-negative `byteLength` —
+with `INVALID_STREAM_CHUNK` before any enqueue; valid ArrayBuffer and
+typed-byte views pass through unconverted. Exact byte counting, oversize
+rejection before enqueue, underrun flush rejection, closure state, and the
+scoped wrapper save/restore (existing native global never overwritten) are
+unchanged. Targeted Node guard proof passed 32 checks including forged byteLength rejection, exact UTF8 bytes, binary views, overrun/underrun, and global restoration.
+
+
+
+# Final Validation Note — 2026-10-04
+Production unchanged; owner acceptance NOT_RUN; no owner-ready claim.
+
+- Base 2cbe with approved uncommitted follow-ups.
+- Root: 100 files, 846 tests PASS. Prod build/typecheck/lint/brain/map 194 refs 0/V3 PASS 8998c0c8b7363198bd601111a088dee96b526583b5fdbc47b6e9a0f7212ce003.
+- Native: 15 probes, 266 checks PASS after scoped fix; helper guard 32 PASS; no native/S3 production fallback.
+- Portable Clerk helper 11 PASS; component actual 8 PASS / expected-mutant lock reject-after-5 PASS via verify-all runner.
+- Only the component probe forks isolated dev React (helper does not) under production parent; PASSED after assertions; no weakening.
+- Manifest helper 13 PASS via --only runner.
+- syncBulkBundles post-alias hydration PASS 1 ($12000/$7000, no uploads); R20 alias UI/native Jan1-3 proof preserved.
+- Retained 13-case probe exercises the actual helper strict canonical/server-published/typed-alias/foreign/wrong-type/malformed, NOT standalone service integration. Cloned alias-service probe withdrawn; do not promote copy.
+- Caller review: false-guard throw before download/commit, static-only.
+- CURRENT 212/99cc2842 shard3 17PASS 1SKIP, no 5173, exit 0. MAIN 211/c3388821 shard2 17PASS 1SKIP stale-dist, 7/8 18PASS each; after-build 11PASS recovers stale-dist. Baseline 2cbe 209/2c9c1972 4-shard 70PASS 2SKIP historical. Do not sum or claim all-212 PASS; remote all-12 CI pending.
+- Clerk NODE_ENV act error + NO_VERDICT failures resolved harness-only; keep failure evidence. Filter/Chart recovery ongoing; weather invocation 403 observed, cause unproven, no weather PASS.
+- Supersedes only prior MAIN-shards-not-run / pending-Clerk / probe-being-added phrases; preserves historical source/unit/production facts.

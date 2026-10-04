@@ -36,6 +36,7 @@ import {
   seedUser,
   scopeAll,
   scopeSpecific,
+  withFixedLengthStream,
 } from "./_worker-testkit.mjs";
 import worker from "../worker/index.js";
 import 'fake-indexeddb/auto';
@@ -146,6 +147,7 @@ async function checkDuplicateBody(scope, server_property_id, rawHash) {
   });
 }
 
+async function runAllChecks() {
 // ---------------------------------------------------------------------------
 // 1. Canonical id already in scope returns unchanged — zero mapping reads.
 // ---------------------------------------------------------------------------
@@ -368,6 +370,7 @@ await run.check("full flow via alias: raw-upload, raw-archive, pending, upload, 
       "x-raw-hash": rawHash,
       "x-report-type": "occupancy",
       "x-archive-id": "raw_alias_flow",
+      "Content-Length": String(rawPayload.byteLength),
     },
     body: rawPayload,
   });
@@ -534,6 +537,11 @@ await run.check("X-Requested-With gate unchanged: mutation without the header is
   assertEqual(resGate.status, 401, "headered but unauthenticated mutation reaches auth as 401");
 });
 
+}
+
+await withFixedLengthStream(async () => {
+  await runAllChecks();
+});
 run.done();
 if (process.exitCode) process.exit(1);
 console.log("PASSED: probe-bulk-import-property-identity completed all tests successfully.");

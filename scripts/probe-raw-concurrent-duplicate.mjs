@@ -18,6 +18,7 @@ import {
   seedUser,
   scopeAll,
   scopeSpecific,
+  withFixedLengthStream,
 } from "./_worker-testkit.mjs";
 import { handleBulkImportRequest } from "../worker/bulk-import.js";
 import { clearMockStore, getMockStore, testR2Binding } from "./_r2-testkit.mjs";
@@ -62,6 +63,7 @@ function setupWorker() {
   return { db, env, stats, owner, managerA, managerB };
 }
 
+async function runAllChecks() {
 // 1. Browser A and Browser B upload exact same bytes simultaneously with different filenames and dates
 await run.check("Browser A and B concurrent raw upload yields 1 canonical object and 1 logical manifest", async () => {
   const { db, env, owner } = setupWorker();
@@ -250,12 +252,12 @@ await run.check("Property isolation: identical raw bytes for Property A and Prop
 
   const reqA = new Request("http://localhost/api/bulk-import/raw-upload", {
     method: "PUT",
-    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": rawHash },
+    headers: { "x-server-property-id": "P_A", "x-report-type": "occupancy", "x-raw-hash": rawHash, "content-length": String(rawBytes.byteLength) },
     body: rawBytes,
   });
   const reqB = new Request("http://localhost/api/bulk-import/raw-upload", {
     method: "PUT",
-    headers: { "x-server-property-id": "P_B", "x-report-type": "occupancy", "x-raw-hash": rawHash },
+    headers: { "x-server-property-id": "P_B", "x-report-type": "occupancy", "x-raw-hash": rawHash, "content-length": String(rawBytes.byteLength) },
     body: rawBytes,
   });
 
@@ -272,6 +274,11 @@ await run.check("Property isolation: identical raw bytes for Property A and Prop
   assert(dataA.raw_object_key !== dataB.raw_object_key, "Keys are strictly isolated by property");
 });
 
+}
+
+await withFixedLengthStream(async () => {
+  await runAllChecks();
+});
 run.done();
 if (process.exitCode) process.exit(1);
 console.log("PASSED: probe-raw-concurrent-duplicate completed.");

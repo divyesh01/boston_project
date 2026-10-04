@@ -16,6 +16,7 @@ import {
   makeRunner,
   seedUser,
   scopeAll,
+  withFixedLengthStream,
 } from './_worker-testkit.mjs';
 import { handleBulkImportRequest } from '../worker/bulk-import.js';
 import { clearMockStore, testR2Binding } from './_r2-testkit.mjs';
@@ -38,6 +39,20 @@ async function computeNormalizedHash(bundle) {
 }
 
 const run = makeRunner('probe-bulk-import-concurrency-recovery');
+
+function withNativeRawContentLength(url, init) {
+  if (url.pathname !== '/api/bulk-import/raw-upload') return init;
+  const headers = new Headers(init?.headers ?? undefined);
+  if (headers.has('content-length')) return init;
+  const body = init?.body;
+  const bytes = typeof body === 'string' ? new TextEncoder().encode(body)
+    : body instanceof Uint8Array ? body
+      : body instanceof ArrayBuffer ? new Uint8Array(body)
+        : null;
+  if (!bytes) return init;
+  headers.set('content-length', String(bytes.byteLength));
+  return { ...init, headers };
+}
 
 function setupTest() {
   clearMockStore();
@@ -65,12 +80,14 @@ function setupTest() {
   globalThis.fetch = async (url, options = {}) => {
     const u = new URL(url, 'http://localhost');
     const parts = u.pathname.replace(/^\/+/, '').split('/');
-    const req = new Request(u.toString(), options);
+    const req = new Request(u.toString(), withNativeRawContentLength(u, options));
     return await handleBulkImportRequest(req, env, owner, u, parts);
   };
 
   return { db, env, owner, rawStore, bulkStore };
 }
+
+await withFixedLengthStream(async () => {
 
 await run.check('1. Concurrent duplicate activations: winner commits 201, loser re-evaluates to 200 already_active', async () => {
   const { env, owner, bulkStore } = setupTest();
@@ -394,6 +411,7 @@ await run.check('6. D1 constraint and guard integrity: CHECK(ok=1) and seq uniqu
 });
 
 run.done();
+});
 if (process.exitCode) process.exit(1);
 console.log('PASSED: probe-bulk-import-concurrency-recovery completed all tests successfully.');
 process.exit(0);

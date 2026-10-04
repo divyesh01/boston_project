@@ -16,6 +16,7 @@ import {
   seedUser,
   scopeAll,
   scopeSpecific,
+  withFixedLengthStream,
 } from "./_worker-testkit.mjs";
 import { handleBulkImportRequest } from "../worker/bulk-import.js";
 import { clearMockStore, getMockStore, testR2Binding } from "./_r2-testkit.mjs";
@@ -50,6 +51,8 @@ function setupWorker() {
   return { db, env, stats, owner, staff };
 }
 
+await withFixedLengthStream(async () => {
+
 await run.check("Write-once immutability: idempotent 200 on identical file, 403 scope rejection on overwrite attempt", async () => {
   const { env, owner } = setupWorker();
   const propertyId = "P_A";
@@ -65,6 +68,7 @@ await run.check("Write-once immutability: idempotent 200 on identical file, 403 
       "x-report-type": "occupancy",
       "x-raw-hash": hashA,
       "x-file-name": "august_final.csv",
+      "Content-Length": String(contentA.byteLength),
     },
     body: contentA,
   });
@@ -81,6 +85,7 @@ await run.check("Write-once immutability: idempotent 200 on identical file, 403 
       "x-report-type": "occupancy",
       "x-raw-hash": hashA,
       "x-file-name": "august_final.csv",
+      "Content-Length": String(contentA.byteLength),
     },
     body: contentA,
   });
@@ -102,6 +107,7 @@ await run.check("Write-once immutability: idempotent 200 on identical file, 403 
       "x-report-type": "occupancy",
       "x-raw-hash": hashA,
       "x-file-name": "august_final.csv",
+      "Content-Length": String(contentA.byteLength),
     },
     body: contentA,
   });
@@ -127,6 +133,7 @@ await run.check("Checksum tamper rejection: declared hash != byte digest returns
       "x-server-property-id": propertyId,
       "x-raw-hash": fakeHash,
       "x-file-name": "tampered.csv",
+      "Content-Length": String(realBytes.byteLength),
     },
     body: realBytes,
   });
@@ -153,6 +160,7 @@ await run.check("Delete / Undo semantics: 'Remove from Analytics' leaves raw arc
       "x-raw-hash": rawHash,
       "x-archive-id": rawArchiveId,
       "x-file-name": "delete_test.csv",
+      "Content-Length": String(rawBytes.byteLength),
     },
     body: rawBytes,
   });
@@ -274,6 +282,7 @@ await run.check("Destruction governance: non-owner forbidden (403), immutable ar
 });
 
 run.done();
+});
 if (process.exitCode) process.exit(1);
 console.log("PASSED: probe-bulk-import-immutable-source completed.");
 process.exit(0);

@@ -25,3 +25,6 @@ Use the full prior Worker version above to restore Worker code and assets if rel
 ## Antigravity follow-up
 
 Use `ANTIGRAVITY_UI_UX_HANDOFF.md` for all changed files, expected invariants, exact commands, edge cases and route checks. Focus on reconciled enterprise/property contracts and every financial/write path. Authenticated production-owner acceptance is distinct from successful upload/deployment.
+
+
+October 4 release follow-up: fixed the ledger ErrorState prop required by CI; preserved legacy review handling metrics while adding explicit provider-publication metrics; retained numeric-dollar channel payloads behind a verified-publishing capability and provider receipt requirement. The current mock adapter remains disabled. Antigravity: run npm run typecheck, node scripts/probe-reviews.mjs and node scripts/probe-cents-unit-mismatch.mjs, then inspect /Pricing, /Reviews and /DataIntelligence. Codex did not run these checks locally.

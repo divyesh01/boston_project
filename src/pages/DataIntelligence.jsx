@@ -602,7 +602,7 @@ export default function DataIntelligence() {
 
   if (filesQ.isPending || entitiesQ.isPending) return <LoadingState title="Loading data health evidence" description="Waiting for uploaded reports and saved ledgers before evaluating completeness." />;
   if (filesQ.isError || entitiesQ.isError) return readErrorBanner;
-  if (Object.keys(existingData._errors || {}).length) return <ErrorState title="Some ledger evidence is unavailable" description="Completeness, reconciliation and duplicate scanning are paused until all saved ledgers can be read completely." onRetry={() => Promise.all([filesQ.refetch(), entitiesQ.refetch()])} />;
+  if (Object.keys(existingData._errors || {}).length) return <ErrorState title="Some ledger evidence is unavailable" error={null} description="Completeness, reconciliation and duplicate scanning are paused until all saved ledgers can be read completely." onRetry={() => Promise.all([filesQ.refetch(), entitiesQ.refetch()])} />;
 
   const TAB_OPTIONS = [
     { value: 'health', label: `Portfolio Completeness (${portfolioHealth.properties.length})` },

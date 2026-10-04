@@ -94,7 +94,8 @@ export function aggregateRating(reviews) {
     const k = SOURCE_LABELS[r.source] || r.source || "Other";
     bySource[k] = (bySource[k] || 0) + 1;
   }
-  const replied = list.filter(hasPublishedResponse).length;
+  const replied = list.filter((r) => r.status !== "new").length;
+  const publishedResponses = list.filter(hasPublishedResponse).length;
   return {
     total: list.length,
     rated: rated.length,
@@ -104,9 +105,15 @@ export function aggregateRating(reviews) {
     bySource,
     replied,
     responseRate: list.length ? replied / list.length : 0,
+    publishedResponses,
+    publishedResponseRate: list.length ? publishedResponses / list.length : 0,
   };
 }
 
 export function needsResponse(reviews) {
+  return (reviews || []).filter((r) => r.status === "new");
+}
+
+export function needsPublishedResponse(reviews) {
   return (reviews || []).filter((r) => r.status !== "resolved" && !hasPublishedResponse(r));
 }

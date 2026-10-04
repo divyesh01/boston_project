@@ -11,7 +11,7 @@ import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { db } from "@/api/base44Client";
 import { useRealtimeInvalidation } from "@/lib/realtime";
 import {
-  SOURCE_LABELS, reviewSentiment, isInconsistent, aggregateRating, needsResponse, hasPublishedResponse,
+  SOURCE_LABELS, reviewSentiment, isInconsistent, aggregateRating, needsPublishedResponse, hasPublishedResponse,
 } from "@/lib/reputationService";
 import { ErrorState } from "@/components/ui/status";
 
@@ -31,7 +31,7 @@ export default function Reviews() {
   const [notice, setNotice] = useState(null);
 
   const stats = useMemo(() => aggregateRating(reviews), [reviews]);
-  const pending = useMemo(() => needsResponse(reviews), [reviews]);
+  const pending = useMemo(() => needsPublishedResponse(reviews), [reviews]);
   const inconsistent = useMemo(() => reviews.filter((r) => isInconsistent(r)), [reviews]);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["reviews"] });
@@ -76,7 +76,7 @@ export default function Reviews() {
           <p className="text-[11px] uppercase tracking-[0.3em] text-[#FFB547]">Reputation</p>
           <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Guest Reviews</h1>
           <p className="mt-1 text-sm text-slate-400">
-            {dateRange.from || "—"} → {dateRange.to || "—"} · {num(stats.total)} saved reviews · {pct(stats.responseRate)} confirmed published responses
+            {dateRange.from || "—"} → {dateRange.to || "—"} · {num(stats.total)} saved reviews · {pct(stats.publishedResponseRate)} confirmed published responses
           </p>
         </div>
       </header>

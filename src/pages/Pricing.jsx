@@ -3,6 +3,8 @@ import { Settings2, ArrowUpRight, CheckCircle, AlertTriangle, ChevronDown, Chevr
 import Card from "@/components/ui-exec/Card";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { useRooms } from "@/lib/useHotelData";
+import { db } from "@/api/base44Client";
+import { applyDynamicRateOverride } from "@/lib/pricingOverride";
 import { usePricingForecast } from "@/lib/usePricing";
 import { getPricingConfig, savePricingConfig, DEFAULT_PRICING_CONFIG, ROOM_TYPES } from "@/lib/pricingSettings";
 import { money2 } from "@/lib/hotel";
@@ -56,6 +58,9 @@ export default function Pricing() {
 
   const [expanded, setExpanded] = useState(false);
   const [notice, setNotice] = useState(null);
+  const [pushing, setPushing] = useState(false);
+  // The console-only adapter does not advertise verified provider publishing.
+  const canPublish = Reflect.get(db.integrations.ChannelManager, "supportsVerifiedPublishing") === true;
   const [horizon, setHorizon] = useState(14);
 
   const {
@@ -112,6 +117,38 @@ export default function Pricing() {
     : availabilityMessage;
 
 
+
+  const handlePush = async () => {
+    if (pushing || !canPublish || isPortfolio || !today || isHistoricalSimulation || roomsQ.isError || forecastError) return;
+    setPushing(true);
+    setNotice(null);
+    try {
+      const rateMap = {};
+      for (const type of ROOM_TYPES) {
+        const cents = today.types?.[type]?.recommendedCents;
+        if (Number.isFinite(cents) && cents > 0) rateMap[type] = fromCents(cents);
+      }
+      if (!Object.keys(rateMap).length) throw new Error("No valid rates are available to publish.");
+      const receipt = await db.integrations.ChannelManager.PushInventory(singlePropertyId, rateMap);
+      if (!receipt || !Reflect.get(receipt, "provider_receipt_id")) {
+        throw new Error("The provider did not confirm publication. Check your channel manager before retrying.");
+      }
+      for (const roomType of Object.keys(rateMap)) {
+        await applyDynamicRateOverride({
+          propertyId: singlePropertyId,
+          newRate: fromCents(today.types[roomType].recommendedCents),
+          roomType,
+          justification: `Provider confirmed rate publication for ${propName}`,
+          user: null,
+        });
+      }
+      setNotice({ type: "ok", text: `Provider confirmed recommended rates for ${propName}.` });
+    } catch (error) {
+      setNotice({ type: "error", text: error.message || "Rate publication could not be confirmed." });
+    } finally {
+      setPushing(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -220,6 +257,7 @@ export default function Pricing() {
         </Card>
 
         <Card title="Channel publishing" subtitle="Publish rates through your connected channel provider">
+          <button type="button" onClick={handlePush} disabled={!canPublish || pushing || isPortfolio || !today || isHistoricalSimulation || roomsQ.isError || forecastError} className="mb-3 min-h-11 rounded-lg border border-white/10 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50">{pushing ? "Publishing rates..." : "Publish to verified channels"}</button>
           <p className="text-sm text-slate-400">Automatic rate publishing is unavailable. Review the recommendations here, then enter approved rates in your channel manager.</p>
         </Card>
       </div>

@@ -176,3 +176,6 @@ Building the production artifact is necessary packaging for the requested deploy
 Release target: `boston-project.divyesh-boston.workers.dev`, account `8142ebfb266752f3b082c5d9badf1133`. Before deployment, current full rollback version recorded from Cloudflare is `d11352f9-e80e-4a52-9d01-f37067ed37ed`; recheck if another deployment appears. Both Worker and newly built assets deploy together with existing root `wrangler.jsonc`.
 
 Antigravity should check the integrated version, especially the APIs named above and all earlier scenarios. Independent runtime verification of the combined source remains NOT_RUN by Codex.
+
+
+October 4 release follow-up: fixed the ledger ErrorState prop required by CI; preserved legacy review handling metrics while adding explicit provider-publication metrics; retained numeric-dollar channel payloads behind a verified-publishing capability and provider receipt requirement. The current mock adapter remains disabled. Antigravity: run npm run typecheck, node scripts/probe-reviews.mjs and node scripts/probe-cents-unit-mismatch.mjs, then inspect /Pricing, /Reviews and /DataIntelligence. Codex did not run these checks locally.

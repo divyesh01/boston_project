@@ -21,14 +21,14 @@ This release consolidates core financial, operational, worker aggregate, and fro
 ### B. Operational Scope & Ledger Isolation
 - **RoomBoard Independent Querying:** Room stays and housekeeping tasks query strictly against `boardDate`. Multi-day stays overlapping `boardDate` (checked in prior, checking out after) are fully preserved. Loading states gate rendering to prevent false vacant room indicators.
 - **Active Property Filtering:** Global filters (`useGlobalFilters`) filter out inactive properties (`p.active !== false`) across dashboards, property pickers, and comparisons, while keeping Settings unfiltered for property management.
-- **Empty Property Selection:** Local Payroll, Expenses, and Forecasting queries return no rows when no properties are selected. Synthetic owner/restricted query tests preserve single, nonempty, and date-filter behavior; normal browser acceptance remains pending.
+- **Empty Property Selection:** Local Payroll, Expenses and Forecasting queries return no rows when no properties are selected. accepted scoped evidence is zero-active normal-auth rendering only: 26 checks that Payroll/Expenses/Forecast render empty selection (coordinator evidence at `independent-browser-zero-active/zero-active-ui-proof.json`). No mutation or all-controls claim is made.
 - **Zero-Selection Guard:** Portfolio view passes an explicit array of active property IDs (`activePortfolioIds`), never the unscoped `"all"` sentinel, preventing inactive property data leakage.
 - **Fail-Closed Portfolio Aggregates:** Daily financial aggregate cache (`useDailyFinancialAggregates`) is restricted to single properties (`typeof propertyId === 'string' && propertyId !== 'all'`). Multi-property or portfolio requests safely bypass cached aggregates and compute from raw authoritative ledgers to prevent partial cache totals.
 - **Worker Aggregate Availability:** When both supported aggregate tables are absent or empty, the aggregate read returns an explicit unavailable result with empty summaries. The client uses raw ledgers unless it has nonempty, complete, current summaries for the selected property. Unexpected storage errors remain errors.
 
 ### C. Frontend Engine & Security Hardening
 - **Tailwind CSS v4 & LightningCSS:** Updated to `tailwindcss@4.3.3` with `@tailwindcss/postcss@4.3.3`. The installed candidate passed 68 compatibility checks in headless Chromium. Focus PNGs for the covered fixtures were byte-identical (1719B); raw shadow strings differ because v4 adds transparent layers. This evidence does not establish parity for every page or browser.
-- **PDF Export:** The pinned `html2canvas-pro@2.5.0` renderer resolves the observed unsupported `oklab` failure. Normal synthetic downloads parse and render populated pages. Numeric figures now disable ellipsis only in the export clone; known populated figures pass independent page-one pixel review; larger-value and full-page visual checks remain pending. This is not production acceptance.
+- **PDF Export:** The pinned `html2canvas-pro@2.5.0` renderer resolves the observed unsupported `oklab` failure. Normal synthetic downloads parse and render populated pages. Numeric figures now disable ellipsis only in the export clone; known populated figures pass independent page-one pixel review. Current accepted scoped PDF review (replacing the older current "8-only" gate statement; dated historical 8-page records are preserved as historical): original 8 (`exports/pdf-clone-repaired-proof.json`) plus larger 9 (`exports/larger-pdf-pixel-proof.json`) under coordinator evidence `page-fixture/schema-seven` — all 17 pages independent glyph/layout review with the known $1,234,567.89 figure with warnings; this is not an all-financial-math PASS. This is not production acceptance.
 - **Dependency Security Clean:** Upgraded `dompurify` to `3.4.16` (deduplicated across dependencies including `jspdf`). Vulnerable braces dependency removed from the dependency tree. `npm run audit:gate` passes with 0 advisories (`ACCEPTED = {}` unchanged).
 
 ---
@@ -130,17 +130,20 @@ Repair verification matrix, updated 2026-10-04 (individual historical scopes ret
 
 | Gate | Result | Scope |
 | --- | --- | --- |
-| Standard Vitest | Follow-up: 100 files, 846 tests PASS | Frozen average and recovery follow-up; earlier pushed repair also passed 98 files / 835 tests |
-| Typecheck / lint / production build | PASS | Repository commands |
-| Brain / repository map / V3 | PASS | Staged task changes |
+| Standard Vitest | 100 files, 846 tests PASS at clean base `a273191be59ce78ac85f63d588c5d0b6466e5f94` | Historical provenance; type/lint/build/governance/remote all SUCCESS at that base |
+| Weather full suite (root, actual) | 101 files, 852 PASS, 87.23s, run before type-only mocks | Actual status; retained type-corrected 6 PASS |
+| Lint (Weather source/test) | PASS | Actual status |
+| Typecheck (typed-mock fix) | PASS | Repository command after the typing-only correction |
+| Production build | PASS, 21.07s | Current Weather source |
+| Brain / map / V3 (post-Weather) | PASS | Brain exit 0; map 10 areas, 29 rows, 39 contracts, 194 references, 0 problems; V3 31 files and 6 adapters verified |
 | Dependency audit | PASS: zero advisories | No accepted exceptions added |
 | Financial / operations / aggregate / authorization probes | PASS in documented scopes | Synthetic fixtures and actual handlers; not production owner acceptance |
-| Normal PDF / workbook | PASS for the recorded two-property case | Eight PDF pages reviewed; workbook reconciles 2,452,500 cents with completeness warnings |
+| Normal PDF / workbook | Scoped PASS as recorded | Accepted scoped review: 17 pages (original 8 + larger 9) glyph/layout with known $1,234,567.89 with warnings — not all-financial-math PASS; workbook reconciles 2,452,500 cents with completeness warnings |
 | Route body coverage | 36 recorded PASS | Local synthetic normal-auth fixtures; historical public render and expected redirects distinguished |
-| Primary browser actions | 10 PASS, 1 FAIL, 95 NOT_RUN, 1 N_A | Recorded exports, expense/payroll filtering, check-in, property deletion, housekeeping retrieval/save and bootstrap checks; N_A is a separately inventoried route action. Historical native import failure awaits replay on the applied repair |
+| Primary browser actions | Scoped receipts PASS; full-matrix reconciliation PENDING | No aggregate math claimed beyond scoped receipts below; old R2 import failure is historical, superseded by R20 |
 | Production owner acceptance | NOT_RUN | No production authenticated owner acceptance claimed |
 
-The candidate is not an owner-ready declaration. The larger-number PDF case preserves the full $1,234,567.89 figure and completeness warnings across reviewed pages. Outstanding browser actions, the R2 import failure, private-fixture checks and production acceptance remain separate open gates. Zero-active financial rendering and selected-night room carry have additional scoped browser evidence. The broad mutation sweep passed the earlier candidate snapshot; it is not a full mutation claim for the added warning, empty-selection and PDF callback changes. Their focused regressions and the final standard suite pass.
+The candidate is not an owner-ready declaration. Accepted scoped receipts: R20 import normal fix (3 rows Jan 1–3, 40000+30000+30000c=100000c with import and reload hydrate); Clerk 25-check resolution persists with same immutable amount and other-property 6 records unchanged; Staff R1 and Payroll R3 root-accepted normal-API full-record and cents proofs only; R30 Dashboard filters (single-A 1312500c / B 1140000c / All 2452500c / date-included 2452500c / date-excluded 0 with ten native snapshots unchanged); zero-active 26-check scoped rendering; 17-page scoped PDF review. Current action-matrix reconciliation remains pending. Older dated snapshots below are preserved as history. Production owner acceptance remains NOT_RUN. Production unchanged. Migrations 0008/0009 approval remaining unchanged.
 
 ## October 4 production metadata refresh
 
@@ -224,11 +227,18 @@ The Clerk Audit correction preserves approvals and resolution notes after reload
 A separate normal local Auth/server-sync browser replay passed 25 strict checks on the frozen candidate, including reload persistence, unchanged original amount/property/date/record identity fields, and six byte-identical captured raw records for the other property. The invalid HTTP-query delay attempt is preserved as failed harness evidence: this runtime refreshes Clerk records through a local query promise. Fresh review raised preexisting or unproven partial-write, malformed-record, and scope-change questions; none demonstrated an introduced critical or high defect in this patch. These results do not establish production deployment or complete owner acceptance.
 
 
+## Current Weather status (2026-10-04, scoped)
+
+In server-auth deployments (`import.meta.env.VITE_USE_SERVER_AUTH === "true"`), `WeatherPanel` omits the unsupported legacy live-weather connector. It still displays fresh cached weather; when the cache is empty, it displays the existing unavailable message. With the flag `false` or undefined, the prior legacy connector behavior is kept. No auth, role, worker-route, or provider configuration was changed. Applied source `1E354DA0B9C4088663428D9E5B5DC3A4C505C6DAFE4D597A1C9E39BCDC34492D`. Live provider and key configuration remain UNPROVEN.
+
+Scoped evidence only: six retained actual component/service regression checks pass; seventeen actual query checks pass; the guard-removed control with the same empty cache is required to fail. Normal-auth browser replay R3 passed thirteen strict checks: single-A selection held with header and $13,125 for 3608 ms, reload shows unavailable, zero `getWeather` calls, ten native business snapshots identical, weather persist zero. Fresh-plan critique raised no HIGH/CRITICAL items. The existing DTO `feels_like` drop is separate existing behavior, follow-up only. Coordinator evidence basenames (artifacts under `rri-launch-20261003/readonly-ui-controls-20261004`, actual-result json inside `weather-capability-repair-r1`): `weather-panel-browser-r3-result.json`, `retained-r2-actual-results.json`. These are coordinator artifacts, not owner-portable deliverables.
+
+
 # Final Validation Note — 2026-10-04
 Production unchanged; owner acceptance NOT_RUN; no owner-ready claim.
 
-- Base 2cbe with approved uncommitted follow-ups.
-- Root: 100 files, 846 tests PASS. Prod build/typecheck/lint/brain/map 194 refs 0/V3 PASS 8998c0c8b7363198bd601111a088dee96b526583b5fdbc47b6e9a0f7212ce003.
+- Current committed base: a273191be59ce78ac85f63d588c5d0b6466e5f94; Weather source and regression follow-up pending commit.
+- Root: historical base `a273191` 100 files, 846 tests PASS with type/lint/build/governance/remote SUCCESS. Weather full suite (root, actual): 101 files, 852 PASS, 87.23s, run before type-only mocks. Retained type-corrected 6 PASS. Lint PASS on Weather source/test. Typecheck PASS after typed mock correction; production build PASS, 21.07s. Final brain/map/V3 governance checks PASS: brain exit 0; map 10 areas, 29 rows, 39 contracts, 194 references, 0 problems; V3 31 files and 6 adapters verified with SHA256 8998c0c8b7363198bd601111a088dee96b526583b5fdbc47b6e9a0f7212ce003. Refreshed typecheck and lint both exit 0.
 - Native: 15 probes, 266 checks PASS after scoped fix; helper guard 32 PASS; no native/S3 production fallback.
 - Portable Clerk helper 11 PASS; component actual 8 PASS / expected-mutant lock reject-after-5 PASS via verify-all runner.
 - Only the component probe forks isolated dev React (helper does not) under production parent; PASSED after assertions; no weakening.
@@ -236,6 +246,6 @@ Production unchanged; owner acceptance NOT_RUN; no owner-ready claim.
 - syncBulkBundles post-alias hydration PASS 1 ($12000/$7000, no uploads); R20 alias UI/native Jan1-3 proof preserved.
 - Retained 13-case probe exercises the actual helper strict canonical/server-published/typed-alias/foreign/wrong-type/malformed, NOT standalone service integration. Cloned alias-service probe withdrawn; do not promote copy.
 - Caller review: false-guard throw before download/commit, static-only.
-- CURRENT 212/99cc2842 shard3 17PASS 1SKIP, no 5173, exit 0. MAIN 211/c3388821 shard2 17PASS 1SKIP stale-dist, 7/8 18PASS each; after-build 11PASS recovers stale-dist. Baseline 2cbe 209/2c9c1972 4-shard 70PASS 2SKIP historical. Do not sum or claim all-212 PASS; remote all-12 CI pending.
-- Clerk NODE_ENV act error + NO_VERDICT failures resolved harness-only; keep failure evidence. Filter/Chart recovery ongoing; weather invocation 403 observed, cause unproven, no weather PASS.
+- CURRENT 212/99cc2842 shard3 17PASS 1SKIP, no 5173, exit 0. MAIN 211/c3388821 shard2 17PASS 1SKIP stale-dist, 7/8 18PASS each; after-build 11PASS recovers stale-dist. Baseline 2cbe 209/2c9c1972 4-shard 70PASS 2SKIP historical. Do not sum or claim all-212 PASS; remote all-12 Deep Verification shards and aggregate gate SUCCESS at a273191; this does not convert skipped checks to PASS.
+- Clerk NODE_ENV act error + NO_VERDICT failures resolved harness-only; keep failure evidence. Filter/Chart recovery ongoing; weather scoped checks pass per Current Weather status, live provider/key UNPROVEN.
 - Supersedes only prior MAIN-shards-not-run / pending-Clerk / probe-being-added phrases; preserves historical source/unit/production facts.

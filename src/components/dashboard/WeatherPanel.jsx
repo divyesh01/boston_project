@@ -67,7 +67,9 @@ export default function WeatherPanel() {
         propertyId,
         date,
         cacheRows: locationVersion ? [] : snapshots,
-        fetchFn: () => fetchOpenWeatherForecast({
+        fetchFn: import.meta.env.VITE_USE_SERVER_AUTH === 'true'
+          ? undefined
+          : () => fetchOpenWeatherForecast({
           lat: cfg.lat,
           lon: cfg.lon,
           invoke: (name, params) => db.functions.invoke(name, params),

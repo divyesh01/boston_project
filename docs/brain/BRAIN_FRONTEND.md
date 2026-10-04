@@ -841,5 +841,89 @@ When uploading or resuming reports that overlap an active analytical period for 
    - All predecessors are superseded atomically in D1, 0 duplicate analytical rows are stored, and Dexie hydration flushes old superseded rows while syncing the new active bundle.
    - Tested in `src/pages/ImportBatch18Regression.test.jsx` and `scripts/probe-bulk-import-multi-replacement.mjs`.
 
+---
+
+## 57. Operational Integrity & Active Property Scope Contracts (2026-10-03)
+
+1. **RoomBoard Independent BoardDate & Multiday Stay Invariant**:
+   - `RoomBoard.jsx` queries stays and housekeeping tasks scoped directly to selected `boardDate` instead of inheriting the global period `dateRange`/`months`.
+   - `useRoomStays` in `src/lib/useHotelData.js` evaluates stays overlapping `boardDate` (including `check_in` before `boardDate` and `check_out` after `boardDate`), so narrowing date to `boardDate` does not drop multiday stays.
+   - Housekeeping tasks query for `boardDate`.
+   - All query loading states (`isLoading`, `roomsLoading`, `staysQ.isLoading`, `tasksQ.isLoading`) are checked before rendering, preventing false vacant availability during reads.
+   - Fetch failures render `ErrorState` with retry, never vacant availability.
+
+2. **RoomBoard Check-in Form Date Tracking (`newIn`)**:
+   - `effectiveCheckIn` follows `boardDate` automatically while the operator has not explicitly selected a custom check-in date.
+   - Once manually edited, the explicit manual date is preserved across subsequent `boardDate` changes.
+   - Changing properties (`singlePropertyId`) or completing a check-in resets form fields and reverts to the automatic `boardDate` default.
+
+3. **Active Property Scope & Zero-Selection Guard (`useGlobalFilters`)**:
+   - `accessibleProperties` / `properties` in `useGlobalFilters.jsx` filters `p.active !== false` alongside `canAccessProperty(p.id)`, hiding inactive properties from dashboards, pickers, and comparisons.
+   - Global `useProperties()` in `src/lib/useHotelData.js` remains unfiltered so Settings roster can display inactive properties and support reactivation.
+   - Zero selection / portfolio mode forwards an explicit array of active portfolio IDs (`activePortfolioIds`), never the unscoped `"all"` sentinel.
+   - Zero active properties yields an empty array `[]` (never `"all"`), and `buildFilter` generates `{ property_id: { $in: [] } }` returning 0 records without leaking inactive data.
+   - Cached selections of properties that become inactive are dropped by `effectiveProperties`.
+
+4. **Fail-Closed Portfolio Aggregates (`useDailyFinancialAggregates`)**:
+   - Gated to single properties (`typeof propertyId === 'string' && propertyId !== 'all'`).
+   - Portfolio scopes (arrays, `"all"`, empty array, null) return `data: null`, forcing callers to query property-scoped raw ledgers and preventing partial-portfolio totals from incomplete cache rows. Single-property queries use dedicated namespaced cache keys.
+
+---
+
+## 58. Tailwind CSS v4 Engine Migration & Dependency Security Contract (2026-10-03)
+
+1. **Tailwind CSS v4 & LightningCSS Pipeline Integration**:
+   - Modernized styling pipeline to `tailwindcss@4.3.3` with `@tailwindcss/postcss@4.3.3`.
+   - `postcss.config.js` configures `@tailwindcss/postcss: {}`.
+   - Redundant `autoprefixer` removed; Tailwind 4 integrates native LightningCSS autoprefixing and modern vendor prefixes.
+   - `src/index.css` replaces legacy `@tailwind` directives with modern `@import "tailwindcss";`, `@config "../tailwind.config.js";`, `@custom-variant dark (&:where(.dark, .dark *));`, theme token mappings (`--default-ring-width`, `--default-ring-color`, `--radius-full`, `--color-slate-200`, `--color-blue-500`), legacy outline compatibility rules, and base border-color resets.
+   - Legacy JavaScript Tailwind config (`tailwind.config.js`) and plugins (`tailwindcss-animate`) remain fully preserved and loaded via `@config "../tailwind.config.js"`.
+   - The compatibility layer preserves the v3 defaults covered by the fixture assertions, including border widths, heading font sizes/weights, list reset, and default border colors.
+
+2. **Security Gate & Dependency Hygiene**:
+   - `dompurify` upgraded from vulnerable `^3.4.13` to patched `^3.4.16`, deduplicated across all runtime and bundle dependencies (including `jspdf`).
+   - Vulnerable `braces` removed from the dependency tree (previously introduced via Tailwind v3 chokidar/micromatch watch pipeline). `npm ls braces` returns empty.
+   - Security audit gate (`node scripts/audit-gate.mjs`) passes with 0 critical, 0 high, 0 moderate, 0 low advisories without relaxing policy or expanding allowlists (`ACCEPTED = {}` unchanged).
+
+3. **Chromium Computed Style Proof & Buffer Equivalence**:
+   - Validated across 68 automated style assertions in headless Chromium against frozen v3 baseline.
+   - The covered dark/light tokens, interactive controls, overlays/dialog animations, preflight resets, utility scales, and elevation/hairlines pass all 68 assertions. This fixture does not establish parity for every page or browser.
+   - Primary interactive button focus ring screenshot buffers are byte-identical (1719 bytes each, `Buffer.compare === 0`).
 
 
+4. **PDF Modern Color Compatibility**:
+   - `html2canvas` is pinned to the NPM alias `npm:html2canvas-pro@2.5.0`, preserving the existing import and call options in `src/lib/pdfExport.js` and its pagination contract. The maintained renderer supports Tailwind modern color functions; no custom color conversion is used.
+   - The normal authenticated synthetic Dashboard PDF download now parses and renders populated pages. Independent page-one pixel review confirms full $24,525.00, 75, 68.2%, $327.00, RevPAR $222.95, and partial/tax-incomplete warnings. Larger-value and full-page visual acceptance remain separate pending work; this does not establish production acceptance.
+   - `--color-blue-500` is explicitly declared with the installed Tailwind 4.3.3 default value `oklch(62.3% 0.214 259.815)`, preserving its computed color and satisfying the surface token declaration contract.
+   - PDF capture now clears overflow clipping and ellipsis only on numerical `.u-figure.truncate` nodes in the cloned document. The actual `exportToPdf` callback contract preserves full text, live DOM, unrelated nodes, and existing errors; eight synthetic assertions are separate from the observed normal-value first-page pixel proof. Larger-value and full-page acceptance remain pending.
+
+5. **Money Kept Warning Boundaries**:
+   - The donut warning about deductions exceeding gross now requires strictly negative money kept. No warning appears for an empty period or positive break-even; a loss still warns. Three real component render assertions reproduce the two old false warnings and pass with the corrected guard. Financial calculations and tax completeness remain unchanged.
+
+6. **Empty Property Selection in Local Page Queries**:
+   - Payroll payroll/occupancy queries, Expenses expense/payroll queries, and Forecasting's shared page filter preserve an explicit empty array as `property_id: { $in: [] }`. Single selections, nonempty arrays, legacy `all`/undefined behavior, date constraints, and Staff filtering stay unchanged.
+   - `src/pages/portfolioQuery.test.js` executes current page query functions against the unchanged local facade with synthetic owner/restricted identities and in-memory IndexedDB. This is client query coverage; normal authenticated browser/server acceptance remains separate.
+
+
+## Cross-site UX production integration (October 4, 2026)
+
+The production integration applies the cross-site UX patch onto the current-main-based
+owner reporting candidate. It preserves lazy startup and the current enterprise/property
+contracts while adding mobile all-pages navigation, accessible bounded dialogs, date
+controls, complete loading/error states, duplicate-save guards, truthful missing values,
+and clearer export/account actions. Command menu changes live in
+`src/components/CommandMenuDialog.jsx`; weather resolves a single selected property
+through the existing property selection helper.
+
+The owner reported verification complete and authorized release. The exact integrated
+source is newly assembled; that statement is not an independent acceptance result for
+the combined source. See `ANTIGRAVITY_UI_UX_HANDOFF.md` for changed-file inventory,
+commands, expected behavior and remaining runtime risks. Broad tests and browser
+acceptance remain delegated to Antigravity. Packaging/deployment outcomes are recorded
+in `docs/production-ui-release-2026-10-04.md`.
+
+
+October 4 release follow-up: fixed the ledger ErrorState prop required by CI; preserved legacy review handling metrics while adding explicit provider-publication metrics; retained numeric-dollar channel payloads behind a verified-publishing capability and provider receipt requirement. The current mock adapter remains disabled. Antigravity: run npm run typecheck, node scripts/probe-reviews.mjs and node scripts/probe-cents-unit-mismatch.mjs, then inspect /Pricing, /Reviews and /DataIntelligence. Codex did not run these checks locally.
+
+
+Release continuation: updated existing DataIntelligence UI test code to await real asynchronous reads before asserting loaded content, with an initial pending-state assertion preserved. Updated SmartButtonGroup callback test to the actual Report Download Options label. No assertions removed, product loading guards unchanged, no verification commands executed locally. GitHub CI owns automatic execution; Antigravity owns authenticated owner acceptance. Production artifact is unchanged by these test-only edits.

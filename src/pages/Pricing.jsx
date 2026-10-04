@@ -1,17 +1,18 @@
 import React, { useState, useEffect } from "react";
-import { Settings2, RefreshCw, ArrowUpRight, CheckCircle, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
+import { Settings2, ArrowUpRight, CheckCircle, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { useRooms } from "@/lib/useHotelData";
 import { db } from "@/api/base44Client";
+import { applyDynamicRateOverride } from "@/lib/pricingOverride";
 import { usePricingForecast } from "@/lib/usePricing";
 import { getPricingConfig, savePricingConfig, DEFAULT_PRICING_CONFIG, ROOM_TYPES } from "@/lib/pricingSettings";
 import { money2 } from "@/lib/hotel";
 import { fromCents } from "@/lib/decimal";
 import { useRealtimeInvalidation } from "@/lib/realtime";
-import { applyDynamicRateOverride } from "@/lib/pricingOverride";
 import { ErrorState } from "@/components/ui/status";
 import { useSettingsVersion } from "@/hooks/useSettingsVersion";
+import { singleSelectedProperty } from "@/lib/propertySelection";
 
 const toCentsFromDollars = (d) => Math.round((Number(d) || 0) * 100);
 
@@ -28,6 +29,13 @@ const PRESETS = {
   Aggressive: { minMultiplier: 0.65, maxMultiplier: 2.0, demandSensitivity: 0.7, competitorWeight: 0.15 },
 };
 
+const Input = ({ label, hint = "", children }) => (
+    <label className="flex flex-col gap-1 text-xs text-slate-400">
+      <span className="flex items-center justify-between">{label}{hint && <span className="text-[10px] normal-case tracking-normal text-slate-500">{hint}</span>}</span>
+      {children}
+    </label>
+  );
+
 export default function Pricing() {
   const { property, properties } = useGlobalFilters();
   const settingsVersion = useSettingsVersion();
@@ -35,21 +43,24 @@ export default function Pricing() {
   const { data: rooms = [] } = roomsQ;
   useRealtimeInvalidation(["rooms", "reservations", "weather"]);
 
-  const isPortfolio = property === "all" || Array.isArray(property);
-  const singlePropertyId = !isPortfolio ? property : null;
+  const selectedProperty = singleSelectedProperty(property, properties);
+  const singlePropertyId = selectedProperty?.id ?? null;
+  const isPortfolio = singlePropertyId == null;
   const propName = isPortfolio
     ? (Array.isArray(property) ? `${property.length} Properties` : "Portfolio")
-    : (properties.find((p) => p.id === property)?.name || "Property");
+    : (selectedProperty?.name || "Property");
 
-  const [cfg, setCfg] = useState(() => getPricingConfig(singlePropertyId || "*"));
+  const [cfg, setCfg] = useState(() => getPricingConfig(singlePropertyId ?? "*"));
 
   useEffect(() => {
-    setCfg(getPricingConfig(singlePropertyId || "*"));
+    setCfg(getPricingConfig(singlePropertyId ?? "*"));
   }, [settingsVersion, singlePropertyId]);
 
   const [expanded, setExpanded] = useState(false);
   const [notice, setNotice] = useState(null);
   const [pushing, setPushing] = useState(false);
+  // The console-only adapter does not advertise verified provider publishing.
+  const canPublish = Reflect.get(db.integrations.ChannelManager, "supportsVerifiedPublishing") === true;
   const [horizon, setHorizon] = useState(14);
 
   const {
@@ -63,12 +74,13 @@ export default function Pricing() {
     isHistoricalSimulation,
     forecastStartDate,
     calendarToday,
-  } = usePricingForecast(horizon);
+  } = usePricingForecast(90);
+  const visibleForecast = forecast.slice(0, horizon);
 
   const update = (patch) => {
     const next = { ...cfg, ...patch };
     setCfg(next);
-    const stored = savePricingConfig(next, singlePropertyId || "*");
+    const stored = savePricingConfig(next, singlePropertyId ?? "*");
     // Clear only this page's own storage warning on a later success — any other
     // notice (a preset confirmation, a push result) is left where it was.
     setNotice((prev) =>
@@ -91,8 +103,8 @@ export default function Pricing() {
   // This used to rebuild the base case here from `rooms.length` and an unweighted
   // mean of base rates, which is not the per-type inventory split the engine uses
   // to project revenue, so the uplift compared two different room counts.
-  const projectedPeriodRev = forecast.reduce((s, d) => s + d.projectedRevenueCents, 0);
-  const basePeriodRev = forecast.reduce((s, d) => s + (d.projectedBaseRevenueCents || 0), 0);
+  const projectedPeriodRev = visibleForecast.reduce((s, d) => s + d.projectedRevenueCents, 0);
+  const basePeriodRev = visibleForecast.reduce((s, d) => s + (d.projectedBaseRevenueCents || 0), 0);
   const upliftCents = projectedPeriodRev - basePeriodRev;
   const upliftPct = basePeriodRev > 0 ? Math.round((upliftCents / basePeriodRev) * 1000) / 10 : 0;
 
@@ -102,54 +114,41 @@ export default function Pricing() {
       : occ > 0.6
       ? `Moderate demand (${Math.round(occ * 100)}% occupancy forecast) — rates hold at a modest premium on weekends.`
       : `Light demand (${Math.round(occ * 100)}% occupancy forecast) — prices ease within the floor to protect fill.`
-    : "No room register yet to size demand.";
+    : availabilityMessage;
+
+
 
   const handlePush = async () => {
-    if (isPortfolio) { setNotice({ type: "error", text: "Select a specific property to push rates." }); return; }
-    if (!today) return;
-    if (isHistoricalSimulation) {
-      setNotice({
-        type: "error",
-        text: `Cannot push historical simulation rates (${forecastStartDate}) to live channels. Rate push requires a live business date.`,
-      });
-      return;
-    }
-    setPushing(true); setNotice(null);
+    if (pushing || !canPublish || isPortfolio || !today || isHistoricalSimulation || roomsQ.isError || forecastError) return;
+    setPushing(true);
+    setNotice(null);
     try {
       const rateMap = {};
       for (const type of ROOM_TYPES) {
-        if (today.types && today.types[type]) rateMap[type] = fromCents(today.types[type].recommendedCents);
+        const cents = today.types?.[type]?.recommendedCents;
+        if (Number.isFinite(cents) && cents > 0) rateMap[type] = fromCents(cents);
       }
-      await db.integrations.ChannelManager.PushInventory(singlePropertyId, rateMap);
-      // Audit each applied rate override (best-effort — never blocks the push).
-      for (const type of ROOM_TYPES) {
-        const rec = today.types?.[type]?.recommendedCents;
-        if (rec) {
-          try {
-            await applyDynamicRateOverride({
-              propertyId: singlePropertyId,
-              newRate: fromCents(rec),
-              roomType: type,
-              justification: `Yield push to ${propName}`,
-              user: null,
-            });
-          } catch { /* audit trail is non-critical */ }
-        }
+      if (!Object.keys(rateMap).length) throw new Error("No valid rates are available to publish.");
+      const receipt = await db.integrations.ChannelManager.PushInventory(singlePropertyId, rateMap);
+      if (!receipt || !Reflect.get(receipt, "provider_receipt_id")) {
+        throw new Error("The provider did not confirm publication. Check your channel manager before retrying.");
       }
-      setNotice({ type: "ok", text: `Pushed recommended rates for ${propName} to connected channels.` });
-    } catch (e) {
-      setNotice({ type: "error", text: `Push failed: ${e.message}` });
+      for (const roomType of Object.keys(rateMap)) {
+        await applyDynamicRateOverride({
+          propertyId: singlePropertyId,
+          newRate: fromCents(today.types[roomType].recommendedCents),
+          roomType,
+          justification: `Provider confirmed rate publication for ${propName}`,
+          user: null,
+        });
+      }
+      setNotice({ type: "ok", text: `Provider confirmed recommended rates for ${propName}.` });
+    } catch (error) {
+      setNotice({ type: "error", text: error.message || "Rate publication could not be confirmed." });
     } finally {
       setPushing(false);
     }
   };
-
-  const Input = ({ label, hint = "", children }) => (
-    <label className="flex flex-col gap-1 text-xs text-slate-400">
-      <span className="flex items-center justify-between">{label}{hint && <span className="text-[10px] normal-case tracking-normal text-slate-500">{hint}</span>}</span>
-      {children}
-    </label>
-  );
 
   return (
     <div className="space-y-6">
@@ -246,29 +245,20 @@ export default function Pricing() {
 
         <Card title="Competitive Set" subtitle="Your position vs the market benchmark">
           <div className="space-y-2 text-xs">
-            <div className="flex items-center justify-between rounded-lg bg-[#0A1628]/40 px-3 py-2"><span className="text-slate-400">Your recommended ADR</span><span className="font-medium text-white">{money2(fromCents(avgRecCents))}</span></div>
+            <div className="flex items-center justify-between rounded-lg bg-[#0A1628]/40 px-3 py-2"><span className="text-slate-400">Your recommended ADR</span><span className="font-medium text-white">{today ? money2(fromCents(avgRecCents)) : "Unavailable"}</span></div>
             <div className="flex items-center justify-between rounded-lg bg-[#0A1628]/40 px-3 py-2"><span className="text-slate-400">Comp set rate</span><span className="font-medium text-slate-300">{money2(fromCents(cfg.competitorRateCents))}</span></div>
             <div className="flex items-center justify-between rounded-lg bg-[#0A1628]/40 px-3 py-2">
               <span className="text-slate-400">Position</span>
               <span className={`font-medium ${avgRecCents > cfg.competitorRateCents ? "text-[#FF6B6B]" : avgRecCents < cfg.competitorRateCents ? "text-[#00E096]" : "text-slate-300"}`}>
-                {avgRecCents > cfg.competitorRateCents ? `Premium (${money2(fromCents(avgRecCents - cfg.competitorRateCents))})` : avgRecCents < cfg.competitorRateCents ? `Discounted (${money2(fromCents(cfg.competitorRateCents - avgRecCents))})` : "Parity"}
+                {!today ? "Unavailable" : avgRecCents > cfg.competitorRateCents ? `Premium (${money2(fromCents(avgRecCents - cfg.competitorRateCents))})` : avgRecCents < cfg.competitorRateCents ? `Discounted (${money2(fromCents(cfg.competitorRateCents - avgRecCents))})` : "Parity"}
               </span>
             </div>
           </div>
         </Card>
 
-        <Card title="Push to Channels" subtitle="Send today's recommended rates to connected OTAs">
-          <p className="text-sm text-slate-400">Dispatches the current recommended rate for each room type to the channel manager, which pushes it to every connected OTA.</p>
-          <div className="mt-3 space-y-2">
-            {ROOM_TYPES.map((type) => {
-              const rec = today?.types?.[type]?.recommendedCents;
-              return (<div key={type} className="flex items-center justify-between text-xs"><span className="text-slate-400">{type}</span><span className="font-medium text-white">{rec ? money2(fromCents(rec)) : "—"}</span></div>);
-            })}
-          </div>
-          <button onClick={handlePush} disabled={pushing || isPortfolio || !enabled || !today} className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-[#6C63FF] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#5b52e8] disabled:opacity-50">
-            <RefreshCw className={`h-4 w-4 ${pushing ? "animate-spin" : ""}`} />{pushing ? "Pushing…" : "Push Recommended Rates"}
-          </button>
-          {isPortfolio && <p className="mt-2 text-center text-xs text-amber-400"><AlertTriangle className="mr-1 inline h-3 w-3" /> Select a specific property to push.</p>}
+        <Card title="Channel publishing" subtitle="Publish rates through your connected channel provider">
+          <button type="button" onClick={handlePush} disabled={!canPublish || pushing || isPortfolio || !today || isHistoricalSimulation || roomsQ.isError || forecastError} className="mb-3 min-h-11 rounded-lg border border-white/10 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50">{pushing ? "Publishing rates..." : "Publish to verified channels"}</button>
+          <p className="text-sm text-slate-400">Automatic rate publishing is unavailable. Review the recommendations here, then enter approved rates in your channel manager.</p>
         </Card>
       </div>
 
@@ -317,7 +307,7 @@ export default function Pricing() {
           </div>
         }
       >
-        {!expanded && (
+        {!expanded && forecast.length > 0 && (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {[7, 14, 30, 90].map((d) => {
               const slice = forecast.slice(0, d);
@@ -326,7 +316,7 @@ export default function Pricing() {
             })}
           </div>
         )}
-        {rooms.length === 0 ? (
+        {forecast.length === 0 ? (
           <div><p className="mt-2 text-sm text-slate-400">{availabilityMessage}</p>
           <p className="mt-2 text-xs text-slate-500">{freshnessNotice}</p></div>
         ) : expanded ? (
@@ -340,7 +330,7 @@ export default function Pricing() {
                 </tr>
               </thead>
               <tbody>
-                {forecast.map((day) => (
+                {visibleForecast.map((day) => (
                   <tr key={day.date} className="border-b border-white/5">
                     <td className="whitespace-nowrap px-2 py-2 text-white">{day.date}{day.isWeekend && <span className="ml-1 text-[10px] text-[#FFB547]">WKND</span>}</td>
                     <td className="px-2 py-2 text-slate-400">{Math.round(day.occupancy * 100)}%</td>

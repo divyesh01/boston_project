@@ -87,9 +87,23 @@ export function buildActionCenter({
   // current window. A delayed/partial import (e.g. last month only got half its rows
   // uploaded) would otherwise fabricate a scary "-40% revenue" from a comparison
   // that isn't apples-to-apples.
-  const prevDays = prevOccRows.length;
-  const curDays = occRows.length;
-  const prevUsable = curDays > 0 && prevDays >= Math.max(1, Math.floor(curDays * 0.5));
+  const prevDays = new Set(prevOccRows.map((row) => isoKey(row.date)).filter(Boolean)).size;
+  const curDays = new Set(occRows.map((row) => isoKey(row.date)).filter(Boolean)).size;
+  const datesByProperty = (rows) => {
+    const dates = new Map();
+    for (const row of rows) {
+      const date = isoKey(row.date);
+      if (!date) continue;
+      const property = String(row.property_id || "");
+      if (!dates.has(property)) dates.set(property, new Set());
+      dates.get(property).add(date);
+    }
+    return dates;
+  };
+  const currentCoverage = datesByProperty(occRows);
+  const previousCoverage = datesByProperty(prevOccRows);
+  const prevUsable = curDays > 0 && prevDays >= Math.max(1, Math.ceil(curDays * 0.5)) &&
+    [...currentCoverage].every(([property, dates]) => (previousCoverage.get(property)?.size || 0) >= Math.max(1, Math.ceil(dates.size * 0.5)));
   const prevStats = prevUsable
     ? CalculationService.calculateOccupancyMetrics(prevOccRows, roomCounts)
     : null;

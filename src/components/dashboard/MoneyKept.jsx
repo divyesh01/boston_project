@@ -66,8 +66,9 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
 
   const {
     gross, grossBasis, items, totalDeductions, kept, pieData, barData, trendData, tax,
-    refundsTotal, passThrough, colorByKey, pieIsGrossShare,
+    refundsTotal, passThrough, colorByKey, pieIsGrossShare, isTaxIncomplete, isPartial,
   } = data;
+  const partial = Boolean(isTaxIncomplete || isPartial || tax?.incomplete);
   // Keep rate = money kept against the *net-revenue base*, not raw gross.
   // Refunds (returned to guest) and pass-through taxes (collected on behalf of
   // the government, never the owner's to keep) are removed from the denominator
@@ -116,14 +117,34 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="text-[11px] uppercase tracking-[0.3em] text-[#00D4FF]">Money in My Pocket</p>
-            <h2 className="mt-1 font-heading text-xl font-semibold text-white">Estimated Money Kept</h2>
-            <p className="mt-1 text-xs text-slate-400">Net profit after commissions, card fees, expenses & refunds</p>
+            <div className="flex items-center gap-2">
+              <h2 className="mt-1 font-heading text-xl font-semibold text-white">Estimated Money Kept</h2>
+              {partial && (
+                <span className="mt-1 inline-flex items-center rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300">
+                  Partial Estimate
+                </span>
+              )}
+            </div>
+            <p className="mt-1 text-xs text-slate-400">
+              {partial
+                ? "Provisional take-home: tax calculations are incomplete (missing rates or room nights)"
+                : "Net profit after commissions, card fees, expenses & refunds"}
+            </p>
           </div>
           <Wallet className="h-6 w-6 text-[#00E096]" />
         </div>
         <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <div className="sm:col-span-2">
-            <p className="text-[10px] uppercase tracking-widest text-slate-500" title="Estimated Money Kept = Gross Revenue - all commissions, fees, taxes, payroll, expenses and refunds">Estimated Money Kept</p>
+            <div className="flex items-center gap-2">
+              <p className="text-[10px] uppercase tracking-widest text-slate-500" title="Estimated Money Kept = Gross Revenue - all commissions, fees, taxes, payroll, expenses and refunds">
+                {partial ? "Estimated Money Kept (Partial)" : "Estimated Money Kept"}
+              </p>
+              {partial && (
+                <span className="text-[10px] font-medium text-amber-300">
+                  (taxes incomplete)
+                </span>
+              )}
+            </div>
             {/* The three headline figures roll up to their value, and re-roll
                 whenever the date range, the fee rate or a settings change moves
                 them — so a settings change is visible as money moving rather
@@ -136,8 +157,13 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
               className={`mt-1 font-heading text-4xl font-semibold ${kept >= 0 ? "text-[#00E096]" : "text-[#FF6B6B]"}`}
             />
             <p className="mt-1 text-xs text-slate-500">
-              {gross > 0 ? `${money2(gross)} ${grossIsRoomOnly ? "room revenue" : "total revenue"} · keep rate ${pct(keepRate)}` : "No revenue in selected period"}
+              {gross > 0 ? `${money2(gross)} ${grossIsRoomOnly ? "room revenue" : "total revenue"} · ${partial ? "partial keep rate" : "keep rate"} ${pct(keepRate)}` : "No revenue in selected period"}
             </p>
+            {partial && (
+              <p className="mt-1 text-xs text-amber-300">
+                Partial estimate: configure missing rates or supply occupied room-night counts. Keep rate and profit are not final.
+              </p>
+            )}
             <p className="mt-0.5 text-[10px] text-slate-600">
               {netRevenueBase > 0 ? `rate measured on net base ${money2(netRevenueBase)} = gross − refunds − pass-through tax` : ""}
             </p>
@@ -184,17 +210,26 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
                     {i.label}
                   </span>
                   <span className="text-sm tabular-nums text-slate-200">
-                    {i.amount < 0 ? '+' : '-'}{money2(Math.abs(i.amount))}
-                    {/* Always share OF GROSS, so every row in this column and
-                        every slice in the pie are measuring the same thing. The
-                        configured rate (e.g. a 11.70% tax rate) is a different
-                        quantity against a different base, so it is shown
-                        separately and labelled — it used to be printed in this
-                        slot, which made the list and the pie disagree on the
-                        same dollar figure. */}
-                    <span className="ml-1.5 text-xs text-slate-500">{gross > 0 ? `(${pct(i.amount / gross)})` : "(—)"}</span>
-                    {i.rate !== undefined && (
-                      <span className="ml-1 text-xs text-slate-600">· {pct(i.rate, 2)} rate</span>
+                    {i.incomplete && i.amount === 0 ? (
+                      <span className="text-xs font-medium text-amber-300">Unknown (tax inputs incomplete)</span>
+                    ) : (
+                      <>
+                        {i.amount < 0 ? '+' : '-'}{money2(Math.abs(i.amount))}
+                        {/* Always share OF GROSS, so every row in this column and
+                            every slice in the pie are measuring the same thing. The
+                            configured rate (e.g. a 11.70% tax rate) is a different
+                            quantity against a different base, so it is shown
+                            separately and labelled — it used to be printed in this
+                            slot, which made the list and the pie disagree on the
+                            same dollar figure. */}
+                        <span className="ml-1.5 text-xs text-slate-500">{gross > 0 ? `(${pct(i.amount / gross)})` : "(—)"}</span>
+                        {i.rate !== undefined && (
+                          <span className="ml-1 text-xs text-slate-600">· {pct(i.rate, 2)} rate</span>
+                        )}
+                        {i.incomplete && !i.label.toLowerCase().includes("partial") && (
+                          <span className="ml-1.5 text-xs font-medium text-amber-300">(partial)</span>
+                        )}
+                      </>
                     )}
                   </span>
                 </button>
@@ -211,12 +246,12 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
             <div className="flex w-full items-center justify-between rounded-lg bg-[#00E096]/[0.06] px-3 py-3">
               <span className="flex items-center gap-2 text-sm font-medium text-[#00E096]">
                 <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: C.green }} />
-                Estimated Money Kept
+                {partial ? "Estimated Money Kept (Partial)" : "Estimated Money Kept"}
               </span>
               <span className="font-heading text-base font-semibold tabular-nums text-[#00E096]">
                 {kept >= 0 ? "" : "-"}{money2(Math.abs(kept))}
                 <span className="ml-1.5 text-xs font-normal text-slate-400">
-                  {gross > 0 ? `(${pct(keepRate)})` : "(—)"}
+                  {gross > 0 ? `(${partial ? "partial " : ""}${pct(keepRate)})` : "(—)"}
                 </span>
               </span>
             </div>
@@ -232,7 +267,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
               startAngle={90}
               endAngle={-270}
             />
-            {!pieIsGrossShare && (
+            {!pieIsGrossShare && kept < 0 && (
               <p className="mt-1 text-center text-xs text-amber-300/80">
                 Deductions exceed gross revenue this period, so there is no “money kept”
                 wedge — these shares are of total deductions, not of gross.
@@ -300,7 +335,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
         </Card>
 
         <Card
-          title="Estimated Money Kept Trend"
+          title={partial ? "Estimated Money Kept Trend (Partial)" : "Estimated Money Kept Trend"}
           subtitle="Kept after deductions per day, week, month, or year"
           right={
             <div className="flex items-center gap-0.5 rounded-lg border border-white/10 bg-[#0A1628] p-0.5">
@@ -333,7 +368,7 @@ export default function MoneyKept({ occRows, srcRows, grossRows, dateRange, prop
                   <YAxis tick={axis} stroke="#ffffff10" tickFormatter={(v) => `${Math.round(v / 1000)}k`} width={54} />
                   <Tooltip
                     contentStyle={tip}
-                    formatter={(v, name) => [money2(v), name === "gross" ? grossTitle : "Estimated Money Kept"]}
+                    formatter={(v, name) => [money2(v), name === "gross" ? grossTitle : (partial ? "Estimated Money Kept (Partial)" : "Estimated Money Kept")]}
                   />
                   <Area type="monotone" dataKey="kept" stroke={C.green} strokeWidth={2} fill="url(#keptGrad)" />
                   <Line type="monotone" dataKey="gross" stroke={C.purple} strokeWidth={1.5} strokeDasharray="4 4" dot={false} />

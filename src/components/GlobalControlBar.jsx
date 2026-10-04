@@ -94,7 +94,7 @@ function MultiPropertySelect({ selectedIds, properties, onToggle, onClear }) {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button className="flex h-9 w-full items-center justify-between rounded-lg border border-white/10 bg-[#0A1628] px-3 text-sm text-slate-200 hover:border-white/20">
+        <button type="button" aria-label={`Property: ${label}`} className="flex h-9 w-full items-center justify-between rounded-lg border border-white/10 bg-[#0A1628] px-3 text-sm text-slate-200 hover:border-white/20">
           <span className="truncate">{label}</span>
           <Building2 className="ml-2 h-4 w-4 shrink-0 text-slate-500" />
         </button>
@@ -137,7 +137,10 @@ export default function GlobalControlBar() {
   const filters = PAGE_FILTERS[pageKey] || {};
   const { clerks, sources } = useFilterOptions(f.property, filters);
   const [applied, setApplied] = useState(false);
+  const [applying, setApplying] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const supportsCompareToggle = pageKey === "/" || pageKey === "/mtd";
+  const showComparison = pageKey === "/compare" || (supportsCompareToggle && f.compareOn);
 
   if (pageKey === "/settings" || pageKey === "/upload") return null;
 
@@ -170,9 +173,16 @@ export default function GlobalControlBar() {
   const reportOpts = [["all", "All Reports"], ["occupancy", "Occupancy"], ["source", "Source Summary"], ["gross", "Gross Revenue"], ["clerk", "Clerk Shift"]];
 
   const handleApply = async () => {
-    await queryClientInstance.invalidateQueries();
-    setApplied(true);
-    setTimeout(() => setApplied(false), 1500);
+    if (applying) return;
+    setApplying(true);
+    try {
+      await queryClientInstance.invalidateQueries({}, { throwOnError: true });
+      setApplied(true);
+      setTimeout(() => setApplied(false), 1500);
+    } catch (error) {
+      setApplied(false);
+      toast.error("Some data could not be refreshed", { description: error?.message || String(error) });
+    } finally { setApplying(false); }
   };
 
   const selectedMonthsLabel = f.months.length === 0
@@ -194,7 +204,13 @@ export default function GlobalControlBar() {
         </Field>
         <div className="min-w-[110px]">
           <label className="mb-1 block text-[10px] uppercase tracking-widest text-slate-500">Period</label>
-          <Mini value={f.period} onChange={f.setPeriod} options={PERIODS} placeholder="Period" />
+          <Mini value={f.period} onChange={(value) => {
+            if (value === "custom") {
+              f.setCustomFrom(f.dateRange.from);
+              f.setCustomTo(f.dateRange.to);
+            }
+            f.setPeriod(value);
+          }} options={PERIODS} placeholder="Period" />
         </div>
         <div className="min-w-[90px]">
           <label className="mb-1 block text-[10px] uppercase tracking-widest text-slate-500">Year</label>
@@ -205,18 +221,27 @@ export default function GlobalControlBar() {
           <div className="flex items-end gap-2">
             <div>
               <label className="mb-1 block text-[10px] uppercase tracking-widest text-slate-500">From</label>
-              <input type="date" value={f.customFrom} onChange={(e) => f.setCustomFrom(e.target.value)} className="h-9 rounded-lg border border-white/10 bg-[#0A1628] px-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
+              <input type="date" aria-label="From date" value={f.customFrom} max={f.customTo || undefined} onChange={(e) => {
+                if (!e.target.value) return;
+                f.setCustomFrom(e.target.value);
+                if (f.customTo && e.target.value > f.customTo) f.setCustomTo(e.target.value);
+              }} className="h-9 rounded-lg border border-white/10 bg-[#0A1628] px-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
             </div>
             <span className="pb-2 text-slate-500">→</span>
             <div>
               <label className="mb-1 block text-[10px] uppercase tracking-widest text-slate-500">To</label>
-              <input type="date" value={f.customTo} onChange={(e) => f.setCustomTo(e.target.value)} className="h-9 rounded-lg border border-white/10 bg-[#0A1628] px-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
+              <input type="date" aria-label="To date" value={f.customTo} min={f.customFrom || undefined} onChange={(e) => {
+                if (!e.target.value) return;
+                f.setCustomTo(e.target.value);
+                if (f.customFrom && e.target.value < f.customFrom) f.setCustomFrom(e.target.value);
+              }} className="h-9 rounded-lg border border-white/10 bg-[#0A1628] px-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
             </div>
           </div>
         )}
 
         <div className="ml-auto flex items-end gap-2">
-          <button
+          {supportsCompareToggle && <button
+            aria-pressed={f.compareOn}
             onClick={() => f.setCompareOn(!f.compareOn)}
             className={`flex h-9 items-center gap-2 rounded-lg border px-4 text-sm font-medium transition-all ${
               f.compareOn ? "border-[#00D4FF] bg-[#00D4FF]/15 text-[#00D4FF]" : "border-white/10 bg-[#0A1628] text-slate-400 hover:border-white/20"
@@ -224,7 +249,7 @@ export default function GlobalControlBar() {
           >
             <GitCompare className="h-4 w-4" />
             Compare: {f.compareOn ? "ON" : "OFF"}
-          </button>
+          </button>}
           <button
             onClick={handleExportPdf}
             disabled={exporting}
@@ -247,6 +272,7 @@ export default function GlobalControlBar() {
           </button>
 
           <button
+            aria-pressed={f.months.length === 0}
             onClick={() => f.setMonths([])}
             className={`flex h-8 items-center rounded-lg border px-3 text-xs font-medium transition-all ${
               f.months.length === 0 ? "border-[#6C63FF] bg-[#6C63FF]/15 text-white" : "border-white/10 bg-[#0A1628] text-slate-400 hover:bg-white/5"
@@ -259,6 +285,7 @@ export default function GlobalControlBar() {
             {MONTHS_SHORT.map((m, i) => (
               <button
                 key={m}
+                aria-pressed={f.months.includes(i)}
                 onClick={() => f.toggleMonth(i)}
                 className={`h-8 rounded-md px-2 text-xs font-medium transition-all ${
                   f.months.includes(i) ? "bg-[#6C63FF] text-white" : "bg-[#0A1628] text-slate-400 hover:bg-white/5 hover:text-slate-200"
@@ -275,7 +302,7 @@ export default function GlobalControlBar() {
         </div>
       )}
 
-      {f.compareOn && (
+      {showComparison && (
         <div className="mt-3 space-y-3 rounded-lg border border-[#00D4FF]/20 bg-[#00D4FF]/[0.04] p-3">
           <div className="flex flex-wrap items-end gap-3">
             <span className="text-[10px] uppercase tracking-widest text-[#00D4FF]">Compare to</span>
@@ -334,13 +361,14 @@ export default function GlobalControlBar() {
         </div>
       )}
 
-      <div className="mt-3 flex items-center gap-2">
+      <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
           onClick={handleApply}
+          disabled={applying}
           className="flex h-9 items-center gap-2 rounded-lg bg-[#6C63FF] px-5 text-sm font-medium text-white transition-colors hover:bg-[#5b52e8]"
         >
           {applied ? <Check className="h-4 w-4 text-[#00E096]" /> : <Check className="h-4 w-4" />}
-          {applied ? "Applied!" : "Apply"}
+          {applying ? "Refreshing..." : applied ? "Refreshed!" : "Refresh data"}
         </button>
         <button
           onClick={f.reset}

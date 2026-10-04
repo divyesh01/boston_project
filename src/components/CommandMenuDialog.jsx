@@ -51,12 +51,13 @@ export default function CommandMenuDialog({ open, onOpenChange }) {
           <Search className="h-5 w-5 text-slate-400" />
           <Command.Input
             ref={inputRef}
+            aria-label="Search pages and properties"
             placeholder="Type a command, page, or property..."
             className="flex h-14 w-full rounded-md bg-transparent py-3 pl-3 pr-4 outline-none placeholder:text-slate-500 text-slate-100"
           />
         </div>
 
-        <Command.List className="max-h-[400px] overflow-y-auto overflow-x-hidden p-2">
+        <Command.List className="max-h-[min(400px,60dvh)] overflow-y-auto overflow-x-hidden p-2">
           <Command.Empty className="py-6 text-center text-sm text-slate-400">
             No results found.
           </Command.Empty>
@@ -101,7 +102,7 @@ export default function CommandMenuDialog({ open, onOpenChange }) {
               className="flex cursor-pointer select-none items-center gap-2 rounded-lg px-2 py-2.5 text-sm text-slate-200 transition-colors aria-selected:bg-[#6C63FF]/20 aria-selected:text-white"
             >
               <RotateCcw className="h-4 w-4" />
-              Refresh Dashboard
+              Reload application
             </Command.Item>
           </Command.Group>
         </Command.List>

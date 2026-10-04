@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,8 @@ import { PASSWORD_HELP } from "@/lib/userFormValidation";
 
 export default function ChangePassword() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
+  const submitting = useRef(false);
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -25,6 +26,7 @@ export default function ChangePassword() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (submitting.current) return;
     setError("");
     if (!isCryptoAvailable()) {
       setError("Password hashing is not available in this browser.");
@@ -52,16 +54,19 @@ export default function ChangePassword() {
       setError(strength);
       return;
     }
+    submitting.current = true;
     setLoading(true);
     try {
       await db.users.changeOwnPassword(user, current, next);
       toast({ title: "Password changed", description: "Your password has been updated." });
       rotateCsrfToken();
-      navigate("/");
+      const sessionReady = await refreshUser();
+      navigate(sessionReady ? "/" : "/login", { replace: true });
     } catch (err) {
       setError(err.message || "Could not change password.");
     } finally {
       setLoading(false);
+      submitting.current = false;
     }
   };
 
@@ -81,6 +86,7 @@ export default function ChangePassword() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
+            <fieldset disabled={loading} className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="current">Current password</Label>
               <div className="relative">
@@ -93,7 +99,7 @@ export default function ChangePassword() {
                   required
                   className="h-11 pr-10"
                 />
-                <button type="button" onClick={() => setShow((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" tabIndex={-1}>
+                <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "Hide passwords" : "Show passwords"} aria-pressed={show} className="absolute right-0 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center text-muted-foreground">
                   {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
@@ -109,13 +115,14 @@ export default function ChangePassword() {
             </div>
 
             {error && (
-              <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error}</div>
+              <div role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error}</div>
             )}
 
             <Button type="submit" className="h-11 w-full" disabled={loading}>
               {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Change Password
             </Button>
+            </fieldset>
           </form>
         </CardContent>
       </Card>

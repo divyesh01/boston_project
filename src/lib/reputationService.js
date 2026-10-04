@@ -57,16 +57,27 @@ export function scoreSentiment(text) {
 // True when the star rating and the text sentiment disagree materially — the
 // reviews worth a closer human look.
 export function isInconsistent(review) {
-  const rating = Number(review.rating) || 3;
+  const rating = Number(review.rating);
+  if (!Number.isFinite(rating) || rating < 1 || rating > 5) return false;
   const s = scoreSentiment(review.body || review.text);
   if (rating >= STAR_BREAKPOINT.positive && s.sentiment === "negative") return true;
   if (rating <= STAR_BREAKPOINT.negative && s.sentiment === "positive") return true;
   return false;
 }
 
+export function hasPublishedResponse(review) {
+  return !!(review?.provider_response_id && review?.response_published_at);
+}
+
+export function reviewSentiment(review) {
+  return ["positive", "neutral", "negative"].includes(review.sentiment)
+    ? review.sentiment
+    : scoreSentiment(review.body || review.text).sentiment;
+}
+
 export function aggregateRating(reviews) {
   const list = reviews || [];
-  const rated = list.filter((r) => Number(r.rating) > 0);
+  const rated = list.filter((r) => Number.isFinite(Number(r.rating)) && Number(r.rating) >= 1 && Number(r.rating) <= 5);
   const avg = rated.length ? rated.reduce((a, r) => a + Number(r.rating), 0) / rated.length : 0;
   const distribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
   for (const r of rated) {
@@ -75,7 +86,7 @@ export function aggregateRating(reviews) {
   }
   const bySentiment = { positive: 0, neutral: 0, negative: 0 };
   for (const r of list) {
-    const s = r.sentiment || scoreSentiment(r.body || r.text).sentiment;
+    const s = reviewSentiment(r);
     bySentiment[s] += 1;
   }
   const bySource = {};
@@ -84,6 +95,7 @@ export function aggregateRating(reviews) {
     bySource[k] = (bySource[k] || 0) + 1;
   }
   const replied = list.filter((r) => r.status !== "new").length;
+  const publishedResponses = list.filter(hasPublishedResponse).length;
   return {
     total: list.length,
     rated: rated.length,
@@ -93,9 +105,15 @@ export function aggregateRating(reviews) {
     bySource,
     replied,
     responseRate: list.length ? replied / list.length : 0,
+    publishedResponses,
+    publishedResponseRate: list.length ? publishedResponses / list.length : 0,
   };
 }
 
 export function needsResponse(reviews) {
   return (reviews || []).filter((r) => r.status === "new");
+}
+
+export function needsPublishedResponse(reviews) {
+  return (reviews || []).filter((r) => r.status !== "resolved" && !hasPublishedResponse(r));
 }

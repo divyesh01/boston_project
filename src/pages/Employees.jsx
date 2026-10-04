@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect, useRef } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import { motion } from "framer-motion";
 import { Users, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Info } from "lucide-react";
@@ -35,6 +35,8 @@ export default function Employees() {
   const [mgrError, setMgrError] = useState(null);
   const [signOffNotes, setSignOffNotes] = useState({});
   const [signedClerks, setSignedClerks] = useState({});
+  const [signing, setSigning] = useState(null);
+  const signingRef = useRef(false);
   const [notice, setNotice] = useState(null);
   const viewScope = JSON.stringify([property, dateRange.from, dateRange.to, employee]);
   useEffect(() => {
@@ -50,6 +52,7 @@ export default function Employees() {
   }, []);
 
   const handleSignOff = async (clerk) => {
+    if (signingRef.current || signedClerks[clerk.reviewKey]) return;
     const notes = signOffNotes[clerk.reviewKey] || "";
     // A sign-off is an attribution: it writes reviewed_by_id / reviewed_by_name
     // onto the shift record and an ANOMALY_SIGN_OFF audit row. This used to fall
@@ -64,6 +67,8 @@ export default function Employees() {
       return;
     }
     const user = mgr;
+    signingRef.current = true;
+    setSigning(clerk.reviewKey);
     try {
       if (clerk.property_id === "" || clerk.property_id == null || clerk.records.some((rec) => propertyRecordKey(rec, rec.clerk_name || "Unknown") !== clerk.key)) {
         throw new Error("Select shift records belonging to one identified property before signing off.");
@@ -82,6 +87,9 @@ export default function Employees() {
       setNotice({ type: "ok", text: `Signed off ${clerk.clerk}'s shift records at ${propertyDisplayName(clerk, properties)}.` });
     } catch (e) {
       setNotice({ type: "error", text: `Sign-off failed: ${e.message}` });
+    } finally {
+      signingRef.current = false;
+      setSigning(null);
     }
   };
 
@@ -466,17 +474,19 @@ export default function Employees() {
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/5 pt-3">
                   <input
+                    disabled={signing !== null}
                     value={signOffNotes[s.reviewKey] || ""}
                     onChange={(e) => setSignOffNotes((p) => ({ ...p, [s.reviewKey]: e.target.value }))}
                     placeholder="Resolution notes (optional)"
+                    aria-label={`Resolution notes for ${s.clerk}`}
                     className="flex-1 min-w-[200px] rounded-lg border border-white/10 bg-[#0A1628] px-3 py-2 text-xs text-white"
                   />
                   <button
                     onClick={() => handleSignOff(s)}
-                    disabled={signedClerks[s.reviewKey] || !s.records.length || s.property_id === "" || s.property_id == null}
+                    disabled={signedClerks[s.reviewKey] || signing !== null || !s.records.length || s.property_id === "" || s.property_id == null}
                     className="rounded-lg bg-[#00D4FF] px-3 py-2 text-xs font-medium text-[#04231A] hover:bg-[#5fe3ff] disabled:opacity-50"
                   >
-                    {signedClerks[s.reviewKey] ? "Signed Off" : "Sign Off Shift"}
+                    {signedClerks[s.reviewKey] ? "Signed Off" : signing === s.reviewKey ? "Signing..." : "Sign Off Shift"}
                   </button>
                 </div>
                              </td>

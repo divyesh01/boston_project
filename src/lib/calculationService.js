@@ -352,10 +352,11 @@ export class CalculationService {
     srcRows = [...srcRows,...occupancyRows.filter(row=>!sourceDays.has(JSON.stringify([rowPropertyId(row),String(row.date).slice(0,10)]))).map(row=>({...row,source:'__ROOM_REVENUE_ESTIMATE__',tax_basis_fallback:true,net_revenue:row.room_revenue}))];
     const propertyIds = [...new Set([...srcRows,...grossRows].map(row=>rowPropertyId(row)))];
     if (propertyIds.length > 1) {
-      const totals = {state:0,city:0,other:0,total:0,imported:0,estimated:0,calculations:[]};
+      const totals = {state:0,city:0,other:0,total:0,imported:0,estimated:0,incomplete:false,calculations:[]};
       for (const id of propertyIds) {
         const part = this.calculateTaxLiability(srcRows.filter(r=>rowPropertyId(r)===id),grossRows.filter(r=>rowPropertyId(r)===id),id,dateRange,occupancyRows.filter(r=>rowPropertyId(r)===id),includeCalculations);
         for (const key of ['state','city','other','total','imported','estimated']) totals[key] = fromCents(toCents(totals[key])+toCents(part[key]));
+        if (part.incomplete) totals.incomplete = true;
         if (includeCalculations) totals.calculations.push(...(part.calculations || []));
       }
       if (!includeCalculations) delete totals.calculations;
@@ -367,7 +368,7 @@ export class CalculationService {
       // Every key the enabled path returns, so a caller reading `.estimated` or
       // `.imported` gets 0 rather than undefined — which would become NaN the
       // moment it reached toCents() and poison the whole deduction total.
-      return { state: 0, city: 0, other: 0, total: 0, imported: 0, estimated: 0, ...(includeCalculations ? {calculations:[]} : {}) };
+      return { state: 0, city: 0, other: 0, total: 0, imported: 0, estimated: 0, incomplete: false, ...(includeCalculations ? {calculations:[]} : {}) };
     }
 
     // Per-date bases in integer CENTS. Grouping is by date already; the residue came
@@ -411,6 +412,7 @@ export class CalculationService {
     // the imported portion as pass-through. `total` is unchanged for anyone
     // reporting total LIABILITY, which is a real and different question.
     let importedCents = 0, estimatedCents = 0;
+    let incomplete = false;
     const calculations = [];
     const dates = new Set([...taxBase.keys(), ...taxImp.keys()]);
     dates.forEach(d => {
@@ -432,6 +434,8 @@ export class CalculationService {
         const base = fromCents(taxBase.get(d) || 0);
         const r = getEffectiveTaxRates(propertyId, d);
         const enterprise = estimateEnterpriseTax(propertyId, d, base, occupancyRows);
+        const isDayIncomplete = Boolean(enterprise ? enterprise.incomplete === true : (r.unconfigured === true));
+        if (isDayIncomplete) incomplete = true;
         const s = enterprise ? toCents(enterprise.state) : multiply(base, r.state);
         const c = enterprise ? toCents(enterprise.city) : multiply(base, r.city);
         const o = enterprise ? toCents(enterprise.other) : multiply(base, r.other);
@@ -442,7 +446,7 @@ export class CalculationService {
         estimatedCents += toCents(remittance.hotel);
         if (includeCalculations) {
           const rates = enterprise ? enterprise.lines.reduce((out, line) => { if (line.type === 'percentage') out[['state','city'].includes(line.kind) ? line.kind : 'other'] += line.rate; return out; }, {state:0,city:0,other:0}) : {state:r.state,city:r.city,other:r.other};
-          calculations.push({property_id:propertyId,date:d,basis:'estimated',base,rates,state:fromCents(s),city:fromCents(c),other:fromCents(o),jurisdictions:enterprise?.lines,remittance,hotel_estimate:remittance.hotel,incomplete:enterprise?.incomplete || (!enterprise && r.unconfigured === true)});
+          calculations.push({property_id:propertyId,date:d,basis:'estimated',base,rates,state:fromCents(s),city:fromCents(c),other:fromCents(o),jurisdictions:enterprise?.lines,remittance,hotel_estimate:remittance.hotel,incomplete:isDayIncomplete});
         }
       }
     });
@@ -456,6 +460,7 @@ export class CalculationService {
       imported: fromCents(importedCents),
       // Owed by the owner on revenue the PMS did not tax: a real cost.
       estimated: fromCents(estimatedCents),
+      incomplete,
       ...(includeCalculations ? {calculations} : {}),
     };
   }
@@ -470,6 +475,9 @@ export class CalculationService {
       result.keepRate = result.gross - result.refunds > 0 ? result.kept / (result.gross - result.refunds) : 0;
       result.basis = Object.fromEntries(['ota','cc','tax'].map(key => [key,new Set(parts.map(p=>p.basis[key])).size===1 ? parts[0].basis[key] : 'mixed']));
       result.grossBasis = grossRevenueForPeriod({grossRows,occRows});
+      const hasTaxIncomplete = parts.some(p => p.taxIncomplete);
+      result.taxIncomplete = hasTaxIncomplete;
+      result.isPartial = hasTaxIncomplete;
       return result;
     }
     // Gross comes from the SAME helper the dashboard widget uses, not from a
@@ -599,6 +607,13 @@ export class CalculationService {
     // state/city/other tax columns are not among them.
     const keepableBaseCents = grossCents - refundsCents;
 
+    const isTaxIncomplete = Boolean(taxLeg.basis === 'estimated' && taxLiability.incomplete);
+    const taxBasis = taxLeg.basis === 'estimated' && taxLeg.cents === 0 && passThroughTaxesCents > 0
+      ? 'imported'
+      : isTaxIncomplete
+        ? 'partial estimate'
+        : taxLeg.basis;
+
     return {
       gross: fromCents(grossCents),
       // Provenance for the figure above: "total" when the gross-charge ledger
@@ -622,13 +637,13 @@ export class CalculationService {
       basis: {
         ota: otaLeg.basis,
         cc: ccLeg.basis,
-        tax: taxLeg.basis === 'estimated' && taxLeg.cents === 0 && passThroughTaxesCents > 0
-          ? 'imported'
-          : taxLeg.basis,
+        tax: taxBasis,
       },
       totalDeductions: fromCents(totalDeductionsCents),
       kept: fromCents(keptCents),
       keepRate: keepableBaseCents > 0 ? keptCents / keepableBaseCents : 0,
+      taxIncomplete: isTaxIncomplete,
+      isPartial: isTaxIncomplete,
     };
   }
 

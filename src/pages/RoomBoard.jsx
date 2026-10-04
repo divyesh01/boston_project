@@ -34,35 +34,44 @@ export default function RoomBoard() {
   const queryClient = useQueryClient();
   useRealtimeInvalidation(["rooms", "room-stays", "housekeeping"]);
 
-  const occQ = useOccupancy(dateRange, property, months);
-  const roomsQ = useRooms(property);
-  const staysQ = useRoomStays(dateRange, property, months);
-  const tasksQ = useHousekeepingTasks(dateRange, property);
-  const { data: occ = [], isLoading } = occQ;
-  const { data: rooms = [], isLoading: roomsLoading } = roomsQ;
-  const { data: stays = [] } = staysQ;
-  const { data: tasks = [] } = tasksQ;
-  const { data: reservations = [], isLoading: reservationsLoading } = useReservations(dateRange, property);
-  const { data: weatherSnapshots = [] } = useWeatherSnapshots(property);
-
   const [boardDate, setBoardDate] = useState(latestDate || new Date().toISOString().slice(0, 10));
   useEffect(() => {
     if (latestDate && !boardDate) setBoardDate(latestDate);
   }, [latestDate, boardDate]);
 
+  const occQ = useOccupancy(dateRange, property, months);
+  const roomsQ = useRooms(property);
+  const staysQ = useRoomStays(boardDate, property);
+  const tasksQ = useHousekeepingTasks(boardDate, property);
+  const { data: occ = [], isLoading } = occQ;
+  const { data: rooms = [], isLoading: roomsLoading } = roomsQ;
+  const { data: stays = [] } = staysQ;
+  const { data: tasks = [] } = tasksQ;
+  const reservationsQ = useReservations(dateRange, property);
+  const weatherQ = useWeatherSnapshots(property);
+  const { data: reservations = [], isLoading: reservationsLoading } = reservationsQ;
+  const { data: weatherSnapshots = [] } = weatherQ;
+  const pricingEvidenceReady = reservationsQ.isSuccess && weatherQ.isSuccess;
+
   const [newGuest, setNewGuest] = useState("");
   const [newRoom, setNewRoom] = useState("");
   const [newRate, setNewRate] = useState("");
-  const [newIn, setNewIn] = useState(boardDate);
+  const [newIn, setNewIn] = useState("");
+  const [isManualCheckIn, setIsManualCheckIn] = useState(false);
   const [newOut, setNewOut] = useState("");
   const [newFolio, setNewFolio] = useState("");
   const [notice, setNotice] = useState(null);
+
+  const effectiveCheckIn = isManualCheckIn && newIn ? newIn : boardDate;
+
   useEffect(() => {
     setNewRoom("");
     setNewGuest("");
     setNewRate("");
     setNewFolio("");
     setNewOut("");
+    setNewIn("");
+    setIsManualCheckIn(false);
     setNotice(null);
   }, [singlePropertyId]);
 
@@ -72,7 +81,7 @@ export default function RoomBoard() {
   const pricingEnabled = singlePropertyId != null && isPricingEnabled(singlePropertyId);
   const pricingConfig = getPricingConfig(singlePropertyId ?? "*");
   const suggestedForRoom = useMemo(() => {
-    if (!pricingEnabled || !newRoom || !boardDate) return null;
+    if (!pricingEnabled || !pricingEvidenceReady || !newRoom || !boardDate) return null;
     const room = rooms.find((r) => String(r.property_id) === String(singlePropertyId) && String(r.room_number) === String(newRoom));
     if (!room) return null;
     const weatherByDate = {};
@@ -84,12 +93,12 @@ export default function RoomBoard() {
     return suggestedRateForDate({
       roomType: room.room_type, date: boardDate, occupancy: occ, reservations, rooms, weatherByDate, config: pricingConfig, rateBounds: getEnterpriseConfig(singlePropertyId, boardDate, selectedProperty),
     });
-  }, [pricingEnabled, singlePropertyId, selectedProperty, newRoom, boardDate, rooms, reservations, weatherSnapshots, pricingConfig]);
+  }, [pricingEnabled, pricingEvidenceReady, singlePropertyId, selectedProperty, newRoom, boardDate, rooms, reservations, weatherSnapshots, pricingConfig]);
 
   // Recommended rate per room type for the selected board date — shown as a
   // "Suggested" badge on vacant tiles.
   const recommendedByType = useMemo(() => {
-    if (!pricingEnabled || !boardDate) return {};
+    if (!pricingEnabled || !pricingEvidenceReady || !boardDate) return {};
     const weatherByDate = {};
     for (const s of weatherSnapshots || []) {
       const d = String(s.date || "").slice(0, 10);
@@ -101,7 +110,7 @@ export default function RoomBoard() {
       out[type] = suggestedRateForDate({ roomType: type, date: boardDate, occupancy: occ, reservations, rooms, weatherByDate, config: pricingConfig, rateBounds: getEnterpriseConfig(singlePropertyId, boardDate, selectedProperty) });
     }
     return out;
-  }, [pricingEnabled, singlePropertyId, selectedProperty, boardDate, rooms, reservations, weatherSnapshots, pricingConfig]);
+  }, [pricingEnabled, pricingEvidenceReady, singlePropertyId, selectedProperty, boardDate, rooms, reservations, weatherSnapshots, pricingConfig]);
 
   const inventory = inventoryInScope(property, properties);
   const propName = isPortfolio
@@ -191,12 +200,12 @@ export default function RoomBoard() {
       await db.entities.RoomStay.create({
         property_id: singlePropertyId,
         property_name: prop?.name || "",
-        date: newIn || boardDate,
+        date: effectiveCheckIn,
         room_number: String(newRoom),
         guest_name: newGuest,
         room_type: room?.room_type || "Standard",
-        check_in: newIn || boardDate,
-        check_out: newOut || boardDate,
+        check_in: effectiveCheckIn,
+        check_out: newOut || effectiveCheckIn,
         rate_cents: toRateCents(newRate),
         folio_number: newFolio || "",
         status: "occupied",
@@ -227,7 +236,7 @@ export default function RoomBoard() {
     }
 
     invalidateBoard();
-    setNewGuest(""); setNewRate(""); setNewFolio(""); setNewOut("");
+    setNewGuest(""); setNewRate(""); setNewFolio(""); setNewOut(""); setNewIn(""); setIsManualCheckIn(false);
     setNotice(
       statusWarning
         ? {
@@ -258,7 +267,9 @@ export default function RoomBoard() {
     invalidateBoard();
   };
 
-  if (isLoading || roomsLoading) return <p className="text-slate-500">Loading property board…</p>;
+  if (isLoading || roomsLoading || staysQ.isLoading || tasksQ.isLoading) {
+    return <p className="text-slate-500">Loading property board…</p>;
+  }
 
   // On a failed read of the room register, stays, housekeeping tasks or
   // occupancy, this page used to draw the whole board anyway: every tile in the
@@ -273,7 +284,7 @@ export default function RoomBoard() {
         </header>
         <ErrorState
           title="Could not load the room board"
-          description="Do not sell rooms off this screen. The read failed, and the board it used to draw showed every room clean and empty with nobody checked in — a front desk reading that would sell rooms that already have a guest in them."
+          description="Room availability is unavailable until inventory, stays and housekeeping data load. Retry before assigning a room."
           error={roomsQ.error || staysQ.error || tasksQ.error || occQ.error}
           onRetry={() => { roomsQ.refetch(); staysQ.refetch(); tasksQ.refetch(); occQ.refetch(); }}
         />
@@ -313,7 +324,7 @@ export default function RoomBoard() {
             <input
               type="date"
               value={boardDate}
-              onChange={(e) => setBoardDate(e.target.value)}
+              onChange={(e) => { if (e.target.value) setBoardDate(e.target.value); }}
               className="rounded-lg border border-white/10 bg-[#0A1628] px-2 py-1 text-xs text-white"
             />
           </label>
@@ -399,14 +410,14 @@ export default function RoomBoard() {
                     </p>
                   )}
                   {!isPortfolio && (
-                    <div className="mt-1.5 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                    <div className="mt-1.5 flex flex-wrap gap-1">
                       {["available", "dirty", "out_of_service"].map((st) => (
                         <button
                           key={st}
                           onClick={() => handleRoomState(t.roomId || t.id, st)}
                           className="flex-1 rounded bg-white/10 px-1 py-0.5 text-[9px] text-slate-300 hover:bg-white/20"
                         >
-                          {st === "out_of_service" ? "OOS" : st[0].toUpperCase()}
+                          {st === "out_of_service" ? "Out of service" : st === "available" ? "Clean" : "Dirty"}
                         </button>
                       ))}
                     </div>
@@ -510,7 +521,15 @@ export default function RoomBoard() {
           </label>
           <label className="flex flex-col gap-1 text-xs text-slate-400">
             Check-in
-            <input type="date" value={newIn} onChange={(e) => setNewIn(e.target.value)} className="rounded-lg border border-white/10 bg-[#0A1628] px-2 py-2 text-sm text-white" />
+            <input
+              type="date"
+              value={effectiveCheckIn}
+              onChange={(e) => {
+                setIsManualCheckIn(true);
+                setNewIn(e.target.value);
+              }}
+              className="rounded-lg border border-white/10 bg-[#0A1628] px-2 py-2 text-sm text-white"
+            />
           </label>
           <label className="flex flex-col gap-1 text-xs text-slate-400">
             Check-out
@@ -526,6 +545,7 @@ export default function RoomBoard() {
                 <span className="text-slate-500"> · occ {Math.round(suggestedForRoom.occupancy * 100)}% → {Math.round((suggestedForRoom.multiplierBps / 10000) * 100)}× base</span>
               </div>
             )}
+            {pricingEnabled && !pricingEvidenceReady && <span className="text-amber-300">Suggested rate unavailable until reservation and weather evidence loads.</span>}
           </label>
           <button
             type="submit"

@@ -21,7 +21,7 @@ export const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Se
 export const MONTHS_LONG = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
 export const PAGE_FILTERS = {
-  "/": { employee: true, paymentType: true, channel: true, reportType: true },
+  "/": { employee: true, paymentType: true, channel: true },
   "/action-center": { channel: true },
   "/compare": { channel: true },
   "/rooms": {},
@@ -35,13 +35,13 @@ export const PAGE_FILTERS = {
   // The ledger page has its own account picker: the global employee dropdown is
   // built from ClerkShiftRecord.clerk_name, which never matches the PMS
   // usernames on TransactionLine, so offering it here would filter to nothing.
-  "/transactions": { paymentType: true },
+  "/transactions": {},
   // Statistics reads whole PMS snapshots, and every metric in one is already
   // aggregated by the PMS. There is no per-employee or per-channel dimension to
   // slice on, so only the date range and property apply — both of which live
   // outside this map and always show.
   "/statistics": {},
-  "/charts": { channel: true, reportType: true },
+  "/charts": {},
   // The OTA page manages commission RATES and compares every channel against
   // the others; filtering to a single channel would hide the comparison that is
   // the point of the page. It never read the global `channel` value, so the
@@ -94,11 +94,12 @@ function computeRange(period, year, month, latestDate, customFrom, customTo, anc
 
   if (period === "ytd") {
     const from = iso(y, 0, 1);
-    let to;
-    if (y >= (anchorDate ? today.getUTCFullYear() : today.getFullYear())) {
-      to = latestDate || iso((anchorDate ? today.getUTCFullYear() : today.getFullYear()), (anchorDate ? today.getUTCMonth() : today.getMonth()), (anchorDate ? today.getUTCDate() : today.getDate()));
-    } else {
-      to = iso(y, 11, 31);
+    const currentYear = anchorDate ? today.getUTCFullYear() : today.getFullYear();
+    let to = iso(y, 11, 31);
+    if (y === currentYear) {
+      const todayDate = anchorDate || iso(y, today.getMonth(), today.getDate());
+      to = latestDate && String(latestDate).startsWith(`${y}-`) && latestDate <= todayDate
+        ? latestDate : todayDate;
     }
     return { from, to };
   }
@@ -162,34 +163,34 @@ export function GlobalFiltersProvider({ children }) {
   const { canAccessProperty } = useAuth();
 
   // Property-level access: non-owner/admin users only see their assigned properties.
-  // This is the SECOND clamp — useProperties() reads through db.entities.Property,
-  // which scopes the roster on its primary key. Kept anyway because this list is
-  // what the property picker renders, and a UI that offers a property the data layer
-  // will refuse produces empty screens with no explanation.
+  // Dashboard scope: inactive properties (active === false) are hidden from dashboards and pickers.
+  // Settings still sees the full roster via useProperties() for reactivation.
   const accessibleProperties = useMemo(
-    () => rosterProperties.filter((p) => canAccessProperty(p.id)),
+    () => rosterProperties.filter((p) => canAccessProperty(p.id) && p.active !== false),
     [rosterProperties, canAccessProperty]
   );
 
-  // Constrain selections to accessible properties. A selected id that is not
-  // accessible is dropped rather than honoured, so a stale selection surviving a
-  // permission change cannot widen what the next query asks for.
+  // Constrain selections to accessible active properties. A selected id that is not
+  // accessible or has been deactivated is dropped rather than honoured, so a stale selection surviving a
+  // permission change or deactivation cannot widen what the next query asks for.
   const effectiveProperties = useMemo(
     () => selectedPropertyIds.filter((id) => accessibleProperties.some((p) => p.id === id)),
     [selectedPropertyIds, accessibleProperties]
   );
 
-  // Backward-compat: property as string or array for hooks.
-  //
-  // No selection resolves to the sentinel "all", which every consumer forwards to
-  // db.entities.*.filter as "no property condition". That is not a hole: applyScope
-  // turns an absent condition into the caller's own allowance, so "all" means "all
-  // of mine", not "all that exist". The data layer is what enforces it, not this.
-  const property = effectiveProperties.length === 0
-    ? "all"
-    : effectiveProperties.length === 1
-    ? effectiveProperties[0]
-    : effectiveProperties;
+  const activePortfolioIds = useMemo(
+    () => accessibleProperties.map((p) => p.id),
+    [accessibleProperties]
+  );
+
+  // Explicit active portfolio IDs: zero selection forwards the array of active portfolio IDs
+  // rather than the unscoped "all" sentinel, so inactive property records/cache never leak.
+  // ZERO active properties results in empty array [], never falling through to "all".
+  const property = useMemo(() => {
+    if (effectiveProperties.length === 1) return effectiveProperties[0];
+    if (effectiveProperties.length > 1) return effectiveProperties;
+    return activePortfolioIds;
+  }, [effectiveProperties, activePortfolioIds]);
 
   const { data: latestDate = "" } = useLatestDate(property);
 

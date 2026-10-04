@@ -80,5 +80,6 @@ export function buildTaxObject({
     effectiveRate: effectiveTaxRate ?? (combined.size===1 ? [...combined][0] : undefined),
     rates:{state:oneRate('state'),city:oneRate('city'),other:oneRate('other')},
     calculations:summaries,
+    incomplete: summaries.some(s => s.incomplete === true),
   };
 }

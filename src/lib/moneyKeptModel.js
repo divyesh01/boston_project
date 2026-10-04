@@ -250,9 +250,7 @@ export function buildMoneyKeptBaseData({
     pushItem('ota', 'OTA Commissions ('+labelBasis('ota')+')', costTotal('otaCommissions'), recordsFor('ota','otaCommissions','ota'));
     pushItem('cc', 'Credit Card Processing Fees ('+labelBasis('cc')+')', costTotal('ccFees'), recordsFor('credit_card_fees','ccFees','cc'));
     pushItem('refund_fee', 'CC Fee on Refunds', costTotal('refundFees'), costs.map(c=>({name:c.id || 'Property',detail:'Configured property refund fee',amount:c.value.refundFees})));
-    const taxIsActual = labelBasis('tax') === 'actual';
-    const effectiveTaxRate = undefined;
-    pushItem('taxes','Business Taxes ('+labelBasis('tax')+')',costTotal('estimatedTaxes'),recordsFor('taxes','estimatedTaxes','tax'));
+
     const liability = {state:0,city:0,other:0};
     const taxCalculations = [];
     for (const c of costs) {
@@ -267,6 +265,32 @@ export function buildMoneyKeptBaseData({
       }
     }
     const estimatedTaxFromRates = fromCents(taxCalculations.filter(c=>c.basis==='estimated').reduce((n,c)=>n+(c.hotel_estimate != null ? toCents(c.hotel_estimate) : toCents(c.state)+toCents(c.city)+toCents(c.other)),0));
+
+    const taxIsActual = labelBasis('tax') === 'actual';
+    const isTaxIncomplete = !taxIsActual && (costs.some(c => c.value?.taxIncomplete) || taxCalculations.some(c => c.incomplete));
+    const effectiveTaxRate = undefined;
+    const estimatedTaxesTotal = costTotal('estimatedTaxes');
+    const taxBasisLabel = isTaxIncomplete
+      ? (estimatedTaxesTotal > 0 ? (labelBasis('tax').includes('partial') ? labelBasis('tax') : `${labelBasis('tax')} · partial`) : 'incomplete · unknown')
+      : labelBasis('tax');
+    const taxItemLabel = `Business Taxes (${taxBasisLabel})`;
+    if (Math.abs(estimatedTaxesTotal) > 0.004) {
+      items.push({
+        key: 'taxes',
+        label: taxItemLabel,
+        amount: fromCents(toCents(estimatedTaxesTotal)),
+        records: recordsFor('taxes','estimatedTaxes','tax'),
+        incomplete: isTaxIncomplete,
+      });
+    } else if (isTaxIncomplete && !taxIsActual) {
+      items.push({
+        key: 'taxes',
+        label: taxItemLabel,
+        amount: 0,
+        records: recordsFor('taxes','estimatedTaxes','tax'),
+        incomplete: true,
+      });
+    }
 
     pushItem("payroll", "Payroll", sum(payInPeriod, "total_pay") + expAmt("payroll"), [
       ...payInPeriod.map((p) => ({
@@ -355,6 +379,8 @@ export function buildMoneyKeptBaseData({
       liabCity,
       liabOther,
       dayTotals,
+      isTaxIncomplete,
+      isPartial: isTaxIncomplete,
     };
     // `expenses` is listed because line 146 reads it directly on the fallback path
     // (no aggregate cache). It was previously omitted and the memo still refreshed,
@@ -365,7 +391,8 @@ export function buildMoneyKeptBaseData({
 }
 
 export function buildMoneyKeptPresentation(baseData, trendMode = "week") {
-    const { gross, grossBasis, items, totalDeductions, kept, from: baseFrom, to: baseTo, tax, refundsTotal, passThrough, dayTotals } = baseData;
+    const { gross, grossBasis, items, totalDeductions, kept, from: baseFrom, to: baseTo, tax, refundsTotal, passThrough, dayTotals, isTaxIncomplete, isPartial } = baseData;
+    const partial = Boolean(isTaxIncomplete || isPartial || tax?.incomplete);
     
     // ── Trend: allocate lump expenses/payroll across days by revenue share ──
     const sumDay = (k) => sum(dayTotals, k);
@@ -410,8 +437,9 @@ export function buildMoneyKeptPresentation(baseData, trendMode = "week") {
     // any remaining deductions → Estimated Money Kept (the bottom line, last).
     const pieDeduction = (key, label) => {
       const amt = items.find((i) => i.key === key)?.amount;
+      const displayLabel = (key === "taxes" && partial) ? `${label} (partial)` : label;
       return amt && amt > 0.004
-        ? { name: label, value: Math.round(amt * 100) / 100, color: colorByKey.get(key) }
+        ? { name: displayLabel, value: Math.round(amt * 100) / 100, color: colorByKey.get(key) }
         : null;
     };
     const orderedPie = [
@@ -432,20 +460,23 @@ export function buildMoneyKeptPresentation(baseData, trendMode = "week") {
     // share of gross. That case is flagged so the chart can say so out loud
     // instead of quietly reporting different percentages than the list.
     const keptSlice = Math.round(kept * 100) / 100;
+    const keptLabel = partial ? "Estimated Money Kept (partial)" : "Estimated Money Kept";
     const pieData = [
       ...orderedPie,
       ...otherPie,
-      ...(keptSlice > 0 ? [{ name: "Estimated Money Kept", value: keptSlice, color: C.green }] : []),
+      ...(keptSlice > 0 ? [{ name: keptLabel, value: keptSlice, color: C.green }] : []),
     ];
     const pieIsGrossShare = keptSlice > 0;
 
     const barData = [
       { name: grossBasis?.basis === "room" ? "Room Revenue" : "Total Revenue", value: Math.round(gross * 100) / 100, color: C.purple },
-      { name: "Estimated Money Kept", value: Math.max(0, Math.round(kept * 100) / 100), color: C.green },
+      { name: keptLabel, value: Math.max(0, Math.round(kept * 100) / 100), color: C.green },
     ];
 
     return {
       gross, grossBasis, items, totalDeductions, kept, pieData, barData, trendData, from: baseFrom, to: baseTo,
-      refundsTotal, passThrough, tax, colorByKey, pieIsGrossShare
+      refundsTotal, passThrough, tax, colorByKey, pieIsGrossShare,
+      isTaxIncomplete: partial,
+      isPartial: partial,
     };
 }

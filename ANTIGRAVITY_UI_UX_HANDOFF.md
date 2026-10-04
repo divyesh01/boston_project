@@ -225,3 +225,6 @@ No migrations, schema changes, secret changes or hotel data mutations are part o
 
 ### Edge cases and UI checks
 Inspect DataIntelligence while queries are pending, fail, or partially succeed; do not report false completeness or zero financial totals. Inspect Reviews with handled drafts but no provider receipt, invalid ratings and confirmed provider replies. Inspect Pricing with unavailable connector, portfolio selection, historical business date and failed demand reads; no mock success or override audit should occur. Use the full route checklist above for authenticated desktop/mobile owner acceptance.
+
+
+Release continuation: updated existing DataIntelligence UI test code to await real asynchronous reads before asserting loaded content, with an initial pending-state assertion preserved. Updated SmartButtonGroup callback test to the actual Report Download Options label. No assertions removed, product loading guards unchanged, no verification commands executed locally. GitHub CI owns automatic execution; Antigravity owns authenticated owner acceptance. Production artifact is unchanged by these test-only edits.

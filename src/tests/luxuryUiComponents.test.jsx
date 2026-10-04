@@ -66,7 +66,7 @@ describe('SmartButtonGroup Component', () => {
     fireEvent.click(simulatorBtn);
     expect(onOpenSimulator).toHaveBeenCalledTimes(1);
 
-    const scheduleBtn = screen.getByRole('button', { name: /Schedule Delivery/i });
+    const scheduleBtn = screen.getByRole('button', { name: /Report Download Options/i });
     fireEvent.click(scheduleBtn);
     expect(onOpenSchedule).toHaveBeenCalledTimes(1);
 

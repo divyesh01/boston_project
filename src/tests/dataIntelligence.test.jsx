@@ -56,7 +56,9 @@ describe('Data Intelligence Owner Data Center', () => {
   it('renders all 4 tabs and portfolio completeness matrix', async () => {
     renderWithClient(<DataIntelligence />);
 
-    expect(screen.getByText('Owner Intelligence Center')).toBeInTheDocument();
+    expect(screen.getByText('Loading data health evidence')).toBeInTheDocument();
+    expect(screen.queryByText('Owner Intelligence Center')).not.toBeInTheDocument();
+    expect(await screen.findByText('Owner Intelligence Center')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Portfolio Completeness/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Financial Reconciliation/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Data Scanner & Cleaner/ })).toBeInTheDocument();
@@ -70,7 +72,7 @@ describe('Data Intelligence Owner Data Center', () => {
   it('switches to Financial Reconciliation tab and displays balance cards', async () => {
     renderWithClient(<DataIntelligence />);
 
-    const reconTab = screen.getByRole('button', { name: /Financial Reconciliation/ });
+    const reconTab = await screen.findByRole('button', { name: /Financial Reconciliation/ });
     fireEvent.click(reconTab);
 
     expect(screen.getAllByText('Reported PMS Revenue')[0]).toBeInTheDocument();
@@ -82,7 +84,7 @@ describe('Data Intelligence Owner Data Center', () => {
   it('opens and closes missing dates inspection modal', async () => {
     renderWithClient(<DataIntelligence />);
 
-    const inspectButtons = screen.getAllByText('Inspect Gaps');
+    const inspectButtons = await screen.findAllByText('Inspect Gaps');
     fireEvent.click(inspectButtons[0]);
 
     expect(screen.getByText(/Data Completeness Audit:/)).toBeInTheDocument();

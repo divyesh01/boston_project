@@ -31,3 +31,6 @@ October 4 release follow-up: fixed the ledger ErrorState prop required by CI; pr
 
 
 Latest status: build succeeded for b51d07f; inactive Cloudflare version d2a5bc20-d1a6-49db-95b2-2e1fef8307c6 uploaded. Production traffic remains on prior deployment. Standard CI is blocked by four UI assertions described in ANTIGRAVITY_UI_UX_HANDOFF.md. No merge or production activation performed. Antigravity verification handoff is required before activation.
+
+
+Release continuation: updated existing DataIntelligence UI test code to await real asynchronous reads before asserting loaded content, with an initial pending-state assertion preserved. Updated SmartButtonGroup callback test to the actual Report Download Options label. No assertions removed, product loading guards unchanged, no verification commands executed locally. GitHub CI owns automatic execution; Antigravity owns authenticated owner acceptance. Production artifact is unchanged by these test-only edits.

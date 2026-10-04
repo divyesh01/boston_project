@@ -71,6 +71,7 @@ export default function Users() {
   const [resetUser, setResetUser] = useState(null);
   const [resetPassword, setResetPassword] = useState("");
   const [resetShow, setResetShow] = useState(false);
+  const [passwordHandoff, setPasswordHandoff] = useState(null);
   const [resetAction, setResetAction] = useState("temp"); // temp | permanent
 
   // Confirm dialogs
@@ -264,6 +265,7 @@ export default function Users() {
   };
 
   const handleResetPassword = async () => {
+    if (actionBusy || !resetUser) return;
     if (!isCryptoAvailable()) {
       toast({ variant: "destructive", title: "Error", description: "Password hashing unavailable. Open via localhost/HTTPS." });
       return;
@@ -288,16 +290,14 @@ export default function Users() {
       }
       await db.users.resetPassword(me, resetUser.id, newPassword);
       if (resetAction === "temp") {
-        toast({
-          title: "Temporary password generated",
-          description: `Give ${resetUser.username} the temporary password: ${newPassword}`,
-        });
+        setPasswordHandoff({ username: resetUser.username, password: newPassword });
       } else {
         toast({ title: "Password reset", description: "The user will be asked to change it at next login." });
       }
       setResetUser(null);
       setResetPassword(""); setResetAction("temp");
       rotateCsrfToken();
+      await load();
     } catch (e) {
       toast({ variant: "destructive", title: "Error", description: e.message });
     } finally {
@@ -364,6 +364,7 @@ export default function Users() {
   };
 
   const runConfirm = async () => {
+    if (actionBusy || !confirmAction) return;
     const rateLimit = securityActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
@@ -519,13 +520,13 @@ export default function Users() {
       </Card>
 
       {/* ── Add user dialog ── */}
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      <Dialog open={createOpen} onOpenChange={(open) => { if (!actionBusy) setCreateOpen(open); }}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Add User</DialogTitle>
             <DialogDescription>Create a new login. Set a password below, or generate a strong one.</DialogDescription>
           </DialogHeader>
-          <div className="grid gap-4 py-2">
+          <fieldset disabled={actionBusy} className="grid min-w-0 gap-4 py-2">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Username *</Label>
@@ -576,9 +577,9 @@ export default function Users() {
               </div>
               <Switch checked={form.must_change_password !== false} onCheckedChange={(v) => setFormField("must_change_password", v)} />
             </div>
-          </div>
+          </fieldset>
           <DialogFooter>
-            <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+            <DialogClose asChild><Button variant="outline" disabled={actionBusy}>Cancel</Button></DialogClose>
             <Button onClick={handleCreate} disabled={actionBusy}>
               {actionBusy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Create User
             </Button>
@@ -588,7 +589,7 @@ export default function Users() {
 
       {/* ── Edit user dialog ── */}
       {editUser && editForm && (
-        <Dialog open onOpenChange={() => setEditUser(null)}>
+        <Dialog open onOpenChange={() => { if (!actionBusy) setEditUser(null); }}>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Edit User — {editUser.username}</DialogTitle>
@@ -596,7 +597,7 @@ export default function Users() {
                 {isSelf(editUser) ? "You can only update your own profile fields here." : "Changes to permissions and property access take effect immediately."}
               </DialogDescription>
             </DialogHeader>
-            <div className="grid gap-4 py-2">
+            <fieldset disabled={actionBusy} className="grid min-w-0 gap-4 py-2">
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label>Username</Label>
@@ -682,9 +683,9 @@ export default function Users() {
                   Role, permissions, and property access for your own account are managed by another Owner/Admin. Use the Users list to edit other accounts.
                 </div>
               )}
-            </div>
+            </fieldset>
             <DialogFooter>
-              <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+              <DialogClose asChild><Button variant="outline" disabled={actionBusy}>Cancel</Button></DialogClose>
               <Button onClick={handleEditSave} disabled={actionBusy}>
                 {actionBusy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save Changes
               </Button>
@@ -695,13 +696,13 @@ export default function Users() {
 
       {/* ── Reset password dialog ── */}
       {resetUser && (
-        <Dialog open onOpenChange={() => setResetUser(null)}>
+        <Dialog open onOpenChange={() => { if (!actionBusy) setResetUser(null); }}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Reset password — {resetUser.username}</DialogTitle>
               <DialogDescription>The user will be forced to change their password at next login.</DialogDescription>
             </DialogHeader>
-            <div className="space-y-4 py-2">
+            <fieldset disabled={actionBusy} className="min-w-0 space-y-4 py-2">
               <div className="space-y-2">
                 <Label>Choose an option</Label>
                 <div className="grid grid-cols-2 gap-2">
@@ -728,16 +729,16 @@ export default function Users() {
                   <Label>New password</Label>
                   <div className="relative">
                     <Input type={resetShow ? "text" : "password"} value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} placeholder="Type a password" />
-                    <button type="button" onClick={() => setResetShow((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" tabIndex={-1}>
+                    <button type="button" aria-label={resetShow ? "Hide password" : "Show password"} onClick={() => setResetShow((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">
                       {resetShow ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </button>
                   </div>
                   <p className="text-xs text-muted-foreground">{PASSWORD_HELP}</p>
                 </div>
               )}
-            </div>
+            </fieldset>
             <DialogFooter>
-              <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+              <DialogClose asChild><Button variant="outline" disabled={actionBusy}>Cancel</Button></DialogClose>
               <Button onClick={handleResetPassword} disabled={actionBusy}>
                 {actionBusy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Reset Password
               </Button>
@@ -747,8 +748,22 @@ export default function Users() {
       )}
 
       {/* ── Confirm action dialog ── */}
+      {passwordHandoff && (
+        <Dialog open onOpenChange={() => {}}>
+          <DialogContent onEscapeKeyDown={(event) => event.preventDefault()} onPointerDownOutside={(event) => event.preventDefault()}>
+            <DialogHeader>
+              <DialogTitle>Temporary password for {passwordHandoff.username}</DialogTitle>
+              <DialogDescription>Share this password directly with the user before closing. It is shown only here and must be changed at next login.</DialogDescription>
+            </DialogHeader>
+            <Label htmlFor="temporary-password-handoff">Temporary password</Label>
+            <Input id="temporary-password-handoff" readOnly value={passwordHandoff.password} autoComplete="off" onFocus={(event) => event.target.select()} className="font-mono" />
+            <DialogFooter><Button onClick={() => setPasswordHandoff(null)}>I have saved the password</Button></DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
       {confirmAction && (
-        <Dialog open onOpenChange={() => setConfirmAction(null)}>
+        <Dialog open onOpenChange={() => { if (!actionBusy) setConfirmAction(null); }}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>
@@ -771,7 +786,7 @@ export default function Users() {
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
-              <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+              <DialogClose asChild><Button variant="outline" disabled={actionBusy}>Cancel</Button></DialogClose>
               <Button
                 variant={confirmAction.type === "delete" ? "destructive" : "default"}
                 onClick={runConfirm}

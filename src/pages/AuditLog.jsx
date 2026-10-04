@@ -124,7 +124,10 @@ export default function AuditLog() {
   // call throws (network / auth failure), we surface the local result so the
   // page still tells the user SOMETHING rather than silently hanging on a
   // rejected promise.
+  const verifyInFlight = useRef(false);
   const verify = async () => {
+    if (verifyInFlight.current) return;
+    verifyInFlight.current = true;
     setVerifying(true);
     try {
       const res = await db.audit.verifyChain();
@@ -137,11 +140,15 @@ export default function AuditLog() {
         setChain({ valid: false, error: e2?.message || String(e2), source: "local" });
       }
     } finally {
+      verifyInFlight.current = false;
       setVerifying(false);
     }
   };
 
+  const loadInFlight = useRef(false);
   const load = async () => {
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
     setLoading(true);
     setLoadError(null);
     setWriteFailures(readAuditFailures());
@@ -159,6 +166,7 @@ export default function AuditLog() {
       setLogs([]);
       toast({ variant: "destructive", title: "Error", description: e.message });
     } finally {
+      loadInFlight.current = false;
       setLoading(false);
     }
   };
@@ -282,6 +290,10 @@ export default function AuditLog() {
     overscan: 10,
   });
 
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  const virtualTop = virtualRows[0]?.start || 0;
+  const virtualBottom = Math.max(0, rowVirtualizer.getTotalSize() - (virtualRows.at(-1)?.end || 0));
+
   const SortHead = ({ column, children, className = "" }) => (
     <TableHead className={className} aria-sort={sort.key === column ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
       <button
@@ -317,12 +329,12 @@ export default function AuditLog() {
               <Download className="mr-2 h-4 w-4" />
               Export CSV
             </Button>
-            <Button variant="outline" size="icon" onClick={verify} title="Re-verify chain" aria-label="Re-verify chain" disabled={verifying}>
+            <Button variant="outline" size="icon" onClick={verify} title="Re-verify chain" aria-label="Re-verify chain" disabled={verifying || loading}>
               {verifying
                 ? <ShieldCheck className="h-4 w-4 animate-pulse" />
                 : <ShieldCheck className="h-4 w-4" />}
             </Button>
-            <Button variant="outline" size="icon" onClick={load} title="Refresh" aria-label="Refresh">
+            <Button variant="outline" size="icon" onClick={load} title="Refresh" aria-label="Refresh" disabled={loading || verifying}>
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
             </Button>
           </div>
@@ -566,20 +578,14 @@ export default function AuditLog() {
                   </TableRow>
                 ) : (
                   <>
-                    <tr style={{ height: `${rowVirtualizer.getTotalSize()}px`, display: 'block', width: '100%', position: 'relative' }}>
-                      {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                    {virtualTop > 0 && <TableRow aria-hidden="true"><TableCell colSpan={6} style={{ height: virtualTop, padding: 0, border: 0 }} /></TableRow>}
+                      {virtualRows.map((virtualRow) => {
                         const l = sorted[virtualRow.index];
                         return (
                           <TableRow
                             key={l.id}
-                            style={{
-                              position: 'absolute',
-                              top: 0,
-                              left: 0,
-                              width: '100%',
-                              height: `${virtualRow.size}px`,
-                              transform: `translateY(${virtualRow.start}px)`
-                            }}
+                            data-index={virtualRow.index}
+                            ref={rowVirtualizer.measureElement}
                           >
                             <TableCell className="whitespace-nowrap text-xs text-muted-foreground w-1/6">{new Date(l.created_date).toLocaleString()}</TableCell>
                             <TableCell className="text-sm font-medium w-1/6">{l.username}</TableCell>
@@ -597,7 +603,7 @@ export default function AuditLog() {
                           </TableRow>
                         );
                       })}
-                    </tr>
+                    {virtualBottom > 0 && <TableRow aria-hidden="true"><TableCell colSpan={6} style={{ height: virtualBottom, padding: 0, border: 0 }} /></TableRow>}
                   </>
                 )}
               </TableBody>

@@ -1,4 +1,5 @@
 import TaxRemittanceRecords from '@/components/payments/TaxRemittanceRecords';
+import { toast } from "sonner";
 import React, { useMemo, useRef, useState } from "react";
 import { CreditCard, DollarSign, Receipt, RefreshCw, AlertTriangle, Percent, Settings, Download } from "lucide-react";
 import Card from "@/components/ui-exec/Card";
@@ -8,7 +9,7 @@ import ChartToolbar from "@/components/charts/ChartToolbar";
 import TaxConfigModal from "@/components/TaxConfigModal";
 import TaxCalculationBreakdown from "@/components/dashboard/TaxCalculationBreakdown";
 import { summarizeTaxCalculations } from "@/lib/taxLiability";
-import { ErrorState } from "@/components/ui/status";
+import { ErrorState, LoadingState } from "@/components/ui/status";
 import { usePaymentData, useOccupancy, useClerkRecords, useSources, useGrossRevenue } from "@/lib/useHotelData";
 import { usePullToRefresh } from "@/hooks/usePullToRefresh";
 import { money2, sum, inRange, C } from "@/lib/hotel";
@@ -25,7 +26,8 @@ export default function Payments() {
   const { data: payRecords = [], isLoading, isError, error, refetch } = usePaymentData(dateRange, property, months);
   const occQ = useOccupancy(dateRange, property, months);
   const { data: occ = [] } = occQ;
-  const { data: clerk = [] } = useClerkRecords(dateRange, property);
+  const clerkQ = useClerkRecords(dateRange, property);
+  const { data: clerk = [] } = clerkQ;
   const srcQ = useSources(dateRange, property, months);
   const { data: sourceRows = [] } = srcQ;
   const grossQ = useGrossRevenue(dateRange, property, months);
@@ -59,7 +61,7 @@ export default function Payments() {
   // tenders at once.
   const activeMethods = useMemo(
     () => (paymentType && paymentType !== "all"
-      ? PAYMENT_METHOD_FIELDS.filter(([key]) => key === paymentType)
+      ? PAYMENT_METHOD_FIELDS.filter(([key]) => paymentType === "CARD" ? CARD_METHODS.includes(key) : key === String(paymentType).toLowerCase())
       : PAYMENT_METHOD_FIELDS),
     [paymentType]
   );
@@ -99,17 +101,19 @@ export default function Payments() {
       ? CARD_METHODS.filter((k) => activeMethods.some(([key]) => key === k))
       : CARD_METHODS;
     const showCash = activeMethods.some(([key]) => key === "cash");
-    return payRows
-      .map((r) => ({
-        date: String(r.date).slice(0, 10),
-        total: methodFiltered
-          ? activeMethods.reduce((a, [key]) => a + (Number(r[key]) || 0), 0)
-          : Number(r.total) || 0,
-        cash: showCash ? Number(r.cash) || 0 : 0,
-        card: cardKeys.reduce((a, k) => a + (Number(r[k]) || 0), 0),
-      }))
-      .filter((r) => r.date)
-      .sort((a, b) => a.date.localeCompare(b.date));
+    const groups = new Map();
+    payRows.forEach((row) => {
+      const date = String(row.date || "").slice(0, 10);
+      if (!date) return;
+      if (!groups.has(date)) groups.set(date, []);
+      groups.get(date).push(row);
+    });
+    return [...groups.entries()].map(([date, rows]) => ({
+      date,
+      total: fromCents(sumCents(rows.flatMap((row) => methodFiltered ? activeMethods.map(([key]) => row[key] || 0) : [row.total || 0]))),
+      cash: showCash ? sum(rows, "cash") : 0,
+      card: fromCents(sumCents(rows.flatMap((row) => cardKeys.map((key) => row[key] || 0)))),
+    })).sort((a, b) => a.date.localeCompare(b.date));
   }, [payRows, activeMethods, methodFiltered]);
 
   // Clerk drops (from ClerkShiftRecord, if any exist)
@@ -121,33 +125,32 @@ export default function Payments() {
     const byDate = new Map();
     occRows.forEach((r) => {
       const d = String(r.date).slice(0, 10);
-      byDate.set(d, { pmsTotal: Number(r.room_revenue) || 0 });
+      const entry = byDate.get(d) || { pmsTotal: 0 };
+      entry.pmsTotal = fromCents(sumCents([entry.pmsTotal, r.room_revenue || 0]));
+      byDate.set(d, entry);
     });
     payRows.forEach((r) => {
       const d = String(r.date).slice(0, 10);
       const entry = byDate.get(d) || { pmsTotal: 0 };
-      const card = CARD_METHODS.reduce((a, k) => a + (Number(r[k]) || 0), 0);
+      const card = fromCents(sumCents(CARD_METHODS.map((k) => r[k] || 0)));
       const cash = Number(r.cash) || 0;
-      entry.pmsCard = (entry.pmsCard || 0) + card;
-      entry.pmsCash = (entry.pmsCash || 0) + cash;
-      entry.merchantSettledNet = (entry.merchantSettledNet || 0) + card;
-      entry.bankDeposited = (entry.bankDeposited || 0) + (card + cash);
+      entry.pmsCard = fromCents(sumCents([entry.pmsCard || 0, card]));
+      entry.pmsCash = fromCents(sumCents([entry.pmsCash || 0, cash]));
       byDate.set(d, entry);
     });
     const days = [...byDate.entries()].map(([date, e]) => {
       const pmsTotal = e.pmsTotal || 0;
       const pmsCard = e.pmsCard || 0;
       const pmsCash = e.pmsCash || 0;
-      const merchantSettledNet = e.merchantSettledNet || 0;
-      const bankDeposited = e.bankDeposited || 0;
-      const cardVariance = pmsCard - merchantSettledNet;
-      const variance = pmsCard + pmsCash - pmsTotal;
-      return { date, pmsTotal, pmsCard, pmsCash, merchantSettledNet, bankDeposited, cardVariance, status: Math.abs(variance) < 1 ? "Balanced" : "Review" };
+      const merchantSettledNet = null;
+      const bankDeposited = null;
+      const cardVariance = null;
+      return { date, pmsTotal, pmsCard, pmsCash, merchantSettledNet, bankDeposited, cardVariance, status: "Incomplete: bank and merchant evidence unavailable" };
     }).sort((a, b) => a.date.localeCompare(b.date));
     const totalPmsRevenue = fromCents(sumCents(days.map((d) => d.pmsTotal)));
-    const totalMerchantSettled = fromCents(sumCents(days.map((d) => d.merchantSettledNet)));
-    const totalBankDeposited = fromCents(sumCents(days.map((d) => d.bankDeposited)));
-    const netVariance = fromCents(days.reduce((a, d) => a + subtract(d.pmsCard + d.pmsCash, d.pmsTotal), 0));
+    const totalMerchantSettled = null;
+    const totalBankDeposited = null;
+    const netVariance = null;
     return {
       days,
       periodSummary: {
@@ -155,7 +158,7 @@ export default function Payments() {
         totalMerchantSettled,
         totalBankDeposited,
         netVariance,
-        reconciliationHealth: Math.abs(netVariance) < 1 ? "Healthy" : "Needs Review",
+        reconciliationHealth: "Incomplete: bank and merchant evidence unavailable",
       },
     };
   }, [occRows, payRows]);
@@ -164,7 +167,7 @@ export default function Payments() {
     try {
       exportReconciliationToCsv(reconciliationExport, propName);
     } catch (e) {
-      console.error("Reconciliation export failed:", e.message);
+      toast.error("Reconciliation export was not created", { description: e?.message || String(e) });
     }
   };
 
@@ -254,7 +257,6 @@ export default function Payments() {
   const combinedRates = new Set(estimates.map(row=>row.rates.state+row.rates.city+row.rates.other));
   const combinedRateLabel = combinedRates.size===1 ? formatTaxRate([...combinedRates][0]) : combinedRates.size>1 ? 'per property / period' : 'reported amounts';
 
-  if (isLoading) return <p className="text-slate-500">Loading payment data…</p>;
 
   // A failed read used to fall through to the dashboard below, which sums an empty
   // array and prints $0.00 collected and $0.00 tax. Those are real-looking figures for
@@ -262,16 +264,18 @@ export default function Payments() {
   // occ feeds Expected Revenue and the variance alarm; sources + gross feed the tax
   // liability card — a failure in any of them is just as corrupting as a
   // payment-read failure, so the page must stop rather than print a false $0 tax.
-  if (isError || occQ.isError || srcQ.isError || grossQ.isError) {
+  if (isError || occQ.isError || srcQ.isError || grossQ.isError || clerkQ.isError) {
     return (
       <ErrorState
         title="Could not load payment data"
         description="Payment totals and tax figures are not shown because the read failed — they are not zero."
-        error={error || occQ.error || srcQ.error || grossQ.error}
-        onRetry={() => { refetch(); occQ.refetch(); srcQ.refetch(); grossQ.refetch(); }}
+        error={error || occQ.error || srcQ.error || grossQ.error || clerkQ.error}
+        onRetry={() => { refetch(); occQ.refetch(); srcQ.refetch(); grossQ.refetch(); clerkQ.refetch(); }}
       />
     );
   }
+
+  if (isLoading || [occQ, srcQ, grossQ, clerkQ].some((query) => query.isLoading)) return <LoadingState title="Loading payments and audit data..." />;
 
   return (
     <div className="space-y-6">

@@ -1,5 +1,15 @@
 import { Inbox, AlertTriangle, RefreshCw } from "lucide-react";
 
+export function LoadingState({ title = "Loading…", description = "", className = "" }) {
+  return (
+    <div role="status" aria-live="polite" className={`rounded-2xl border border-white/5 bg-[#0A1628]/40 px-6 py-12 text-center ${className}`}>
+      <RefreshCw aria-hidden="true" className="mx-auto mb-3 h-6 w-6 text-slate-400 motion-safe:animate-spin" />
+      <p className="text-sm text-slate-200">{title}</p>
+      {description && <p className="mt-1 text-xs text-slate-400">{description}</p>}
+    </div>
+  );
+}
+
 export function EmptyState({ icon: Icon = Inbox, title, description, action = null, className = "" }) {
   return (
     <div className={`flex flex-col items-center justify-center rounded-2xl border border-white/5 bg-[#0A1628]/40 px-6 py-12 text-center ${className}`}>
@@ -7,7 +17,7 @@ export function EmptyState({ icon: Icon = Inbox, title, description, action = nu
         <Icon className="h-6 w-6" />
       </div>
       <h3 className="text-sm font-medium text-slate-200">{title}</h3>
-      {description && <p className="mt-1 max-w-sm text-xs text-slate-500">{description}</p>}
+      {description && <p className="mt-1 max-w-sm text-xs text-[var(--t-tertiary)]">{description}</p>}
       {action && <div className="mt-4">{action}</div>}
     </div>
   );
@@ -15,7 +25,7 @@ export function EmptyState({ icon: Icon = Inbox, title, description, action = nu
 
 export function ErrorState({ title = "Something went wrong", description, error, onRetry, className = "" }) {
   return (
-    <div className={`flex flex-col items-center justify-center rounded-2xl border border-red-500/20 bg-red-500/[0.04] px-6 py-12 text-center ${className}`}>
+    <div role="alert" className={`flex flex-col items-center justify-center rounded-2xl border border-red-500/20 bg-red-500/[0.04] px-6 py-12 text-center ${className}`}>
       <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-500/10 text-red-400">
         <AlertTriangle className="h-6 w-6" />
       </div>
@@ -28,6 +38,7 @@ export function ErrorState({ title = "Something went wrong", description, error,
       )}
       {onRetry && (
         <button
+          type="button"
           onClick={onRetry}
           className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[#6C63FF] px-4 py-2 text-sm font-medium text-white hover:bg-[#5b52e8]"
         >

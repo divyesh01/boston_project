@@ -47,8 +47,11 @@ export default function RoomBoard() {
   const { data: rooms = [], isLoading: roomsLoading } = roomsQ;
   const { data: stays = [] } = staysQ;
   const { data: tasks = [] } = tasksQ;
-  const { data: reservations = [], isLoading: reservationsLoading } = useReservations(dateRange, property);
-  const { data: weatherSnapshots = [] } = useWeatherSnapshots(property);
+  const reservationsQ = useReservations(dateRange, property);
+  const weatherQ = useWeatherSnapshots(property);
+  const { data: reservations = [], isLoading: reservationsLoading } = reservationsQ;
+  const { data: weatherSnapshots = [] } = weatherQ;
+  const pricingEvidenceReady = reservationsQ.isSuccess && weatherQ.isSuccess;
 
   const [newGuest, setNewGuest] = useState("");
   const [newRoom, setNewRoom] = useState("");
@@ -78,7 +81,7 @@ export default function RoomBoard() {
   const pricingEnabled = singlePropertyId != null && isPricingEnabled(singlePropertyId);
   const pricingConfig = getPricingConfig(singlePropertyId ?? "*");
   const suggestedForRoom = useMemo(() => {
-    if (!pricingEnabled || !newRoom || !boardDate) return null;
+    if (!pricingEnabled || !pricingEvidenceReady || !newRoom || !boardDate) return null;
     const room = rooms.find((r) => String(r.property_id) === String(singlePropertyId) && String(r.room_number) === String(newRoom));
     if (!room) return null;
     const weatherByDate = {};
@@ -90,12 +93,12 @@ export default function RoomBoard() {
     return suggestedRateForDate({
       roomType: room.room_type, date: boardDate, occupancy: occ, reservations, rooms, weatherByDate, config: pricingConfig, rateBounds: getEnterpriseConfig(singlePropertyId, boardDate, selectedProperty),
     });
-  }, [pricingEnabled, singlePropertyId, selectedProperty, newRoom, boardDate, rooms, reservations, weatherSnapshots, pricingConfig]);
+  }, [pricingEnabled, pricingEvidenceReady, singlePropertyId, selectedProperty, newRoom, boardDate, rooms, reservations, weatherSnapshots, pricingConfig]);
 
   // Recommended rate per room type for the selected board date — shown as a
   // "Suggested" badge on vacant tiles.
   const recommendedByType = useMemo(() => {
-    if (!pricingEnabled || !boardDate) return {};
+    if (!pricingEnabled || !pricingEvidenceReady || !boardDate) return {};
     const weatherByDate = {};
     for (const s of weatherSnapshots || []) {
       const d = String(s.date || "").slice(0, 10);
@@ -107,7 +110,7 @@ export default function RoomBoard() {
       out[type] = suggestedRateForDate({ roomType: type, date: boardDate, occupancy: occ, reservations, rooms, weatherByDate, config: pricingConfig, rateBounds: getEnterpriseConfig(singlePropertyId, boardDate, selectedProperty) });
     }
     return out;
-  }, [pricingEnabled, singlePropertyId, selectedProperty, boardDate, rooms, reservations, weatherSnapshots, pricingConfig]);
+  }, [pricingEnabled, pricingEvidenceReady, singlePropertyId, selectedProperty, boardDate, rooms, reservations, weatherSnapshots, pricingConfig]);
 
   const inventory = inventoryInScope(property, properties);
   const propName = isPortfolio
@@ -281,7 +284,7 @@ export default function RoomBoard() {
         </header>
         <ErrorState
           title="Could not load the room board"
-          description="Do not sell rooms off this screen. The read failed, and the board it used to draw showed every room clean and empty with nobody checked in — a front desk reading that would sell rooms that already have a guest in them."
+          description="Room availability is unavailable until inventory, stays and housekeeping data load. Retry before assigning a room."
           error={roomsQ.error || staysQ.error || tasksQ.error || occQ.error}
           onRetry={() => { roomsQ.refetch(); staysQ.refetch(); tasksQ.refetch(); occQ.refetch(); }}
         />
@@ -321,7 +324,7 @@ export default function RoomBoard() {
             <input
               type="date"
               value={boardDate}
-              onChange={(e) => setBoardDate(e.target.value)}
+              onChange={(e) => { if (e.target.value) setBoardDate(e.target.value); }}
               className="rounded-lg border border-white/10 bg-[#0A1628] px-2 py-1 text-xs text-white"
             />
           </label>
@@ -407,14 +410,14 @@ export default function RoomBoard() {
                     </p>
                   )}
                   {!isPortfolio && (
-                    <div className="mt-1.5 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                    <div className="mt-1.5 flex flex-wrap gap-1">
                       {["available", "dirty", "out_of_service"].map((st) => (
                         <button
                           key={st}
                           onClick={() => handleRoomState(t.roomId || t.id, st)}
                           className="flex-1 rounded bg-white/10 px-1 py-0.5 text-[9px] text-slate-300 hover:bg-white/20"
                         >
-                          {st === "out_of_service" ? "OOS" : st[0].toUpperCase()}
+                          {st === "out_of_service" ? "Out of service" : st === "available" ? "Clean" : "Dirty"}
                         </button>
                       ))}
                     </div>
@@ -542,6 +545,7 @@ export default function RoomBoard() {
                 <span className="text-slate-500"> · occ {Math.round(suggestedForRoom.occupancy * 100)}% → {Math.round((suggestedForRoom.multiplierBps / 10000) * 100)}× base</span>
               </div>
             )}
+            {pricingEnabled && !pricingEvidenceReady && <span className="text-amber-300">Suggested rate unavailable until reservation and weather evidence loads.</span>}
           </label>
           <button
             type="submit"

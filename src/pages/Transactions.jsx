@@ -20,7 +20,7 @@ import LedgerStrip from "@/components/transactions/LedgerStrip";
 import EmployeeCompare from "@/components/transactions/EmployeeCompare";
 import CommissionsPanel from "@/components/transactions/CommissionsPanel";
 import LedgerTable from "@/components/transactions/LedgerTable";
-import { ErrorState } from "@/components/ui/status";
+import { ErrorState, LoadingState } from "@/components/ui/status";
 import { propertyDisplayName } from "@/lib/propertyRecordIdentity";
 
 const tip = { background: "#0A1628", border: "1px solid #ffffff14", borderRadius: 12, color: "#e2e8f0" };
@@ -67,7 +67,8 @@ export default function Transactions() {
   const [includeSystem, setIncludeSystem] = useState(false);
 
   const { data: rows = [], isLoading, isError, error, refetch } = useTransactions(dateRange, property, months);
-  const { data: sources = [] } = useSources(dateRange, property, months);
+  const sourcesQ = useSources(dateRange, property, months);
+  const { data: sources = [] } = sourcesQ;
 
   // Belt and braces: the query may be served from a cache built for a wider
   // range, so re-filter to exactly what the control bar is asking for.
@@ -387,7 +388,7 @@ export default function Transactions() {
 
       {tab === "compare" && <EmployeeCompare rows={scoped} grain="monthly" />}
 
-      {tab === "commissions" && <CommissionsPanel rows={scoped} sourceRows={sources} dateRange={dateRange} />}
+      {tab === "commissions" && (sourcesQ.isPending ? <LoadingState title="Loading channel commission evidence" /> : sourcesQ.isError ? <ErrorState title="Channel commission evidence is unavailable" description="Cost of sale cannot be calculated until source reports load." error={sourcesQ.error} onRetry={sourcesQ.refetch} /> : <CommissionsPanel rows={scoped} sourceRows={sources} dateRange={dateRange} />)}
 
       {tab === "ledger" && (
         <>

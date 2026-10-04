@@ -39,12 +39,17 @@ import {
   monthLabel,
 } from "@/lib/payrollCalc";
 
+function localEntryDate() {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 const EMPTY_RUN = {
   employee_name: "", department: "", pay_type: "hourly",
   base_rate: "", hours: "40", overtime_hours: "0", overtime_rate: "",
   bonus: "0", deductions: "0",
-  pay_period_start: new Date().toISOString().slice(0, 10),
-  pay_period_end: new Date().toISOString().slice(0, 10),
+  pay_period_start: localEntryDate(),
+  pay_period_end: localEntryDate(),
 };
 
 const EMPTY_STAFF = {
@@ -312,10 +317,12 @@ function PropertyPayroll() {
       });
 
       await db.entities.PayrollRun.create(record);
+      invalidateMoney();
 
       // Optionally add them to the directory so the monthly engine picks them
       // up from here on, instead of the owner re-entering the amount forever.
       if (quickForm.saveToStaff && !existingStaff) {
+        try {
         // Reserved, not derived: the id is persisted before use so a deleted
         // employee's id can never be handed to this new hire (see employeeId.js).
         const reservedId = await reserveEmployeeId(name, staff);
@@ -335,6 +342,11 @@ function PropertyPayroll() {
           property_name: propertyName,
         });
         qc.invalidateQueries({ queryKey: ["staff"] });
+        } catch (error) {
+          toast.warning("Payroll saved, but the staff directory was not updated.", {
+            description: `Add the staff member from the directory. Do not re-enter this payroll payment. ${error?.message || error}`,
+          });
+        }
       }
 
       try {
@@ -391,9 +403,16 @@ function PropertyPayroll() {
   };
 
   const handleToggleStaff = async (id, active) => {
-    await db.entities.Staff.update(id, { active: active !== false ? false : true });
-    sfx.pop();
-    qc.invalidateQueries({ queryKey: ["staff"] });
+    if (running) return;
+    setRunning(true);
+    try {
+      await db.entities.Staff.update(id, { active: active === false });
+      sfx.pop();
+      await qc.invalidateQueries({ queryKey: ["staff"] });
+      toast.success("Staff status saved.");
+    } catch (error) {
+      toast.error(`Staff status was not saved: ${error?.message || error}. Please try again.`);
+    } finally { setRunning(false); }
   };
 
   const handleDeleteStaff = async (s) => {

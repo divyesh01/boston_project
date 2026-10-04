@@ -297,7 +297,7 @@ export function formatDayLabel(dateStr, opts = { weekday: "long", month: "long",
 export function aggregate(rows, groupKey, valueKey, agg) {
   const map = new Map();
   (rows || []).forEach((r) => {
-    const k = r[groupKey] === undefined || r[groupKey] === null || r[groupKey] === "" ? "(blank)" : String(r[groupKey]).slice(0, 40);
+    const k = r[groupKey] === undefined || r[groupKey] === null || r[groupKey] === "" ? "(blank)" : String(r[groupKey]);
     const v = toCents(r[valueKey]);
     if (!map.has(k)) map.set(k, []);
     map.get(k).push(v);

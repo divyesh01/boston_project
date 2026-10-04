@@ -212,32 +212,27 @@ export default function DataTemplate() {
         const isOpen = expanded === spec.key;
         return (
           <Card key={spec.key}>
-            <button
-              onClick={() => setExpanded(isOpen ? null : spec.key)}
-              className="flex w-full items-center justify-between"
-            >
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ background: `${spec.color}15` }}>
-                  <Icon className="h-5 w-5" style={{ color: spec.color }} />
+            <div className="flex flex-wrap items-center gap-3">
+              <button type="button" aria-expanded={isOpen} aria-controls={`template-${spec.key}`}
+                onClick={() => setExpanded(isOpen ? null : spec.key)}
+                className="flex min-h-11 min-w-0 flex-1 items-center gap-3 text-left">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl" style={{ background: `${spec.color}15` }}>
+                  <Icon aria-hidden="true" className="h-5 w-5" style={{ color: spec.color }} />
                 </div>
-                <div className="text-left">
+                <div className="min-w-0">
                   <h3 className="font-heading text-sm font-semibold text-white">{spec.title}</h3>
                   <p className="text-xs text-slate-400">{spec.description}</p>
+                  <p className="mt-1 text-xs text-slate-400">{spec.fields.length} fields - {isOpen ? "Hide" : "Show"} details</p>
                 </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="text-xs text-slate-500">{spec.fields.length} fields</span>
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleDownload(spec); }}
-                  className="flex items-center gap-1 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs text-slate-300 hover:border-[#00D4FF]/30"
-                >
-                  <Download className="h-3 w-3" /> CSV
-                </button>
-              </div>
-            </button>
+              </button>
+              <button type="button" aria-label={`Download ${spec.title} CSV template`} onClick={() => handleDownload(spec)}
+                className="flex min-h-11 items-center gap-1 rounded-lg border border-white/10 px-3 text-xs text-slate-300 hover:border-[#00D4FF]/30">
+                <Download aria-hidden="true" className="h-3 w-3" /> CSV
+              </button>
+            </div>
 
             {isOpen && (
-              <div className="mt-4 overflow-x-auto">
+              <div id={`template-${spec.key}`} className="mt-4 overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-[11px] uppercase tracking-widest text-slate-500">

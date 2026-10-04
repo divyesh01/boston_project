@@ -58,10 +58,10 @@ export default function Dashboard() {
   // them — the materialized aggregate drives the initial paint.
   const { data: occ = [], isLoading, isError: occError, error: occErrorObj, refetch: refOcc } = useOccupancy(dateRange, property, months);
   const { data: prevOcc = [] } = useOccupancy(compareOn ? compareDateRange : { from: "", to: "" }, property, compareOn ? compareMonths : [], compareOn);
-  const { data: sources = [], refetch: refSrc } = useSources(dateRange, property, months);
-  const { data: clerk = [], refetch: refClerk } = useClerkRecords(dateRange, property);
-  const { data: gross = [], isError: grossError, error: grossErrorObj, refetch: refGross } = useGrossRevenue(dateRange, property, months);
-  const { data: payRows = [] } = usePaymentData(dateRange, property, months);
+  const { data: sources = [], isLoading: sourcesLoading, isError: sourcesError, error: sourcesErrorObj, refetch: refSrc } = useSources(dateRange, property, months);
+  const { data: clerk = [], isLoading: clerkLoading, isError: clerkError, error: clerkErrorObj, refetch: refClerk } = useClerkRecords(dateRange, property);
+  const { data: gross = [], isLoading: grossLoading, isError: grossError, error: grossErrorObj, refetch: refGross } = useGrossRevenue(dateRange, property, months);
+  const { data: payRows = [], isLoading: paymentsLoading, isError: paymentsError, error: paymentsErrorObj, refetch: refPayments } = usePaymentData(dateRange, property, months);
 
   // Materialized daily aggregates (rebuilt on every import). When present, the
   // headline metrics, charts and owner-intelligence panels read a few hundred
@@ -76,12 +76,12 @@ export default function Dashboard() {
     ? (Array.isArray(property) ? { property_id: { $in: property } } : { property_id: property })
     : {};
   
-  const { data: expenses = [], isError: expensesError, error: expensesErrorObj, refetch: refExpenses } = useQuery({
+  const { data: expenses = [], isLoading: expensesLoading, isError: expensesError, error: expensesErrorObj, refetch: refExpenses } = useQuery({
     queryKey: ["expenses", propertyKey],
     queryFn: () => db.entities.Expense.filter(propFilter, "-expense_date", 100000),
   });
 
-  const { data: payroll = [], isError: payrollError, error: payrollErrorObj, refetch: refPayroll } = useQuery({
+  const { data: payroll = [], isLoading: payrollLoading, isError: payrollError, error: payrollErrorObj, refetch: refPayroll } = useQuery({
     queryKey: ["payroll", propertyKey],
     queryFn: () => db.entities.PayrollRun.filter(propFilter, "-pay_period_start", 100000),
   });
@@ -148,7 +148,7 @@ export default function Dashboard() {
   }, [clerk, employee, paymentType]);
 
   const handleRefresh = async () => {
-    await Promise.all([refOcc(), refSrc(), refClerk(), refGross(), refExpenses(), refPayroll()]);
+    await Promise.all([refOcc(), refSrc(), refClerk(), refGross(), refExpenses(), refPayroll(), refPayments(), agg.refetch()]);
   };
   const { pullDist, refreshing } = usePullToRefresh(handleRefresh);
 
@@ -443,8 +443,7 @@ export default function Dashboard() {
   // finish in the background (they only feed the secondary trend alerts). When
   // the cache is empty (nothing imported yet) we fall back to waiting for the
   // live ledgers — the original behaviour.
-  const initialLoading = (aggData ? false : isLoading) || agg.isLoading;
-  if (initialLoading) return <p className="text-slate-500">Loading executive data…</p>;
+  const initialLoading = (!aggData && (isLoading || sourcesLoading || grossLoading || paymentsLoading)) || agg.isLoading || expensesLoading || payrollLoading || clerkLoading;
 
   // Every KPI card on this page sums an array. An empty array sums to 0, so a failed
   // read renders a complete, confident dashboard reading $0 revenue and 0% occupancy —
@@ -454,7 +453,7 @@ export default function Dashboard() {
   // failure React Query leaves them [], so the card would silently book zero costs
   // and overstate profit with no error shown. isError (not empty) gates it, so a
   // hotel that genuinely has no expenses/payroll yet is unaffected.
-  const dashboardError = agg.isError ? agg.error : occError ? occErrorObj : grossError ? grossErrorObj : expensesError ? expensesErrorObj : payrollError ? payrollErrorObj : null;
+  const dashboardError = agg.isError ? agg.error : occError ? occErrorObj : grossError ? grossErrorObj : expensesError ? expensesErrorObj : payrollError ? payrollErrorObj : clerkError ? clerkErrorObj : !aggData && sourcesError ? sourcesErrorObj : !aggData && paymentsError ? paymentsErrorObj : null;
   if (dashboardError) {
     return (
       <ErrorState
@@ -465,6 +464,8 @@ export default function Dashboard() {
       />
     );
   }
+
+  if (initialLoading) return <p role="status" className="text-slate-400">Loading complete executive data...</p>;
 
   return (
     <div className="space-y-6">

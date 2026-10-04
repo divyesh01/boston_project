@@ -187,7 +187,7 @@ export default function Housekeeping() {
         </header>
         <ErrorState
           title="Could not load the housekeeping board"
-          description="This read failed, so zeros and an empty task queue would not mean the work is done. Do not release rooms as clean or send a housekeeper home on the strength of this screen — dirty rooms and overdue tasks may still be outstanding."
+          description="Room readiness and tasks are unavailable. Retry before marking rooms ready or changing assignments."
           error={roomsQ.error || tasksQ.error}
           onRetry={() => { roomsQ.refetch(); tasksQ.refetch(); }}
         />

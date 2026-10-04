@@ -21,7 +21,7 @@ export const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Se
 export const MONTHS_LONG = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
 export const PAGE_FILTERS = {
-  "/": { employee: true, paymentType: true, channel: true, reportType: true },
+  "/": { employee: true, paymentType: true, channel: true },
   "/action-center": { channel: true },
   "/compare": { channel: true },
   "/rooms": {},
@@ -35,13 +35,13 @@ export const PAGE_FILTERS = {
   // The ledger page has its own account picker: the global employee dropdown is
   // built from ClerkShiftRecord.clerk_name, which never matches the PMS
   // usernames on TransactionLine, so offering it here would filter to nothing.
-  "/transactions": { paymentType: true },
+  "/transactions": {},
   // Statistics reads whole PMS snapshots, and every metric in one is already
   // aggregated by the PMS. There is no per-employee or per-channel dimension to
   // slice on, so only the date range and property apply — both of which live
   // outside this map and always show.
   "/statistics": {},
-  "/charts": { channel: true, reportType: true },
+  "/charts": {},
   // The OTA page manages commission RATES and compares every channel against
   // the others; filtering to a single channel would hide the comparison that is
   // the point of the page. It never read the global `channel` value, so the
@@ -94,11 +94,12 @@ function computeRange(period, year, month, latestDate, customFrom, customTo, anc
 
   if (period === "ytd") {
     const from = iso(y, 0, 1);
-    let to;
-    if (y >= (anchorDate ? today.getUTCFullYear() : today.getFullYear())) {
-      to = latestDate || iso((anchorDate ? today.getUTCFullYear() : today.getFullYear()), (anchorDate ? today.getUTCMonth() : today.getMonth()), (anchorDate ? today.getUTCDate() : today.getDate()));
-    } else {
-      to = iso(y, 11, 31);
+    const currentYear = anchorDate ? today.getUTCFullYear() : today.getFullYear();
+    let to = iso(y, 11, 31);
+    if (y === currentYear) {
+      const todayDate = anchorDate || iso(y, today.getMonth(), today.getDate());
+      to = latestDate && String(latestDate).startsWith(`${y}-`) && latestDate <= todayDate
+        ? latestDate : todayDate;
     }
     return { from, to };
   }

@@ -19,9 +19,9 @@ const PIE_HEIGHT_CLASS = "h-[520px]";
 const CARTESIAN_HEIGHT_CLASS = "h-96";
 
 /**
- * @param {{ data?: any[]; type?: string; heightClass?: string }} props
+ * @param {{ data?: any[]; type?: string; heightClass?: string; formatter?: (value: any) => string }} props
  */
-export default function UniversalChart({ data = [], type, heightClass = "" }) {
+export default function UniversalChart({ data = [], type, heightClass = "", formatter = money2 }) {
   const reduceMotion = useReducedMotion();
   if (!data.length) return <p className="text-sm text-slate-500">No data for this selection.</p>;
   const top = data.slice(0, 25);
@@ -47,12 +47,14 @@ export default function UniversalChart({ data = [], type, heightClass = "" }) {
   if (isPie) {
     return (
       <div className={box}>
-        <PieDonut data={top} type={type} height="100%" formatter={money2} maxSlices={25} />
+        <PieDonut data={data} type={type} height="100%" formatter={formatter} maxSlices={25} />
       </div>
     );
   }
 
   return (
+    <div>
+    {data.length > top.length && <p className="mb-2 text-xs text-slate-400">Showing the first {top.length} of {data.length} groups. The summary and exports include all groups.</p>}
     <div className={box}>
       <ResponsiveContainer width="100%" height="100%">
         {type === "hbar" ? (
@@ -60,7 +62,7 @@ export default function UniversalChart({ data = [], type, heightClass = "" }) {
             <CartesianGrid stroke="#ffffff0a" horizontal={false} />
             <XAxis type="number" tick={axis} stroke="#ffffff10" />
             <YAxis type="category" dataKey="name" tick={axis} width={130} stroke="#ffffff10" />
-            <Tooltip contentStyle={tip} />
+            <Tooltip contentStyle={tip} formatter={(value) => formatter(value)} />
             <Bar dataKey="value" fill={C.cyan} radius={[0, 6, 6, 0]} {...anim} />
           </BarChart>
         ) : type === "line" ? (
@@ -74,7 +76,7 @@ export default function UniversalChart({ data = [], type, heightClass = "" }) {
             <CartesianGrid stroke="#ffffff0a" vertical={false} />
             <XAxis dataKey="name" tick={axis} stroke="#ffffff10" />
             <YAxis tick={axis} stroke="#ffffff10" />
-            <Tooltip contentStyle={tip} />
+            <Tooltip contentStyle={tip} formatter={(value) => formatter(value)} />
             <Area type="monotone" dataKey="value" stroke={C.green} strokeWidth={2} fill="url(#uGrad)" {...anim} />
           </AreaChart>
         ) : (
@@ -82,11 +84,12 @@ export default function UniversalChart({ data = [], type, heightClass = "" }) {
             <CartesianGrid stroke="#ffffff0a" vertical={false} />
             <XAxis dataKey="name" tick={axis} stroke="#ffffff10" interval={0} angle={-25} textAnchor="end" height={70} />
             <YAxis tick={axis} stroke="#ffffff10" />
-            <Tooltip contentStyle={tip} />
+            <Tooltip contentStyle={tip} formatter={(value) => formatter(value)} />
             <Bar dataKey="value" fill={C.purple} radius={[6, 6, 0, 0]} {...anim} />
           </BarChart>
         )}
       </ResponsiveContainer>
+    </div>
     </div>
   );
 }

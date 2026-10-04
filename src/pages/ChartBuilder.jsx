@@ -11,7 +11,7 @@ import { downloadCsv, downloadExcel, stampFilename } from "@/lib/exportData";
 import { toast } from "@/components/ui/use-toast";
 import { formatNumber } from "@/lib/decimal";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
-import { ErrorState } from "@/components/ui/status";
+import { ErrorState, LoadingState } from "@/components/ui/status";
 
 const CHARTS = [
   ["bar", "📊 Bar"],
@@ -23,8 +23,8 @@ const CHARTS = [
 const AGGS = [["sum", "Sum"], ["avg", "Average"], ["count", "Count"], ["max", "Maximum"], ["min", "Minimum"]];
 const HIDDEN = ["id", "created_by_id", "created_date", "updated_date", "created_by", "is_sample"];
 
-const Select = ({ value, onChange, options }) => (
-  <ResponsiveSelect value={value} onValueChange={onChange} options={options} />
+const Select = ({ value, onChange, options, label, disabled = false }) => (
+  <ResponsiveSelect value={value} onValueChange={onChange} options={options} label={label} disabled={disabled} />
 );
 
 export default function ChartBuilder() {
@@ -53,7 +53,11 @@ export default function ChartBuilder() {
   const [dsKey, setDsKey] = useState("src");
   const ds = datasets.find((d) => d.key === dsKey) || datasets[0];
   const rows = ds?.rows || [];
-  const columns = rows.length ? Object.keys(rows[0]).filter((k) => !HIDDEN.includes(k)) : [];
+  const columns = useMemo(() => [...new Set(rows.flatMap((row) => Object.keys(row)))].filter((key) => !HIDDEN.includes(key)), [rows]);
+  const numericColumns = useMemo(() => columns.filter((key) => rows.some((row) => {
+    const value = row[key];
+    return value !== null && value !== undefined && String(value).trim() !== "" && typeof value !== "boolean" && Number.isFinite(Number(value));
+  })), [columns, rows]);
   const hasDate = columns.includes("date");
 
   const [groupBy, setGroupBy] = useState("source");
@@ -69,14 +73,14 @@ export default function ChartBuilder() {
 
   const cols = columns.length ? columns : [];
   const g = cols.includes(groupBy) ? groupBy : cols[0];
-  const v = cols.includes(valueKey) ? valueKey : cols[cols.length - 1];
-  const data = useMemo(() => (filteredRows.length && g && v ? aggregate(filteredRows, g, v, agg) : []), [filteredRows, g, v, agg]);
+  const v = numericColumns.includes(valueKey) ? valueKey : numericColumns[0];
+  const data = useMemo(() => (filteredRows.length && g && (agg === "count" || v) ? aggregate(filteredRows, g, v, agg) : []), [filteredRows, g, v, agg]);
 
   const dateRangeText = hasDate && dateRange.from && dateRange.to
     ? `Showing ${format(parseISO(dateRange.from), "MMM d")} – ${format(parseISO(dateRange.to), "MMM d, yyyy")} (${filteredRows.length} rows)`
     : "All data";
 
-  const chartTitle = `${agg.toUpperCase()} of ${v} by ${g}`;
+  const chartTitle = `${agg.toUpperCase()} of ${agg === "count" ? "rows" : (v || "numeric values")} by ${g || "group"}`;
 
   // The two export buttons used to pass hotel.js's raw `{name, value}` rows straight
   // out, which produced a file headed `name,value` — the owner then had to remember
@@ -99,7 +103,7 @@ export default function ChartBuilder() {
         filename: stampFilename(`chart_${agg}_${v}_by_${g}`, isExcel ? "xlsx" : "csv"),
         columns: [
           { key: "name", label: g || "Group" },
-          { key: "value", label: `${agg} (${v || "value"})` },
+          { key: "value", label: agg === "count" ? "Count (rows)" : `${agg} (${v || "value"})` },
         ],
         sheetName: chartTitle,
       });
@@ -118,12 +122,17 @@ export default function ChartBuilder() {
     }
   };
 
+  const datasetReads = [occQ, srcQ, grossQ, uploadsQ];
+  const datasetFailure = datasetReads.find((query) => query.isError);
+  if (datasetFailure) return <ErrorState title="Could not load chart datasets" description="Retry to load the source data before creating a chart." error={datasetFailure.error} onRetry={() => datasetReads.forEach((query) => query.refetch())} />;
+  if (datasetReads.some((query) => query.isLoading)) return <LoadingState title="Loading chart datasets..." />;
+
   return (
     <div className="space-y-6">
       <header>
         <p className="text-[11px] uppercase tracking-[0.3em] text-[#00D4FF]">Module 5</p>
         <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Universal Chart Builder</h1>
-        <p className="mt-1 text-sm text-slate-400">Pick any column for grouping and any column for values.</p>
+        <p className="mt-1 text-sm text-slate-400">Group by any column, then choose a numeric value or count rows.</p>
       </header>
 
       {/* Without this, a failed read still populated the dataset dropdown but drew an
@@ -141,23 +150,23 @@ export default function ChartBuilder() {
       <div className="grid gap-4 rounded-2xl border border-white/5 bg-[#0F1F35]/60 p-5 sm:grid-cols-2 xl:grid-cols-5">
         <div>
           <label className="mb-1.5 block text-[11px] uppercase tracking-widest text-slate-400">Dataset</label>
-          <Select value={dsKey} onChange={setDsKey} options={datasets.map((d) => [d.key, d.label])} />
+          <Select label="Dataset" value={ds?.key || ""} onChange={setDsKey} options={datasets.map((d) => [d.key, d.label])} />
         </div>
         <div>
           <label className="mb-1.5 block text-[11px] uppercase tracking-widest text-slate-400">Group by (X)</label>
-          <Select value={g || ""} onChange={setGroupBy} options={columns.map((c) => [c, c])} />
+          <Select label="Group by" value={g || ""} onChange={setGroupBy} options={columns.map((c) => [c, c])} />
         </div>
         <div>
           <label className="mb-1.5 block text-[11px] uppercase tracking-widest text-slate-400">Value (Y)</label>
-          <Select value={v || ""} onChange={setValueKey} options={columns.map((c) => [c, c])} />
+          <Select label="Numeric value" disabled={agg === "count"} value={v || ""} onChange={setValueKey} options={numericColumns.map((c) => [c, c])} />
         </div>
         <div>
           <label className="mb-1.5 block text-[11px] uppercase tracking-widest text-slate-400">Aggregation</label>
-          <Select value={agg} onChange={setAgg} options={AGGS} />
+          <Select label="Aggregation" value={agg} onChange={setAgg} options={AGGS} />
         </div>
         <div>
           <label className="mb-1.5 block text-[11px] uppercase tracking-widest text-slate-400">Chart type</label>
-          <Select value={type} onChange={setType} options={CHARTS} />
+          <Select label="Chart type" value={type} onChange={setType} options={CHARTS} />
         </div>
       </div>
 
@@ -167,7 +176,7 @@ export default function ChartBuilder() {
         right={<ChartToolbar targetRef={chartRef} title={chartTitle} dateRange={dateRangeText} />}
       >
         <div ref={chartRef}>
-          <UniversalChart data={data} type={type} />
+          <UniversalChart data={data} type={type} formatter={(value) => formatNumber(value, "auto")} />
         </div>
         <p className="mt-3 text-xs text-slate-500">{dateRangeText}</p>
       </Card>
@@ -196,7 +205,7 @@ export default function ChartBuilder() {
             <thead className="sticky top-0 bg-[#0F1F35] text-left text-[11px] uppercase tracking-widest text-slate-500">
               <tr>
                 <th className="py-2">{g}</th>
-                <th className="py-2 text-right">{`${agg} (${v})`}</th>
+                <th className="py-2 text-right">{agg === "count" ? "Count (rows)" : `${agg} (${v || "value"})`}</th>
               </tr>
             </thead>
             <tbody>

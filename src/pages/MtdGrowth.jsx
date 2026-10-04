@@ -11,7 +11,7 @@ import {
   money, money2, num, pct, sum, inRange, C, occupancyStats,
   grossRevenueForPeriod, isoEpochDay, epochDayToIso,
 } from "@/lib/hotel";
-import { ErrorState } from "@/components/ui/status";
+import { ErrorState, LoadingState } from "@/components/ui/status";
 
 const METRICS = [
   // `derived` means the value is assembled from two ledgers by
@@ -201,55 +201,39 @@ export default function MtdGrowth() {
     return { rev, adrM, revparM, occM, best, worst, sentence };
   }, [comparisons, compareOn]);
 
-  const chartData = useMemo(() => {
+  const dailyComparison = useMemo(() => {
     const map = new Map();
-    curElapsed.forEach((r) => {
-      const d = String(r.date).slice(5);
-      if (!map.has(d)) map.set(d, { date: d, current: 0, previous: 0 });
-      map.get(d).current += Number(r.room_revenue || 0);
-    });
-    prevElapsed.forEach((r) => {
-      const d = String(r.date).slice(5);
-      if (!map.has(d)) map.set(d, { date: d, current: 0, previous: 0 });
-      map.get(d).previous += Number(r.room_revenue || 0);
-    });
-    return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
-  }, [curElapsed, prevElapsed]);
-
-  const occChart = useMemo(() => {
-    const map = new Map();
-    curElapsed.forEach((r) => {
-      const d = String(r.date).slice(5);
-      if (!map.has(d)) map.set(d, { date: d, current: 0, previous: 0 });
-      map.get(d).current = (r.occupancy || 0) > 1 ? r.occupancy / 100 : (r.occupancy || 0);
-    });
-    prevElapsed.forEach((r) => {
-      const d = String(r.date).slice(5);
-      if (!map.has(d)) map.set(d, { date: d, current: 0, previous: 0 });
-      map.get(d).previous = (r.occupancy || 0) > 1 ? r.occupancy / 100 : (r.occupancy || 0);
-    });
-    return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
-  }, [curElapsed, prevElapsed]);
-
-  // Per-day ADR / RevPAR (rate metrics) for trend charts. Each day is computed
-  // from a single-row occupancyStats so capacity is portfolio-safe, matching the
-  // weighted logic used by the metric cards above.
-  const buildRateChart = (key) => {
-    const map = new Map();
-    const pushSide = (rows, side) => {
-      rows.forEach((r) => {
-        const d = String(r.date).slice(5);
-        if (!map.has(d)) map.set(d, { date: d, current: 0, previous: 0 });
-        map.get(d)[side] = occupancyStats([r], properties)[key];
+    const addSide = (rows, side, start) => {
+      const groups = new Map();
+      rows.forEach((row) => {
+        const date = String(row.date).slice(0, 10);
+        if (!groups.has(date)) groups.set(date, []);
+        groups.get(date).push(row);
+      });
+      groups.forEach((dayRows, date) => {
+        const day = isoEpochDay(date) - isoEpochDay(start) + 1;
+        if (!Number.isFinite(day) || day < 1) return;
+        if (!map.has(day)) map.set(day, { day, date: `Day ${day}`, current: null, previous: null });
+        map.get(day)[side] = occupancyStats(dayRows, properties);
       });
     };
-    pushSide(curElapsed, "current");
-    pushSide(prevElapsed, "previous");
-    return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
-  };
-
-  const adrChart = useMemo(() => buildRateChart("adr"), [curElapsed, prevElapsed, properties]);
-  const revparChart = useMemo(() => buildRateChart("revpar"), [curElapsed, prevElapsed, properties]);
+    addSide(curElapsed, "current", dateRange.from);
+    if (compareOn) addSide(prevElapsed, "previous", compareDateRange.from);
+    return [...map.values()].sort((a, b) => a.day - b.day);
+  }, [curElapsed, prevElapsed, properties, dateRange.from, compareDateRange.from, compareOn]);
+  const metricChart = (key) => dailyComparison.map((day) => ({
+    date: day.date,
+    current: day.current?.[key] ?? null,
+    previous: day.previous?.[key] ?? null,
+  }));
+  const chartData = metricChart("revenue");
+  const occChart = metricChart("occupancy");
+  const adrChart = metricChart("adr");
+  const revparChart = metricChart("revpar");
+  const reads = [occQ, grossQ, ...(compareOn ? [prevOccQ, prevGrossQ] : [])];
+  const failedRead = reads.find((query) => query.isError);
+  if (failedRead) return <ErrorState title="Could not load growth data" description="Growth figures are unavailable until the selected periods load." error={failedRead.error} onRetry={() => reads.forEach((query) => query.refetch())} />;
+  if (reads.some((query) => query.isLoading)) return <LoadingState title="Loading growth data..." />;
 
   return (
     <div className="space-y-6">
@@ -259,8 +243,8 @@ export default function MtdGrowth() {
         <p className="relative text-[11px] uppercase tracking-[0.3em] text-[#00D4FF]">Period Analysis</p>
         <h1 className="relative mt-2 font-heading text-3xl font-semibold text-white">MTD Growth</h1>
         <p className="relative mt-1 text-sm text-slate-400">
-          Current: {dateRange.from || "—"} → {dateRange.to || "—"} · {curElapsed.length} days
-          {compareOn && <> · vs Previous: {prevWindow?.from || "—"} → {prevWindow?.to || "—"} · {prevElapsed.length} days</>}
+          Current: {dateRange.from || "—"} → {dateRange.to || "—"} · {new Set(curElapsed.map((r) => String(r.date).slice(0, 10))).size} days
+          {compareOn && <> · vs Previous: {prevWindow?.from || "—"} → {prevWindow?.to || "—"} · {new Set(prevElapsed.map((r) => String(r.date).slice(0, 10))).size} days</>}
         </p>
       </header>
 

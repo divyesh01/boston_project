@@ -903,3 +903,21 @@ When uploading or resuming reports that overlap an active analytical period for 
 6. **Empty Property Selection in Local Page Queries**:
    - Payroll payroll/occupancy queries, Expenses expense/payroll queries, and Forecasting's shared page filter preserve an explicit empty array as `property_id: { $in: [] }`. Single selections, nonempty arrays, legacy `all`/undefined behavior, date constraints, and Staff filtering stay unchanged.
    - `src/pages/portfolioQuery.test.js` executes current page query functions against the unchanged local facade with synthetic owner/restricted identities and in-memory IndexedDB. This is client query coverage; normal authenticated browser/server acceptance remains separate.
+
+
+## Cross-site UX production integration (October 4, 2026)
+
+The production integration applies the cross-site UX patch onto the current-main-based
+owner reporting candidate. It preserves lazy startup and the current enterprise/property
+contracts while adding mobile all-pages navigation, accessible bounded dialogs, date
+controls, complete loading/error states, duplicate-save guards, truthful missing values,
+and clearer export/account actions. Command menu changes live in
+`src/components/CommandMenuDialog.jsx`; weather resolves a single selected property
+through the existing property selection helper.
+
+The owner reported verification complete and authorized release. The exact integrated
+source is newly assembled; that statement is not an independent acceptance result for
+the combined source. See `ANTIGRAVITY_UI_UX_HANDOFF.md` for changed-file inventory,
+commands, expected behavior and remaining runtime risks. Broad tests and browser
+acceptance remain delegated to Antigravity. Packaging/deployment outcomes are recorded
+in `docs/production-ui-release-2026-10-04.md`.

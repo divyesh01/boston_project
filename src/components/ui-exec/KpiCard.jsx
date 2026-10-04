@@ -55,6 +55,12 @@ export default function KpiCard(
       onClick={onClick}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onClick();
+        }
+      } : undefined}
       className={cn(
         "fx-enter group relative overflow-hidden rounded-2xl p-5",
         onClick && "cursor-pointer hover:border-[var(--brand)]/50",

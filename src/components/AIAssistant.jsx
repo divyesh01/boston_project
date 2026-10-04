@@ -35,6 +35,18 @@ export default function AIAssistant() {
   // runs only AFTER the awaited rate-limiter check, so two fast presses both read
   // loading===false and fire concurrent invokes. A ref flips synchronously.
   const busyRef = useRef(false);
+  const contextGeneration = useRef(0);
+  const scopeKey = JSON.stringify([property, dateRange.from, dateRange.to]);
+  const scopeKeyRef = useRef(scopeKey);
+  scopeKeyRef.current = scopeKey;
+  const triggerRef = useRef(null);
+  const inputRef = useRef(null);
+  const wasOpenRef = useRef(false);
+  useEffect(() => {
+    if (open) inputRef.current?.focus();
+    else if (wasOpenRef.current) triggerRef.current?.focus();
+    wasOpenRef.current = open;
+  }, [open]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -45,12 +57,16 @@ export default function AIAssistant() {
   // Changing the dashboard filters is an explicit owner action. Do not let an
   // older chat topic quietly override that new choice.
   useEffect(() => {
+    contextGeneration.current += 1;
     setActiveContext(null);
   }, [property, dateRange.from, dateRange.to]);
 
   const handleAsk = async (question) => {
     if (!question.trim() || busyRef.current) return;
     busyRef.current = true;
+    setLoading(true);
+    const requestGeneration = contextGeneration.current;
+    const requestScopeKey = scopeKeyRef.current;
     const q = question.trim();
 
     // Rate limiting for AI queries
@@ -62,6 +78,7 @@ export default function AIAssistant() {
           text: `Too many AI queries. Please try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.`
         }]);
         busyRef.current = false;
+        setLoading(false);
         return;
       }
     } catch {
@@ -109,7 +126,7 @@ export default function AIAssistant() {
       });
       const summary = res.data.summary;
       const returnedContext = contextFromSummary(summary);
-      if (returnedContext) setActiveContext(returnedContext);
+      if (returnedContext && requestGeneration === contextGeneration.current && requestScopeKey === scopeKeyRef.current) setActiveContext(returnedContext);
       setMessages((prev) => [...prev, { role: "assistant", text: res.data.answer || "I couldn't process that question.", summary }]);
     } catch (e) {
       setMessages((prev) => [...prev, { role: "assistant", text: `Sorry, I encountered an error: ${e.response?.data?.error || e.message}. Please try again.` }]);
@@ -123,6 +140,8 @@ export default function AIAssistant() {
       {/* Floating button */}
       {!open && (
         <button
+          ref={triggerRef}
+          type="button"
           onClick={() => setOpen(true)}
           aria-label="Open AI Assistant"
           className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-[#6C63FF] to-[#00D4FF] shadow-lg shadow-[#6C63FF]/30 transition-all hover:scale-105 active:scale-95"
@@ -139,11 +158,15 @@ export default function AIAssistant() {
       <AnimatePresence>
         {open && (
           <motion.div
+            role="dialog"
+            aria-modal="false"
+            aria-labelledby="owner-analyst-title"
+            onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setOpen(false); } }}
             initial={{ opacity: 0, y: 20, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.95 }}
             transition={{ duration: 0.2 }}
-            className="fixed bottom-6 right-6 z-50 flex h-[600px] max-h-[80vh] w-[400px] max-w-[calc(100vw-3rem)] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0F1F35] shadow-2xl"
+            className="fixed bottom-6 right-6 z-50 flex h-[600px] max-h-[calc(100dvh-7rem-env(safe-area-inset-bottom))] w-[400px] max-w-[calc(100vw-3rem)] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0F1F35] shadow-2xl"
             style={{ bottom: "calc(6rem + env(safe-area-inset-bottom))" }}
           >
             {/* Header */}
@@ -153,11 +176,11 @@ export default function AIAssistant() {
                   <Bot className="h-4 w-4 text-white" />
                 </div>
                 <div>
-                  <p className="text-sm font-semibold text-white">Owner Analyst</p>
+                  <p id="owner-analyst-title" className="text-sm font-semibold text-white">Owner Analyst</p>
                   <p className="text-[10px] text-slate-500">Imported data only · explains, never guesses</p>
                 </div>
               </div>
-              <button onClick={() => setOpen(false)} aria-label="Close" className="text-slate-400 hover:text-white">
+              <button type="button" onClick={() => setOpen(false)} aria-label="Close AI Assistant" className="flex h-11 w-11 items-center justify-center text-slate-400 hover:text-white">
                 <X className="h-5 w-5" />
               </button>
             </div>
@@ -173,6 +196,8 @@ export default function AIAssistant() {
                   {SUGGESTIONS.map((s) => (
                     <button
                       key={s}
+                      type="button"
+                      disabled={loading}
                       onClick={() => handleAsk(s)}
                       className="block w-full rounded-lg border border-white/5 bg-[#0A1628]/40 px-3 py-2 text-left text-xs text-slate-300 transition-colors hover:border-[#6C63FF]/30 hover:bg-white/5"
                     >
@@ -185,7 +210,7 @@ export default function AIAssistant() {
               {activeContext && (
                 <div className="flex items-center justify-between gap-2 rounded-lg border border-[#00D4FF]/20 bg-[#00D4FF]/[0.06] px-3 py-2 text-xs">
                   <span className="text-[#8fe8ff]">Continuing: {activeContext.propertyLabel} · {activeContext.from === activeContext.to ? activeContext.from : `${activeContext.from} → ${activeContext.to}`} · {String(activeContext.topic || "daily summary").replace(/_/g, " ")}</span>
-                  <button type="button" onClick={() => setActiveContext(null)} className="shrink-0 text-slate-400 hover:text-white">Clear</button>
+                  <button type="button" onClick={() => { contextGeneration.current += 1; setActiveContext(null); }} className="min-h-11 shrink-0 text-slate-400 hover:text-white">Clear</button>
                 </div>
               )}
 
@@ -248,10 +273,12 @@ export default function AIAssistant() {
             <div className="border-t border-white/10 bg-[#0A1628] p-3">
               <div className="flex items-center gap-2">
                 <input
+                  ref={inputRef}
+                  aria-label="Question for Owner Analyst"
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") handleAsk(input); }}
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) handleAsk(input); }}
                   placeholder="Ask naturally: “what about Expedia?” or “why was it low?”"
                   className="flex-1 rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]"
                   disabled={loading}
@@ -261,7 +288,7 @@ export default function AIAssistant() {
                   onClick={() => handleAsk(input)}
                   disabled={loading || !input.trim()}
                   aria-label="Send message"
-                  className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#6C63FF] text-white transition-colors hover:bg-[#5b52e8] disabled:opacity-50"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-[#6C63FF] text-white transition-colors hover:bg-[#5b52e8] disabled:opacity-50"
                 >
                   <Send className="h-4 w-4" />
                 </button>

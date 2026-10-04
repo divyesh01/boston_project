@@ -26,6 +26,13 @@ import { operationalActionRateLimiter } from "@/lib/rateLimiters";
 import { guardDestructiveAction } from "@/lib/deleteGuard";
 import { ErrorState } from "@/components/ui/status";
 
+import { isBusinessDate } from "@/lib/businessDate";
+
+function localEntryDate() {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 function useExpenses(propertyId) {
   return useQuery({
     queryKey: ["expenses", propertyId],
@@ -87,12 +94,14 @@ function PropertyExpenses() {
   // expenses/payroll failure and must stop the page the same way.
   const readFailed = expensesQ.isError ? expensesQ : payrollQ.isError ? payrollQ : occQ.isError ? occQ : payQ.isError ? payQ : null;
   const retryReads = () => { expensesQ.refetch(); payrollQ.refetch(); occQ.refetch(); payQ.refetch(); };
+  const [entryBusy, setEntryBusy] = useState(false);
+  const entryBusyRef = useRef(false);
   const [showForm, setShowForm] = useState(false);
   const [showPayrollForm, setShowPayrollForm] = useState(false);
   const [targetMargin, setTargetMargin] = useState(15);
   const [form, setForm] = useState({
     expense_name: "", vendor: "", category: "other", customCat: "", frequency: "one_time",
-    amount: "", expense_date: new Date().toISOString().slice(0, 10), payment_status: "unpaid",
+    amount: "", expense_date: localEntryDate(), payment_status: "unpaid",
     taxable: true,
   });
   const customSelected = !isStandardCategory(form.category);
@@ -103,8 +112,8 @@ function PropertyExpenses() {
   const [payrollForm, setPayrollForm] = useState({
     employee_name: "", department: "Front Desk", pay_type: "hourly",
     base_rate: "", hours: "40", overtime_hours: "0", bonus: "0", deductions: "0",
-    pay_period_start: new Date().toISOString().slice(0, 10),
-    pay_period_end: new Date().toISOString().slice(0, 10),
+    pay_period_start: localEntryDate(),
+    pay_period_end: localEntryDate(),
   });
 
   const occRows = useMemo(() => occ.filter((r) => inRange(r.date, dateRange.from, dateRange.to)), [occ, dateRange]);
@@ -142,7 +151,7 @@ function PropertyExpenses() {
 
   // Target-margin planner: what-if guidance derived from the cent-exact
   // totalCosts/netRevenue. Not a reconciled total, so the ratio math stays float.
-  const targetRevenue = targetMargin > 0 ? totalCosts / (1 - targetMargin / 100) : 0;
+  const targetRevenue = totalCosts / (1 - targetMargin / 100);
   const revenueRemaining = targetRevenue - netRevenue;
 
   const periodLabel = period === "monthly" && months.length > 0
@@ -152,6 +161,10 @@ function PropertyExpenses() {
   const propName = property === "all" ? "All Properties" : (Array.isArray(property) ? `${property.length} Properties` : (properties.find((p) => p.id === property)?.name || "Property"));
 
   const handleAdd = async () => {
+    if (entryBusyRef.current) return;
+    entryBusyRef.current = true;
+    setEntryBusy(true);
+    try {
     const prop = requireWriteProperty();
     if (!prop) return;
     // Rate limiting for operational actions
@@ -172,10 +185,11 @@ function PropertyExpenses() {
       toast.error("Expense name and amount are required.");
       return;
     }
-    if (Number(form.amount) <= 0) {
+    if (!Number.isFinite(Number(form.amount)) || Number(form.amount) <= 0) {
       toast.error("Amount must be greater than zero.");
       return;
     }
+    if (!isBusinessDate(form.expense_date)) { toast.error("Enter a valid expense date."); return; }
     let category = form.category;
     if (customSelected) {
       if (form.category === "__custom__") {
@@ -205,15 +219,25 @@ function PropertyExpenses() {
       toast.error("Could not save the expense. Please try again.");
       return;
     }
-    setForm({ expense_name: "", vendor: "", category: "other", customCat: "", frequency: "one_time", amount: "", expense_date: new Date().toISOString().slice(0, 10), payment_status: "unpaid", taxable: true });
+    setForm({ expense_name: "", vendor: "", category: "other", customCat: "", frequency: "one_time", amount: "", expense_date: localEntryDate(), payment_status: "unpaid", taxable: true });
     qc.invalidateQueries({ queryKey: ["expenses"] });
     setShowForm(false);
     rotateCsrfToken();
+    } catch (error) {
+      toast.error(`Could not save: ${error?.message || error}`);
+    } finally {
+      entryBusyRef.current = false;
+      setEntryBusy(false);
+    }
   };
 
   const handleToggleTaxable = async (id, current) => {
-    await db.entities.Expense.update(id, { taxable: !current });
-    qc.invalidateQueries({ queryKey: ["expenses"] });
+    if (entryBusyRef.current) return;
+    entryBusyRef.current = true;
+    setEntryBusy(true);
+    try { await db.entities.Expense.update(id, { taxable: current === false }); await qc.invalidateQueries({ queryKey: ["expenses"] }); toast.success("Tax status saved."); }
+    catch (err) { toast.error(`Tax status was not saved: ${err?.message || err}`); }
+    finally { entryBusyRef.current = false; setEntryBusy(false); }
   };
 
   const customCats = useMemo(() => [...new Set(expenses.map((e) => e.category).filter((c) => c && !isStandardCategory(c)))].sort(), [expenses]);
@@ -222,8 +246,8 @@ function PropertyExpenses() {
   const filteredExpenses = useMemo(() => {
     return expenses.filter((e) => {
       if (expFilterCat !== "all" && e.category !== expFilterCat) return false;
-      if (expFilterTax === "taxable" && !e.taxable) return false;
-      if (expFilterTax === "exempt" && e.taxable) return false;
+      if (expFilterTax === "taxable" && e.taxable === false) return false;
+      if (expFilterTax === "exempt" && e.taxable !== false) return false;
       if (expSearch.trim()) {
         const s = expSearch.toLowerCase();
         if (!String(e.expense_name || "").toLowerCase().includes(s) &&
@@ -256,6 +280,10 @@ function PropertyExpenses() {
   });
 
   const handleAddPayroll = async () => {
+    if (entryBusyRef.current) return;
+    entryBusyRef.current = true;
+    setEntryBusy(true);
+    try {
     const prop = requireWriteProperty();
     if (!prop) return;
     // Rate limiting for operational actions
@@ -272,7 +300,8 @@ function PropertyExpenses() {
       return;
     }
 
-    if (!payrollForm.employee_name) return;
+    if (!payrollForm.employee_name.trim()) { toast.error("Enter an employee name."); return; }
+    if (!isBusinessDate(payrollForm.pay_period_start) || !isBusinessDate(payrollForm.pay_period_end) || payrollForm.pay_period_start > payrollForm.pay_period_end) { toast.error("Enter a valid payroll period with the end on or after the start."); return; }
 
     // Pay is computed by the shared calculatePay, not here.
     //
@@ -316,10 +345,16 @@ function PropertyExpenses() {
       property_id: prop.id,
       property_name: prop?.name || "",
     });
-    setPayrollForm({ employee_name: "", department: "Front Desk", pay_type: "hourly", base_rate: "", hours: "40", overtime_hours: "0", bonus: "0", deductions: "0", pay_period_start: new Date().toISOString().slice(0, 10), pay_period_end: new Date().toISOString().slice(0, 10) });
+    setPayrollForm({ employee_name: "", department: "Front Desk", pay_type: "hourly", base_rate: "", hours: "40", overtime_hours: "0", bonus: "0", deductions: "0", pay_period_start: localEntryDate(), pay_period_end: localEntryDate() });
     qc.invalidateQueries({ queryKey: ["payroll"] });
     setShowPayrollForm(false);
     rotateCsrfToken();
+    } catch (error) {
+      toast.error(`Could not save: ${error?.message || error}`);
+    } finally {
+      entryBusyRef.current = false;
+      setEntryBusy(false);
+    }
   };
 
   // Both deletes below already had CSRF and rate limiting but no confirmation:
@@ -499,8 +534,8 @@ function PropertyExpenses() {
             <div className="flex items-center gap-2">
               <label className="text-xs text-slate-400">Target Margin:</label>
               <input
-                type="number" min="0" max="100" value={targetMargin}
-                onChange={(e) => setTargetMargin(Number(e.target.value))}
+                type="number" min="0" max="99" aria-label="Target profit margin percent" value={targetMargin}
+                onChange={(e) => setTargetMargin(Math.min(99, Math.max(0, Number(e.target.value) || 0)))}
                 className="w-20 rounded-lg border border-white/10 bg-[#040D1A] px-3 py-1.5 text-right text-sm text-slate-200 outline-none focus:border-[#00D4FF]"
               />
               <span className="text-sm text-slate-400">%</span>
@@ -509,7 +544,7 @@ function PropertyExpenses() {
           <div className="mt-3 grid gap-3 sm:grid-cols-3">
             <div>
               <p className="text-xs text-slate-500">Target Revenue</p>
-              <p className="font-heading text-lg text-[#00D4FF]">{targetMargin > 0 ? money2(targetRevenue) : "—"}</p>
+              <p className="font-heading text-lg text-[#00D4FF]">{money2(targetRevenue)}</p>
             </div>
             <div>
               <p className="text-xs text-slate-500">Current Revenue</p>
@@ -518,7 +553,7 @@ function PropertyExpenses() {
             <div>
               <p className="text-xs text-slate-500">Remaining to Target</p>
               <p className={`font-heading text-lg ${revenueRemaining <= 0 ? "text-[#00E096]" : "text-[#FFB547]"}`}>
-                {targetMargin > 0 ? money2(Math.max(0, revenueRemaining)) : "—"}
+                {money2(Math.max(0, revenueRemaining))}
               </p>
             </div>
           </div>
@@ -529,7 +564,7 @@ function PropertyExpenses() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card
           title="Expense Tracker"
-          subtitle={`${filteredExpenses.length} of ${expenses.length} expenses · ${money2(operatingExpenses)} total`}
+          subtitle={`${filteredExpenses.length} of ${expenses.length} expenses across all dates. Selected-period operating costs: ${money2(operatingExpenses)}.`}
           right={
             <button
               disabled={!selectedProperty}
@@ -541,9 +576,9 @@ function PropertyExpenses() {
           }
         >
           {showForm && (
-            <div className="mb-4 grid gap-3 rounded-xl border border-white/10 bg-[#0A1628] p-4 sm:grid-cols-2 lg:grid-cols-3">
-              <input value={form.expense_name} onChange={(e) => setForm({ ...form, expense_name: e.target.value })} placeholder="Expense name" className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
-              <input value={form.vendor} onChange={(e) => setForm({ ...form, vendor: e.target.value })} placeholder="Vendor" className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
+            <fieldset disabled={entryBusy} className="mb-4 grid gap-3 rounded-xl border border-white/10 bg-[#0A1628] p-4 sm:grid-cols-2 lg:grid-cols-3">
+              <label className="space-y-1 text-xs text-slate-400"><span className="block">Expense name</span><input value={form.expense_name} onChange={(e) => setForm({ ...form, expense_name: e.target.value })} placeholder="Expense name" className="w-full rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" /></label>
+              <label className="space-y-1 text-xs text-slate-400"><span className="block">Vendor</span><input value={form.vendor} onChange={(e) => setForm({ ...form, vendor: e.target.value })} placeholder="Vendor" className="w-full rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" /></label>
               <select
                 value={customCategory}
                 onChange={(e) => setForm({ ...form, category: e.target.value === "__custom__" ? "__custom__" : e.target.value, customCat: "" })}
@@ -562,22 +597,22 @@ function PropertyExpenses() {
                   aria-label="Custom category name"
                 />
               )}
-              <select value={form.frequency} onChange={(e) => setForm({ ...form, frequency: e.target.value })} className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]">
+              <select aria-label="Expense frequency" value={form.frequency} onChange={(e) => setForm({ ...form, frequency: e.target.value })} className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]">
                 {EXPENSE_FREQUENCIES.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
               </select>
-              <input type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="Amount $" className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
-              <input type="date" value={form.expense_date} onChange={(e) => setForm({ ...form, expense_date: e.target.value })} className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
+              <label className="space-y-1 text-xs text-slate-400"><span className="block">Amount ($)</span><input type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="Amount $" min="0.01" step="0.01" className="w-full rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" /></label>
+              <label className="space-y-1 text-xs text-slate-400"><span className="block">Expense date</span><input type="date" value={form.expense_date} onChange={(e) => setForm({ ...form, expense_date: e.target.value })} className="w-full rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" /></label>
               <label className="flex items-center gap-2 text-sm text-slate-300">
                 <input type="checkbox" checked={form.taxable !== false} onChange={(e) => setForm({ ...form, taxable: e.target.checked })} className="h-4 w-4 rounded border-white/20" />
                 Taxable
               </label>
-              <button onClick={handleAdd} className="rounded-lg bg-[#00E096] px-4 py-2 text-sm font-medium text-[#040D1A] hover:bg-[#00c885]">Save Expense</button>
-            </div>
+              <button onClick={handleAdd} disabled={entryBusy || !selectedProperty} className="rounded-lg bg-[#00E096] px-4 py-2 text-sm font-medium text-[#040D1A] hover:bg-[#00c885]">{entryBusy ? "Saving..." : "Save Expense"}</button>
+            </fieldset>
           )}
 
           {/* Search & filters */}
           <div className="mb-4 flex flex-wrap items-center gap-2">
-            <input type="text" value={expSearch} onChange={(e) => setExpSearch(e.target.value)} placeholder="Search expenses…" className="flex-1 rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
+            <input type="text" aria-label="Search expenses" value={expSearch} onChange={(e) => setExpSearch(e.target.value)} placeholder="Search expenses…" className="flex-1 rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
             <select value={expFilterCat} onChange={(e) => setExpFilterCat(e.target.value)} className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-xs text-slate-200">
               <option value="all">All Categories</option>
               {EXPENSE_CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
@@ -658,7 +693,7 @@ function PropertyExpenses() {
 
         <Card
           title="Payroll Records"
-          subtitle={`${payroll.length} records · ${money2(totalPayroll)} total`}
+          subtitle={`${payroll.length} records across all dates and statuses. Selected-period committed payroll: ${money2(totalPayroll)}.`}
           right={
             <button
               disabled={!selectedProperty}
@@ -670,20 +705,22 @@ function PropertyExpenses() {
           }
         >
           {showPayrollForm && (
-            <div className="mb-4 grid gap-3 rounded-xl border border-white/10 bg-[#0A1628] p-4 sm:grid-cols-2 lg:grid-cols-3">
-              <input value={payrollForm.employee_name} onChange={(e) => setPayrollForm({ ...payrollForm, employee_name: e.target.value })} placeholder="Employee name" className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
-              <input value={payrollForm.department} onChange={(e) => setPayrollForm({ ...payrollForm, department: e.target.value })} placeholder="Department" className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
+            <fieldset disabled={entryBusy} className="mb-4 grid gap-3 rounded-xl border border-white/10 bg-[#0A1628] p-4 sm:grid-cols-2 lg:grid-cols-3">
+              <label className="text-xs text-slate-400">Period start<input type="date" value={payrollForm.pay_period_start} onChange={(e) => setPayrollForm({ ...payrollForm, pay_period_start: e.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-white" /></label>
+              <label className="text-xs text-slate-400">Period end<input type="date" value={payrollForm.pay_period_end} onChange={(e) => setPayrollForm({ ...payrollForm, pay_period_end: e.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-white" /></label>
+              <label className="space-y-1 text-xs text-slate-400"><span className="block">Employee name</span><input value={payrollForm.employee_name} onChange={(e) => setPayrollForm({ ...payrollForm, employee_name: e.target.value })} placeholder="Employee name" className="w-full rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" /></label>
+              <label className="space-y-1 text-xs text-slate-400"><span className="block">Department</span><input value={payrollForm.department} onChange={(e) => setPayrollForm({ ...payrollForm, department: e.target.value })} placeholder="Department" className="w-full rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" /></label>
               <select value={payrollForm.pay_type} onChange={(e) => setPayrollForm({ ...payrollForm, pay_type: e.target.value })} className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]">
                 <option value="hourly">Hourly</option>
                 <option value="salary">Salary</option>
               </select>
-              <input type="number" value={payrollForm.base_rate} onChange={(e) => setPayrollForm({ ...payrollForm, base_rate: e.target.value })} placeholder="Base rate $" className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
-              <input type="number" value={payrollForm.hours} onChange={(e) => setPayrollForm({ ...payrollForm, hours: e.target.value })} placeholder="Hours" className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
-              <input type="number" value={payrollForm.overtime_hours} onChange={(e) => setPayrollForm({ ...payrollForm, overtime_hours: e.target.value })} placeholder="OT hours" className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
-              <input type="number" value={payrollForm.bonus} onChange={(e) => setPayrollForm({ ...payrollForm, bonus: e.target.value })} placeholder="Bonus $" className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
-              <input type="number" value={payrollForm.deductions} onChange={(e) => setPayrollForm({ ...payrollForm, deductions: e.target.value })} placeholder="Deductions $" className="rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" />
-              <button onClick={handleAddPayroll} className="rounded-lg bg-[#00E096] px-4 py-2 text-sm font-medium text-[#040D1A] hover:bg-[#00c885]">Save Payroll</button>
-            </div>
+              <label className="space-y-1 text-xs text-slate-400"><span className="block">Base rate ($)</span><input type="number" value={payrollForm.base_rate} onChange={(e) => setPayrollForm({ ...payrollForm, base_rate: e.target.value })} placeholder="Base rate $" className="w-full rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" /></label>
+              <label className="space-y-1 text-xs text-slate-400"><span className="block">Hours</span><input type="number" value={payrollForm.hours} onChange={(e) => setPayrollForm({ ...payrollForm, hours: e.target.value })} placeholder="Hours" className="w-full rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" /></label>
+              <label className="space-y-1 text-xs text-slate-400"><span className="block">Overtime hours</span><input type="number" value={payrollForm.overtime_hours} onChange={(e) => setPayrollForm({ ...payrollForm, overtime_hours: e.target.value })} placeholder="OT hours" className="w-full rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" /></label>
+              <label className="space-y-1 text-xs text-slate-400"><span className="block">Bonus ($)</span><input type="number" value={payrollForm.bonus} onChange={(e) => setPayrollForm({ ...payrollForm, bonus: e.target.value })} placeholder="Bonus $" className="w-full rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" /></label>
+              <label className="space-y-1 text-xs text-slate-400"><span className="block">Deductions ($)</span><input type="number" value={payrollForm.deductions} onChange={(e) => setPayrollForm({ ...payrollForm, deductions: e.target.value })} placeholder="Deductions $" className="w-full rounded-lg border border-white/10 bg-[#040D1A] px-3 py-2 text-sm text-slate-200 outline-none focus:border-[#00D4FF]" /></label>
+              <button onClick={handleAddPayroll} disabled={entryBusy || !selectedProperty} className="rounded-lg bg-[#00E096] px-4 py-2 text-sm font-medium text-[#040D1A] hover:bg-[#00c885] disabled:opacity-50">{entryBusy ? "Saving…" : "Save Payroll Draft"}</button>
+            </fieldset>
           )}
 
           <div className="max-h-80 space-y-2 overflow-auto" ref={payrollParentRef}>

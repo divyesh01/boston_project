@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Select as RadixSelect, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select";
-import { Drawer, DrawerContent } from "@/components/ui/drawer";
+import { Drawer, DrawerContent, DrawerTitle, DrawerDescription } from "@/components/ui/drawer";
 import { Check, ChevronDown } from "lucide-react";
 
 export default function ResponsiveSelect(
@@ -38,6 +38,8 @@ export default function ResponsiveSelect(
     <>
       <button
         type="button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
         disabled={disabled}
         onClick={() => setOpen(true)}
         className="flex h-11 w-full items-center justify-between rounded-lg border border-white/10 bg-[#0A1628] px-3 text-sm text-slate-200 disabled:opacity-50"
@@ -48,13 +50,17 @@ export default function ResponsiveSelect(
       <Drawer open={open} onOpenChange={setOpen}>
         <DrawerContent className="bg-[#0F1F35]" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
           <div className="mx-auto w-full max-w-md p-4">
+            <DrawerTitle className="sr-only">{label || placeholder || "Choose an option"}</DrawerTitle>
+            <DrawerDescription className="sr-only">Choose one option below.</DrawerDescription>
             {label && <p className="mb-2 text-xs uppercase tracking-widest text-slate-500">{label}</p>}
             <div className="max-h-[50vh] overflow-auto pb-4">
               {options.map((o) => (
                 <button
                   key={o[0]}
+                  type="button"
+                  aria-pressed={o[0] === value}
                   onClick={() => {
-                    onValueChange(o[0]);
+                    onValueChange?.(o[0]);
                     setOpen(false);
                   }}
                   disabled={o[2]?.disabled}

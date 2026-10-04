@@ -29,7 +29,7 @@ export default function Card(
   return (
     <div
       className={cn(
-        "fx-enter relative rounded-2xl",
+        "fx-enter relative min-w-0 rounded-2xl",
         // Opt-in glass. Default is a solid raised surface because
         // backdrop-filter forces a compositing pass per element and these
         // pages hold 30+ cards — glass is for the few that overlay content.
@@ -70,10 +70,10 @@ export default function Card(
       )}
     >
       {(title || right) && (
-        <div className={cn("flex items-start justify-between gap-4", flush ? "px-6 pt-6 pb-4" : "mb-5")}>
+        <div className={cn("flex flex-wrap items-start justify-between gap-4", flush ? "px-6 pt-6 pb-4" : "mb-5")}>
           <div className="min-w-0">
             {title && (
-              <h3 className="truncate font-heading text-[13px] font-semibold tracking-[0.01em] text-[var(--t-primary)]">
+              <h3 className="break-words font-heading text-[13px] font-semibold tracking-[0.01em] text-[var(--t-primary)]">
                 {title}
               </h3>
             )}

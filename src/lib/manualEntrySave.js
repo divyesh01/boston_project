@@ -59,11 +59,12 @@ import { db, runInTransaction } from '@/api/base44Client';
  * @param {string | number} [args.propertyId] the single property being edited
  * @param {PreparedRow[]} args.prepared
  * @param {Set<string>} [args.existingKeys] dedupe keys already in the database
+ * @param {Map<string, Set<string>>} [args.existingOwners] saved record IDs for each key
  * @param {(record: Record<string, any>) => string} args.dedupeKey
  * @returns {Promise<{ saved: number, skipped: number }>} counts that reflect what
  *          COMMITTED; on failure this throws and nothing was written.
  */
-export async function saveManualRows({ entityName, propertyId, prepared = [], existingKeys, dedupeKey }) {
+export async function saveManualRows({ entityName, propertyId, prepared = [], existingKeys, existingOwners, dedupeKey }) {
   // Argument faults are the caller's bug, so they throw here rather than being
   // absorbed into a "0 records saved" that reads like an empty grid.
   if (!entityName) throw new Error('saveManualRows: entityName is required');
@@ -91,6 +92,7 @@ export async function saveManualRows({ entityName, propertyId, prepared = [], ex
   // and the retry would then skip exactly the rows that were never written.
   const seen = new Set(existingKeys || []);
   const writes = [];
+  const batchOwners = new Map();
   let skipped = 0;
   for (const item of prepared) {
     const row = item?.row || {};
@@ -101,13 +103,22 @@ export async function saveManualRows({ entityName, propertyId, prepared = [], ex
       throw new Error('Manual entries belong to a different property. Reload this property before saving.');
     }
     const key = dedupeKey(record);
-    // An edit targets a known id, so it is never a duplicate of itself.
+    // An edit may keep its own key, but cannot take another record's key.
     const hasId = row._id !== undefined && row._id !== null && row._id !== '';
+    const owner = hasId ? String(row._id) : null;
+    const owners = existingOwners?.get(key);
+    if (owner !== null && owners && [...owners].some((id) => String(id) !== owner)) {
+      throw new Error(`An existing record already uses ${key}. Keep the original date/source or choose a different one.`);
+    }
+    if (batchOwners.has(key) && (owner !== null || batchOwners.get(key) !== null)) {
+      throw new Error(`Two edited rows use ${key}. Give each row a distinct date/source before saving.`);
+    }
     if (!hasId && seen.has(key)) {
       skipped++;
       continue;
     }
     seen.add(key);
+    batchOwners.set(key, owner);
     writes.push({ id: hasId ? row._id : null, record });
   }
 

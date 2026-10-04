@@ -903,3 +903,11 @@ When uploading or resuming reports that overlap an active analytical period for 
 6. **Empty Property Selection in Local Page Queries**:
    - Payroll payroll/occupancy queries, Expenses expense/payroll queries, and Forecasting's shared page filter preserve an explicit empty array as `property_id: { $in: [] }`. Single selections, nonempty arrays, legacy `all`/undefined behavior, date constraints, and Staff filtering stay unchanged.
    - `src/pages/portfolioQuery.test.js` executes current page query functions against the unchanged local facade with synthetic owner/restricted identities and in-memory IndexedDB. This is client query coverage; normal authenticated browser/server acceptance remains separate.
+
+
+7. **Portfolio Occupancy Subline**:
+   - Dashboard's Avg rooms/night label uses the existing unique reporting-date count for the selected occupancy rows, so multiple properties on one date do not dilute the portfolio figure. Four actual Dashboard render regressions cover same-date portfolio rows, distinct dates, a single property and empty data; revenue, occupancy percentage, ADR/RevPAR and filtering are unchanged.
+
+
+8. **Settings Archive Mode Boundary**:
+   - In server-sync mode, Settings labels the download a local snapshot and explains that records not yet loaded in this browser may be absent. It disables local archive restore and keeps handler guards; the archive function independently rejects that mode before local mutations. Local-only backup/restore copy, permissions and REPLACE confirmation remain unchanged. Candidate tests render both modes; production server backup and recovery remain separate.

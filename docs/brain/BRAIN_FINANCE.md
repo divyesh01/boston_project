@@ -644,3 +644,8 @@ Clerk and timecard scan logic now live in `src/lib/parsers/clerk.js` and
 `src/lib/parsers/timecard.js`. `reportParsers.js` remains the dispatch/import
 orchestrator. The committed HotelKey fixture corpus and mutation harness pin both scanner
 contracts; do not copy either scanner back into the orchestrator.
+
+
+## Portfolio rooms per reporting night (2026-10-04)
+
+Dashboard's Occupancy subline divides total rooms sold by unique reporting dates in the already filtered occupancy rows, using the existing uniqueDays count. It does not divide by property-day row count. Two properties reporting 40 and 35 rooms on one date therefore show Avg 75 rooms/night; single-property, multiple-date and empty-data behavior remain covered by tests/dashboard.occupancy.test.jsx. These four rendered Dashboard regressions mock input data and subcomponents; they do not establish full financial integration or production acceptance.

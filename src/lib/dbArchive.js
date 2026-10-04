@@ -73,6 +73,17 @@ export const ARCHIVE_FORMAT_VERSION = 1;
 export const ARCHIVE_FILE_EXT = ".json";
 
 /**
+ * Whether server data sync is currently enabled.
+ * When enabled, business data is authoritative on the server, local IndexedDB
+ * holds only a cache, and raw local database restore is unsafe and unsupported.
+ *
+ * @returns {boolean}
+ */
+export function isServerDataSyncEnabled() {
+  return import.meta.env?.VITE_USE_SERVER_DATA_SYNC === "true";
+}
+
+/**
  * Checked against `file.size` BEFORE the file is read, so a wrong pick (a video,
  * a disk image) is refused without pulling it into memory. Also re-checked
  * against the string length in parseArchive for callers that skip the file gate.
@@ -629,6 +640,12 @@ export async function restoreArchive(parsed, { confirm } = {}) {
     );
   }
   await requireAllPropertyAccess("restore");
+
+  if (isServerDataSyncEnabled()) {
+    throw new Error(
+      "Restore is not supported when server data sync is enabled. Database restore replaces only local browser data and cannot safely overwrite or reconcile authoritative server state.",
+    );
+  }
 
   const { archive } = parsed;
   const { included } = classifyStores(localDb.tables.map((t) => t.name));

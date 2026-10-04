@@ -36,7 +36,7 @@ import { Input } from "@/components/ui/input";
 import { Loader2 } from "lucide-react";
 import { getCsrfToken, validateCsrfToken, rotateCsrfToken, sanitizeText, sanitizeAlphanumeric, sanitizeCsvCell } from "@/lib/securityUtils";
 import { operationalActionRateLimiter, destructiveActionRateLimiter, securityActionRateLimiter } from "@/lib/rateLimiters";
-import { ARCHIVE_FILE_EXT, downloadArchive, inspectArchiveFile, parseArchive, restoreArchive } from "@/lib/dbArchive";
+import { ARCHIVE_FILE_EXT, downloadArchive, inspectArchiveFile, parseArchive, restoreArchive, isServerDataSyncEnabled } from "@/lib/dbArchive";
 import { hasAllPropertyAccess } from "@/lib/launchPolicy";
 import PasswordConfirmDialog from "@/components/PasswordConfirmDialog";
 
@@ -149,6 +149,7 @@ export default function Settings() {
   const [restoreError, setRestoreError] = useState("");
   const [restorePhrase, setRestorePhrase] = useState("");
   const restoreInputRef = useRef(null);
+  const isServerSync = isServerDataSyncEnabled();
 
   // Auto-save commission rates & CC fee to localStorage on change (skip on mount or remote sync)
   useEffect(() => {
@@ -384,13 +385,15 @@ export default function Settings() {
     try {
       const res = await downloadArchive();
       toast({
-        title: "Backup downloaded",
-        description: `${res.total_rows.toLocaleString()} record(s) from ${res.stores} table(s), plus ${res.local_slots} setting(s), saved as ${res.filename}. Keep a copy somewhere other than this computer.`,
+        title: isServerSync ? "Local snapshot downloaded" : "Backup downloaded",
+        description: isServerSync
+          ? `${res.total_rows.toLocaleString()} record(s) from ${res.stores} table(s), plus ${res.local_slots} setting(s), saved as ${res.filename}. This is a snapshot of local browser data only, not a complete server backup.`
+          : `${res.total_rows.toLocaleString()} record(s) from ${res.stores} table(s), plus ${res.local_slots} setting(s), saved as ${res.filename}. Keep a copy somewhere other than this computer.`,
       });
       try {
         await db.audit.log({
           username: me?.username || "settings",
-          action: "Database backup exported",
+          action: isServerSync ? "Local database snapshot exported" : "Database backup exported",
           detail: `${res.filename} · ${res.total_rows} row(s) · ${res.stores} table(s) · ${res.local_slots} setting(s) · ${Math.round(res.bytes / 1024)} KB`,
         });
       } catch (e) {
@@ -425,6 +428,12 @@ export default function Settings() {
     setRestorePhrase("");
     setRestoreError("");
     if (!file) return;
+    if (isServerSync) {
+      setRestoreError(
+        "Restore is not supported when server data sync is enabled. Database restore replaces only local browser data and cannot safely overwrite or reconcile authoritative server state."
+      );
+      return;
+    }
     const gate = inspectArchiveFile(file);
     if (!gate.ok) {
       setRestoreError(gate.reason);
@@ -446,6 +455,12 @@ export default function Settings() {
 
   const handleRestoreConfirm = async () => {
     if (!restorePlan) return;
+    if (isServerSync) {
+      setRestoreError(
+        "Restore is not supported when server data sync is enabled. Database restore replaces only local browser data and cannot safely overwrite or reconcile authoritative server state."
+      );
+      return;
+    }
     const rateLimit = destructiveActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
@@ -1642,15 +1657,33 @@ export default function Settings() {
       </Card>
 
       {hasAllPropertyAccess(me) && (
-        <Card title="Backup & restore" subtitle="Save the whole database to a file, or replace it from one">
+        <Card
+          title="Backup & restore"
+          subtitle={
+            isServerSync
+              ? "Save a local database snapshot to a file (server restore is disabled)"
+              : "Save the whole database to a file, or replace it from one"
+          }
+        >
           <div className="space-y-6">
             <Alert className="border-amber-500/30 bg-amber-500/10">
               <AlertDescription className="text-sm text-slate-300">
-                Every record in this app — staff, payroll, expenses, imported reports, commission
-                rates and tax periods — is stored in <strong>this browser, on this computer</strong>.
-                There is no copy on a server. Clearing site data, resetting the machine or moving to
-                a different laptop loses all of it. A backup file is the only way to move the data or
-                get it back.
+                {isServerSync ? (
+                  <>
+                    Server data sync is active. Business data is persisted to the server.
+                    Downloading a snapshot creates a copy of the local browser cache on this computer
+                    only — it is not a complete server backup and may not include records not yet loaded
+                    in this browser. Restoring from a backup file is not supported in server-sync mode.
+                  </>
+                ) : (
+                  <>
+                    Every record in this app — staff, payroll, expenses, imported reports, commission
+                    rates and tax periods — is stored in <strong>this browser, on this computer</strong>.
+                    There is no copy on a server. Clearing site data, resetting the machine or moving to
+                    a different laptop loses all of it. A backup file is the only way to move the data or
+                    get it back.
+                  </>
+                )}
               </AlertDescription>
             </Alert>
 
@@ -1661,35 +1694,58 @@ export default function Settings() {
                 className="flex items-center gap-2 rounded-lg bg-[#6C63FF] px-6 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#5b52e8] disabled:opacity-60"
               >
                 {backupBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                {backupBusy ? "Building backup…" : "Download backup"}
+                {backupBusy
+                  ? (isServerSync ? "Building snapshot…" : "Building backup…")
+                  : (isServerSync ? "Download local snapshot" : "Download backup")}
               </button>
               <p className="mt-2 text-xs text-slate-500">
-                Writes a single <code className="text-slate-400">{ARCHIVE_FILE_EXT}</code> file
-                holding every table and every setting, with a checksum so a damaged file is refused
-                rather than half-restored. Do a fresh one after any large import, and keep it
-                somewhere other than this computer.
+                {isServerSync ? (
+                  <>
+                    Writes a single <code className="text-slate-400">{ARCHIVE_FILE_EXT}</code> file
+                    capturing a local snapshot of cached browser tables and settings. It is a browser
+                    snapshot only and does not serve as a complete server backup.
+                  </>
+                ) : (
+                  <>
+                    Writes a single <code className="text-slate-400">{ARCHIVE_FILE_EXT}</code> file
+                    holding every table and every setting, with a checksum so a damaged file is refused
+                    rather than half-restored. Do a fresh one after any large import, and keep it
+                    somewhere other than this computer.
+                  </>
+                )}
               </p>
             </div>
 
             <div className="border-t border-white/10 pt-6">
               <Label className="text-sm font-medium text-slate-200">Restore from a backup</Label>
-              <p className="mt-1 text-xs text-slate-500">
-                Restoring <strong className="text-slate-400">replaces</strong> everything currently
-                in this browser with the contents of the file. It cannot merge two databases — row
-                ids from two machines would collide and records would end up attached to the wrong
-                property. Download a backup of what is here first if you want to keep it.
-              </p>
+              {isServerSync ? (
+                <Alert className="mt-2 border-amber-500/30 bg-amber-500/10">
+                  <AlertDescription className="text-xs text-slate-300">
+                    Restoring from a backup file is not supported when server data sync is enabled.
+                    Database restore replaces only local browser data and cannot safely overwrite or
+                    reconcile authoritative server state.
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <p className="mt-1 text-xs text-slate-500">
+                  Restoring <strong className="text-slate-400">replaces</strong> everything currently
+                  in this browser with the contents of the file. It cannot merge two databases — row
+                  ids from two machines would collide and records would end up attached to the wrong
+                  property. Download a backup of what is here first if you want to keep it.
+                </p>
+              )}
 
               <input
                 ref={restoreInputRef}
                 type="file"
                 accept={ARCHIVE_FILE_EXT}
                 onChange={handleRestoreFile}
+                disabled={isServerSync}
                 className="hidden"
               />
               <button
                 onClick={() => restoreInputRef.current?.click()}
-                disabled={restoreBusy}
+                disabled={restoreBusy || isServerSync}
                 className="mt-3 inline-flex items-center gap-2 rounded-lg border border-white/10 px-4 py-2.5 text-sm text-slate-300 transition-colors hover:border-[#6C63FF]/60 hover:text-white disabled:opacity-60"
               >
                 {restoreBusy && !restorePlan ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
@@ -1751,7 +1807,7 @@ export default function Settings() {
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       onClick={handleRestoreConfirm}
-                      disabled={restorePhrase !== "REPLACE" || restoreBusy}
+                      disabled={restorePhrase !== "REPLACE" || restoreBusy || isServerSync}
                       className="flex items-center gap-2 rounded-lg border border-[#FF6B6B]/30 bg-[#FF6B6B]/10 px-4 py-2.5 text-sm font-medium text-[#FF6B6B] transition-colors hover:bg-[#FF6B6B]/20 disabled:opacity-50"
                     >
                       {restoreBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}

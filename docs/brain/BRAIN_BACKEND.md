@@ -1178,3 +1178,8 @@ The `/api/aggregates/daily` handler in `worker/aggregates.js` provides server-au
 - **Production Baseline**: The production database ledger reflects migrations `0001` through `0007`. Neither `property_day_summary` nor `daily_financial_aggregate` exists in the baseline production ledger.
 - **Additive DDL Rehearsal**: Migrations `0008_property_day_summary.sql` and `0009_enterprise_settings_guard.sql` have been rehearsed and verified as strictly additive, idempotent, and non-destructive on synthetic fixtures (74/74 assertions PASS).
 - **Deployment Status**: Migrations `0008` and `0009` have **NOT** been applied to production, pending owner APPROVAL (authenticated owner UI acceptance is a separate required proof). In the interim, the guarded Worker fast-path availability contract serves as the active, safe fallback candidate.
+
+
+## Local archive boundary with server data sync (2026-10-04)
+
+src/lib/dbArchive.js creates browser-local database snapshots; it does not fetch a complete server backup or restore authoritative server records. When VITE_USE_SERVER_DATA_SYNC is exactly true, restoreArchive rejects after the existing validation/permission checks and before any local transaction, clear, bulkPut or settings-slot write. Local-only restore retains its permissions, REPLACE confirmation and replacement behavior. src/lib/dbArchive.serverSync.test.jsx covers mode detection, zero mutation calls in server mode and local-mode control flow with a synthetic local-store ledger; it does not prove real Dexie atomicity or remote recovery.

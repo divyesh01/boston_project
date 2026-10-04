@@ -16,6 +16,8 @@ This release consolidates core financial, operational, worker aggregate, and fro
 - **Loss Warning:** The deductions-exceed-gross message appears only when money kept is negative. Empty and break-even periods do not display a loss warning; the underlying financial totals are unchanged.
 - **Owner Performance Packet Export:** XLSX exports reflect identical data provenance; Executive Summary and Sheet 5 explicitly stamp `PARTIAL / TAX INCOMPLETE` warnings when partial analytical periods are selected.
 
+- **Rooms per Reporting Night:** Dashboard's Occupancy subline uses unique reporting dates across the selected properties. For two properties with 40 and 35 rooms sold on the same date, it shows Avg 75 rooms/night. This display correction preserves the financial totals and filters; browser acceptance of the newly corrected label remains separate.
+
 ### B. Operational Scope & Ledger Isolation
 - **RoomBoard Independent Querying:** Room stays and housekeeping tasks query strictly against `boardDate`. Multi-day stays overlapping `boardDate` (checked in prior, checking out after) are fully preserved. Loading states gate rendering to prevent false vacant room indicators.
 - **Active Property Filtering:** Global filters (`useGlobalFilters`) filter out inactive properties (`p.active !== false`) across dashboards, property pickers, and comparisons, while keeping Settings unfiltered for property management.
@@ -70,6 +72,8 @@ Before reviewing live numbers in the web application, ensure property configurat
    - Ensure inactive properties are marked `Active: false`. Inactive properties are omitted from dashboard summaries and portfolio aggregates.
 
 ---
+
+**Local snapshots and recovery (/settings):** With server data sync active, Download local snapshot saves only data currently loaded in this browser; it is not a complete server backup. Local file restore is disabled in that mode. Do not use a browser snapshot as evidence of server recovery. Local-only mode retains its backup and confirmed replacement workflow.
 
 ## 4. Actionable Browser Operational Steps
 
@@ -126,14 +130,14 @@ Verified repair candidate, 2026-10-03:
 
 | Gate | Result | Scope |
 | --- | --- | --- |
-| Standard Vitest | PASS: 98 files, 835 tests | Frozen repair source |
+| Standard Vitest | Follow-up: 100 files, 846 tests PASS | Frozen average and recovery follow-up; earlier pushed repair also passed 98 files / 835 tests |
 | Typecheck / lint / production build | PASS | Repository commands |
 | Brain / repository map / V3 | PASS | Staged task changes |
 | Dependency audit | PASS: zero advisories | No accepted exceptions added |
 | Financial / operations / aggregate / authorization probes | PASS in documented scopes | Synthetic fixtures and actual handlers; not production owner acceptance |
 | Normal PDF / workbook | PASS for the recorded two-property case | Eight PDF pages reviewed; workbook reconciles 2,452,500 cents with completeness warnings |
-| Route body coverage | 27 PASS, 9 NOT_RUN | Local synthetic normal-auth fixture; historical render and redirect evidence distinguished |
-| Primary browser actions | 2 PASS, 105 NOT_RUN | PDF/XLSX actions proven; remaining actions require actual interaction evidence |
+| Route body coverage | 36 recorded PASS | Local synthetic normal-auth fixtures; historical public render and expected redirects distinguished |
+| Primary browser actions | 6 PASS, 1 FAIL, 100 NOT_RUN | Exact exports, expense/payroll filtering, check-in and confirmed property deletion tested; import fails in the native R2 path and remains under repair |
 | Production owner acceptance | NOT_RUN | No production authenticated owner acceptance claimed |
 
-The candidate is not an owner-ready declaration. Larger-number PDF rendering, outstanding browser routes/actions, private-fixture checks and production acceptance remain separate open gates. The broad mutation sweep passed the earlier candidate snapshot; it is not a full mutation claim for the added warning, empty-selection and PDF callback changes. Their focused regressions and the final standard suite pass.
+The candidate is not an owner-ready declaration. The larger-number PDF case preserves the full $1,234,567.89 figure and completeness warnings across reviewed pages. Outstanding browser actions, the R2 import failure, private-fixture checks and production acceptance remain separate open gates. Zero-active financial rendering and selected-night room carry have additional scoped browser evidence. The broad mutation sweep passed the earlier candidate snapshot; it is not a full mutation claim for the added warning, empty-selection and PDF callback changes. Their focused regressions and the final standard suite pass.

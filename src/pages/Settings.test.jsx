@@ -158,6 +158,7 @@ vi.mock("@/lib/dbArchive", () => ({
   inspectArchiveFile: vi.fn(() => ({ ok: false, reason: "unused" })),
   parseArchive: vi.fn(),
   restoreArchive: vi.fn(),
+  isServerDataSyncEnabled: vi.fn(() => false),
 }));
 
 vi.mock("@/lib/launchPolicy", () => ({

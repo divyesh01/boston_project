@@ -49,7 +49,7 @@ export default function SmartButtonGroup({
           className="flex items-center gap-1.5 rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-3 py-2 text-xs font-medium text-indigo-300 hover:bg-indigo-500/20 active:scale-[0.98] transition-all"
         >
           <Calendar className="h-3.5 w-3.5" />
-          Schedule Delivery
+          Report Download Options
         </button>
       )}
 
@@ -57,7 +57,7 @@ export default function SmartButtonGroup({
       {onClearCache && (
         <button
           onClick={onClearCache}
-          title="Reset IndexedDB fast cache and rehydrate from server authority"
+          title="Refresh current reporting data from the server"
           className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-slate-800/60 px-3 py-2 text-xs font-medium text-slate-400 hover:bg-slate-800 hover:text-slate-200 active:scale-[0.98] transition-all"
         >
           <RotateCcw className="h-3.5 w-3.5" />

@@ -51,7 +51,7 @@ export function usePricingForecast(days = 14) {
   const forecastStartDate = profile?.current_business_date || calendarToday;
   const policyForDate = useMemo(() => date => getEnterpriseConfig(propertyId, date, selectedProperty || {}), [propertyId, selectedProperty, settingsVersion]);
   const isHistoricalSimulation = false;
-  const unavailable = propertyId == null || roomsQ.isPending || reservationsQ.isPending || roomsQ.isError || reservationsQ.isError;
+  const unavailable = propertyId == null || roomsQ.isPending || reservationsQ.isPending || snapshotsQ.isPending || roomsQ.isError || reservationsQ.isError || snapshotsQ.isError;
 
   const forecast = useMemo(
     () =>
@@ -83,7 +83,7 @@ export function usePricingForecast(days = 14) {
   };
 
   return {
-    availabilityMessage: propertyId == null ? "Select one property for pricing recommendations." : roomsQ.isPending || reservationsQ.isPending ? "Loading room inventory and reservations…" : "No room register yet. Create one on the Room Board.",
+    availabilityMessage: propertyId == null ? "Select one property for pricing recommendations." : roomsQ.isPending || reservationsQ.isPending || snapshotsQ.isPending ? "Loading room inventory, reservations and weather…" : "No room register yet. Create one on the Room Board.",
     freshnessNotice: `${!clockConfigured ? 'Configure the property time zone and business date; this preview uses UTC dates. ' : ''}${latestDate && latestDate < calendarToday ? `Imported financial data ends ${latestDate}. ` : ''}Rates are model estimates from the stored room register and reservation book; confirm current bookings before use.`,
     forecast,
     config,

@@ -8,6 +8,7 @@ import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { db } from "@/api/base44Client";
 import { getWeatherConfig, saveWeatherConfig } from "@/lib/weatherSettings";
 import { loadWeather, fetchOpenWeatherForecast } from "@/lib/weatherService";
+import { singleSelectedProperty } from "@/lib/propertySelection";
 
 function conditionLabel(cond) {
   const c = String(cond || "");
@@ -20,29 +21,43 @@ function conditionLabel(cond) {
   return c || "—";
 }
 
+function finiteReading(value) {
+  if (value == null || String(value).trim() === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function displayReading(value, suffix = "") {
+  const number = finiteReading(value);
+  return number == null ? "Unavailable" : `${Math.round(number)}${suffix}`;
+}
+
 function tempC(kOrC) {
-  const n = Number(kOrC);
-  if (Number.isNaN(n)) return "—";
+  const n = finiteReading(kOrC);
+  if (n == null) return "Unavailable";
   return n > 150 ? `${Math.round(n - 273.15)}°` : `${Math.round(n)}°`;
 }
 
 export default function WeatherPanel() {
-  const { property } = useGlobalFilters();
-  const { data: snapshots = [] } = useWeatherSnapshots(property);
+  const { property, properties } = useGlobalFilters();
+  const selectedProperty = singleSelectedProperty(property, properties);
+  const isPortfolio = !selectedProperty;
+  const propertyId = selectedProperty?.id ?? "all";
+  const snapshotsQ = useWeatherSnapshots(property);
+  const { data: snapshots = [] } = snapshotsQ;
 
   const [cfgOpen, setCfgOpen] = useState(false);
-  const [draftLat, setDraftLat] = useState(getWeatherConfig(typeof property === "string" && property !== "all" ? property : "*").lat);
-  const [draftLon, setDraftLon] = useState(getWeatherConfig(typeof property === "string" && property !== "all" ? property : "*").lon);
+  const [draftLat, setDraftLat] = useState(getWeatherConfig(propertyId).lat);
+  const [draftLon, setDraftLon] = useState(getWeatherConfig(propertyId).lon);
   const [cfgError, setCfgError] = useState("");
 
-  const isPortfolio = property === "all" || Array.isArray(property);
-  const propertyId = !isPortfolio ? property : "all";
   const [locationVersion,setLocationVersion] = useState(0);
   useEffect(()=>{const cfg=getWeatherConfig(propertyId);setDraftLat(cfg.lat);setDraftLon(cfg.lon);},[propertyId]);
   const date = new Intl.DateTimeFormat("en-CA", {timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading: weatherLoading } = useQuery({
     queryKey: ["weather-load", propertyId, date, locationVersion],
+    enabled: isPortfolio || !snapshotsQ.isPending,
     queryFn: async () => {
       const cfg = getWeatherConfig(propertyId);
       if (isPortfolio) {
@@ -69,11 +84,12 @@ export default function WeatherPanel() {
       });
     },
   });
+  const isLoading = weatherLoading || (!isPortfolio && snapshotsQ.isPending);
 
   const rows = data?.rows || [];
   const current = rows.find((r) => r.kind === "current") || rows.find((r) => String(r.date).slice(0, 10) === date) || {};
   const forecast = rows.filter((r) => r.kind === "forecast");
-  const chartData = forecast.map((f) => ({ day: String(f.date).slice(5), high: Number(f.temp_max), low: Number(f.temp_min) }));
+  const chartData = forecast.map((f) => ({ day: String(f.date).slice(5), high: finiteReading(f.temp_max), low: finiteReading(f.temp_min) }));
 
   const handleSaveCfg = () => {
     if (!String(draftLat).trim() || !String(draftLon).trim() || !Number.isFinite(Number(draftLat)) || !Number.isFinite(Number(draftLon)) || Math.abs(Number(draftLat)) > 90 || Math.abs(Number(draftLon)) > 180) {setCfgError("Enter valid latitude (-90 to 90) and longitude (-180 to 180)."); return;}
@@ -108,8 +124,12 @@ export default function WeatherPanel() {
         <div className="mb-4 rounded-xl border border-white/5 bg-[#0A1628]/50 p-3">
           <p className="text-xs text-slate-400">Property coordinates (the OpenWeather API key is configured on the server and never stored in this browser).</p>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            <input value={draftLat} onChange={(e) => setDraftLat(e.target.value)} placeholder="Latitude" className="rounded-lg border border-white/10 bg-[#0A1628] px-2 py-2 text-sm text-white" />
-            <input value={draftLon} onChange={(e) => setDraftLon(e.target.value)} placeholder="Longitude" className="rounded-lg border border-white/10 bg-[#0A1628] px-2 py-2 text-sm text-white" />
+            <label className="space-y-1 text-xs text-slate-300">Latitude
+              <input value={draftLat ?? ""} onChange={(e) => setDraftLat(e.target.value)} inputMode="decimal" placeholder="Latitude" className="block w-full rounded-lg border border-white/10 bg-[#0A1628] px-2 py-2 text-sm text-white" />
+            </label>
+            <label className="space-y-1 text-xs text-slate-300">Longitude
+              <input value={draftLon ?? ""} onChange={(e) => setDraftLon(e.target.value)} inputMode="decimal" placeholder="Longitude" className="block w-full rounded-lg border border-white/10 bg-[#0A1628] px-2 py-2 text-sm text-white" />
+            </label>
           </div>
           <div className="mt-2 flex gap-2">
             <button onClick={handleSaveCfg} className="rounded-lg bg-[#6C63FF] px-3 py-1.5 text-xs font-medium text-white">Save</button>
@@ -140,11 +160,11 @@ export default function WeatherPanel() {
             <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
               <p className="text-[10px] uppercase tracking-widest text-slate-500">Feels Like</p>
               <p className="mt-1 font-heading text-2xl font-semibold text-white">{tempC(current.feels_like ?? current.temp)}</p>
-              <p className="text-xs text-slate-400">humidity {Math.round(Number(current.humidity) || 0)}%</p>
+              <p className="text-xs text-slate-400">Humidity: {displayReading(current.humidity, "%")}</p>
             </div>
             <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">
               <p className="text-[10px] uppercase tracking-widest text-slate-500">Wind</p>
-              <p className="mt-1 font-heading text-2xl font-semibold text-white">{Math.round(Number(current.wind) || 0)}</p>
+              <p className="mt-1 font-heading text-2xl font-semibold text-white">{displayReading(current.wind)}</p>
               <p className="text-xs text-slate-400">m/s</p>
             </div>
             <div className="rounded-xl border border-white/5 bg-[#0A1628]/60 p-3">

@@ -1,12 +1,13 @@
 import React, { useState, useEffect, lazy, Suspense } from "react";
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Building2, MoreHorizontal, X, ArrowLeft, LogOut, KeyRound, ChevronDown } from "lucide-react";
-import { DURATION, EASE_OUT, fadeOnly } from "@/lib/motion";
+import { Building2, MoreHorizontal, ArrowLeft, LogOut, KeyRound, ChevronDown } from "lucide-react";
+import { DURATION, fadeOnly } from "@/lib/motion";
 const AIAssistant = lazy(() => import("@/components/AIAssistant"));
 import { GlobalFiltersProvider, useGlobalFilters } from "@/lib/useGlobalFilters";
 import GlobalControlBar from "@/components/GlobalControlBar";
 import { useAuth } from "@/lib/AuthContext";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import CommandMenu from "@/components/CommandMenu";
 import { NAV, PRIMARY, MORE } from "@/lib/navigation";
 import { useRealtimeInvalidation, APP_SYNC_PREFIXES } from "@/lib/realtime";
@@ -14,15 +15,17 @@ import { pullRemoteSettings } from "@/lib/settingsStore";
 
 function SidebarBrand() {
   const { property, properties } = useGlobalFilters();
-  const isPortfolio = property === "all";
-  const prop = isPortfolio ? null : properties.find((p) => p.id === property);
-  const name = isPortfolio ? "Red Roof Portfolio" : (prop?.name || "Red Roof Executive");
-  const detail = isPortfolio ? `${properties.length} properties` : `Code ${prop?.code || "—"} · ${prop?.rooms || 100} rooms`;
+  const selected = properties.filter((p) => property === "all" || (Array.isArray(property) ? property.map(String).includes(String(p.id)) : String(p.id) === String(property)));
+  const multiple = property === "all" || selected.length > 1;
+  const prop = selected.length === 1 ? selected[0] : null;
+  const name = multiple ? "Red Roof Portfolio" : (prop?.name || "Red Roof Executive");
+  const rooms = Number(prop?.rooms);
+  const detail = multiple ? `${selected.length} properties selected` : (prop ? `Code ${prop.code || "Unavailable"} / ${Number.isFinite(rooms) && rooms > 0 ? `${rooms} rooms` : "Room count unavailable"}` : "Select a property");
   return (
-    <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+    <p className="mt-2 text-xs leading-relaxed text-[var(--t-tertiary)]">
       {name}
       <br />
-      <span className="text-slate-600">{detail}</span>
+      <span className="text-[var(--t-tertiary)]">{detail}</span>
     </p>
   );
 }
@@ -37,7 +40,6 @@ export default function Layout() {
   const navigate = useNavigate();
   const { canAccessRoute, user, logout } = useAuth();
   const [moreOpen, setMoreOpen] = useState(false);
-  const visibleNav = NAV.filter((n) => canAccessRoute(n.to));
   const active = NAV.find((n) => n.to === pathname);
   const isPrimary = PRIMARY.some((n) => n.to === pathname && canAccessRoute(n.to));
   const inMore = MORE.some((n) => n.to === pathname && canAccessRoute(n.to));
@@ -47,11 +49,22 @@ export default function Layout() {
   }, [inMore]);
   const coreVisible = PRIMARY.filter((n) => canAccessRoute(n.to));
   const moreVisible = MORE.filter((n) => canAccessRoute(n.to));
+  const mobilePrimary = coreVisible.slice(0, 4);
+  const mobileMore = [...coreVisible.slice(4), ...moreVisible];
+  const mobileMoreActive = mobileMore.some((n) => n.to === pathname);
   const reduceMotion = useReducedMotion();
 
   // Reconcile cloud settings (taxes, commissions, fees) with local storage on load
   useEffect(() => {
     pullRemoteSettings();
+  }, []);
+
+  useEffect(() => { setMoreOpen(false); }, [pathname]);
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const closeOnDesktop = () => { if (desktop.matches) setMoreOpen(false); };
+    desktop.addEventListener("change", closeOnDesktop);
+    return () => desktop.removeEventListener("change", closeOnDesktop);
   }, []);
 
   useEffect(() => {
@@ -92,6 +105,7 @@ export default function Layout() {
   return (
     <GlobalFiltersProvider>
     <div className="min-h-screen bg-[#040D1A] font-body text-slate-200">
+      <a href="#main-content" className="skip-link">Skip to main content</a>
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 hidden w-64 overflow-y-auto border-r border-white/5 bg-[#0A1628] p-6 lg:flex lg:flex-col">
         <div className="flex items-center gap-2">
@@ -99,7 +113,7 @@ export default function Layout() {
           <span className="font-heading text-sm font-semibold tracking-wide text-white">RRI Executive</span>
         </div>
         <SidebarBrand />
-        <nav className="mt-6 flex-1 space-y-1 overflow-y-auto pr-1">
+        <nav aria-label="Main navigation" className="mt-6 flex-1 space-y-1 overflow-y-auto pr-1">
           <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
             Owner Intelligence
           </p>
@@ -109,6 +123,7 @@ export default function Layout() {
               <Link
                 key={to}
                 to={to}
+                aria-current={a ? "page" : undefined}
                 className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all duration-200 ${
                   a ? "bg-[#6C63FF]/15 text-white font-medium" : "text-slate-400 hover:bg-white/5 hover:text-slate-100"
                 }`}
@@ -121,6 +136,9 @@ export default function Layout() {
 
           <div className="pt-4 border-t border-white/5 mt-4">
             <button
+              type="button"
+              aria-expanded={showAllTools}
+              aria-controls="operational-navigation"
               onClick={() => setShowAllTools((prev) => !prev)}
               className="flex w-full items-center justify-between px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 hover:text-slate-300 transition-colors"
             >
@@ -128,14 +146,15 @@ export default function Layout() {
               <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showAllTools ? "rotate-180" : ""}`} />
             </button>
             {showAllTools && (
-              <div className="mt-1 space-y-0.5">
+              <div id="operational-navigation" className="mt-1 space-y-0.5">
                 {moreVisible.map(({ to, label, icon: Icon }) => {
                   const a = pathname === to;
                   return (
                     <Link
                       key={to}
                       to={to}
-                      className={`flex items-center gap-3 rounded-xl px-3 py-2 text-xs transition-all duration-200 ${
+                      aria-current={a ? "page" : undefined}
+                      className={`flex items-center gap-3 rounded-xl px-3 py-3 text-sm transition-all duration-200 ${
                         a ? "bg-[#6C63FF]/15 text-white" : "text-slate-400 hover:bg-white/5 hover:text-slate-100"
                       }`}
                     >
@@ -197,7 +216,10 @@ export default function Layout() {
         >
           {!isPrimary && (
             <button
-              onClick={() => navigate(-1)}
+              onClick={() => {
+                if (window.history.state?.idx > 0) navigate(-1);
+                else navigate("/");
+              }}
               className="flex h-11 w-11 items-center justify-center rounded-lg text-slate-300 transition-colors hover:bg-white/5 hover:text-white"
               aria-label="Go back"
             >
@@ -210,7 +232,7 @@ export default function Layout() {
           </span>
         </header>
 
-        <main className="mx-auto max-w-[1400px] px-4 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-6 sm:px-8 lg:py-8">
+        <main id="main-content" tabIndex={-1} className="mx-auto max-w-[1400px] px-4 pb-[calc(5rem+env(safe-area-inset-bottom))] pt-6 sm:px-8 lg:py-8">
           <GlobalControlBar />
           <AnimatePresence mode="wait">
             <motion.div
@@ -228,12 +250,15 @@ export default function Layout() {
 
         {/* Mobile bottom tab bar */}
         <nav
+          aria-label="Mobile navigation"
           className="fixed inset-x-0 bottom-0 z-30 flex items-stretch justify-around border-t border-white/10 bg-[#0A1628]/95 backdrop-blur lg:hidden"
           style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
         >
-          {PRIMARY.filter((n) => canAccessRoute(n.to)).map(({ to, short, icon: Icon }) => (
+          {mobilePrimary.map(({ to, short, icon: Icon }) => (
             <button
               key={to}
+              type="button"
+              aria-current={pathname === to ? "page" : undefined}
               onClick={() => {
                 if (pathname === to) {
                   navigate(to);
@@ -247,7 +272,7 @@ export default function Layout() {
                 }
               }}
               className={`flex min-h-[44px] flex-1 flex-col items-center gap-1 py-3 text-[10px] ${
-                pathname === to ? "text-[#00D4FF]" : "text-slate-500"
+                pathname === to ? "text-[#00D4FF]" : "text-slate-400"
               }`}
             >
               <Icon className="h-5 w-5" />
@@ -255,9 +280,13 @@ export default function Layout() {
             </button>
           ))}
           <button
+            type="button"
+            id="mobile-more-trigger"
+            aria-haspopup="dialog"
+            aria-expanded={moreOpen}
             onClick={() => setMoreOpen(true)}
             className={`flex min-h-[44px] flex-1 flex-col items-center gap-1 py-3 text-[10px] ${
-              inMore ? "text-[#00D4FF]" : "text-slate-500"
+              mobileMoreActive ? "text-[#00D4FF]" : "text-slate-400"
             }`}
           >
             <MoreHorizontal className="h-5 w-5" />
@@ -265,67 +294,40 @@ export default function Layout() {
           </button>
         </nav>
 
-        {/* More menu — bottom sheet.
-            The only hand-rolled overlay in the app (the Radix dialogs animate
-            themselves via tailwindcss-animate). It used to pop in and out with
-            no transition at all; AnimatePresence is needed rather than a CSS
-            class because the close is the half that was missing. */}
-        <AnimatePresence>
-          {moreOpen && (
-            /* Keyed explicitly: AnimatePresence identifies children by
-               `child.key || ""`, so a keyless child works only while it is the
-               sole child. A real key keeps that from becoming a trap. */
-            <div key="more-sheet" className="fixed inset-0 z-40 lg:hidden" onClick={() => setMoreOpen(false)}>
-              <motion.div
-                className="absolute inset-0 bg-black/60"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: DURATION.fast / 1000, ease: EASE_OUT }}
-              />
-              <motion.div
-                className="absolute inset-x-0 bottom-0 rounded-t-3xl border-t border-white/10 bg-[#0F1F35] p-4"
-                style={{ paddingBottom: "calc(1rem + env(safe-area-inset-bottom))" }}
-                onClick={(e) => e.stopPropagation()}
-                // A sheet is the one place a longer travel is right — it comes
-                // from off-screen, so it animates its own height rather than a
-                // token distance. Reduced motion drops to a plain cross-fade.
-                initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: "100%" }}
-                animate={reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
-                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: "100%" }}
-                transition={{ duration: DURATION.slow / 1000, ease: EASE_OUT }}
-              >
-              <div className="mb-4 flex items-center justify-between">
-                <span className="font-heading text-sm font-semibold text-white">More</span>
-                <button onClick={() => setMoreOpen(false)} aria-label="Close menu" className="text-slate-400 hover:text-white">
-                  <X className="h-5 w-5" />
-                </button>
+        <DialogPrimitive.Root open={moreOpen} onOpenChange={setMoreOpen}>
+          <DialogPrimitive.Portal>
+            <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/60" />
+            <DialogPrimitive.Content
+              className="fixed inset-x-0 bottom-0 z-50 max-h-[85dvh] overflow-y-auto overscroll-contain rounded-t-3xl border-t border-white/10 bg-[#0F1F35] p-4"
+              style={{ paddingBottom: "calc(1rem + env(safe-area-inset-bottom))" }}
+              onCloseAutoFocus={(event) => {
+                event.preventDefault();
+                document.getElementById("mobile-more-trigger")?.focus();
+              }}
+            >
+              <div className="mb-4 flex items-center justify-between gap-4">
+                <DialogPrimitive.Title className="font-heading text-sm font-semibold text-white">All pages</DialogPrimitive.Title>
+                <DialogPrimitive.Close className="min-h-11 rounded-lg px-3 text-sm text-slate-300 hover:bg-white/5">Close</DialogPrimitive.Close>
               </div>
-              <div className="grid grid-cols-3 gap-3">
-                {MORE.filter((n) => canAccessRoute(n.to)).map(({ to, short, icon: Icon }) => (
-                  <Link
-                    key={to}
-                    to={to}
+              <DialogPrimitive.Description className="sr-only">Choose a page or manage your account.</DialogPrimitive.Description>
+              <nav aria-label="More pages" className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {mobileMore.map(({ to, label, icon: Icon }) => (
+                  <Link key={to} to={to} aria-current={pathname === to ? "page" : undefined}
                     onClick={() => setMoreOpen(false)}
-                    className={`flex min-h-[72px] flex-col items-center gap-2 rounded-xl border px-2 py-4 text-xs ${
-                      pathname === to
-                        ? "border-[#6C63FF] bg-[#6C63FF]/15 text-white"
-                        : "border-white/10 bg-[#0A1628] text-slate-400"
-                    }`}
-                  >
-                    <Icon className="h-5 w-5" />
-                    {short}
+                    className={`flex min-h-[72px] flex-col items-center gap-2 rounded-xl border px-2 py-4 text-center text-xs ${pathname === to ? "border-[var(--brand)] bg-[var(--brand-quiet)] text-white" : "border-white/10 bg-[#0A1628] text-slate-300"}`}>
+                    <Icon aria-hidden="true" className="h-5 w-5" />{label}
                   </Link>
                 ))}
+              </nav>
+              <div className="mt-4 flex flex-wrap items-center justify-center gap-3 border-t border-white/10 pt-3 text-sm text-slate-300">
+                <Link className="min-h-11 px-3 py-3" to="/change-password" onClick={() => setMoreOpen(false)}>Change password</Link>
+                <button type="button" className="min-h-11 px-3 text-red-300" onClick={async () => { await logout(false); window.location.href = "/cdn-cgi/access/logout"; }}>Logout</button>
+                <Link className="min-h-11 px-3 py-3" to="/privacy" onClick={() => setMoreOpen(false)}>Privacy</Link>
+                <Link className="min-h-11 px-3 py-3" to="/terms" onClick={() => setMoreOpen(false)}>Terms</Link>
               </div>
-              <div className="mt-3 flex items-center justify-center gap-4 border-t border-white/10 pt-3 text-xs text-slate-400">
-                <Link to="/privacy" onClick={() => setMoreOpen(false)} className="hover:text-white hover:underline">Privacy</Link>
-                <Link to="/terms" onClick={() => setMoreOpen(false)} className="hover:text-white hover:underline">Terms</Link>
-              </div>
-              </motion.div>
-            </div>
-          )}
-        </AnimatePresence>
+            </DialogPrimitive.Content>
+          </DialogPrimitive.Portal>
+        </DialogPrimitive.Root>
       </div>
 
       <Suspense fallback={null}>

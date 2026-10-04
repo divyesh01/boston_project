@@ -38,9 +38,12 @@ async function captureChart(element, title, dateRange) {
   const svg = findSvg(element);
   if (!svg) throw new Error("No chart found in this area");
 
-  const rect = element.getBoundingClientRect();
-  const width = Math.max(rect.width, 300);
-  const height = Math.max(rect.height, 200);
+  // Capture the SVG at its own aspect ratio. The wrapper can also contain a
+  // legend, whose height must not stretch the exported chart.
+  const rect = svg.getBoundingClientRect();
+  const width = Math.ceil(rect.width);
+  const height = Math.ceil(rect.height);
+  if (!(width > 0 && height > 0)) throw new Error("The chart is hidden or has no visible size");
 
   const chartCanvas = await svgToCanvas(svg, width, height);
 
@@ -82,5 +85,6 @@ export async function copyChartToClipboard(element, title, dateRange) {
   }
   const canvas = await captureChart(element, title, dateRange);
   const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) throw new Error("Could not create the chart image for the clipboard");
   await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
 }

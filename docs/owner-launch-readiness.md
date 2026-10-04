@@ -137,7 +137,27 @@ Verified repair candidate, 2026-10-03:
 | Financial / operations / aggregate / authorization probes | PASS in documented scopes | Synthetic fixtures and actual handlers; not production owner acceptance |
 | Normal PDF / workbook | PASS for the recorded two-property case | Eight PDF pages reviewed; workbook reconciles 2,452,500 cents with completeness warnings |
 | Route body coverage | 36 recorded PASS | Local synthetic normal-auth fixtures; historical public render and expected redirects distinguished |
-| Primary browser actions | 6 PASS, 1 FAIL, 100 NOT_RUN | Exact exports, expense/payroll filtering, check-in and confirmed property deletion tested; import fails in the native R2 path and remains under repair |
+| Primary browser actions | 7 PASS, 1 FAIL, 99 NOT_RUN | Exact exports, expense/payroll filtering, check-in and confirmed property deletion tested; import fails in the native R2 path and remains under repair |
 | Production owner acceptance | NOT_RUN | No production authenticated owner acceptance claimed |
 
 The candidate is not an owner-ready declaration. The larger-number PDF case preserves the full $1,234,567.89 figure and completeness warnings across reviewed pages. Outstanding browser actions, the R2 import failure, private-fixture checks and production acceptance remain separate open gates. Zero-active financial rendering and selected-night room carry have additional scoped browser evidence. The broad mutation sweep passed the earlier candidate snapshot; it is not a full mutation claim for the added warning, empty-selection and PDF callback changes. Their focused regressions and the final standard suite pass.
+
+## October 4 production metadata refresh
+
+Read-only release-controller evidence records active version **308**,
+2d2b18a4-a31f-465e-b43c-4916ee571c8a, at 100% traffic, created
+2026-10-04T05:39:40Z. This activation was external to this repair task. Its
+source commit remains **UNPROVEN**; neither the preceding UX release commit
+nor this task's repair commits are asserted to be its deployed source.
+
+The observed runtime uses ENABLE_BUSINESS_SYNC_API=true,
+ENABLE_D1_DATA_API=false, and S3_ENABLED=true. S3/GCS secret names and
+bindings were present; no native R2 bucket binding was present. The local
+native-R2 upload failure establishes a portability defect in that storage
+branch and does not prove a failure in production's preferred S3 branch.
+The isolated streaming candidate has not been accepted or deployed.
+
+Local browser evidence currently records **7 PASS, 1 FAIL, 99 NOT_RUN**
+primary actions. Selected-property Remove and zero-active-property supplements
+remain scoped checks, not blanket coverage of every action. Authenticated
+production owner acceptance remains **NOT_RUN**.

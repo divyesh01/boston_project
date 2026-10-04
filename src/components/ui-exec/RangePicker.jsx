@@ -36,7 +36,7 @@ import React from "react";
 // nothing.
 const FIELD =
   "rounded-lg border border-[var(--line)] bg-[var(--s-overlay)] px-3 py-1.5 text-sm " +
-  "text-[var(--t-primary)] outline-none transition-colors duration-150 " +
+  "text-[var(--t-primary)] min-h-11 transition-colors duration-150 " +
   "hover:border-[var(--line-strong)]";
 
 export default function RangePicker({ from, to, onChange, label }) {
@@ -49,6 +49,7 @@ export default function RangePicker({ from, to, onChange, label }) {
         type="date"
         aria-label={label ? `${label} — from` : "From date"}
         value={from}
+        max={to || undefined}
         onChange={(e) => onChange(e.target.value, to)}
         className={FIELD}
       />
@@ -57,6 +58,7 @@ export default function RangePicker({ from, to, onChange, label }) {
         type="date"
         aria-label={label ? `${label} — to` : "To date"}
         value={to}
+        min={from || undefined}
         onChange={(e) => onChange(from, e.target.value)}
         className={FIELD}
       />

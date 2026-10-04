@@ -55,7 +55,7 @@ const PrivacyPolicy = lazy(() => import('@/pages/PrivacyPolicy'));
 const TermsOfService = lazy(() => import('@/pages/TermsOfService'));
 
 const PageFallback = () => (
-  <div className="mx-auto w-full max-w-6xl animate-pulse space-y-6 p-6 motion-reduce:animate-none">
+  <div role="status" aria-label="Loading page" className="mx-auto w-full max-w-6xl animate-pulse space-y-6 p-6 motion-reduce:animate-none">
     <div className="h-8 w-48 rounded-lg bg-white/5" />
     <div className="grid gap-4 sm:grid-cols-3">
       {[0, 1, 2].map((i) => (
@@ -104,10 +104,7 @@ class TopLevelErrorBoundary extends Component {
         <div className="flex min-h-screen items-center justify-center bg-[#040D1A] p-6">
           <div className="w-full max-w-2xl rounded-2xl border border-red-500/30 bg-[#0F1F35] p-6">
             <h1 className="text-lg font-semibold text-red-300">Application Error</h1>
-            <p className="mt-1 text-sm text-slate-400">{this.state.error.message}</p>
-            <pre className="mt-4 max-h-64 overflow-auto rounded-lg bg-black/40 p-3 text-xs text-red-200">
-              {this.state.info?.componentStack}
-            </pre>
+            <p className="mt-2 text-sm text-slate-400">The application could not open. Reload to try again. If the problem continues, contact your administrator.</p>
             <button
               onClick={() => window.location.reload()}
               className="mt-4 rounded-lg bg-[#6C63FF] px-4 py-2 text-sm font-medium text-white"
@@ -154,11 +151,14 @@ class LazyErrorBoundary extends Component {
   }
 }
 
-const Suspended = ({ children }) => (
-  <LazyErrorBoundary>
-    <Suspense fallback={<PageFallback />}>{children}</Suspense>
-  </LazyErrorBoundary>
-);
+const Suspended = ({ children }) => {
+  const { pathname } = useLocation();
+  return (
+    <LazyErrorBoundary key={pathname}>
+      <Suspense fallback={<PageFallback />}>{children}</Suspense>
+    </LazyErrorBoundary>
+  );
+};
 
 const LoginRedirect = () => {
   const { isAuthenticated, isLoadingAuth } = useAuth();

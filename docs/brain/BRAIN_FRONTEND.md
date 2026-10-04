@@ -911,3 +911,26 @@ When uploading or resuming reports that overlap an active analytical period for 
 
 8. **Settings Archive Mode Boundary**:
    - In server-sync mode, Settings labels the download a local snapshot and explains that records not yet loaded in this browser may be absent. It disables local archive restore and keeps handler guards; the archive function independently rejects that mode before local mutations. Local-only backup/restore copy, permissions and REPLACE confirmation remain unchanged. Candidate tests render both modes; production server backup and recovery remain separate.
+
+## Cross-site UX production integration (October 4, 2026)
+
+The production integration applies the cross-site UX patch onto the current-main-based
+owner reporting candidate. It preserves lazy startup and the current enterprise/property
+contracts while adding mobile all-pages navigation, accessible bounded dialogs, date
+controls, complete loading/error states, duplicate-save guards, truthful missing values,
+and clearer export/account actions. Command menu changes live in
+`src/components/CommandMenuDialog.jsx`; weather resolves a single selected property
+through the existing property selection helper.
+
+The owner reported verification complete and authorized release. The exact integrated
+source is newly assembled; that statement is not an independent acceptance result for
+the combined source. See `ANTIGRAVITY_UI_UX_HANDOFF.md` for changed-file inventory,
+commands, expected behavior and remaining runtime risks. Broad tests and browser
+acceptance remain delegated to Antigravity. Packaging/deployment outcomes are recorded
+in `docs/production-ui-release-2026-10-04.md`.
+
+
+October 4 release follow-up: fixed the ledger ErrorState prop required by CI; preserved legacy review handling metrics while adding explicit provider-publication metrics; retained numeric-dollar channel payloads behind a verified-publishing capability and provider receipt requirement. The current mock adapter remains disabled. Antigravity: run npm run typecheck, node scripts/probe-reviews.mjs and node scripts/probe-cents-unit-mismatch.mjs, then inspect /Pricing, /Reviews and /DataIntelligence. Codex did not run these checks locally.
+
+
+Release continuation: updated existing DataIntelligence UI test code to await real asynchronous reads before asserting loaded content, with an initial pending-state assertion preserved. Updated SmartButtonGroup callback test to the actual Report Download Options label. No assertions removed, product loading guards unchanged, no verification commands executed locally. GitHub CI owns automatic execution; Antigravity owns authenticated owner acceptance. Production artifact is unchanged by these test-only edits.

@@ -12,7 +12,7 @@ import { CalculationService } from "@/lib/calculationService";
 import { sumCents, fromCents } from "@/lib/decimal";
 import { getCommissionRates, setCommissionRates, getCcFeeRate, setCcFeeRate, COMMISSION_TYPES } from "@/lib/commissionRates";
 import { calculateOtaDependence, calculateDirectShiftOpportunity, CHANNEL_GROUPS } from "@/lib/channelDictionary";
-import { ErrorState } from "@/components/ui/status";
+import { ErrorState, LoadingState } from "@/components/ui/status";
 import { useSettingsVersion } from "@/hooks/useSettingsVersion";
 import { useEffect } from "react";
 
@@ -158,6 +158,9 @@ export default function OtaChannels() {
     }
     setExporting(false);
   };
+
+  if (sourcesQ.isError || payQ.isError) return <ErrorState title="Could not load channel revenue" description="Channel profitability is unavailable until revenue and payment data load." error={sourcesQ.error || payQ.error} onRetry={handleRefresh} />;
+  if (sourcesQ.isLoading || payQ.isLoading) return <LoadingState title="Loading channel revenue and payments..." />;
 
   return (
     <div className="space-y-6">

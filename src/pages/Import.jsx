@@ -318,6 +318,7 @@ export default function Import() {
   const [propertyId, setPropertyId] = useState("");
   const [forceImport, setForceImport] = useState(false);
   const [busy, setBusy] = useState(false);
+  const scanningRef = useRef(false);
   const [progress, setProgress] = useState(0);
   const [currentFile, setCurrentFile] = useState("");
   const [totalFiles, setTotalFiles] = useState(0);
@@ -620,6 +621,10 @@ export default function Import() {
   };
 
   const handleFiles = async (fileList) => {
+    if (scanningRef.current || busy || importingRef.current || importing || clearing || !fileList?.length) return;
+    scanningRef.current = true;
+    setBusy(true);
+    try {
     const effUpload = resolveQueueProperty({
       propertyId: String(propertyId || "").trim(),
       accessibleProperties,
@@ -673,8 +678,7 @@ export default function Import() {
       // appearing on first edit so the queue item has one stable shape.
       businessDate: "",
     }));
-    setQueue(newQueue);
-    setResults([]);
+    setQueue((previous) => [...previous, ...newQueue]);
     setExpandedKey(null);
     setTotalFiles(newQueue.length);
     setProcessed(0);
@@ -730,8 +734,13 @@ export default function Import() {
       setProcessed(done);
       setProgress(Math.round((done / newQueue.length) * 100));
     }
-    setBusy(false);
-    setCurrentFile("");
+    } catch (error) {
+      alert(`Reports could not be scanned: ${error?.message || error}. Your existing queue is kept.`);
+    } finally {
+      scanningRef.current = false;
+      setBusy(false);
+      setCurrentFile("");
+    }
   };
 
   // Re-scan one queued file against an operator-supplied statement date.
@@ -1600,7 +1609,8 @@ export default function Import() {
             <button
               key={r.key}
               onClick={() => setType(r.key)}
-              disabled={busy}
+              disabled={busy || importing || clearing}
+              aria-pressed={type === r.key}
               className={`rounded-xl border px-3 py-3 text-left text-sm transition-all duration-200 ${
                 type === r.key
                   ? "border-[#6C63FF] bg-[#6C63FF]/15 text-white"
@@ -1637,10 +1647,10 @@ export default function Import() {
               alert("Select a property before importing reports.");
               return;
             }
-            if (busy) return;
+            if (busy || importing || clearing || scanningRef.current) return;
             handleFiles(e.dataTransfer.files);
           }}
-          className={`mt-5 flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed px-6 py-12 text-center transition-colors ${
+          className={`mt-5 flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed px-6 py-12 text-center transition-colors focus-within:outline focus-within:outline-2 focus-within:outline-[var(--brand)] ${
             !propertyId
               ? "cursor-not-allowed border-white/10 opacity-40"
               : "cursor-pointer border-white/15 bg-[#0A1628]/60 hover:border-[#00D4FF]/60"
@@ -1658,8 +1668,9 @@ export default function Import() {
             type="file"
             accept=".xlsx,.xls,.csv"
             multiple
-            className="hidden"
-            disabled={busy || !propertyId}
+            aria-label="Choose reports to import"
+            className="sr-only"
+            disabled={busy || importing || clearing || !propertyId}
             onChange={(e) => {
               if (!propertyId) {
                 alert("Select a property before importing reports.");

@@ -1,5 +1,7 @@
 import { sanitizeCsvCell } from './securityUtils';
 
+const csvAmount = (value) => sanitizeCsvCell(value == null || value === '' || !Number.isFinite(Number(value)) ? 'Unavailable' : Number(value).toFixed(2));
+
 /**
  * Exports 3-way financial reconciliation data to a secure CSV file.
  * @param {Object} reconciliationData - Output from reconcileDailyFinancials()
@@ -23,12 +25,12 @@ export function exportReconciliationToCsv(reconciliationData, propertyName = 'Po
 
   const rows = reconciliationData.days.map(day => [
     sanitizeCsvCell(day.date),
-    sanitizeCsvCell(Number(day.pmsTotal).toFixed(2)),
-    sanitizeCsvCell(Number(day.pmsCard).toFixed(2)),
-    sanitizeCsvCell(Number(day.pmsCash).toFixed(2)),
-    sanitizeCsvCell(Number(day.merchantSettledNet).toFixed(2)),
-    sanitizeCsvCell(Number(day.bankDeposited).toFixed(2)),
-    sanitizeCsvCell(Number(day.cardVariance).toFixed(2)),
+    csvAmount(day.pmsTotal),
+    csvAmount(day.pmsCard),
+    csvAmount(day.pmsCash),
+    csvAmount(day.merchantSettledNet),
+    csvAmount(day.bankDeposited),
+    csvAmount(day.cardVariance),
     sanitizeCsvCell(day.status)
   ]);
 
@@ -37,12 +39,12 @@ export function exportReconciliationToCsv(reconciliationData, propertyName = 'Po
   rows.push([]);
   rows.push([
     'TOTALS',
-    sanitizeCsvCell(Number(summary.totalPmsRevenue || 0).toFixed(2)),
+    csvAmount(summary.totalPmsRevenue),
     '',
     '',
-    sanitizeCsvCell(Number(summary.totalMerchantSettled || 0).toFixed(2)),
-    sanitizeCsvCell(Number(summary.totalBankDeposited || 0).toFixed(2)),
-    sanitizeCsvCell(Number(summary.netVariance || 0).toFixed(2)),
+    csvAmount(summary.totalMerchantSettled),
+    csvAmount(summary.totalBankDeposited),
+    csvAmount(summary.netVariance),
     sanitizeCsvCell(summary.reconciliationHealth || 'N/A')
   ]);
 

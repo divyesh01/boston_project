@@ -152,11 +152,11 @@ export default function MonthlyCalendar() {
       occupancy: s.occupancy,
       adr: s.adr,
       revpar: s.revpar,
-      highest: occRows.length ? Math.max(...occRows.map((r) => r.room_revenue || 0)) : 0,
-      lowest: occRows.length ? Math.min(...occRows.map((r) => r.room_revenue || 0)) : 0,
+      highest: byDate.size ? Math.max(...Array.from(byDate.values(), (r) => Number(r.room_revenue) || 0)) : 0,
+      lowest: byDate.size ? Math.min(...Array.from(byDate.values(), (r) => Number(r.room_revenue) || 0)) : 0,
       days: s.days,
     };
-  }, [occRows, properties]);
+  }, [occRows, properties, byDate]);
 
   const groups = useMemo(() => {
     const g = { high: [], medium: [], low: [], nodata: [] };
@@ -302,14 +302,19 @@ export default function MonthlyCalendar() {
               const closestDist = cellEvents.length > 0 ? Math.min(...cellEvents.map((e) => e.distance)) : 0;
               const distColor = distanceColor(closestDist);
               return (
-                <button
+                <div
                   key={i}
-                  onClick={() => setSelectedDay(cell.date)}
-                  className={`min-h-[90px] rounded-lg border p-2 text-left transition-all sm:min-h-[120px] ${
+                  className={`relative min-h-[90px] rounded-lg border p-2 text-left transition-all sm:min-h-[120px] ${
                     selectedDay === cell.date ? "border-[#00D4FF] ring-1 ring-[#00D4FF]" : "border-white/5"
                   } ${!cell.data ? "bg-[#0A1628]/40" : ""}`}
                   style={cell.data ? { backgroundColor: `${color}15`, borderLeft: `3px solid ${color}` } : {}}
                 >
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDay(cell.date)}
+                    aria-label={`View performance for ${formatDayLabel(cell.date)}`}
+                    className="absolute inset-0 rounded-lg hover:bg-white/5"
+                  />
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-white">{cell.day}</span>
                     {cell.data && <span className="text-[10px] text-slate-400">{occPct.toFixed(0)}%</span>}
@@ -323,7 +328,8 @@ export default function MonthlyCalendar() {
                     <button
                       type="button"
                       onClick={(e) => { e.stopPropagation(); setEventPopupDay(cell.date); }}
-                      className="mt-1 flex w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-[9px] font-semibold uppercase tracking-wide transition-all hover:brightness-125"
+                      aria-label={`View ${cellEvents.length} events for ${formatDayLabel(cell.date)}`}
+                      className="relative z-10 mt-1 flex min-h-8 w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-[9px] font-semibold uppercase tracking-wide transition-all hover:brightness-125"
                       style={{ backgroundColor: `${eventColor}22`, color: distColor, borderLeft: `2px solid ${eventColor}` }}
                       title={cellEvents.map((e) => `${e.name} — ${e.demand}`).join(" / ")}
                     >
@@ -342,7 +348,7 @@ export default function MonthlyCalendar() {
                   ) : (
                     <div className="mt-2 text-[10px] text-slate-600">No Data</div>
                   )}
-                </button>
+                </div>
               );
             })}
           </div>

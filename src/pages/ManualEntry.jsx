@@ -238,6 +238,15 @@ function ManualEntryEditor({ selectedProperty, accessibleProperties, setProperty
   // failure visible instead of laundering it into an ordinary empty list.
   const existingQ = useManualEntries(reportType, selectedProperty?.id);
   const existing = existingQ.data ?? [];
+  const ledgerQ = useQuery({
+    queryKey: ["manual-entry-ledger", reportType, selectedProperty?.id],
+    enabled: !!selectedProperty?.id,
+    queryFn: async () => {
+      const ledger = await db.entities[REPORT_CONFIGS[reportType].entity].filter({ property_id: selectedProperty.id }, "-date", 100000);
+      if (ledger.length >= 100000) throw new Error("The ledger exceeds the complete-read limit. Saving is paused because duplicate detection would be incomplete.");
+      return ledger;
+    },
+  });
 
   const propertyOpts = accessibleProperties.map((p) => [JSON.stringify(p.id), p.name]);
 
@@ -481,7 +490,7 @@ function ManualEntryEditor({ selectedProperty, accessibleProperties, setProperty
     // counted revenue with no error anywhere. An empty grid is a nuisance; an
     // empty dedupe set is silent data corruption. So the save refuses until the
     // read succeeds, and says exactly why.
-    if (!existingQ.isSuccess) {
+    if (!existingQ.isSuccess || existingQ.isFetching || !ledgerQ.isSuccess || ledgerQ.isFetching) {
       setSaveMsg("Not saved - the saved-entries list could not be loaded, so duplicate rows cannot be detected. Retry, and do not re-enter rows until it loads.");
       setMsgTone("error");
       setSaving(false);
@@ -494,7 +503,13 @@ function ManualEntryEditor({ selectedProperty, accessibleProperties, setProperty
       if (reportType === "source") return `${rec.property_id}|${rec.date}|${rec.code || rec.source}`;
       return `${rec.property_id}|${rec.date}`;
     };
-    const existingKeys = new Set(existing.map(dedupeKey));
+    const existingKeys = new Set((ledgerQ.data || []).map(dedupeKey));
+    const existingOwners = new Map();
+    for (const record of ledgerQ.data || []) {
+      const key = dedupeKey(record);
+      if (!existingOwners.has(key)) existingOwners.set(key, new Set());
+      existingOwners.get(key).add(String(record.id));
+    }
 
     // Validate rows before writing anything.
     const errors = [];
@@ -572,6 +587,7 @@ function ManualEntryEditor({ selectedProperty, accessibleProperties, setProperty
         propertyId: prop.id,
         prepared,
         existingKeys,
+        existingOwners,
         dedupeKey,
       }));
     } catch (e) {
@@ -586,6 +602,7 @@ function ManualEntryEditor({ selectedProperty, accessibleProperties, setProperty
       return;
     }
     qc.invalidateQueries({ queryKey: ["manual-entries"] });
+    qc.invalidateQueries({ queryKey: ["manual-entry-ledger"] });
     qc.invalidateQueries({ queryKey: ["occupancy"] });
     qc.invalidateQueries({ queryKey: ["payments"] });
     qc.invalidateQueries({ queryKey: ["gross"] });
@@ -674,13 +691,14 @@ function ManualEntryEditor({ selectedProperty, accessibleProperties, setProperty
             </button>
           </div>
         </div>
-        {!selectedProperty && <p className="mt-3 text-sm text-amber-400">Select one property before entering or loading records. Each property keeps its own grid and draft.</p>}
-        {existingQ.isError && (
+        <p className="mt-3 text-xs text-slate-400">Select one property before entering or loading records. Each property keeps its own grid and draft.</p>
+        {!selectedProperty && <p className="mt-2 text-sm text-amber-400">Select a property above to start entering data.</p>}
+        {(existingQ.isError || ledgerQ.isError) && (
           <ErrorState
             title="Saved entries could not be loaded"
             description="Saving is disabled while this fails: duplicates can only be detected against the saved list. Nothing you already typed is lost."
-            error={existingQ.error}
-            onRetry={existingQ.refetch}
+            error={existingQ.error || ledgerQ.error}
+            onRetry={() => Promise.all([existingQ.refetch(), ledgerQ.refetch()])}
           />
         )}
       </Card>
@@ -818,7 +836,7 @@ function ManualEntryEditor({ selectedProperty, accessibleProperties, setProperty
                 )}
                 <button
                   onClick={handleSave}
-                  disabled={saving || !hasDraft || !selectedProperty || !existingQ.isSuccess}
+                  disabled={saving || !hasDraft || !selectedProperty || !existingQ.isSuccess || existingQ.isFetching || !ledgerQ.isSuccess || ledgerQ.isFetching}
                   className="flex items-center gap-1.5 rounded-lg bg-[#00E096] px-4 py-2 text-sm font-medium text-[#040D1A] hover:bg-[#00c885] disabled:opacity-50"
                 >
                   <Save className="h-4 w-4" /> {saving ? "Saving…" : "Save & Update Dashboards"}

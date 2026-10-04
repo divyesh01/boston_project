@@ -11,7 +11,7 @@ import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { db } from "@/api/base44Client";
 import { useRealtimeInvalidation } from "@/lib/realtime";
 import {
-  SOURCE_LABELS, scoreSentiment, isInconsistent, aggregateRating, needsResponse,
+  SOURCE_LABELS, reviewSentiment, isInconsistent, aggregateRating, needsPublishedResponse, hasPublishedResponse,
 } from "@/lib/reputationService";
 import { ErrorState } from "@/components/ui/status";
 
@@ -27,91 +27,65 @@ export default function Reviews() {
 
   const [replyId, setReplyId] = useState(null);
   const [draft, setDraft] = useState("");
-  const [_showSeed, _setShowSeed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState(null);
 
-  const stats = useMemo(() => aggregateRating(reviews.map((r) => ({ ...r, sentiment: r.sentiment || scoreSentiment(r.body).sentiment }))), [reviews]);
-  const pending = useMemo(() => needsResponse(reviews), [reviews]);
+  const stats = useMemo(() => aggregateRating(reviews), [reviews]);
+  const pending = useMemo(() => needsPublishedResponse(reviews), [reviews]);
   const inconsistent = useMemo(() => reviews.filter((r) => isInconsistent(r)), [reviews]);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["reviews"] });
 
-  const isPortfolio = property === "all" || Array.isArray(property);
-  const singlePropertyId = !isPortfolio ? property : null;
-
   const handleReply = async (review) => {
-    if (!draft.trim()) return;
-    await db.entities.Review.update(review.id, {
-      response: draft.trim(),
-      responded_at: new Date().toISOString(),
-      status: "replied",
-    });
-    invalidate();
-    setDraft("");
-    setReplyId(null);
+    if (busy || !draft.trim()) return;
+    setBusy(true);
+    const text = draft.trim();
+    try {
+      await db.entities.Review.update(review.id, { response_draft: text });
+      const saved = await db.entities.Review.filter({ id: review.id });
+      if (!saved.some((row) => row.response_draft === text)) throw new Error("This backend did not retain the response draft. Copy your text before leaving this page.");
+      await invalidate();
+      setDraft(""); setReplyId(null);
+      setNotice({ type: "ok", text: "Response draft saved in this app. Publish it directly on the review provider's website." });
+    } catch (err) {
+      setNotice({ type: "error", text: `Draft could not be saved: ${err?.message || err}. Your text is kept below.` });
+    } finally { setBusy(false); }
   };
 
   const handleStatus = async (review, status) => {
-    await db.entities.Review.update(review.id, { status });
-    invalidate();
-  };
-
-  const handleSeed = async () => {
-    if (!singlePropertyId) return;
-    const now = new Date().toISOString().slice(0, 10);
-    const samples = [
-      { source: "google", guest: "Maria G.", rating: 5, body: "Spotless room and really friendly staff. The best hotel breakfast." },
-      { source: "booking", guest: "James T.", rating: 3, body: "Decent value but a bit noisy near the elevator." },
-      { source: "tripadvisor", guest: "Priya S.", rating: 2, body: "Dirty bathroom and rude front desk. Poor experience." },
-      { source: "expedia", guest: "Daniel K.", rating: 4, body: "Clean and comfortable, great location. Would recommend." },
-      { source: "google", guest: "Ana L.", rating: 1, body: "Terrible service, room was not clean at all. Never again." },
-    ];
-    const prop = singlePropertyId;
-    const withSentiment = samples.map((s) => ({ ...s, sentiment: scoreSentiment(s.body).sentiment, status: "new", review_date: now, property_id: prop }));
-    // build review rows
-    for (const s of withSentiment) {
-      await db.entities.Review.create({ ...s, rating: Number(s.rating), body: s.body });
-    }
-    invalidate();
+    if (busy) return;
+    setBusy(true);
+    try {
+      await db.entities.Review.update(review.id, { status });
+      await invalidate();
+      setNotice({ type: "ok", text: status === "resolved" ? "Marked handled in this app." : "Review reopened in this app." });
+    } catch (err) { setNotice({ type: "error", text: `Status was not saved: ${err?.message || err}` }); }
+    finally { setBusy(false); }
   };
 
   if (isLoading) return <p className="text-slate-500">Loading reviews…</p>;
+  if (reviewsQ.isError) return <ErrorState title="Could not load reviews" description="Review totals and actions are unavailable until the saved reviews load." error={reviewsQ.error} onRetry={reviewsQ.refetch} />;
 
   const distData = Object.entries(stats.distribution).map(([star, count]) => ({ name: `${star}★`, count })).filter((d) => d.count > 0);
   const sentData = Object.entries(stats.bySentiment).filter(([, c]) => c > 0).map(([k, v]) => ({ name: k, value: v, color: SENTIMENT_COLOR[k] }));
 
   return (
-    <div className="space-y-6">
+    <fieldset disabled={busy} className="min-w-0 space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-[11px] uppercase tracking-[0.3em] text-[#FFB547]">Reputation</p>
           <h1 className="mt-2 font-heading text-3xl font-semibold text-white">Guest Reviews</h1>
           <p className="mt-1 text-sm text-slate-400">
-            {dateRange.from || "—"} → {dateRange.to || "—"} · {num(stats.total)} reviews · {pct(stats.responseRate)} responded
+            {dateRange.from || "—"} → {dateRange.to || "—"} · {num(stats.total)} saved reviews · {pct(stats.publishedResponseRate)} confirmed published responses
           </p>
         </div>
-        <button
-          onClick={() => { if (isPortfolio) { alert("Select a single property to seed demo reviews."); return; } handleSeed(); }}
-          className="rounded-lg border border-white/10 px-4 py-2 text-xs font-medium text-slate-300 hover:bg-white/5"
-        >
-          Seed demo reviews
-        </button>
       </header>
-
-      {/* Without this, a failed read showed a 0.0 star average, 0 unresolved, and an
-          inbox that invited the operator to seed demo reviews — as if no guest had
-          ever written in. */}
-      {reviewsQ.isError && (
-        <ErrorState
-          title="Could not load reviews"
-          description="The 0.0 star average and empty inbox below are not your reputation — this read failed. Unanswered guest reviews may be live on Google and the OTAs right now while this page reports nothing to answer."
-          error={reviewsQ.error}
-          onRetry={() => { reviewsQ.refetch(); }}
-        />
-      )}
+      <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">Automatic review fetching and public replies are unavailable. This inbox shows records saved in this app. Save a response draft here, then publish it on the provider's website.</p>
+      {notice && <p role={notice.type === "error" ? "alert" : "status"} className={notice.type === "error" ? "text-sm text-red-400" : "text-sm text-emerald-400"}>{notice.text}</p>}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {[
-          ["Average Rating", `${stats.avg.toFixed(1)} ★`, CCOL("#FFB547")],
+          ["Average Rating", stats.rated ? `${stats.avg.toFixed(1)} ★` : "No ratings", CCOL("#FFB547")],
           ["Reviews", num(stats.total), CCOL("#00D4FF")],
           ["Unresolved", num(pending.length), CCOL("#FF6B6B")],
           ["Needs Human Look", num(inconsistent.length), CCOL("#FFB547")],
@@ -154,21 +128,22 @@ export default function Reviews() {
         </Card>
       </div>
 
-      <Card title="Review inbox" subtitle={`${num(pending.length)} unanswered · ${num(stats.replied)} responded`}>
+      <Card title="Review inbox" subtitle={`${num(pending.length)} need attention · ${num(stats.replied)} confirmed published responses`}>
         {reviews.length === 0 ? (
           <div className="text-center">
             <p className="text-sm text-slate-400">No reviews in this period.</p>
             <p className="mt-1 text-xs text-slate-500">
-              Reviews are aggregated from Google, TripAdvisor and OTA channels. Use "Seed demo reviews" on a single property
-              to preview the inbox.
+              No saved reviews match these filters. Check the review provider's website for current guest feedback.
             </p>
           </div>
         ) : (
           <div className="space-y-3">
             {reviews.map((r) => {
-              const sent = r.sentiment || scoreSentiment(r.body).sentiment;
+              const sent = reviewSentiment(r);
               const sColor = SENTIMENT_COLOR[sent];
               const inconsistent = isInconsistent(r);
+              const rating = Number(r.rating);
+              const stars = Number.isFinite(rating) && rating >= 1 && rating <= 5 ? Math.round(rating) : null;
               return (
                 <div key={r.id} className="rounded-xl border border-white/5 bg-[#0A1628]/50 p-3">
                   <div className="flex flex-wrap items-center gap-2">
@@ -176,7 +151,7 @@ export default function Reviews() {
                       {SOURCE_LABELS[r.source] || r.source || "Other"}
                     </span>
                     <span className="text-xs text-white">{r.guest_name || "Guest"}</span>
-                    <span className="text-xs text-[#FFB547]">{"★".repeat(Math.max(0, Math.min(5, Number(r.rating) || 0)))}{"☆".repeat(Math.max(0, 5 - (Number(r.rating) || 0)))}</span>
+                    <span className="text-xs text-[#FFB547]">{stars == null ? "Unrated" : `${"\u2605".repeat(stars)}${"\u2606".repeat(5 - stars)}`}</span>
                     <span className="rounded-full px-2 py-0.5 text-[10px] font-medium" style={{ background: `${sColor}22`, color: sColor }}>
                       {sent}
                     </span>
@@ -188,9 +163,10 @@ export default function Reviews() {
                   <p className="mt-2 text-sm text-slate-300">{r.body || r.text}</p>
                   {r.response && (
                     <div className="mt-2 rounded-lg border-l-2 border-[#00E096]/50 bg-[#00E096]/5 px-3 py-2 text-xs text-slate-300">
-                      <span className="font-medium text-[#00E096]">Your reply:</span> {r.response}
+                      <span className="font-medium text-[#00E096]">{hasPublishedResponse(r) ? "Published response:" : "Saved response (publication unconfirmed):"}</span> {r.response}
                     </div>
                   )}
+                  {r.response_draft && <p className="mt-2 rounded-lg bg-white/5 p-3 text-xs text-slate-300"><strong>Response draft:</strong> {r.response_draft}</p>}
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     {replyId === r.id ? (
                       <>
@@ -198,20 +174,21 @@ export default function Reviews() {
                           value={draft}
                           onChange={(e) => setDraft(e.target.value)}
                           rows={2}
-                          placeholder="Write a public reply…"
+                          placeholder="Draft a response to publish on the provider's website…"
+                          aria-label="Response draft"
                           className="flex-1 rounded-lg border border-white/10 bg-[#0A1628] px-2 py-1.5 text-xs text-white"
                         />
-                        <button onClick={() => handleReply(r)} className="rounded-lg bg-[#00E096] px-3 py-1 text-xs font-medium text-[#04231A]">Send</button>
-                        <button onClick={() => { setReplyId(null); setDraft(""); }} className="rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-300">Cancel</button>
+                        <button disabled={busy || !draft.trim()} onClick={() => handleReply(r)} className="rounded-lg bg-[#00E096] px-3 py-1 text-xs font-medium text-[#04231A] disabled:opacity-50">{busy ? "Saving…" : "Save draft"}</button>
+                        <button onClick={() => { if (draft.trim() && !window.confirm("Discard this unsaved response draft?")) return; setReplyId(null); setDraft(""); }} className="rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-300">Cancel</button>
                       </>
                     ) : (
-                      <button onClick={() => { setReplyId(r.id); setDraft(r.response || ""); }} className="rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-300 hover:bg-white/10">
-                        {r.response ? "Edit reply" : "Reply"}
+                      <button onClick={() => { if (replyId && draft.trim() && !window.confirm("Discard the unsaved response draft and open this review?")) return; setReplyId(r.id); setDraft(r.response_draft || r.response || ""); }} className="rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-300 hover:bg-white/10">
+                        {r.response_draft ? "Edit draft" : "Draft response"}
                       </button>
                     )}
-                    {r.status === "replied" && (
+                    {r.status !== "resolved" && (
                       <button onClick={() => handleStatus(r, "resolved")} className="rounded-lg border border-[#00E096]/30 px-2 py-1 text-xs text-[#00E096] hover:bg-[#00E096]/10">
-                        Mark resolved
+                        Mark handled locally
                       </button>
                     )}
                     {r.status === "resolved" && (
@@ -226,7 +203,7 @@ export default function Reviews() {
           </div>
         )}
       </Card>
-    </div>
+    </fieldset>
   );
 }
 

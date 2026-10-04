@@ -37,8 +37,14 @@ import { Loader2 } from "lucide-react";
 import { getCsrfToken, validateCsrfToken, rotateCsrfToken, sanitizeText, sanitizeAlphanumeric, sanitizeCsvCell } from "@/lib/securityUtils";
 import { operationalActionRateLimiter, destructiveActionRateLimiter, securityActionRateLimiter } from "@/lib/rateLimiters";
 import { ARCHIVE_FILE_EXT, downloadArchive, inspectArchiveFile, parseArchive, restoreArchive, isServerDataSyncEnabled } from "@/lib/dbArchive";
+import { isBusinessDate as isEntryDate } from "@/lib/businessDate";
 import { hasAllPropertyAccess } from "@/lib/launchPolicy";
 import PasswordConfirmDialog from "@/components/PasswordConfirmDialog";
+
+function localEntryDate() {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
 
 export default function Settings() {
   const { user: me, logout } = useAuth();
@@ -56,6 +62,9 @@ export default function Settings() {
   const [thresholdSaved, setThresholdSaved] = useState(false);
   const [revThresholds, setRevThresholds] = useState(() => getRevenueThresholds());
   const [revSaved, setRevSaved] = useState(false);
+  const dirtySections = useRef({ rates: false, tax: false });
+  const [ratesSaving, setRatesSaving] = useState(false);
+  const [taxSaving, setTaxSaving] = useState(false);
   const isInitialMount = useRef(true);
   const isRemoteUpdate = useRef(false);
   const [remoteSyncEpoch, setRemoteSyncEpoch] = useState(0);
@@ -71,10 +80,12 @@ export default function Settings() {
     const unsubChange = subscribeSettingsChange(() => {
       if (!isEditingSettingsLocked()) {
         isRemoteUpdate.current = true;
-        setRates(getCommissionRates());
-        setCcFee(getCcFeeRate());
-        setCcRefunds(getCcFeeOnRefunds());
-        setTaxRows(getTaxSettings());
+        if (!dirtySections.current.rates) {
+          setRates(getCommissionRates());
+          setCcFee(getCcFeeRate());
+          setCcRefunds(getCcFeeOnRefunds());
+        }
+        if (!dirtySections.current.tax) setTaxRows(getTaxSettings());
         setThresholds(getAlertThresholds());
         setRevThresholds(getRevenueThresholds());
         // Force one render even when the pulled values compare equal. The final
@@ -187,6 +198,8 @@ export default function Settings() {
   }, [remoteSyncEpoch]);
 
   const handleChange = (key, field, val) => {
+    dirtySections.current.rates = true;
+    setEditingSettingsLock(true);
     setEditingSettingsLock(true);
     const cur = rates[key] || { type: "percentage", rate: 0, taxExempt: false };
     if (field === "rate") {
@@ -202,12 +215,16 @@ export default function Settings() {
   };
 
   const handleCcFeeChange = (val) => {
+    dirtySections.current.rates = true;
+    setEditingSettingsLock(true);
     setEditingSettingsLock(true);
     const v = Number(val);
     setCcFee(v);
   };
 
   const handleAdd = () => {
+    dirtySections.current.rates = true;
+    setEditingSettingsLock(true);
     const name = newSource.trim().toUpperCase();
     if (name && !rates[name]) {
       setRates({ ...rates, [name]: { type: "percentage", rate: 0, taxExempt: false } });
@@ -216,13 +233,15 @@ export default function Settings() {
   };
 
   const handleRemove = (key) => {
+    dirtySections.current.rates = true;
+    setEditingSettingsLock(true);
     const next = { ...rates };
     delete next[key];
     setRates(next);
   };
 
   const handleSave = async () => {
-    setEditingSettingsLock(false);
+    if (ratesSaving) return;
     const rateLimit = operationalActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
@@ -252,6 +271,9 @@ export default function Settings() {
       rotateCsrfToken();
       return;
     }
+    dirtySections.current.rates = false;
+    setEditingSettingsLock(dirtySections.current.tax);
+    setRatesSaving(true);
     try {
       await db.audit.log({
         username: me?.username || "settings",
@@ -274,13 +296,15 @@ export default function Settings() {
     queryClientInstance.invalidateQueries({ queryKey: ["payments"] });
     queryClientInstance.invalidateQueries({ queryKey: ["daily-aggregates"] });
     rebuildDailyAggregates({ propertyId: "all" }).catch(() => {});
+    setRatesSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
     rotateCsrfToken();
   };
 
   const handleReset = () => {
-    setEditingSettingsLock(false);
+    dirtySections.current.rates = false;
+    setEditingSettingsLock(dirtySections.current.tax);
     const fresh = getCommissionRates();
     setRates(fresh);
     setCcFee(getCcFeeRate());
@@ -288,11 +312,13 @@ export default function Settings() {
   };
 
   const updateTaxRow = (i, patch) => {
+    dirtySections.current.tax = true;
     setEditingSettingsLock(true);
     setTaxRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
   };
 
   const addTaxRow = () => {
+    dirtySections.current.tax = true;
     setEditingSettingsLock(true);
     setTaxRows((prev) => [
       ...prev,
@@ -302,19 +328,20 @@ export default function Settings() {
         state_rate: 0,
         city_rate: 0,
         other_rate: 0,
-        effective_start: new Date().toISOString().slice(0, 10),
+        effective_start: localEntryDate(),
         effective_end: "",
       },
     ]);
   };
 
   const removeTaxRow = (i) => {
+    dirtySections.current.tax = true;
     setEditingSettingsLock(true);
     setTaxRows((prev) => prev.filter((_, idx) => idx !== i));
   };
 
   const handleSaveTax = async () => {
-    setEditingSettingsLock(false);
+    if (taxSaving) return;
     const rateLimit = operationalActionRateLimiter.check();
     if (!rateLimit.allowed) {
       toast({ variant: "destructive", title: "Rate Limited", description: `Too many requests. Try again in ${Math.ceil(rateLimit.retryAfter / 60)} minutes.` });
@@ -324,6 +351,15 @@ export default function Settings() {
     if (!validateCsrfToken(csrfToken)) {
       toast({ variant: "destructive", title: "Security Error", description: "Invalid security token. Please refresh the page and try again." });
       rotateCsrfToken();
+      return;
+    }
+    const invalidTax = taxRows.find((row) =>
+      [row.state_rate, row.city_rate, row.other_rate].some((rate) => !Number.isFinite(Number(rate)) || Number(rate) < 0 || Number(rate) > 1) ||
+      (row.effective_start && !isEntryDate(row.effective_start)) ||
+      (row.effective_end && !isEntryDate(row.effective_end)) ||
+      (row.effective_start && row.effective_end && row.effective_end < row.effective_start));
+    if (invalidTax) {
+      toast({ variant: "destructive", title: "Check tax settings", description: "Use rates from 0% to 100%, valid dates, and an end date on or after the start date." });
       return;
     }
     const clean = taxRows.map(({ _key, ...rest }) => rest);
@@ -336,6 +372,9 @@ export default function Settings() {
       rotateCsrfToken();
       return;
     }
+    dirtySections.current.tax = false;
+    setEditingSettingsLock(dirtySections.current.rates);
+    setTaxSaving(true);
     try {
       await db.audit.log({
         username: me?.username || "settings",
@@ -364,6 +403,7 @@ export default function Settings() {
     queryClientInstance.invalidateQueries({ queryKey: ["payroll"] });
     queryClientInstance.invalidateQueries({ queryKey: ["daily-aggregates"] });
     rebuildDailyAggregates({ propertyId: "all" }).catch(() => {});
+    setTaxSaving(false);
     setTaxSaved(true);
     setTimeout(() => setTaxSaved(false), 2000);
     rotateCsrfToken();
@@ -605,7 +645,10 @@ export default function Settings() {
         return;
       }
       const sanitizedName = sanitizeCsvCell(sanitizeText(newPropName.trim()));
-      const sanitizedRooms = Math.max(1, Math.min(10000, Number(newPropRooms) || 100));
+      const sanitizedRooms = Number(newPropRooms);
+      if (!Number.isInteger(sanitizedRooms) || sanitizedRooms < 1 || sanitizedRooms > 10000) {
+        setPropMsg("Enter a whole room count from 1 to 10,000."); setPropMsgType("error"); return;
+      }
       await withActionTimeout(
         db.entities.Property.create({
           code: sanitizedCode,
@@ -675,13 +718,16 @@ export default function Settings() {
   };
 
   const handleSaveEditProperty = async () => {
-    if (!propEditTarget?.id) return;
+    if (isSavingEditProp || !propEditTarget?.id) return;
     const sanitizedName = sanitizeCsvCell(sanitizeText(editPropName.trim()));
     if (!sanitizedName) {
       toast({ variant: "destructive", title: "Validation Error", description: "Property name is required." });
       return;
     }
-    const sanitizedRooms = Math.max(1, Math.min(10000, Number(editPropRooms) || 100));
+    const sanitizedRooms = Number(editPropRooms);
+    if (!Number.isInteger(sanitizedRooms) || sanitizedRooms < 1 || sanitizedRooms > 10000) {
+      toast({ variant: "destructive", title: "Check room count", description: "Enter a whole room count from 1 to 10,000." }); return;
+    }
     const sanitizedCity = sanitizeCsvCell(sanitizeText(editPropCity.trim()));
     const sanitizedState = sanitizeAlphanumeric(editPropState.trim()).toUpperCase().slice(0, 10);
     setIsSavingEditProp(true);
@@ -951,7 +997,7 @@ export default function Settings() {
       onFocusCapture={() => setEditingSettingsLock(true)}
       onBlurCapture={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget)) {
-          setEditingSettingsLock(false);
+          setEditingSettingsLock(dirtySections.current.rates || dirtySections.current.tax);
         }
       }}
     >
@@ -1042,7 +1088,7 @@ export default function Settings() {
             <input
               type="checkbox"
               checked={ccRefunds}
-              onChange={(e) => setCcRefunds(e.target.checked)}
+              onChange={(e) => { dirtySections.current.rates = true; setEditingSettingsLock(true); setCcRefunds(e.target.checked); }}
               className="h-4 w-4 rounded border-white/20"
             />
             Apply the processing fee to refunds too (refunds also incur the card fee)
@@ -1069,6 +1115,7 @@ export default function Settings() {
         <div className="mt-4 flex gap-3">
           <button
             onClick={handleSave}
+            disabled={ratesSaving}
             className="flex items-center gap-2 rounded-lg bg-[#6C63FF] px-6 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#5b52e8]"
           >
             {saved ? <CheckCircle2 className="h-4 w-4 text-[#00E096]" /> : <Save className="h-4 w-4" />}
@@ -1171,6 +1218,7 @@ export default function Settings() {
           </button>
           <button
             onClick={handleSaveTax}
+            disabled={taxSaving}
             className="flex items-center gap-2 rounded-lg bg-[#6C63FF] px-6 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#5b52e8]"
           >
             {taxSaved ? <CheckCircle2 className="h-4 w-4 text-[#00E096]" /> : <Save className="h-4 w-4" />}

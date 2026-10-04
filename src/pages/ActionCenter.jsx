@@ -15,7 +15,7 @@ import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { getOccThreshold, money2, pct, formatDayLabel, localTodayIso } from "@/lib/hotel";
 import { buildActionCenter } from "@/lib/actionCenter";
 import { distanceColor, getEventsInRange, getUpcomingEventDays } from "@/lib/eventSchedule";
-import { ErrorState } from "@/components/ui/status";
+import { ErrorState, LoadingState } from "@/components/ui/status";
 
 // Pick up productivity ticks describing each bucket's tone
 const TONE = {
@@ -122,9 +122,6 @@ export default function ActionCenter() {
   // an empty lane renders as "Nothing here — good." If any of the five reads failed,
   // that sentence is a false all-clear — the most dangerous thing this page can say. So
   // one failed read blocks the whole page rather than a lane.
-  const reads = [occQ, sourcesQ, payQ, expensesQ, payrollQ];
-  const failed = reads.find((q) => q.isError);
-  const retryAll = () => reads.forEach((q) => q.refetch());
 
   // Previous equal-length window for period-over-period deltas
   const prevRange = useMemo(() => {
@@ -136,7 +133,12 @@ export default function ActionCenter() {
   }, [dateRange]);
 
   const prevEnabled = !!(prevRange.from && prevRange.to);
-  const { data: prevOcc = [] } = useOccupancy(prevRange, property, [], prevEnabled);
+  const prevOccQ = useOccupancy(prevRange, property, [], prevEnabled);
+  const { data: prevOcc = [] } = prevOccQ;
+  const reads = [occQ, sourcesQ, payQ, expensesQ, payrollQ, ...(prevEnabled ? [prevOccQ] : [])];
+  const failed = reads.find((q) => q.isError);
+  const pending = reads.some((q) => q.isPending || q.isLoading);
+  const retryAll = () => Promise.all(reads.map((q) => q.refetch()));
 
   // Events for the current date range, one-time and recurring. The expansion
   // lives in eventSchedule.js -- this page used to carry its own copy of both
@@ -201,7 +203,7 @@ export default function ActionCenter() {
         </p>
       </header>
 
-      {failed ? (
+      {pending ? <LoadingState title="Loading recommendations" /> : failed ? (
         <ErrorState
           title="Could not build the action list"
           description="At least one of the reads behind this page failed, so no recommendations are shown. An empty list here would read as “nothing needs attention”, which cannot be confirmed."

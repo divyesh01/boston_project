@@ -6,14 +6,14 @@ import ChannelRevenue from "@/components/compare/ChannelRevenue";
 import { useOccupancy, useSources } from "@/lib/useHotelData";
 import { useGlobalFilters } from "@/lib/useGlobalFilters";
 import { money, money2, num, pct, inRange, occupancyStats } from "@/lib/hotel";
-import { ErrorState } from "@/components/ui/status";
+import { ErrorState, LoadingState, EmptyState } from "@/components/ui/status";
 
 export default function Compare() {
   const { dateRange, compareDateRange, channel, property, properties, months, compareMonths } = useGlobalFilters();
   const occQ = useOccupancy(dateRange, property, months);
   const prevOccQ = useOccupancy(compareDateRange, property, compareMonths);
   const sourcesQ = useSources(dateRange, property, months);
-  const { data: occ = [], isLoading } = occQ;
+  const { data: occ = [] } = occQ;
   const { data: prevOcc = [] } = prevOccQ;
   const { data: sources = [] } = sourcesQ;
 
@@ -30,7 +30,14 @@ export default function Compare() {
     return r;
   }, [sources, dateRange, channel]);
 
-  if (isLoading) return <p className="text-slate-500">Loading comparison engine…</p>;
+  if (occQ.isError || prevOccQ.isError || sourcesQ.isError) return (
+    <ErrorState title="Could not load both periods" description="Comparison figures are unavailable until both periods load. Check your connection and try again."
+      error={occQ.error || prevOccQ.error || sourcesQ.error}
+      onRetry={() => { occQ.refetch(); prevOccQ.refetch(); sourcesQ.refetch(); }} />
+  );
+  if ([occQ, prevOccQ, sourcesQ].some((query) => query.isLoading)) return <LoadingState title="Loading both comparison periods…" />;
+
+  if (!sa.days || !sb.days) return <EmptyState title="No comparable data in these periods" description="Choose dates with imported occupancy reports for both periods. A missing period cannot supply a reliable growth percentage." />;
 
   return (
     <div className="space-y-6">

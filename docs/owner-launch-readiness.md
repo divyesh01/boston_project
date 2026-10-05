@@ -249,3 +249,13 @@ Production unchanged; owner acceptance NOT_RUN; no owner-ready claim.
 - CURRENT 212/99cc2842 shard3 17PASS 1SKIP, no 5173, exit 0. MAIN 211/c3388821 shard2 17PASS 1SKIP stale-dist, 7/8 18PASS each; after-build 11PASS recovers stale-dist. Baseline 2cbe 209/2c9c1972 4-shard 70PASS 2SKIP historical. Do not sum or claim all-212 PASS; remote all-12 Deep Verification shards and aggregate gate SUCCESS at a273191; this does not convert skipped checks to PASS.
 - Clerk NODE_ENV act error + NO_VERDICT failures resolved harness-only; keep failure evidence. Filter/Chart recovery ongoing; weather scoped checks pass per Current Weather status, live provider/key UNPROVEN.
 - Supersedes only prior MAIN-shards-not-run / pending-Clerk / probe-being-added phrases; preserves historical source/unit/production facts.
+## R80 readiness update (ModuleCards universal manual copy)
+
+- Universal manual tile (see BRAIN_FRONTEND.md); current Cloudflare Worker
+  verified fetch-only / zero cron; legacy provider config UNPROVEN.
+- Confirmed HIGH normal-UI twins: OWN001/2 total 27700, expected 55400.
+  Owner-AUTHORIZED narrow protected fix E139 is an OWN candidate under
+  review/tests; MAIN not fixed yet.
+- Single-person manual R1 normal native 27700 repeat/reload ROOT PASS.
+  Broad owner production/function acceptance NOT_RUN. 6b72 remote 2 CI
+  all SUCCESS.

@@ -972,3 +972,13 @@ Production unchanged; owner acceptance NOT_RUN; no owner-ready claim.
 - CURRENT 212/99cc2842 shard3 17PASS 1SKIP, no 5173, exit 0. MAIN 211/c3388821 shard2 17PASS 1SKIP stale-dist, 7/8 18PASS each; after-build 11PASS recovers stale-dist. Baseline 2cbe 209/2c9c1972 4-shard 70PASS 2SKIP historical. Do not sum or claim all-212 PASS; remote all-12 Deep Verification shards and aggregate gate SUCCESS at a273191; this does not convert skipped checks to PASS.
 - Clerk NODE_ENV act error + NO_VERDICT failures resolved harness-only; keep failure evidence. Filter/Chart recovery ongoing; weather scoped checks pass per section 59, live provider/key UNPROVEN.
 - Supersedes only prior MAIN-shards-not-run / pending-Clerk / probe-being-added phrases; preserves historical source/unit/production facts.
+## R80 - universal manual ModuleCards tile (root decision)
+
+- Payroll tile is universal honest manual copy in ALL modes, no flag-switch:
+  Use Payroll to generate approved runs for the selected property.
+- No automatic final-day background promise in ANY mode; /payroll link,
+  manual button, money logic, other cards unchanged.
+- Real ModuleCards DOM gate PASS 3/3 (true/false/explicit undefined, 4.03s);
+  UI unit only, not a scheduler/backend test.
+- Copy does NOT implement the background monthly feature. Payroll-page R63
+  conditional candidate NOT accepted/applied - not a release.

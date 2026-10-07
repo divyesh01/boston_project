@@ -649,3 +649,23 @@ contracts; do not copy either scanner back into the orchestrator.
 ## Portfolio rooms per reporting night (2026-10-04)
 
 Dashboard's Occupancy subline divides total rooms sold by unique reporting dates in the already filtered occupancy rows, using the existing uniqueDays count. It does not divide by property-day row count. Two properties reporting 40 and 35 rooms on one date therefore show Avg 75 rooms/night; single-property, multiple-date and empty-data behavior remain covered by tests/dashboard.occupancy.test.jsx. These four rendered Dashboard regressions mock input data and subcomponents; they do not establish full financial integration or production acceptance.
+
+
+### Payroll identity correction — owner launch review
+
+The local `runLocalAutoPayroll` path keys current-period runs by typed property ID and stable employee ID, stores the employee ID on new records, and preserves historical runs. A legacy name-only record or punch must resolve to exactly one staff row in the full property roster, including inactive and unconfigured staff. Unknown or conflicting original IDs and helper groups containing multiple employee identities abort before payroll writes. Numeric zero may use a name fallback only when that name uniquely resolves to the same numeric ID. Staff without pay configuration remain skipped; uniquely resolved unconfigured name-only records are preserved without blocking other staff.
+
+The frozen identity candidate `BD65123CCCB00A470EB022C6F3D3C254A2D070C17AAED0CD9BB5C67F170C246E` passed 49 actual-function/helper oracles and 24 API/localDb tests, including the original seven unchanged tests. A fresh normal-login browser run created two same-name employees through the staff UI, generated two $277 runs, and proved repeat/reload idempotency and unchanged unrelated native records (48 checks).
+
+Concurrency remains a separate release finding: two simultaneous calls against synthetic DB seams created four runs totaling $1,108; sequential calls created two runs totaling $554. A subsequent normal-login test with two independent browser contexts confirmed the duplication, as detailed below. The identity patch does not establish server-enforced uniqueness across clients. Production migrations and owner acceptance remain separate release gates.
+
+
+## Portfolio statistics correction — 2026-10-07
+
+Hotel Statistics is a dated snapshot, rather than an additive timeline. Portfolio lookups preserve typed property IDs, business dates, periods and per-property duplicate ordering. Accessible active selected property IDs now reach the headline, composition, metric table and trend helpers. A selected property missing on a particular business date produces unavailable values instead of a partial portfolio total. Rates without a proved common denominator remain unavailable.
+
+Room revenue includes taxable and exempt revenue in integer cents. The same definition now drives the current card, prior-year change and dated revenue trend. The detail table aggregates additive metrics across properties without presenting one property's imported text as the portfolio original. Mixed known/missing property IDs yield unknown composition values. The page renders unknown revenue as an em dash and omits its bar; it explains incomplete property coverage and unavailable trends.
+
+### Confirmed concurrent payroll release blocker — 2026-10-07
+
+A fresh normal-login local test with two independent browser contexts reproduced four generated payroll records totaling 110800 cents for two employees who should receive two records totaling 55400 cents. Each employee ID appeared twice. Independent native reads from both contexts matched; Staff and the existing paid payroll record for the other property were unchanged. This confirms the earlier function-seam race in the actual runtime; the single shared-context attempt that did not duplicate payments does not establish concurrency safety. The employee-identity correction remains verified, while authoritative atomic creation across clients is a separate unresolved release blocker. No concurrency correction or production change is included in this batch.

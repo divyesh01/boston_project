@@ -270,4 +270,156 @@ describe("autoPayroll timecard integration (local path)", () => {
     expect(runP2.overtime_hours).toBe(0);
     expect(runP2.regular_pay).toBe(750);
   });
-});
+});
+describe("autoPayroll stable employee identities", () => {
+  const PERIOD = { ...PINNED, force: true, propertyId: "P1" };
+  async function identifiedStaff(employeeId, name, extra = {}) {
+    await localDb.Staff.add({ property_id: "P1", property_name: "Pin Prop", employee_id: employeeId,
+      employee_name: name, active: true, pay_type: "salary", base_rate: 277, hours: 0,
+      overtime_hours: 0, bonus: 0, deductions: 0, ...extra });
+  }
+  async function identifiedPunch(employeeId, name, extra = {}) {
+    await localDb.TimecardPunch.add({ property_id: "P1", employee_id: employeeId, employee_name: name,
+      shift_date: "2026-03-02", clock_in: "08:00", clock_out: "16:00", ...extra });
+  }
+  async function rejectBeforeWrite() {
+    const existing = await localDb.PayrollRun.toArray();
+    await expect(db.functions.invoke("autoPayroll", PERIOD)).rejects.toThrow(/preflight failed/i);
+    expect(await localDb.PayrollRun.toArray()).toEqual(existing);
+  }
+  it("pays two employees with the same name separately and skips both on repeat", async () => {
+    await identifiedStaff("OWN001", "Same Name");
+    await identifiedStaff("OWN002", "Same Name");
+    const first = await db.functions.invoke("autoPayroll", PERIOD);
+    expect(first.data.createdCount).toBe(2);
+    const runs = await localDb.PayrollRun.toArray();
+    expect(runs.map(r => r.employee_id).sort()).toEqual(["OWN001", "OWN002"]);
+    expect(runs.map(r => Math.round(r.total_pay * 100))).toEqual([27700, 27700]);
+    const second = await db.functions.invoke("autoPayroll", PERIOD);
+    expect(second.data.createdCount).toBe(0);
+    expect(second.data.skippedCount).toBe(2);
+    expect(await localDb.PayrollRun.toArray()).toEqual(runs);
+  });
+  it("stops before any write when the helper merges numeric and string employee IDs", async () => {
+    await identifiedStaff("ELG1", "Eligible One");
+    await identifiedStaff(1, "Numeric One", { pay_type: "hourly", base_rate: 10 });
+    await identifiedStaff("1", "String One", { pay_type: "hourly", base_rate: 10 });
+    await identifiedPunch(1, "Numeric One");
+    await identifiedPunch("1", "String One", { shift_date: "2026-03-03" });
+    await rejectBeforeWrite();
+  });
+  it("stops before any write when distinct employees share a merged helper key", async () => {
+    await identifiedStaff("ELG1", "Eligible One");
+    await identifiedStaff("OWN001", "One", { pay_type: "hourly", base_rate: 10 });
+    await identifiedStaff("OWN002", "Two", { pay_type: "hourly", base_rate: 10 });
+    await identifiedPunch("OWN001", "One", { employee_key: "shared" });
+    await identifiedPunch("OWN002", "Two", { employee_key: "shared", shift_date: "2026-03-03" });
+    await rejectBeforeWrite();
+  });
+  it("rejects an unknown original timecard employee ID even when its name matches staff", async () => {
+    await identifiedStaff("ELG1", "Eligible One");
+    await identifiedStaff("OWN001", "Known Staff", { pay_type: "hourly", base_rate: 10 });
+    await identifiedPunch("GHOST99", "Known Staff");
+    await rejectBeforeWrite();
+  });
+  it("preserves numeric zero when the helper fallback names exactly that employee", async () => {
+    await identifiedStaff("ELG1", "Eligible One");
+    await identifiedStaff(0, "Zero Staff", { pay_type: "hourly", base_rate: 10 });
+    await identifiedPunch(0, "Zero Staff");
+    const res = await db.functions.invoke("autoPayroll", PERIOD);
+    expect(res.data.createdCount).toBe(2);
+    const runs = await localDb.PayrollRun.toArray();
+    const zero = runs.find(r => typeof r.employee_id === "number" && r.employee_id === 0);
+    expect(zero).toMatchObject({ employee_id: 0, hours: 7.5, total_pay: 75, timecard_derived: true });
+  });
+  it("rejects numeric zero when a wrong name would change the helper fallback identity", async () => {
+    await identifiedStaff("ELG1", "Eligible One");
+    await identifiedStaff(0, "Zero Staff", { pay_type: "hourly", base_rate: 10 });
+    await identifiedPunch(0, "Wrong Name");
+    await rejectBeforeWrite();
+  });
+  it("rejects numeric zero when its fallback name is ambiguous", async () => {
+    await identifiedStaff("ELG1", "Eligible One");
+    await identifiedStaff(0, "Same Name");
+    await identifiedStaff("OWN001", "Same Name");
+    await identifiedPunch(0, "Same Name");
+    await rejectBeforeWrite();
+  });
+  it("rejects conflicting original ID fields on the same timecard", async () => {
+    await identifiedStaff("ELG1", "Eligible One");
+    await identifiedStaff(0, "Zero Staff");
+    await identifiedStaff("OWN001", "Other Staff");
+    await identifiedPunch(0, "Zero Staff", { employeeId: "OWN001" });
+    await rejectBeforeWrite();
+  });
+  it("rejects a whitespace primary ID that masks a valid secondary ID", async () => {
+    await identifiedStaff("ELG1", "Eligible One");
+    await identifiedStaff("OWN001", "Known Staff");
+    await identifiedPunch("   ", "Known Staff", { employeeId: "OWN001" });
+    await rejectBeforeWrite();
+  });
+  it("rejects an unknown secondary ID instead of ignoring it", async () => {
+    await identifiedStaff("ELG1", "Eligible One");
+    await identifiedStaff("OWN001", "Known Staff");
+    await identifiedPunch("OWN001", "Known Staff", { employeeId: "GHOST99" });
+    await rejectBeforeWrite();
+  });
+  it("preserves an ambiguous historic name-only payroll record and creates no new run", async () => {
+    await identifiedStaff("ELG1", "Eligible One");
+    await identifiedStaff("OWN001", "Same Name");
+    await identifiedStaff("OWN002", "Same Name");
+    await localDb.PayrollRun.add({ property_id: "P1", employee_name: "Same Name", pay_period_end: "2026-03-31", total_pay: 277 });
+    await rejectBeforeWrite();
+  });
+  it("does not assign name-only timecards to either of two same-name employees", async () => {
+    await identifiedStaff("ELG1", "Eligible One");
+    await identifiedStaff("OWN001", "Same Name");
+    await identifiedStaff("OWN002", "Same Name");
+    await punch("Same Name", "2026-03-02", "08:00", "16:00");
+    await rejectBeforeWrite();
+  });
+  it("requires a stable ID for every payable active employee before any write", async () => {
+    await identifiedStaff("ELG1", "Eligible One");
+    await localDb.Staff.add({ property_id: "P1", employee_name: "Missing ID", active: true, pay_type: "salary", base_rate: 277 });
+    await rejectBeforeWrite();
+  });
+  it("uses a historic stable ID to skip a paid employee after a name change", async () => {
+    await identifiedStaff("OWN001", "New Name");
+    await localDb.PayrollRun.add({ property_id: "P1", employee_id: "OWN001", employee_name: "Old Name", pay_period_end: "2026-03-31", total_pay: 277 });
+    const before = await localDb.PayrollRun.toArray();
+    const res = await db.functions.invoke("autoPayroll", PERIOD);
+    expect(res.data.createdCount).toBe(0);
+    expect(res.data.skippedCount).toBe(1);
+    expect(await localDb.PayrollRun.toArray()).toEqual(before);
+  });
+  it("skips a unique employee with no pay configuration and preserves its name-only punch", async () => {
+    await identifiedStaff("ELG1", "Eligible One");
+    await localDb.Staff.add({ property_id: "P1", employee_name: "NoRate", active: true, pay_type: "hourly", base_rate: 0 });
+    await punch("NoRate", "2026-03-02", "08:00", "16:00");
+    const punchesBefore = await localDb.TimecardPunch.toArray();
+    const res = await db.functions.invoke("autoPayroll", PERIOD);
+    expect(res.data.createdCount).toBe(1);
+    expect(res.data.skippedCount).toBe(1);
+    expect(res.data.skipped[0].employee_name).toBe("NoRate");
+    expect(await localDb.TimecardPunch.toArray()).toEqual(punchesBefore);
+  });
+  it("preserves a historic name-only payroll for a unique employee with no pay configuration", async () => {
+    await identifiedStaff("ELG1", "Eligible One");
+    await localDb.Staff.add({ property_id: "P1", employee_name: "NoRate", active: true, pay_type: "hourly", base_rate: 0 });
+    await localDb.PayrollRun.add({ property_id: "P1", employee_name: "NoRate", pay_period_end: "2026-03-31", total_pay: 0, note: "preserve history" });
+    const before = await localDb.PayrollRun.toArray();
+    const res = await db.functions.invoke("autoPayroll", PERIOD);
+    expect(res.data.createdCount).toBe(1);
+    expect(res.data.skippedCount).toBe(1);
+    const after = await localDb.PayrollRun.toArray();
+    expect(after.find(r => r.id === before[0].id)).toEqual(before[0]);
+    expect(after).toHaveLength(2);
+  });
+  it("still rejects a name-only punch shared by payable and unconfigured employees", async () => {
+    await identifiedStaff("ELG1", "Eligible One");
+    await identifiedStaff("OWN001", "Same Name");
+    await localDb.Staff.add({ property_id: "P1", employee_name: "Same Name", active: true, base_rate: 0 });
+    await punch("Same Name", "2026-03-02", "08:00", "16:00");
+    await rejectBeforeWrite();
+  });
+});

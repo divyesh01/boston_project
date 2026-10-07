@@ -23,11 +23,11 @@ function formatValue(value, unit) {
   return num(value);
 }
 
-export default function MetricExplorer({ rows = [] }) {
+export default function MetricExplorer({ rows = [], expectedPropertyIds }) {
   const [query, setQuery] = useState("");
   const [openSection, setOpenSection] = useState(null);
 
-  const sections = useMemo(() => sectionTable(rows), [rows]);
+  const sections = useMemo(() => sectionTable(rows, expectedPropertyIds), [rows, expectedPropertyIds]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();

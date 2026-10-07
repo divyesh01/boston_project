@@ -1558,8 +1558,11 @@ async function runLocalAutoPayroll(params = {}) {
   )) throw new Error("Select one identified property for payroll, or omit propertyId for the authorized portfolio.");
 
   const propertyKey = (id) => JSON.stringify([typeof id, id]);
-  const employeeKey = (value) => String(value ?? "").trim().toLowerCase();
-  const payrollKey = (row) => JSON.stringify([propertyKey(row.property_id), employeeKey(row.employee_name)]);
+  const normalizeName = (value) => String(value ?? "").trim().toLowerCase();
+  const isValidEmployeeId = (v) => (typeof v === "string" && v.trim() !== "") || (typeof v === "number" && Number.isFinite(v));
+  const hasEmployeeIdField = (row) => row != null && row.employee_id !== undefined && row.employee_id !== null && !(typeof row.employee_id === "string" && row.employee_id.trim() === "");
+  const identityKey = (propertyId, employeeId) => JSON.stringify([propertyKey(propertyId), typeof employeeId === "number" ? "number" : "string", typeof employeeId === "number" ? String(employeeId) : String(employeeId).trim()]);
+  const legacyNameKey = (propertyId, name) => JSON.stringify([propertyKey(propertyId), normalizeName(name)]);
   const properties = await db.entities.Property.filter({});
   const allowedProperties = new Set(properties.map((p) => propertyKey(p.id)));
   const requestedKey = requestedProperty ? propertyKey(params.propertyId) : null;
@@ -1570,13 +1573,78 @@ async function runLocalAutoPayroll(params = {}) {
     allowedProperties.has(propertyKey(row.property_id)) &&
     (!requestedProperty || propertyKey(row.property_id) === requestedKey);
   const filter = requestedProperty ? { property_id: params.propertyId } : {};
-  const staff = (await db.entities.Staff.filter(filter)).filter((s) => s.active !== false && inPayrollScope(s));
+  const allScopedStaff = (await db.entities.Staff.filter(filter)).filter(inPayrollScope);
+  const staff = allScopedStaff.filter((s) => s.active !== false);
   if (staff.length === 0) {
     return { data: { status: "ok", message: "No active staff found — nothing to process.", periodStart, periodEnd, createdCount: 0, skippedCount: 0 } };
   }
+  for (const s of staff) {
+    if (s.employee_name && Number(s.base_rate) > 0 && !isValidEmployeeId(s.employee_id)) {
+      throw new Error(`Payroll identity preflight failed: active staff "${String(s.employee_name ?? "")}" is missing a valid stable employee_id; refusing to create any payroll for this period.`);
+    }
+  }
+  const staffIdentitySeen = new Map();
+  for (const s of staff) {
+    if (!isValidEmployeeId(s.employee_id)) continue;
+    const key = identityKey(s.property_id, s.employee_id);
+    if (staffIdentitySeen.has(key)) {
+      throw new Error(`Payroll identity preflight failed: duplicate stable employee_id "${String(s.employee_id)}" in the same property; refusing to create any payroll for this period.`);
+    }
+    staffIdentitySeen.set(key, s);
+  }
 
   const existing = (await db.entities.PayrollRun.filter({ ...filter, pay_period_end: periodEnd })).filter(inPayrollScope);
-  const paidKeys = new Set(existing.map(payrollKey));
+  const existingByIdentity = new Map();
+  const legacyNameOnlyRows = [];
+  for (const row of existing) {
+    if (isValidEmployeeId(row.employee_id)) {
+      const key = identityKey(row.property_id, row.employee_id);
+      if (!existingByIdentity.has(key)) existingByIdentity.set(key, row);
+    } else if (hasEmployeeIdField(row)) {
+      throw new Error("Payroll identity preflight failed: an existing payroll record in scope has a malformed employee_id; refusing to create any payroll for this period.");
+    } else if (normalizeName(row.employee_name) !== "") {
+      legacyNameOnlyRows.push(row);
+    } else {
+      throw new Error("Payroll identity preflight failed: an existing payroll record in scope has neither a valid employee_id nor a name; refusing to create any payroll for this period.");
+    }
+  }
+  const validIdentitiesByName = new Map();
+  const staffRowsByName = new Map();
+  for (const s of allScopedStaff) {
+    if (normalizeName(s.employee_name) === "") continue;
+    const key = legacyNameKey(s.property_id, s.employee_name);
+    if (!staffRowsByName.has(key)) staffRowsByName.set(key, []);
+    staffRowsByName.get(key).push(s);
+    if (!isValidEmployeeId(s.employee_id)) continue;
+    if (!validIdentitiesByName.has(key)) validIdentitiesByName.set(key, []);
+    validIdentitiesByName.get(key).push(s);
+  }
+  const allIdentitiesSeen = new Map();
+  for (const s of allScopedStaff) {
+    if (!isValidEmployeeId(s.employee_id)) continue;
+    const key = identityKey(s.property_id, s.employee_id);
+    if (!allIdentitiesSeen.has(key)) allIdentitiesSeen.set(key, []);
+    allIdentitiesSeen.get(key).push(s);
+  }
+  for (const [key, rows] of allIdentitiesSeen) {
+    if (rows.length > 1 && rows.some((r) => r.active !== false)) {
+      throw new Error("Payroll identity preflight failed: duplicate stable employee_id in relevant scope including inactive staff; refusing to create any payroll for this period.");
+    }
+  }
+  const legacySuppressedIdentities = new Set();
+  for (const row of legacyNameOnlyRows) {
+    const key = legacyNameKey(row.property_id, row.employee_name);
+    const rows = staffRowsByName.get(key) || [];
+    if (rows.length !== 1) {
+      throw new Error(`Payroll identity preflight failed: ambiguous legacy name-only payroll for "${String(row.employee_name ?? "")}" matches ${rows.length} staff rows; refusing to create any payroll for this period.`);
+    }
+    if (!rows[0].employee_name || !(Number(rows[0].base_rate) > 0)) continue;
+    const candidates = validIdentitiesByName.get(key) || [];
+    if (candidates.length !== 1) {
+      throw new Error(`Payroll identity preflight failed: legacy name-only payroll for "${String(row.employee_name ?? "")}" has no single valid stable identity; refusing to create any payroll for this period.`);
+    }
+    legacySuppressedIdentities.add(identityKey(candidates[0].property_id, candidates[0].employee_id));
+  }
 
   // Read failures abort before the first payroll write. A failed timecard read
   // is not evidence that there were no punches and configured hours should win.
@@ -1585,8 +1653,67 @@ async function runLocalAutoPayroll(params = {}) {
     String(p.shift_date || p.date || "").slice(0, 10) >= periodStart &&
     String(p.shift_date || p.date || "").slice(0, 10) <= periodEnd
   );
+  const punchStableIdOf = (p) => (p == null ? undefined : (p.employee_id !== undefined && p.employee_id !== null && !(typeof p.employee_id === "string" && p.employee_id.trim() === "") ? p.employee_id : (p.employeeId !== undefined && p.employeeId !== null && !(typeof p.employeeId === "string" && p.employeeId.trim() === "") ? p.employeeId : undefined)));
+  const punchNameOf = (p) => (p == null ? undefined : p.employee_name);
+  const idsEqual = (a, b) => {
+    if (typeof a !== typeof b) return false;
+    if (typeof a === "number" && typeof b === "number") return String(a) === String(b);
+    if (typeof a === "string" && typeof b === "string") return a.trim() === b.trim();
+    return false;
+  };
+  const punchesToReconcile = [];
+  for (const p of punches) {
+    const pid = punchStableIdOf(p);
+    if (pid !== undefined) {
+      if (!isValidEmployeeId(pid)) {
+        throw new Error("Payroll identity preflight failed: a current-period timecard record has a malformed employee_id; refusing to create any payroll for this period.");
+      }
+      // Preserve original ID provenance before the timecard helper's truthy
+      // fallback can erase zero or let a blank primary ID hide the secondary.
+      const suppliedIds = [p.employee_id, p.employeeId].filter((id) =>
+        id !== undefined && id !== null && !(typeof id === "string" && id.trim() === "")
+      );
+      for (const id of suppliedIds) {
+        if (!isValidEmployeeId(id) || !idsEqual(id, pid)) {
+          throw new Error("Payroll identity preflight failed: conflicting or malformed original timecard employee IDs; refusing to create any payroll for this period.");
+        }
+        const matches = allIdentitiesSeen.get(identityKey(p.property_id, id)) || [];
+        if (matches.length !== 1) {
+          throw new Error("Payroll identity preflight failed: original timecard references unknown or ambiguous stable employee identity; refusing to create any payroll for this period.");
+        }
+      }
+      const projectedId = p.employee_id || p.employeeId || "";
+      if (!isValidEmployeeId(projectedId)) {
+        const namedStaff = staffRowsByName.get(legacyNameKey(p.property_id, punchNameOf(p))) || [];
+        if (pid !== 0 || namedStaff.length !== 1 ||
+          !isValidEmployeeId(namedStaff[0].employee_id) || !idsEqual(namedStaff[0].employee_id, pid)) {
+          throw new Error("Payroll identity preflight failed: timecard helper would erase the original stable employee identity; refusing to create any payroll for this period.");
+        }
+      } else if (!idsEqual(projectedId, pid)) {
+        throw new Error("Payroll identity preflight failed: timecard helper would change the original stable employee identity; refusing to create any payroll for this period.");
+      }
+      punchesToReconcile.push(p);
+      continue;
+    }
+    const pname = punchNameOf(p);
+    if (normalizeName(pname) === "") {
+      throw new Error("Payroll identity preflight failed: a current-period timecard record has neither a valid employee_id nor a name; refusing to create any payroll for this period.");
+    }
+    const rows = staffRowsByName.get(legacyNameKey(p.property_id, pname)) || [];
+    if (rows.length !== 1) {
+      throw new Error(`Payroll identity preflight failed: ambiguous name-only timecard for "${String(pname ?? "")}" matches ${rows.length} staff rows; refusing to create any payroll for this period.`);
+    }
+    // A uniquely resolved employee without pay configuration is skipped by
+    // payroll. Keep its source punch intact without reconciling unpaid staff.
+    if (!rows[0].employee_name || !(Number(rows[0].base_rate) > 0)) continue;
+    const candidates = validIdentitiesByName.get(legacyNameKey(p.property_id, pname)) || [];
+    if (candidates.length !== 1) {
+      throw new Error(`Payroll identity preflight failed: name-only timecard for "${String(pname ?? "")}" has no single valid stable identity; refusing to create any payroll for this period.`);
+    }
+    punchesToReconcile.push(p);
+  }
   const punchesByProperty = new Map();
-  for (const punch of punches) {
+  for (const punch of punchesToReconcile) {
     const key = propertyKey(punch.property_id);
     if (!punchesByProperty.has(key)) punchesByProperty.set(key, []);
     punchesByProperty.get(key).push(punch);
@@ -1595,14 +1722,85 @@ async function runLocalAutoPayroll(params = {}) {
   for (const [key, propertyPunches] of punchesByProperty) {
     weeksByProperty.set(key, reconcileTimecards(propertyPunches));
   }
-
+  // R86 merged-week identity preflight (authorized narrow correction): the
+  // readonly helper groups by String-coerced keyOf, so distinct stable IDs
+  // (number 1 vs string "1", E1/E2 sharing employee_key) can merge into one
+  // reconciled week. Inspect EVERY shift of EVERY reconciled week BEFORE any
+  // PayrollRun.create. Bound shifts resolve via type-sensitive identityKey;
+  // name-only shifts resolve via typed property + normalized name to exactly
+  // one Staff row with exactly one valid stable identity (full inventory incl
+  // inactive). >1 distinct identity in one week, or any unresolved/ambiguous
+  // shift, aborts with zero writes. Case-sensitive IDs (E1/e1) stay distinct
+  // and group independently via the actual helper.
+  for (const [propKey, weeks] of weeksByProperty) {
+    let typedPropId;
+    try {
+      typedPropId = JSON.parse(propKey)[1];
+    } catch {
+      throw new Error("Payroll identity preflight failed: unable to resolve typed property for a reconciled week; refusing to create any payroll for this period.");
+    }
+    for (const w of weeks) {
+      const shifts = (w != null && Array.isArray(w.shifts) ? w.shifts : []);
+      const resolved = new Set();
+      for (const s of shifts) {
+        const rawSid = s == null ? undefined : s.employeeId;
+        const hasSid = rawSid !== undefined && rawSid !== null && !(typeof rawSid === "string" && rawSid.trim() === "");
+        if (hasSid) {
+          if (!isValidEmployeeId(rawSid)) {
+            throw new Error("Payroll identity preflight failed: a reconciled shift has a malformed stable employee_id; refusing to create any payroll for this period.");
+          }
+          const boundKey = identityKey(typedPropId, rawSid);
+          const boundRows = allIdentitiesSeen.get(boundKey) || [];
+          if (boundRows.length !== 1) {
+            throw new Error("Payroll identity preflight failed: reconciled shift references unknown or ambiguous stable employee identity; refusing to create any payroll for this period.");
+          }
+          resolved.add(boundKey);
+        } else {
+          const sname = s == null ? undefined : s.employeeName;
+          if (normalizeName(sname) === "") {
+            throw new Error("Payroll identity preflight failed: a reconciled shift has neither a valid stable employee_id nor a name; refusing to create any payroll for this period.");
+          }
+          const nameKey = legacyNameKey(typedPropId, sname);
+          const rows = staffRowsByName.get(nameKey) || [];
+          if (rows.length !== 1) {
+            throw new Error(`Payroll identity preflight failed: ambiguous reconciled shift for "${String(sname ?? "")}" matches ${rows.length} staff rows; refusing to create any payroll for this period.`);
+          }
+          const candidates = validIdentitiesByName.get(nameKey) || [];
+          if (candidates.length !== 1) {
+            throw new Error(`Payroll identity preflight failed: reconciled shift for "${String(sname ?? "")}" has no single valid stable identity; refusing to create any payroll for this period.`);
+          }
+          resolved.add(identityKey(candidates[0].property_id, candidates[0].employee_id));
+        }
+      }
+      if (resolved.size > 1) {
+        throw new Error("Payroll identity preflight failed: merged week contains shifts for more than one stable employee identity; refusing to create any payroll for this period.");
+      }
+    }
+  }
+  const weekNameOf = (w) => (w == null ? undefined : (w.employeeName !== undefined ? w.employeeName : w.employee_name));
+  const weekShiftsOf = (w) => (w != null && Array.isArray(w.shifts) ? w.shifts : []);
+  const shiftStableIdOf = (s) => {
+    if (s == null) return undefined;
+    const v = s.employeeId !== undefined && s.employeeId !== null && !(typeof s.employeeId === "string" && s.employeeId.trim() === "") ? s.employeeId : undefined;
+    return v;
+  };
+  const weekBelongsTo = (w, staffMember) => {
+    const shifts = weekShiftsOf(w);
+    const boundShifts = shifts.filter((s) => shiftStableIdOf(s) !== undefined);
+    if (boundShifts.length > 0) {
+      return boundShifts.some((s) => {
+        const sid = shiftStableIdOf(s);
+        return isValidEmployeeId(sid) && idsEqual(sid, staffMember.employee_id);
+      });
+    }
+    const wname = weekNameOf(w);
+    if (normalizeName(wname) === "") return false;
+    if (normalizeName(wname) !== normalizeName(staffMember.employee_name)) return false;
+    const rows = staffRowsByName.get(legacyNameKey(staffMember.property_id, staffMember.employee_name)) || [];
+    return rows.length === 1;
+  };
   const byEmployee = (staffMember) => {
-    const name = employeeKey(staffMember.employee_name);
-    const id = employeeKey(staffMember.employee_id);
-    const weeks = (weeksByProperty.get(propertyKey(staffMember.property_id)) || []).filter((w) => {
-      const key = employeeKey(w.employeeKey);
-      return (id && key === id) || key === name || (!id && employeeKey(w.employeeName) === name);
-    });
+    const weeks = (weeksByProperty.get(propertyKey(staffMember.property_id)) || []).filter((w) => weekBelongsTo(w, staffMember));
     if (!weeks.length) return null;
     return weeks.reduce(
       (acc, w) => ({
@@ -1616,13 +1814,13 @@ async function runLocalAutoPayroll(params = {}) {
   const created = [];
   const skipped = [];
   for (const s of staff) {
-    const key = payrollKey(s);
-    if (paidKeys.has(key)) {
-      skipped.push({ property_id: s.property_id, property_name: s.property_name || "", employee_name: s.employee_name, reason: "already processed for this period" });
-      continue;
-    }
     if (!s.employee_name || !(Number(s.base_rate) > 0)) {
       skipped.push({ property_id: s.property_id, property_name: s.property_name || "", employee_name: s.employee_name, reason: "missing pay configuration" });
+      continue;
+    }
+    const key = identityKey(s.property_id, s.employee_id);
+    if (existingByIdentity.has(key) || legacySuppressedIdentities.has(key)) {
+      skipped.push({ property_id: s.property_id, property_name: s.property_name || "", employee_name: s.employee_name, reason: "already processed for this period" });
       continue;
     }
     const baseRate = Number(s.base_rate) || 0;
@@ -1641,6 +1839,7 @@ async function runLocalAutoPayroll(params = {}) {
     const record = {
       property_id: s.property_id,
       property_name: s.property_name || "",
+      employee_id: s.employee_id,
       employee_name: s.employee_name,
       department: s.department || "",
       pay_type: s.pay_type || "hourly",
@@ -1661,7 +1860,8 @@ async function runLocalAutoPayroll(params = {}) {
       auto_generated: true,
     };
     await db.entities.PayrollRun.create(record);
-    paidKeys.add(key);
+    existingByIdentity.set(key, record);
+    legacySuppressedIdentities.add(key);
     created.push(record);
   }
 

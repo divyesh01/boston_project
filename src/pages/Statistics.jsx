@@ -73,11 +73,12 @@ export default function Statistics() {
   const [pickedDate, setPickedDate] = useState("");
   const snapshot = useMemo(() => snapshotFor(rows, pickedDate), [rows, pickedDate]);
 
-  const cards = useMemo(() => headline(snapshot.rows, period), [snapshot.rows, period]);
-  const index = useMemo(() => indexSnapshot(snapshot.rows), [snapshot.rows]);
-  const trends = useMemo(() => headlineTrends(rows), [rows]);
-  const revenueMix = useMemo(() => composition(snapshot.rows, "Revenue", period).slice(0, 10), [snapshot.rows, period]);
-  const paymentMix = useMemo(() => composition(snapshot.rows, "Payments", period), [snapshot.rows, period]);
+  const cards = useMemo(() => headline(snapshot.rows, period, property), [snapshot.rows, period, property]);
+  const index = useMemo(() => indexSnapshot(snapshot.rows, property), [snapshot.rows, property]);
+  const trends = useMemo(() => headlineTrends(rows, property), [rows, property]);
+  const revenueMix = useMemo(() => composition(snapshot.rows, "Revenue", period, property).slice(0, 10), [snapshot.rows, period, property]);
+  const paymentMix = useMemo(() => composition(snapshot.rows, "Payments", period, property), [snapshot.rows, period, property]);
+  const knownPayments = useMemo(() => paymentMix.filter((r) => r.value !== null && Number.isFinite(r.value)), [paymentMix]);
   const q = useMemo(() => quality(rows), [rows]);
 
   // One export path for both buttons. It used to be two near-identical inline
@@ -225,6 +226,12 @@ export default function Statistics() {
         ))}
       </div>
 
+      {cards.some((m) => m.incomplete) && (
+        <p role="status" className="rounded-xl border border-[#FFB547]/20 bg-[#FFB547]/5 px-4 py-2.5 text-xs text-[#FFB547]">
+          This snapshot does not cover every selected property. Portfolio totals are unavailable until each property has a snapshot for this date.
+        </p>
+      )}
+
       {/* Prior-year coverage is partial, and the honest version of that is a
           list rather than a flag. Last-year columns are present for all ~106
           metrics but read 0.00 for nearly all of them — the PMS has no trading
@@ -246,7 +253,7 @@ export default function Statistics() {
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Rooms tonight" subtitle="How the 100-room inventory resolved">
+        <Card title="Rooms tonight" subtitle="How the selected room inventory resolved">
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
             {[
               ["Total rooms", totalRooms, "count"],
@@ -283,22 +290,27 @@ export default function Statistics() {
         >
           {paymentMix.length === 0 ? (
             <p className="text-sm text-slate-500">No settlements recorded for this window.</p>
+          ) : knownPayments.length === 0 ? (
+            <p className="text-sm text-slate-500">Settlement totals are unavailable for the selected properties.</p>
           ) : (
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={paymentMix} layout="vertical" margin={{ left: 34, right: 12 }}>
+                <BarChart data={knownPayments} layout="vertical" margin={{ left: 34, right: 12 }}>
                   <CartesianGrid stroke="#ffffff0a" horizontal={false} />
                   <XAxis type="number" tick={axis} stroke="#ffffff10" tickFormatter={(v) => money(v)} />
                   <YAxis type="category" dataKey="name" tick={axis} stroke="#ffffff10" width={96} />
                   <Tooltip contentStyle={tip} formatter={(v) => money2(v)} cursor={{ fill: "#ffffff06" }} />
                   <Bar dataKey="value" radius={[0, 4, 4, 0]}>
-                    {paymentMix.map((e, i) => (
+                    {knownPayments.map((e, i) => (
                       <Cell key={e.name} fill={e.value < 0 ? C.coral : CHART_COLORS[i % CHART_COLORS.length]} />
                     ))}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
+          )}
+          {knownPayments.length > 0 && knownPayments.length < paymentMix.length && (
+            <p className="mt-2 text-xs text-slate-500">Some settlement totals are unavailable for the selected properties.</p>
           )}
         </Card>
       </div>
@@ -312,20 +324,21 @@ export default function Statistics() {
         ) : (
           <div className="space-y-2.5">
             {revenueMix.map((r, i) => {
-              const top = Math.abs(revenueMix[0].value) || 1;
+              const known = r.value !== null && Number.isFinite(r.value);
+              const top = Math.max(1, ...revenueMix.filter((line) => line.value !== null && Number.isFinite(line.value)).map((line) => Math.abs(line.value)));
               return (
                 <div key={r.name} className="flex items-center gap-3">
                   <span className="w-44 shrink-0 truncate text-xs text-slate-400" title={r.name}>{r.name}</span>
                   <span className="h-2 flex-1 overflow-hidden rounded-full bg-white/5">
-                    <span
+                    {known && <span
                       className="block h-full rounded-full transition-all duration-500"
                       style={{
                         width: `${Math.max(2, (Math.abs(r.value) / top) * 100)}%`,
                         background: CHART_COLORS[i % CHART_COLORS.length],
                       }}
-                    />
+                    />}
                   </span>
-                  <span className="w-24 shrink-0 text-right text-sm tabular-nums text-slate-200">{money2(r.value)}</span>
+                  <span className="w-24 shrink-0 text-right text-sm tabular-nums text-slate-200">{formatByUnit(r.value, "currency")}</span>
                 </div>
               );
             })}
@@ -361,6 +374,8 @@ export default function Statistics() {
             One snapshot in this range ({snapshot.date}). Import a statistics export for another day, or widen the
             date range, and the trend appears here.
           </p>
+        ) : !(trends[trendKey] || []).some((point) => point.value !== null && Number.isFinite(Number(point.value))) ? (
+          <p className="text-sm text-slate-400">This trend is unavailable for the selected properties.</p>
         ) : (
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
@@ -392,7 +407,7 @@ export default function Statistics() {
         )}
       </Card>
 
-      <MetricExplorer rows={snapshot.rows} />
+      <MetricExplorer rows={snapshot.rows} expectedPropertyIds={property} />
 
       <Card
         title="About this data"

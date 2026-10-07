@@ -982,3 +982,11 @@ Production unchanged; owner acceptance NOT_RUN; no owner-ready claim.
   UI unit only, not a scheduler/backend test.
 - Copy does NOT implement the background monthly feature. Payroll-page R63
   conditional candidate NOT accepted/applied - not a release.
+
+
+## Statistics property coverage — 2026-10-07
+
+Selected active property IDs now reach the Statistics headline, details, composition and trend helpers. Missing property snapshots display unavailable totals, an explicit coverage message, and no value bars. Revenue trends include taxable plus exempt room revenue for each date. Rate metrics without valid portfolio denominators remain unavailable. The 41 actual-module regressions and normal-login browser 12 checks cover the changed behavior.
+
+### Action Center read acceptance (2026-10-07)
+Normal synthetic owner Refresh data refetched five current query families and advanced their timestamps; parent proof/oracle and missing-source-events negative control passed. Ten full native rows across nine entities stayed unchanged with zero mutation requests. Source/Expense/Payroll were empty; populated calculations, error/retry, action buckets and schedule expansion remain untested. Production was unchanged.

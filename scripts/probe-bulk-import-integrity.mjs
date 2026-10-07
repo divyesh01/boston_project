@@ -2,7 +2,7 @@ import './_loader-boot.mjs';
 import 'fake-indexeddb/auto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { makeInstrumentedEnv, makeRunner, assert, assertEqual, scopeAll } from './_worker-testkit.mjs';
+import { makeInstrumentedEnv, makeRunner, assert, assertEqual, scopeAll, withFixedLengthStream } from './_worker-testkit.mjs';
 import { clearMockStore, getMockStore, testR2Binding } from './_r2-testkit.mjs';
 import { handleBulkImportRequest } from '../worker/bulk-import.js';
 import { executeBulkImport, buildNormalizedBundle, sha256Hex, compressPayloadGzip } from '../src/lib/bulkImportPipeline.js';
@@ -12,6 +12,19 @@ import localDb from '../src/api/localDb.js';
 const nativeFetch = globalThis.fetch;
 const run = makeRunner('probe-bulk-import-integrity');
 let db, env, scope;
+function withNativeRawContentLength(url, init) {
+  if (url.pathname !== '/api/bulk-import/raw-upload') return init;
+  const headers = new Headers(init?.headers ?? undefined);
+  if (headers.has('content-length')) return init;
+  const body = init?.body;
+  const bytes = typeof body === 'string' ? new TextEncoder().encode(body)
+    : body instanceof Uint8Array ? body
+      : body instanceof ArrayBuffer ? new Uint8Array(body)
+        : null;
+  if (!bytes) return init;
+  headers.set('content-length', String(bytes.byteLength));
+  return { ...init, headers };
+}
 async function setup() {
   if (db) db.close();
   clearMockStore();
@@ -25,7 +38,7 @@ async function setup() {
   env = makeInstrumentedEnv(db, { RAW_ARCHIVE: testR2Binding(), BULK_DATA: testR2Binding() }).env;
   scope = scopeAll(['P_A', 'P_B']);
   globalThis.fetch = async (input, init) => {
-    const request = new Request(new URL(String(input), 'http://localhost'), init);
+    const request = new Request(new URL(String(input), 'http://localhost'), withNativeRawContentLength(new URL(String(input), 'http://localhost'), init));
     const routeUrl = new URL(request.url);
     return handleBulkImportRequest(request, env, scope, routeUrl, routeUrl.pathname.split('/').filter(Boolean));
   };
@@ -56,6 +69,8 @@ async function executeWithExplicitReplacement(scanResult, options) {
     expectedRevision: candidates[0].revision,
   });
 }
+await withFixedLengthStream(async () => {
+
 await run.check('Populated 0005 to 0006 preserves all prior columns, indexes and constraints', async () => {
   const migrationDb = new DatabaseSync(':memory:');
   try {
@@ -167,7 +182,7 @@ await run.check('Resume activates original pending manifest without uploading ra
   await setup();
   const bytes = new TextEncoder().encode('Date,Total\n2026-09-01,100');
   const hash = await sha256Hex(bytes);
-  await fetch('/api/bulk-import/raw-upload',{method:'PUT',headers:{'x-server-property-id':'P_A','x-raw-hash':hash,'x-archive-id':'pending'},body:bytes});
+  await fetch('/api/bulk-import/raw-upload',{method:'PUT',headers:{'x-server-property-id':'P_A','x-raw-hash':hash,'x-archive-id':'pending','Content-Length':String(bytes.byteLength)},body:bytes});
   await post('raw-archive',{id:'pending',raw_archive_id:'pending',server_property_id:'P_A',raw_file_hash:hash,original_file_name:'report.csv'});
   const pending = db.prepare('SELECT * FROM import_bundle_manifest WHERE id=?').get('pending');
   const originalPut = env.RAW_ARCHIVE.put; env.RAW_ARCHIVE.put = async () => { throw new Error('Resume re-uploaded raw'); };
@@ -290,7 +305,7 @@ await run.check('CSV, XLS and XLSX original bytes parse and resume the same mani
     const bytes = extension === 'csv' ? new TextEncoder().encode(grid.map(row => row.join(',')).join('\n'))
       : new Uint8Array(XLSX.write(book,{type:'array',bookType:extension === 'xls' ? 'biff8' : 'xlsx'}));
     const hash = await sha256Hex(bytes);
-    await fetch('/api/bulk-import/raw-upload',{method:'PUT',headers:{'x-server-property-id':'P_A','x-raw-hash':hash},body:bytes});
+    await fetch('/api/bulk-import/raw-upload',{method:'PUT',headers:{'x-server-property-id':'P_A','x-raw-hash':hash,'Content-Length':String(bytes.byteLength)},body:bytes});
     await post('raw-archive',{id:'format',raw_archive_id:'format',server_property_id:'P_A',raw_file_hash:hash,report_type:'occupancy',original_file_name:`report.${extension}`});
     const pending = db.prepare('SELECT * FROM import_bundle_manifest WHERE id=?').get('format');
     const download = await fetch('/api/bulk-import/raw/format'); const rawBytes = await download.arrayBuffer();
@@ -381,7 +396,7 @@ await run.check('Real HTTP delivers opaque gzip exactly once', async () => {
 });
 await localDb.delete(); if(db) db.close();
 run.done();
-if(process.exitCode) process.exit(1);
+});
+if (process.exitCode) process.exit(1);
 console.log('PASSED: production-schema integrity and real pipeline regressions');
-
 process.exit(0);

@@ -2,7 +2,7 @@ import './_loader-boot.mjs';
 import 'fake-indexeddb/auto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { makeInstrumentedEnv, makeRunner, assert, assertEqual, scopeAll } from './_worker-testkit.mjs';
+import { makeInstrumentedEnv, makeRunner, assert, assertEqual, scopeAll, withFixedLengthStream } from './_worker-testkit.mjs';
 import { clearMockStore, testR2Binding } from './_r2-testkit.mjs';
 import { handleBulkImportRequest } from '../worker/bulk-import.js';
 import { handleBusinessSyncRequest } from '../worker/business-sync.js';
@@ -52,17 +52,48 @@ globalThis.fetch = async (input, init) => {
       return Response.json({ error: 'Injected midway bundle outage' }, { status: 503 });
     }
   }
-  const request = new Request(url, init);
+  const request = await bridgeRequest(url, init);
   return handleBulkImportRequest(request, env, scope, url, url.pathname.split('/').filter(Boolean));
 };
 
 const day = '2026-09-12';
 const rawBytes = (name) => new TextEncoder().encode(name);
+
+// Native R2 raw upload requires the browser-wire Content-Length the real fetch
+// would attach. This TEST bridge hands the client-created Request straight to
+// the Worker, so for a VALID native raw upload only, synthesize the actual
+// consumed UTF-8/raw byte count into a cloned Request (body preserved).
+async function bodyByteLength(body) {
+  if (body == null) return 0;
+  if (body instanceof Uint8Array) return body.byteLength;
+  if (body instanceof ArrayBuffer) return body.byteLength;
+  if (typeof body === 'string') return new TextEncoder().encode(body).byteLength;
+  if (typeof body.arrayBuffer === 'function') return (await body.arrayBuffer()).byteLength;
+  return 0;
+}
+
+async function bridgeRequest(url, init) {
+  let request = new Request(url, init);
+  if (url.pathname.startsWith('/api/bulk-import/raw-upload') && !request.headers.has('content-length')) {
+    let byteLength = await bodyByteLength(init?.body);
+    if (byteLength === 0 && request.body) {
+      byteLength = (await request.clone().arrayBuffer()).byteLength;
+    }
+    if (byteLength > 0) {
+      const headers = new Headers(request.headers);
+      headers.set('content-length', String(byteLength));
+      request = new Request(request, { headers });
+    }
+  }
+  return request;
+}
+
 const importRows = async (type, rows, propertyId = 'P_A') => executeBulkImport(
   { type, totalRows: rows.length, rowsToImport: rows },
   { propertyId, propertyName: propertyId, sourceFile: `${type}.csv`, rawBytes: rawBytes(`${type}-${propertyId}`) },
 );
 
+async function runAllChecks() {
 await run.check('Active server imports reproduce the fresh-browser zero-revenue symptom and startup heals it without upload', async () => {
   await importRows('gross', [{ date: day, room_revenue: 12000, state_tax: 600, city_tax: 300, other_tax: 0 }]);
   await importRows('occupancy', [{ date: day, room_revenue: 12000, total_revenue: 12900, rooms_sold: 1, total_rooms: 2 }]);
@@ -246,6 +277,12 @@ await run.check('Active server imports reproduce the fresh-browser zero-revenue 
     dashboardRevenueB: (await dashboardRevenueCentsFor('P_B')) / 100,
     uploadRequests: uploadRequests - requestsBeforeHydration,
   };
+});
+
+}
+
+await withFixedLengthStream(async () => {
+  await runAllChecks();
 });
 
 db.close();

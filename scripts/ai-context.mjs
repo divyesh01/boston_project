@@ -173,23 +173,61 @@ function refExists(ref) {
   return git(['rev-parse', '--verify', '--quiet', ref], '') !== '';
 }
 
-function parseStatusLine(line) {
-  if (!line || line.length < 4) return null;
-  const status = line.slice(0, 2);
-  const rawPath = line.slice(3).trim();
-  const target = rawPath.includes(' -> ') ? rawPath.split(' -> ').at(-1) : rawPath;
-  return { status, path: target.replace(/^"|"$/g, '') };
+export function parsePorcelainZ(raw) {
+  if (!raw) return [];
+  const entries = [];
+  const tokens = raw.split('\0');
+  for (let i = 0; i < tokens.length; i++) {
+    const item = tokens[i];
+    if (!item) continue;
+    const status = item.slice(0, 2);
+    const entry = { status, path: item.slice(3) };
+    if (status.includes('R') || status.includes('C')) {
+      entry.originalPath = tokens[++i];
+    }
+    entries.push(entry);
+  }
+  return entries;
 }
 
-function worktreeChanges() {
-  return gitLines(['status', '--porcelain=v1', '--untracked-files=all'])
-    .map(parseStatusLine)
-    .filter(Boolean);
+export function parseNameStatusZ(raw) {
+  if (!raw) return [];
+  const paths = [];
+  const tokens = raw.split('\0');
+  for (let i = 0; i < tokens.length; i++) {
+    const status = tokens[i];
+    if (!status) continue;
+    paths.push(tokens[++i]);
+    if (status.startsWith('R') || status.startsWith('C')) paths.push(tokens[++i]);
+  }
+  return paths.filter(Boolean);
+}
+
+export function worktreeChanges() {
+  try {
+    const raw = execFileSync(
+      'git',
+      ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
+      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 8000 }
+    );
+    return parsePorcelainZ(raw);
+  } catch {
+    return [];
+  }
 }
 
 function committedDiffPaths(baseRef) {
   if (!baseRef || !refExists(baseRef) || !refExists('HEAD')) return [];
-  return gitLines(['diff', '--name-only', '--diff-filter=ACMR', `${baseRef}...HEAD`]);
+  try {
+    const raw = execFileSync(
+      'git',
+      ['diff', '--name-status', '-z', '--find-renames', `${baseRef}...HEAD`],
+      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 8000 }
+    );
+    return parseNameStatusZ(raw);
+  } catch {
+    return [];
+  }
 }
 
 function branchDivergence(baseRef) {
@@ -498,7 +536,7 @@ async function main() {
 
   const worktree = worktreeChanges();
   const branchDiff = changedMode ? committedDiffPaths(baseRef) : [];
-  const changedFiles = unique([...worktree.map((entry) => entry.path), ...branchDiff].map(normalizePath)).filter(Boolean);
+  const changedFiles = unique([...worktree.flatMap((entry) => [entry.path, entry.originalPath].filter(Boolean)), ...branchDiff].map(normalizePath)).filter(Boolean);
   const routingQuery = [query, ...changedFiles].filter(Boolean).join(' ');
 
   const ranked = guideRows
@@ -537,7 +575,8 @@ async function main() {
   }));
 
   const protectedQueryMatches = directProtectedMatches(query, protectedList);
-  const protectedChangedFiles = changedFiles.filter((file) => protectedList.includes(normalizePath(file)));
+  const protectedLookup = new Map(protectedList.map(p => [normalizePath(p), p]));
+  const protectedChangedFiles = unique(changedFiles.map(f => protectedLookup.get(normalizePath(f))).filter(Boolean));
   const changedScope = changedFiles.map((file) => classifyChangedPath(file, guideRows, contractRows, matrixRows));
   const selectedAreaSet = new Set(selectedRows.map((row) => row.Area));
   const mappedOutOfScope = changedScope.filter((item) => item.areas.length && !item.areas.some((area) => selectedAreaSet.has(area)));
@@ -653,4 +692,13 @@ async function main() {
   if (context.decision.blockers.length) process.exitCode = 2;
 }
 
-await main();
+if (process.argv[1]) {
+  const entryPath = path.resolve(process.argv[1]);
+  const modulePath = path.resolve(fileURLToPath(import.meta.url));
+  const isEntry = process.platform === 'win32'
+    ? entryPath.toLowerCase() === modulePath.toLowerCase()
+    : entryPath === modulePath;
+  if (isEntry) {
+    await main();
+  }
+}

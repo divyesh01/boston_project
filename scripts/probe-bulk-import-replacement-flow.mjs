@@ -12,6 +12,7 @@ import {
   makeRunner,
   seedUser,
   scopeAll,
+  withFixedLengthStream,
 } from "./_worker-testkit.mjs";
 import { handleBulkImportRequest } from "../worker/bulk-import.js";
 import { clearMockStore, testR2Binding } from "./_r2-testkit.mjs";
@@ -68,6 +69,7 @@ function setupWorker() {
   return { db, env, stats, owner };
 }
 
+async function runAllChecks() {
 await run.check("1. Hotel Statistics: explicit overlap replacement retains dates absent from the new report", async () => {
   const { db, env, owner } = setupWorker();
   const propertyId = "PROP_MIDDELBORO";
@@ -88,6 +90,7 @@ await run.check("1. Hotel Statistics: explicit overlap replacement retains dates
       "x-raw-hash": v1RawHash,
       "x-archive-id": v1ArchiveId,
       "x-file-name": "Hotel Statistics (1).csv",
+      "Content-Length": String(v1RawBytes.byteLength),
     },
     body: v1RawBytes,
   });
@@ -173,6 +176,7 @@ await run.check("1. Hotel Statistics: explicit overlap replacement retains dates
       "x-raw-hash": v2RawHash,
       "x-archive-id": v2ArchiveId,
       "x-file-name": "Hotel Statistics.csv",
+      "Content-Length": String(v2RawBytes.byteLength),
     },
     body: v2RawBytes,
   });
@@ -308,6 +312,7 @@ await run.check("2. Source Summary pattern: scope isolation & lineage conflict g
       "x-raw-hash": rawOtherHash,
       "x-archive-id": archOtherId,
       "x-file-name": "Source Summary Other.csv",
+      "Content-Length": String(rawOtherBytes.byteLength),
     },
     body: rawOtherBytes,
   });
@@ -386,6 +391,7 @@ await run.check("2. Source Summary pattern: scope isolation & lineage conflict g
       "x-raw-hash": rawMidHash,
       "x-archive-id": archMidId,
       "x-file-name": "Source Summary.csv",
+      "Content-Length": String(rawMidBytes.byteLength),
     },
     body: rawMidBytes,
   });
@@ -485,6 +491,7 @@ await run.check("2. Source Summary pattern: scope isolation & lineage conflict g
       "x-raw-hash": rawMid1Hash,
       "x-archive-id": archMid1Id,
       "x-file-name": "Source Summary (1).csv",
+      "Content-Length": String(rawMid1Bytes.byteLength),
     },
     body: rawMid1Bytes,
   });
@@ -630,6 +637,11 @@ await run.check("3. Pipeline error fidelity: activateBundleOnServer preserves ex
   }
 });
 
+}
+
+await withFixedLengthStream(async () => {
+  await runAllChecks();
+});
 run.done();
 if (process.exitCode) process.exit(1);
 console.log("PASSED: probe-bulk-import-replacement-flow completed all tests successfully.");

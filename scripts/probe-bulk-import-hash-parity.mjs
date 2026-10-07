@@ -10,6 +10,7 @@ import {
   makeRunner,
   seedUser,
   scopeAll,
+  withFixedLengthStream,
 } from "./_worker-testkit.mjs";
 import { handleBulkImportRequest } from "../worker/bulk-import.js";
 import { clearMockStore, testR2Binding } from "./_r2-testkit.mjs";
@@ -33,6 +34,8 @@ function setupWorker() {
   owner.user.account_id = "A_1";
   return { db, env, stats, owner };
 }
+
+await withFixedLengthStream(async () => {
 
 await run.check("Bit-for-bit SHA-256 and byte parity on CSV, XLSX, and XLS downloads", async () => {
   const { env, owner } = setupWorker();
@@ -89,6 +92,7 @@ await run.check("Bit-for-bit SHA-256 and byte parity on CSV, XLSX, and XLS downl
         "x-archive-id": archiveId,
         "x-file-name": item.fileName,
         "content-type": item.mimeType,
+        "Content-Length": String(item.bytes.byteLength),
       },
       body: item.bytes,
     });
@@ -140,6 +144,7 @@ await run.check("Bit-for-bit SHA-256 and byte parity on CSV, XLSX, and XLS downl
 });
 
 run.done();
+});
 if (process.exitCode) process.exit(1);
 console.log("PASSED: probe-bulk-import-hash-parity completed.");
 process.exit(0);

@@ -18,6 +18,7 @@ import {
   makeRunner,
   seedUser,
   scopeAll,
+  withFixedLengthStream,
 } from "./_worker-testkit.mjs";
 import { handleBulkImportRequest } from "../worker/bulk-import.js";
 import { clearMockStore, testR2Binding } from "./_r2-testkit.mjs";
@@ -55,6 +56,8 @@ function setupWorker() {
   owner.user.account_id = "A_1";
   return { db, env, stats, owner };
 }
+
+await withFixedLengthStream(async () => {
 
 await run.check("50-file one-shot archive -> processing failure on file 31 -> Browser B resumes 20 files from R2 with 0 local re-uploads", async () => {
   const { db, env, owner } = setupWorker();
@@ -108,6 +111,7 @@ await run.check("50-file one-shot archive -> processing failure on file 31 -> Br
         "x-archive-id": rawArchiveId,
         "x-file-name": item.fileName,
         "content-type": "text/csv",
+        "Content-Length": String(item.rawBytes.byteLength),
       },
       body: item.rawBytes,
     });
@@ -289,6 +293,7 @@ await run.check("50-file one-shot archive -> processing failure on file 31 -> Br
 });
 
 run.done();
+});
 if (process.exitCode) process.exit(1);
 console.log("PASSED: probe-bulk-import-archive-resume completed.");
 process.exit(0);

@@ -14,6 +14,25 @@ import { ErrorState } from "@/components/ui/status";
 import { db } from "@/api/base44Client";
 import { propertyRecordKey, propertyDisplayName } from "@/lib/propertyRecordIdentity";
 
+export function getClerkGroupPersistence(s, signOffNotes) {
+  const hasRecords = Boolean(s.records && s.records.length > 0);
+  const allResolved = hasRecords && s.records.every((r) => r.review_status === "RESOLVED");
+  const resolvedNotes = hasRecords
+    ? s.records
+        .filter((r) => r.review_status === "RESOLVED" && typeof r.resolution_notes === "string" && r.resolution_notes.trim().length > 0)
+        .sort((a, b) => String(a.id || "").localeCompare(String(b.id || "")))
+        .map((r) => r.resolution_notes.trim())
+    : [];
+  const persistedNotes = resolvedNotes.length === 0
+    ? ""
+    : new Set(resolvedNotes).size === 1
+      ? resolvedNotes[0]
+      : resolvedNotes.join(" | ");
+  const displayNotes = signOffNotes[s.reviewKey] !== undefined ? signOffNotes[s.reviewKey] : persistedNotes;
+  const isSigned = allResolved;
+  return { isSigned, displayNotes, allResolved };
+}
+
 export default function Employees() {
   const { dateRange, property, properties, employee } = useGlobalFilters();
   const recordsQ = useClerkRecords(dateRange, property);
@@ -34,7 +53,6 @@ export default function Employees() {
   const [mgr, setMgr] = useState(null);
   const [mgrError, setMgrError] = useState(null);
   const [signOffNotes, setSignOffNotes] = useState({});
-  const [signedClerks, setSignedClerks] = useState({});
   const [signing, setSigning] = useState(null);
   const signingRef = useRef(false);
   const [notice, setNotice] = useState(null);
@@ -44,16 +62,16 @@ export default function Employees() {
     setClerkFilter("all");
     setFraudClerk("all");
     setSignOffNotes({});
-    setSignedClerks({});
     setNotice(null);
   }, [viewScope]);
+
   useEffect(() => {
     db.auth.me().then((u) => { setMgr(u); setMgrError(null); }).catch((e) => { setMgr(null); setMgrError(e?.message || String(e)); });
   }, []);
 
   const handleSignOff = async (clerk) => {
-    if (signingRef.current || signedClerks[clerk.reviewKey]) return;
-    const notes = signOffNotes[clerk.reviewKey] || "";
+    const { isSigned, displayNotes } = getClerkGroupPersistence(clerk, signOffNotes);
+    if (signingRef.current || isSigned) return;
     // A sign-off is an attribution: it writes reviewed_by_id / reviewed_by_name
     // onto the shift record and an ANOMALY_SIGN_OFF audit row. This used to fall
     // back to id "manager" and name "Manager" whenever db.auth.me() had failed,
@@ -79,11 +97,11 @@ export default function Employees() {
           shiftId: rec.id,
           managerUserId: user.id,
           managerName: user.username || user.email || user.full_name || user.id,
-          resolutionNotes: notes,
+          resolutionNotes: displayNotes,
           propertyId: clerk.property_id,
         });
       }
-      setSignedClerks((p) => ({ ...p, [clerk.reviewKey]: true }));
+      await recordsQ.refetch?.();
       setNotice({ type: "ok", text: `Signed off ${clerk.clerk}'s shift records at ${propertyDisplayName(clerk, properties)}.` });
     } catch (e) {
       setNotice({ type: "error", text: `Sign-off failed: ${e.message}` });
@@ -405,7 +423,9 @@ export default function Employees() {
                     </tr>
                   </thead>
                    <tbody>
-                     {filteredStats.map((s) => (
+{filteredStats.map((s) => {
+                        const { isSigned, displayNotes } = getClerkGroupPersistence(s, signOffNotes);
+                       return (
                       <React.Fragment key={s.key}>
                         <tr
                           onClick={() => setSelected(selected === s.key ? null : s.key)}
@@ -475,7 +495,7 @@ export default function Employees() {
                 <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/5 pt-3">
                   <input
                     disabled={signing !== null}
-                    value={signOffNotes[s.reviewKey] || ""}
+                    value={displayNotes}
                     onChange={(e) => setSignOffNotes((p) => ({ ...p, [s.reviewKey]: e.target.value }))}
                     placeholder="Resolution notes (optional)"
                     aria-label={`Resolution notes for ${s.clerk}`}
@@ -483,17 +503,17 @@ export default function Employees() {
                   />
                   <button
                     onClick={() => handleSignOff(s)}
-                    disabled={signedClerks[s.reviewKey] || signing !== null || !s.records.length || s.property_id === "" || s.property_id == null}
+                    disabled={isSigned || signing !== null || !s.records.length || s.property_id === "" || s.property_id == null}
                     className="rounded-lg bg-[#00D4FF] px-3 py-2 text-xs font-medium text-[#04231A] hover:bg-[#5fe3ff] disabled:opacity-50"
                   >
-                    {signedClerks[s.reviewKey] ? "Signed Off" : signing === s.reviewKey ? "Signing..." : "Sign Off Shift"}
+                    {isSigned ? "Signed Off" : signing === s.reviewKey ? "Signing..." : "Sign Off Shift"}
                   </button>
                 </div>
                              </td>
                           </tr>
                         )}
                       </React.Fragment>
-                    ))}
+                    ); })}
                   </tbody>
                 </table>
               </div>

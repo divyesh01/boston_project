@@ -30,7 +30,7 @@ import { generateDeterministicRowId } from '../src/lib/bulkImportPipeline.js';
 import { CleanupRegistry } from './canary/cleanup-registry.mjs';
 import { CanaryClient, CanaryApiError } from './canary/canary-client.mjs';
 import { runCanary } from './canary-bulk-import.mjs';
-import { makeInstrumentedEnv, scopeAll } from './_worker-testkit.mjs';
+import { makeInstrumentedEnv, scopeAll, withFixedLengthStream } from './_worker-testkit.mjs';
 import { clearMockStore, testR2Binding } from './_r2-testkit.mjs';
 import { handleBulkImportRequest } from '../worker/bulk-import.js';
 import { sameOriginMutation } from '../worker/app-auth.js';
@@ -69,6 +69,38 @@ function assertThrows(fn, expectedCode, message) {
       passed++;
     }
   }
+}
+
+// Native R2 raw upload requires the browser-wire Content-Length. The mock
+// fetch bridge hands the client-created Request straight to the Worker, so for
+// a VALID native raw upload only, synthesize the real consumed UTF-8/raw byte
+// count into a cloned Request (body preserved for the Worker). Never applied
+// to deliberately missing/malformed/oversize header tests.
+async function bodyByteLength(body) {
+  if (body == null) return 0;
+  if (body instanceof Uint8Array) return body.byteLength;
+  if (body instanceof ArrayBuffer) return body.byteLength;
+  if (typeof body === 'string') return new TextEncoder().encode(body).byteLength;
+  if (typeof body.arrayBuffer === 'function') return (await body.arrayBuffer()).byteLength;
+  return 0;
+}
+
+async function bridgeRequest(input, init) {
+  let request = new Request(new URL(String(input), 'http://localhost'), init);
+  const requestUrl = new URL(request.url);
+  const pathname = requestUrl.pathname;
+  if (pathname.startsWith('/api/bulk-import/raw-upload') && !request.headers.has('content-length')) {
+    let byteLength = await bodyByteLength(init?.body);
+    if (byteLength === 0 && request.body) {
+      byteLength = (await request.clone().arrayBuffer()).byteLength;
+    }
+    if (byteLength > 0) {
+      const headers = new Headers(request.headers);
+      headers.set('content-length', String(byteLength));
+      request = new Request(request, { headers });
+    }
+  }
+  return request;
 }
 
 async function runTests() {
@@ -489,7 +521,7 @@ async function runTests() {
     const scope = scopeAll(['canary-prop-1'], 'owner', 'A_1');
 
     const mockFetch = async (input, init) => {
-      const request = new Request(new URL(String(input), 'http://localhost'), init);
+      const request = await bridgeRequest(input, init);
       const routeUrl = new URL(request.url);
       const parts = routeUrl.pathname.split('/').filter(Boolean);
       return handleBulkImportRequest(request, env, scope, routeUrl, parts);
@@ -994,10 +1026,12 @@ async function runTests() {
   // ── Summary & Process Exit ────────────────────────────────────────────────
   console.log('\n--------------------------------------------------------------------------------');
   console.log(`${failed === 0 ? 'PASSED' : 'FAILED'}: ${passed} passed, ${failed} failed`);
-  process.exit(failed > 0 ? 1 : 0);
+  return failed > 0 ? 1 : 0;
 }
 
-runTests().catch((err) => {
-  console.error('Fatal test error:', err);
-  process.exit(1);
-});
+withFixedLengthStream(runTests)
+  .then((exitCode) => process.exit(exitCode))
+  .catch((err) => {
+    console.error('Fatal test error:', err);
+    process.exit(1);
+  });

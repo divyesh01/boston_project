@@ -1,4 +1,5 @@
 import localDb from '../api/localDb.js';
+import { manifestScopeMatches } from './manifestScopeGuard.js';
 import { decompressPayloadGzip, generateDeterministicRowId } from './bulkImportPipeline.js';
 import { BULK_ENTITIES, parseBundle, contentHash, normalizedContent } from '../../worker/bulk-contract.js';
 import { mapConcurrent } from './mapConcurrent.js';
@@ -158,7 +159,7 @@ export async function syncBulkBundles({ force = false, propertyId = '' } = {}) {
         return { synced, lastRevision: revision, activeManifests, materializedRows, verified: true };
       }
       for (const manifest of manifests) {
-        if (propertyId && manifest.server_property_id !== propertyId) throw new Error('Manifest scope mismatch');
+        if (propertyId && !manifestScopeMatches(manifest, propertyId)) throw new Error('Manifest scope mismatch');
       }
       // Verify downloads concurrently, then commit the entire page atomically.
       // Retirements/replacements are still applied in manifest order below.

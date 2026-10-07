@@ -575,7 +575,7 @@ export default function Dashboard() {
             onClick={() => openProvenance("revenue")}
           />
           <KpiCard label="Rooms Sold" value={num(roomsSold)} sub={`of ${num(capacity)} available`} accent={C.cyan} icon={BedDouble} onClick={() => openProvenance("rooms")} />
-          <KpiCard label="Occupancy" value={pct(occupancy)} sub={`Avg ${num(Math.round(roomsSold / (occRows.length || 1)))} rooms/night`} accent={C.green} icon={Percent} onClick={() => openProvenance("occupancy")} />
+          <KpiCard label="Occupancy" value={pct(occupancy)} sub={`Avg ${num(Math.round(roomsSold / (uniqueDays || 1)))} rooms/night`} accent={C.green} icon={Percent} onClick={() => openProvenance("occupancy")} />
           <KpiCard label="ADR / RevPAR" value={money2(adr)} sub={`RevPAR ${money2(revpar)}`} accent={C.amber} icon={Gauge} onClick={() => openProvenance("adr")} />
         </div>
 

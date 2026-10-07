@@ -905,6 +905,13 @@ When uploading or resuming reports that overlap an active analytical period for 
    - `src/pages/portfolioQuery.test.js` executes current page query functions against the unchanged local facade with synthetic owner/restricted identities and in-memory IndexedDB. This is client query coverage; normal authenticated browser/server acceptance remains separate.
 
 
+7. **Portfolio Occupancy Subline**:
+   - Dashboard's Avg rooms/night label uses the existing unique reporting-date count for the selected occupancy rows, so multiple properties on one date do not dilute the portfolio figure. Four actual Dashboard render regressions cover same-date portfolio rows, distinct dates, a single property and empty data; revenue, occupancy percentage, ADR/RevPAR and filtering are unchanged.
+
+
+8. **Settings Archive Mode Boundary**:
+   - In server-sync mode, Settings labels the download a local snapshot and explains that records not yet loaded in this browser may be absent. It disables local archive restore and keeps handler guards; the archive function independently rejects that mode before local mutations. Local-only backup/restore copy, permissions and REPLACE confirmation remain unchanged. Candidate tests render both modes; production server backup and recovery remain separate.
+
 ## Cross-site UX production integration (October 4, 2026)
 
 The production integration applies the cross-site UX patch onto the current-main-based
@@ -927,3 +934,63 @@ October 4 release follow-up: fixed the ledger ErrorState prop required by CI; pr
 
 
 Release continuation: updated existing DataIntelligence UI test code to await real asynchronous reads before asserting loaded content, with an initial pending-state assertion preserved. Updated SmartButtonGroup callback test to the actual Report Download Options label. No assertions removed, product loading guards unchanged, no verification commands executed locally. GitHub CI owns automatic execution; Antigravity owns authenticated owner acceptance. Production artifact is unchanged by these test-only edits.
+
+### Clerk Audit persisted approval and refresh guard (owner launch correction, 2026-10-04)
+
+`src/pages/Employees.jsx` derives each current clerk group's Signed Off state from a nonempty set of records whose `review_status` values are all `RESOLVED`. Both the sign-off handler and expanded-row controls use the same persistence helper. Resolution notes load from persisted reviewed records in stable record-ID order; an explicit local draft, including an empty string, takes precedence for its current review key. Scope changes keep the existing selection, draft, and notice reset. A newly pending record makes the current group eligible for review again.
+
+After successful sign-off updates, the handler awaits `recordsQ.refetch()` before releasing its signing lock. This is a TanStack Query promise over the local data facade in the normal server-sync configuration; it is not an HTTP business-sync query. The retained probes `scripts/probe-clerk-persistence-helper.mjs` and `scripts/probe-clerk-signoff-refetch.mjs` import the actual production helper/component. They cover 11 helper cases and the deferred-refetch lock, with an await-stripped control required to fail at the specific signing-lock assertion. The component probe uses public hook/sign-off stubs and does not establish authentication or database behavior. A separate normal local Auth/server-sync browser replay passed all 25 existing checks, including persisted notes and Signed Off controls after reload, unchanged original record fields, and byte-identical captured rows for the other property. This evidence covers Clerk Audit; it does not certify every operational page or production owner acceptance.
+
+
+Frontend import hydration correction (source HEAD 2cbe candidate)
+Normal Upload selected a property alias (for example prop_fixture_a). The authenticated Worker resolved it to a canonical server property ID and published only unambiguous current-account property_aliases. Client hydration previously required exact canonical equality with the requested alias and threw Manifest scope mismatch after a successful server activation, leaving the upload marked Failed until a later unscoped refresh.
+The corrected client guard accepts exact canonical equality or strict typed equality with an explicitly server-published alias. It keeps foreign/unpublished/wrong-typed manifests denied and preserves the existing falsy propertyId behavior. No Worker mapping or monetary calculation changed.
+The same normal synthetic Upload flow on seven migrations now completes immediately: raw/archive/bulk/activation201, scoped history200, UI3rows/import1file, native Jan1-3 revenue100000c and205/300rooms persist reload with identical history NDJSON. Original generic A/B occupancy records remain unchanged; populated B occupancy is one control, transaction arrays are empty controls only. The reconstructed history payload uses canonical property IDs; substituting only the original UIalias through actual normalizedContent/contentHash exactly reproduces original manifest normalized_hash, so that hash distinction is expected.
+Verification: worker-authored helper13cases PASS; real normal pipeline/hydration browser replay R20 plus independent Codex financial/native/pixel checks. The retained 13-case direct helper probe covers wrong-typed and foreign aliases; full service integration is not claimed. No claim that all website functions are covered.
+
+
+## 59. Weather capability contract — current scoped status (2026-10-04)
+
+In server-auth deployments (`import.meta.env.VITE_USE_SERVER_AUTH === "true"`), `WeatherPanel` omits the unsupported legacy live-weather connector. It still displays fresh cached weather; when the cache is empty, it displays the existing unavailable message. With the flag `false` or undefined, the prior legacy connector behavior is kept. No auth, role, worker-route, or provider configuration was changed. Applied source `1E354DA0B9C4088663428D9E5B5DC3A4C505C6DAFE4D597A1C9E39BCDC34492D`. Live provider and key configuration remain UNPROVEN.
+
+Scoped evidence only: six retained actual component/service regression checks pass; seventeen actual query checks pass; the guard-removed control with the same empty cache is required to fail. Normal-auth browser replay R3 passed thirteen strict checks: single-A selection held with header and $13,125 for 3608 ms, reload shows unavailable, zero `getWeather` calls, ten native business snapshots identical, weather persist zero. Fresh-plan critique raised no HIGH/CRITICAL items. The existing DTO `feels_like` drop is separate existing behavior, follow-up only.
+
+Coordinator evidence basenames (artifacts under `rri-launch-20261003/readonly-ui-controls-20261004`, actual-result json inside `weather-capability-repair-r1`): `weather-panel-browser-r3-result.json`, `retained-r2-actual-results.json`. These are coordinator artifacts, not owner-portable deliverables. Base `a273191be59ce78ac85f63d588c5d0b6466e5f94` remains historical provenance; final gate results are updated by root when known.
+
+# Final Validation Note — 2026-10-04
+Production unchanged; owner acceptance NOT_RUN; no owner-ready claim.
+
+- Current committed base: a273191be59ce78ac85f63d588c5d0b6466e5f94; Weather source and regression follow-up pending commit.
+- Root: historical base `a273191` 100 files, 846 tests PASS with type/lint/build/governance/remote SUCCESS. Weather full suite (root, actual): 101 files, 852 PASS, 87.23s, run before type-only mocks. Retained type-corrected 6 PASS. Lint PASS on Weather source/test. Typecheck PASS after typed mock correction; production build PASS, 21.07s. Final brain/map/V3 governance checks PASS: brain exit 0; map 10 areas, 29 rows, 39 contracts, 194 references, 0 problems; V3 31 files and 6 adapters verified with SHA256 8998c0c8b7363198bd601111a088dee96b526583b5fdbc47b6e9a0f7212ce003. Refreshed typecheck and lint both exit 0.
+- Native: 15 probes, 266 checks PASS after scoped fix; helper guard 32 PASS; no native/S3 production fallback.
+- Portable Clerk helper 11 PASS; component actual 8 PASS / expected-mutant lock reject-after-5 PASS via verify-all runner.
+- Only the component probe forks isolated dev React (helper does not) under production parent; PASSED after assertions; no weakening.
+- Manifest helper 13 PASS via --only runner.
+- syncBulkBundles post-alias hydration PASS 1 ($12000/$7000, no uploads); R20 alias UI/native Jan1-3 proof preserved.
+- Retained 13-case probe exercises the actual helper strict canonical/server-published/typed-alias/foreign/wrong-type/malformed, NOT standalone service integration. Cloned alias-service probe withdrawn; do not promote copy.
+- Caller review: false-guard throw before download/commit, static-only.
+- CURRENT 212/99cc2842 shard3 17PASS 1SKIP, no 5173, exit 0. MAIN 211/c3388821 shard2 17PASS 1SKIP stale-dist, 7/8 18PASS each; after-build 11PASS recovers stale-dist. Baseline 2cbe 209/2c9c1972 4-shard 70PASS 2SKIP historical. Do not sum or claim all-212 PASS; remote all-12 Deep Verification shards and aggregate gate SUCCESS at a273191; this does not convert skipped checks to PASS.
+- Clerk NODE_ENV act error + NO_VERDICT failures resolved harness-only; keep failure evidence. Filter/Chart recovery ongoing; weather scoped checks pass per section 59, live provider/key UNPROVEN.
+- Supersedes only prior MAIN-shards-not-run / pending-Clerk / probe-being-added phrases; preserves historical source/unit/production facts.
+## R80 - universal manual ModuleCards tile (root decision)
+
+- Payroll tile is universal honest manual copy in ALL modes, no flag-switch:
+  Use Payroll to generate approved runs for the selected property.
+- No automatic final-day background promise in ANY mode; /payroll link,
+  manual button, money logic, other cards unchanged.
+- Real ModuleCards DOM gate PASS 3/3 (true/false/explicit undefined, 4.03s);
+  UI unit only, not a scheduler/backend test.
+- Copy does NOT implement the background monthly feature. Payroll-page R63
+  conditional candidate NOT accepted/applied - not a release.
+
+
+## Statistics property coverage — 2026-10-07
+
+Selected active property IDs now reach the Statistics headline, details, composition and trend helpers. Missing property snapshots display unavailable totals, an explicit coverage message, and no value bars. Revenue trends include taxable plus exempt room revenue for each date. Rate metrics without valid portfolio denominators remain unavailable. The 41 actual-module regressions and normal-login browser 12 checks cover the changed behavior.
+
+### Action Center read acceptance (2026-10-07)
+Normal synthetic owner Refresh data refetched five current query families and advanced their timestamps; parent proof/oracle and missing-source-events negative control passed. Ten full native rows across nine entities stayed unchanged with zero mutation requests. Source/Expense/Payroll were empty; populated calculations, error/retry, action buckets and schedule expansion remain untested. Production was unchanged.
+
+## Source-map dependency audit correction — 2026-10-07
+
+The lockfile updates the transitive `source-map-js` package to 1.2.2 to resolve high-severity advisory GHSA-68fv-2mgg-jv7q. Only its version, tarball URL and integrity change; the manifest and all four existing parent dependency ranges stay the same. A clean isolated install, actual npm audit and the unchanged audit gate passed with zero vulnerabilities. The integrated project install also passed. The integrated project passed typecheck, lint, production build, Brain, repository map, V3 and the unchanged audit gate. The initial unit run passed 817 tests but failed four forks-worker startup handshakes; a subsequent full, unchanged npm test passed all 913 tests across 103 files. The 213-suite verification sweep returned 197 PASS, 16 SKIP and one partial PASS, with no failing suites. The original startup failure is preserved and its cause remains unproven. The new remote CI must still run before accepting the new commit.

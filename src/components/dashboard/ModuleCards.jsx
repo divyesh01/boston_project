@@ -12,7 +12,7 @@ const THEMES = {
   emerald: {
     icon: ClipboardList,
     title: "Payroll",
-    description: "Payroll runs on the final day of every month for all active staff and lands Approved.",
+    description: "Use Payroll to generate approved runs for the selected property.",
     to: "/payroll",
     action: "Open Payroll",
     text: "#00E096",

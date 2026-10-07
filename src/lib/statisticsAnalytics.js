@@ -1,5 +1,7 @@
-// Hotel Statistics analytics — reading HotelMetric snapshots.
-//
+// Hotel Statistics snapshot analytics. Portfolio values retain property, date and period boundaries.
+// Currency values aggregate in cents; incomplete scopes and rates without weights stay unavailable.
+// The optional expected property IDs come from the active accessible property selection.
+
 // The mental model matters here, because this table is not shaped like the rest
 // of the app. Everything else is a timeline: one row per day, sum them up. A
 // Hotel Statistics export is a SNAPSHOT: one business date described from five
@@ -92,32 +94,171 @@ export function snapshotFor(rows = [], date = "") {
   return { date: target, rows: rows.filter((r) => String(r.business_date || "").slice(0, 10) === target) };
 }
 
+// ─── Portfolio core (private): typed partitions + one additive classifier ───
+//
+// Valid IDs: non-empty strings (whitespace-only malformed, but ' 1' kept byte-
+// exact and distinct from '1') and finite numbers (0 valid). Typed distinct.
+function isValidPropertyId(pid) {
+  if (typeof pid === "string") return pid.length > 0 && pid.trim().length > 0;
+  if (typeof pid === "number") return Number.isFinite(pid);
+  return false;
+}
+function propertyKey(pid) {
+  return typeof pid === "number" ? `number:${String(pid)}` : `string:${pid}`;
+}
+function dateKeyOf(r) { return String(r.business_date || "").slice(0, 10); }
+function metricKeyOf(n) { return String(n || "").toLowerCase(); }
+function finiteNumberOrNull(v) {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+// index[PARTITION]: {mode} for legacy/single/incomplete, full {mode,date,perProp,order} for portfolio.
+const PARTITION = Symbol("stats.portfolio.partition");
+
+// Modes: legacy (0 valid pids) | single (1 valid, 0 invalid) | incomplete (mixed)
+// | portfolio (2+ distinct typed pids, 0 invalid; ONE latest date, per-prop last-row wins).
+function partitionRows(rows, expectedPropertyIds) {
+  const scorable = (rows || []).filter((r) => !r.is_total);
+  const keys = new Set();
+  let invalid = 0;
+  for (const r of scorable) {
+    if (isValidPropertyId(r.property_id)) keys.add(propertyKey(r.property_id));
+    else invalid++;
+  }
+  const explicit = expectedPropertyIds !== undefined;
+  const expected = explicit
+    ? (Array.isArray(expectedPropertyIds) ? expectedPropertyIds : [expectedPropertyIds])
+    : [];
+  const expectedValid = expected.every(isValidPropertyId);
+  const selected = explicit && expectedValid
+    ? new Set(expected.map(propertyKey))
+    : keys;
+  if (!explicit && keys.size === 0) return { mode: "legacy", rows };
+  const dates = snapshotDates(scorable);
+  const date = dates.length ? dates[dates.length - 1] : "";
+  const latestRows = (rows || []).filter((r) => !date || dateKeyOf(r) === date);
+  const perProp = new Map();
+  const order = [...selected];
+  for (const r of scorable) {
+    if (date && dateKeyOf(r) !== date) continue;
+    const k = propertyKey(r.property_id);
+    if (!isValidPropertyId(r.property_id)) continue;
+    if (!perProp.has(k)) perProp.set(k, { pid: r.property_id, byMetric: new Map() });
+    perProp.get(k).byMetric.set(`${metricKeyOf(r.metric_name)}|${r.period}`, r);
+  }
+  const incomplete = invalid > 0 || !expectedValid ||
+    (explicit && [...keys].some((k) => !selected.has(k))) ||
+    [...selected].some((k) => !perProp.has(k)) ||
+    (selected.size === 0 && scorable.length > 0);
+  return {
+    mode: incomplete ? "incomplete" : selected.size > 1 ? "portfolio" : "single",
+    date, rows: latestRows, perProp, order,
+  };
+}
+// Source-justified additive literals (lowercase). Revenue sums in integer cents,
+// counts numerically. Rates/percentages/unknown never sum across properties.
+const REVENUE_NAMES = new Set(["taxable room revenue", "exempt room revenue"]);
+const COUNT_NAMES = new Set(["room sold", "rooms sold excluding comp house use rooms", "total guests", "rooms available to sell", "total rooms", "out of order", "arrivals", "departures", "walk ins", "no shows"]);
+const RATE_NAMES = new Set(["occupancy excluding down comp house use rooms", "occupancy excluding down rooms and including comp house use rooms", "occupancy including down comp house use rooms", "occupancy", "adr excluding comp house use rooms", "adr including comp house use rooms", "adr", "revpar", "revpar with out of order rooms"]);
+function blankModeFor(mk) {
+  if (REVENUE_NAMES.has(mk)) return "cents";
+  if (COUNT_NAMES.has(mk)) return "num";
+  return "";
+}
+// Single classifier shared by metricValue/firstValue/composition. Zero valid.
+// blankMode covers unit-omitted legacy rows only for known literals.
+function sumAdditive(list, blankMode) {
+  for (const r of list) if (finiteNumberOrNull(r.value) === null) return null;
+  const units = list.map((r) => String(r.unit ?? "").trim().toLowerCase());
+  if (units.every((u) => u === "currency")) { let c = 0; for (const r of list) c += toCents(Number(r.value)); return fromCents(c); }
+  if (units.every((u) => u === "count")) { let t = 0; for (const r of list) t += Number(r.value); return t; }
+  if (units.every((u) => u === "" || u === "unknown")) {
+    if (blankMode === "cents") { let c = 0; for (const r of list) c += toCents(Number(r.value)); return fromCents(c); }
+    if (blankMode === "num") { let t = 0; for (const r of list) t += Number(r.value); return t; }
+  }
+  return null;
+}
+// One metric across all portfolio properties. 'ok' requires FULL coverage: a
+// property missing the metric (or malformed/unsupported) yields 'bad', never a
+// silent partial sum. 'missing' = no property has it.
+function portfolioMetric(part, mk, period) {
+  const hits = [];
+  for (const k of part.order) {
+    const row = part.perProp.get(k).byMetric.get(`${mk}|${period}`);
+    if (row !== undefined) hits.push(row);
+  }
+  if (hits.length === 0) return { status: "missing" };
+  if (hits.length < part.order.length) return { status: "bad" };
+  const v = sumAdditive(hits, blankModeFor(mk));
+  return v === null ? { status: "bad" } : { status: "ok", value: v };
+}
+
 // ─── Value access ───
 //
 // Metric names come straight from the PMS and are matched case-insensitively so
 // a vendor changing "Room Sold" to "Rooms Sold" is a miss rather than a crash.
-export function indexSnapshot(rows = []) {
+//
+// indexSnapshot still returns a Map. Legacy/single keep verbatim metric|period
+// rows (direct .get compatible). Portfolio keeps distinct typed partitions in
+// index[PARTITION]; metricValue/firstValue aggregate through them, so the actual
+// page fields work, not just headline.
+export function indexSnapshot(rows = [], expectedPropertyIds) {
   const map = new Map();
-  for (const r of rows) {
-    if (r.is_total) continue;            // section aggregates: kept in the data, excluded from lookups
-    map.set(`${String(r.metric_name || "").toLowerCase()}|${r.period}`, r);
-  }
+  const part = partitionRows(rows, expectedPropertyIds);
+  if (part.mode === "legacy" || part.mode === "single") {
+    for (const r of (part.rows || [])) {
+      if (r.is_total) continue;            // section aggregates: kept in the data, excluded from lookups
+      map.set(`${String(r.metric_name || "").toLowerCase()}|${r.period}`, r);
+    }
+    map[PARTITION] = { mode: part.mode };
+  } else map[PARTITION] = part.mode === "portfolio" ? part : { mode: "incomplete" };
   return map;
 }
 
 export function metricValue(index, name, period = "actual_today") {
-  const hit = index.get(`${String(name).toLowerCase()}|${period}`);
-  return hit && hit.value !== null && hit.value !== undefined ? hit.value : null;
+  const part = index ? index[PARTITION] : undefined;
+  if (!part || part.mode !== "portfolio") {
+    if (part && part.mode === "incomplete") return null;
+    const hit = index.get(`${String(name).toLowerCase()}|${period}`);
+    return hit && hit.value !== null && hit.value !== undefined ? hit.value : null;
+  }
+  const mk = metricKeyOf(name);
+  if (RATE_NAMES.has(mk)) return null; // multi rates: honest null, no invented denominators
+  const s = portfolioMetric(part, mk, period);
+  return s.status === "ok" ? s.value : null;
 }
 
 // First name that resolves, so a metric can be looked up under any of the
 // aliases different PMS versions use without the caller writing fallback chains.
+// Portfolio resolves the first alias WITHIN each property, then sums across
+// properties (never double-counting two aliases of one property).
 export function firstValue(index, names, period = "actual_today") {
-  for (const n of names) {
-    const v = metricValue(index, n, period);
-    if (v !== null) return v;
+  const part = index ? index[PARTITION] : undefined;
+  if (!part || part.mode !== "portfolio") {
+    if (part && part.mode === "incomplete") return null;
+    for (const n of names) {
+      const v = metricValue(index, n, period);
+      if (v !== null) return v;
+    }
+    return null;
   }
-  return null;
+  const lower = names.map((n) => String(n).toLowerCase());
+  if (lower.some((n) => RATE_NAMES.has(n))) return null;
+  const resolved = [];
+  for (const k of part.order) {
+    const byMetric = part.perProp.get(k).byMetric;
+    for (let i = 0; i < names.length; i++) {
+      const row = byMetric.get(`${lower[i]}|${period}`);
+      if (row !== undefined && row.value !== null && row.value !== undefined) { resolved.push(row); break; }
+    }
+  }
+  if (resolved.length < part.order.length) return null; // a property resolved no alias: unknown
+  const keys = resolved.map((r) => metricKeyOf(r.metric_name));
+  const mode = keys.every((k) => REVENUE_NAMES.has(k)) ? "cents" : keys.every((k) => COUNT_NAMES.has(k)) ? "num" : "";
+  const units = resolved.map((r) => String(r.unit ?? "").trim().toLowerCase());
+  if (units.every((u) => u === "currency") && mode !== "cents") return null; // ADR/RevPAR currency is not additive
+  return sumAdditive(resolved, mode);
 }
 
 // ─── Prior-year availability ───
@@ -135,7 +276,8 @@ export function firstValue(index, names, period = "actual_today") {
 //
 // `yoy` is therefore the gate: it returns null whenever the prior-year figure is
 // missing or zero, so a comparison appears only where there is something real to
-// compare against. Callers never need to pre-check.
+// compare against. Callers never need to pre-check. Portfolio-aware for free via
+// metricValue (summed now/then, still null-safe, complete past kept).
 export function priorYearMetrics(rows = []) {
   const names = new Set();
   for (const r of rows) {
@@ -216,21 +358,50 @@ const HEADLINE = [
   },
 ];
 
-export function headline(rows = [], period = "actual_today") {
-  const index = indexSnapshot(rows);
-  return HEADLINE.map((m) => {
-    let value = firstValue(index, m.names, period);
-    // Room revenue is split taxable/exempt in the export; the owner wants the total.
-    if (m.extra && value !== null) {
-      for (const name of m.extra) {
-        const v = metricValue(index, name, period);
-        if (v !== null) value += v;
+const ADDITIVE_KEYS = new Set(["sold", "revenue", "guests"]);
+
+function headlineValue(index, metric, period) {
+  let value = firstValue(index, metric.names, period);
+  if (finiteNumberOrNull(value) === null) return null;
+  if (!metric.extra || value === null) return value;
+  let cents = toCents(Number(value));
+  const part = index[PARTITION];
+  for (const name of metric.extra) {
+    if (part?.mode === "portfolio") {
+      const leg = portfolioMetric(part, metricKeyOf(name), period);
+      if (leg.status === "bad") return null;
+      if (leg.status === "ok") cents += toCents(Number(leg.value));
+    } else {
+      const leg = metricValue(index, name, period);
+      if (leg !== null) {
+        if (finiteNumberOrNull(leg) === null) return null;
+        cents += toCents(Number(leg));
       }
     }
-    // Per-metric, not per-file: yoy already returns null when the prior-year
-    // figure is missing or zero, which is the case for every headline metric in
-    // the exports seen so far.
-    const change = yoy(index, m.names[0], period);
+  }
+  return fromCents(cents);
+}
+
+export function headline(rows = [], period = "actual_today", expectedPropertyIds) {
+  const index = indexSnapshot(rows, expectedPropertyIds);
+  const part = index[PARTITION];
+  if (part?.mode === "incomplete") {
+    return HEADLINE.map((m) => ({ ...m, value: null, change: null, incomplete: true }));
+  }
+  return HEADLINE.map((m) => {
+    if (part?.mode === "portfolio" && !ADDITIVE_KEYS.has(m.key)) {
+      return { ...m, value: null, change: null };
+    }
+    const value = headlineValue(index, m, period);
+    const priorPeriod = LY_OF[period];
+    const then = priorPeriod ? headlineValue(index, m, priorPeriod) : null;
+    const nowNumber = finiteNumberOrNull(value);
+    const thenNumber = finiteNumberOrNull(then);
+    const delta = m.extra ? fromCents(toCents(nowNumber) - toCents(thenNumber)) : nowNumber - thenNumber;
+    const change = nowNumber === null || thenNumber === null || thenNumber === 0 ? null : {
+      now: value, then, delta,
+      pct: (delta / Math.abs(thenNumber)) * 100,
+    };
     return { ...m, value, change };
   });
 }
@@ -240,13 +411,17 @@ export function headline(rows = [], period = "actual_today") {
 // Every metric in the file, grouped for display. Nothing is filtered out: the
 // user asked to see all the data, and metrics the parser could not categorise
 // are flagged rather than hidden.
-export function sectionTable(rows = []) {
+export function sectionTable(rows = [], expectedPropertyIds) {
+  const part = partitionRows(rows, expectedPropertyIds);
+  const source = part.mode === "legacy" ? rows : part.rows;
   const bySection = new Map();
-  for (const r of rows) {
+  const hits = new Map();
+  for (const r of source) {
     if (!bySection.has(r.section)) bySection.set(r.section, new Map());
     const metrics = bySection.get(r.section);
-    if (!metrics.has(r.metric_name)) {
-      metrics.set(r.metric_name, {
+    const metricKey = part.mode === "legacy" ? r.metric_name : `${metricKeyOf(r.metric_name)}|${!!r.is_total}`;
+    if (!metrics.has(metricKey)) {
+      metrics.set(metricKey, {
         name: r.metric_name,
         category: r.metric_category,
         unit: r.unit,
@@ -256,12 +431,29 @@ export function sectionTable(rows = []) {
         originals: {},
       });
     }
-    const m = metrics.get(r.metric_name);
-    m.values[r.period] = r.value;
-    m.originals[r.period] = r.original_value;
+    const m = metrics.get(metricKey);
+    if (part.mode === "legacy" || part.mode === "single") {
+      m.values[r.period] = r.value;
+      m.originals[r.period] = r.original_value;
+    } else {
+      if (!hits.has(m)) hits.set(m, new Map());
+      const periods = hits.get(m);
+      if (!periods.has(r.period)) periods.set(r.period, new Map());
+      if (isValidPropertyId(r.property_id)) periods.get(r.period).set(propertyKey(r.property_id), r);
+      m.values[r.period] = null;
+      m.originals[r.period] = null;
+    }
     // A metric's unit is whichever period parsed to something concrete; blank
     // forecast columns parse as "unknown" and must not overwrite a real unit.
     if (m.unit === "unknown" && r.unit !== "unknown") m.unit = r.unit;
+  }
+  if (part.mode === "portfolio") {
+    for (const [m, periods] of hits) {
+      for (const [period, byProperty] of periods) {
+        if (byProperty.size !== part.order.length || RATE_NAMES.has(metricKeyOf(m.name))) continue;
+        m.values[period] = sumAdditive([...byProperty.values()], blankModeFor(metricKeyOf(m.name)));
+      }
+    }
   }
   return orderSections([...bySection.keys()]).map((name) => ({
     name,
@@ -274,7 +466,7 @@ export function sectionTable(rows = []) {
 // Built from actual_today only. MTD and YTD from consecutive snapshots overlap
 // by construction, so plotting them as a series draws a line that always rises
 // and means nothing.
-export function trend(rows = [], names, period = "actual_today") {
+function legacyTrend(rows = [], names, period = "actual_today") {
   const wanted = new Set(names.map((n) => n.toLowerCase()));
   const byDate = new Map();
   for (const r of rows) {
@@ -296,11 +488,39 @@ export function trend(rows = [], names, period = "actual_today") {
     .map(({ _rank, ...rest }) => rest);
 }
 
+function trendScope(rows, expectedPropertyIds) {
+  if (expectedPropertyIds !== undefined) return expectedPropertyIds;
+  const ids = new Map();
+  for (const row of rows) {
+    if (!row.is_total && isValidPropertyId(row.property_id)) ids.set(propertyKey(row.property_id), row.property_id);
+  }
+  return [...ids.values()];
+}
+
+export function trend(rows = [], names, period = "actual_today", expectedPropertyIds) {
+  if (partitionRows(rows, expectedPropertyIds).mode === "legacy") return legacyTrend(rows, names, period);
+  const scope = trendScope(rows, expectedPropertyIds);
+  return snapshotDates(rows).map((date) => ({
+    date,
+    value: firstValue(indexSnapshot(snapshotFor(rows, date).rows, scope), names, period),
+  }));
+}
+
 // Trend for every headline metric at once, so the chart can switch between them
 // without refiltering the whole table on each toggle.
-export function headlineTrends(rows = []) {
+export function headlineTrends(rows = [], expectedPropertyIds) {
   const out = {};
-  for (const m of HEADLINE) out[m.key] = trend(rows, m.names);
+  if (partitionRows(rows, expectedPropertyIds).mode === "legacy") {
+    for (const m of HEADLINE) out[m.key] = legacyTrend(rows, m.names);
+    return out;
+  }
+  for (const m of HEADLINE) out[m.key] = [];
+  const scope = trendScope(rows, expectedPropertyIds);
+  for (const date of snapshotDates(rows)) {
+    for (const metric of headline(snapshotFor(rows, date).rows, "actual_today", scope)) {
+      out[metric.key].push({ date, value: metric.value });
+    }
+  }
   return out;
 }
 
@@ -332,12 +552,50 @@ export const ROOM_REVENUE_LINES = Object.freeze(['Taxable Room Revenue', 'Exempt
 const sameSection = (a, b) =>
   String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
 
-export function composition(rows = [], section, period = "actual_today") {
+function legacyComposition(rows = [], section, period = "actual_today") {
   return rows
     .filter((r) => sameSection(r.section, section) && r.period === period && !r.is_total)
     .map((r) => ({ name: r.metric_name, value: Number(r.value) || 0 }))
     .filter((r) => r.value !== 0)
     .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+}
+
+export function composition(rows = [], section, period = "actual_today", expectedPropertyIds) {
+  const part = partitionRows(rows, expectedPropertyIds);
+  if (part.mode === "legacy") return legacyComposition(rows, section, period);
+  const inScope = part.rows.filter(
+    (r) => sameSection(r.section, section) && r.period === period && !r.is_total
+  );
+  // Portfolio: latest snapshot only, same-property last-row wins, currency/count
+  // via the shared classifier. NOTE: value:null lines (partial/non-additive)
+  // need a null-check before arithmetic; revenueSplit already poisons on them.
+  const perPropLast = new Map();
+  const unknownNames = new Map();
+  for (const r of inScope) {
+    unknownNames.set(metricKeyOf(r.metric_name), r.metric_name);
+    if (!isValidPropertyId(r.property_id)) continue;
+    const pk = propertyKey(r.property_id);
+    perPropLast.set(`${pk}|${metricKeyOf(r.metric_name)}`, r);
+  }
+  if (part.mode === "incomplete") {
+    return [...unknownNames.values()].map((name) => ({ name, value: null }));
+  }
+  const grouped = new Map();
+  for (const r of perPropLast.values()) {
+    const mk = metricKeyOf(r.metric_name);
+    if (!grouped.has(mk)) grouped.set(mk, { display: r.metric_name, list: [] });
+    grouped.get(mk).list.push(r);
+  }
+  const out = [];
+  for (const g of grouped.values()) {
+    const mk = metricKeyOf(g.display);
+    if (g.list.length < part.order.length) { out.push({ name: g.display, value: null }); continue; }
+    const v = part.mode === "single" ? finiteNumberOrNull(g.list[0].value)
+      : RATE_NAMES.has(mk) ? null : sumAdditive(g.list, blankModeFor(mk));
+    if (v === null || v === 0) { if (v === null) out.push({ name: g.display, value: null }); continue; }
+    out.push({ name: g.display, value: v });
+  }
+  return out.sort((a, b) => Math.abs(b.value || 0) - Math.abs(a.value || 0));
 }
 
 /**
@@ -351,20 +609,53 @@ export function composition(rows = [], section, period = "actual_today") {
  * and one measures room revenue. Compare `room` against the occupancy path and
  * `total` against the transaction ledger.
  *
+ * Portfolio: duplicates dedupe (last wins), room lines aggregate in integer
+ * cents so `room` agrees with headline room. Mixed/malformed scope poisons
+ * totals to honest null (never null=>0). Multi-date input takes the latest
+ * snapshot, never summed.
+ *
  * @param {Array<Object>} rows - snapshot rows (from snapshotFor)
  * @param {string} [period='ytd']
- * @returns {{room: number, ancillary: number, total: number,
+ * @param {string|number|Array<string|number>} [expectedPropertyIds] - selected accessible property identities
+ * @returns {{room: number|null, ancillary: number|null, total: number|null,
  *            roomLines: Array<{name: string, value: number}>,
- *            ancillaryLines: Array<{name: string, value: number}>}}
+ *            ancillaryLines: Array<{name: string, value: number}>, incomplete?: boolean}}
  */
-export function revenueSplit(rows = [], period = 'ytd') {
-  const lines = composition(rows, STAT_SECTIONS.REVENUE, period);
+export function revenueSplit(rows = [], period = 'ytd', expectedPropertyIds) {
+  const part = partitionRows(rows, expectedPropertyIds);
+  const inScope = (rows || []).filter(
+    (r) => sameSection(r.section, STAT_SECTIONS.REVENUE) && r.period === period && !r.is_total
+  );
+  const scopeHasValid = inScope.some((r) => isValidPropertyId(r.property_id));
+  if (!scopeHasValid && part.mode === "legacy") {
+    const lines = composition(rows, STAT_SECTIONS.REVENUE, period);
+    const isRoom = (name) =>
+      ROOM_REVENUE_LINES.some((r) => r.toLowerCase() === String(name ?? '').trim().toLowerCase());
+    const roomLines = lines.filter((l) => isRoom(l.name));
+    const ancillaryLines = lines.filter((l) => !isRoom(l.name));
+    // Integer cents: these figures are reconciled to the exact cent, so a float
+    // reduce would introduce the very drift the reconciler is built to detect.
+    const sumOf = (ls) => fromCents(sumCents(ls.map((l) => l.value)));
+    const room = sumOf(roomLines);
+    const ancillary = sumOf(ancillaryLines);
+    return { room, ancillary, total: fromCents(toCents(room) + toCents(ancillary)), roomLines, ancillaryLines };
+  }
+  const scopeHasInvalid = inScope.some((r) => !isValidPropertyId(r.property_id));
+  const lines = composition(rows, STAT_SECTIONS.REVENUE, period, expectedPropertyIds);
   const isRoom = (name) =>
     ROOM_REVENUE_LINES.some((r) => r.toLowerCase() === String(name ?? '').trim().toLowerCase());
   const roomLines = lines.filter((l) => isRoom(l.name));
   const ancillaryLines = lines.filter((l) => !isRoom(l.name));
-  // Integer cents: these figures are reconciled to the exact cent, so a float
-  // reduce would introduce the very drift the reconciler is built to detect.
+  const hasNull = (ls) => ls.some((l) => l.value === null || !Number.isFinite(Number(l.value)));
+  if (part.mode === "incomplete" || scopeHasInvalid || hasNull(roomLines) || hasNull(ancillaryLines)) {
+    const cleanSum = (ls) => {
+      if (ls.some((l) => l.value === null || !Number.isFinite(Number(l.value)))) return null;
+      return fromCents(sumCents(ls.map((l) => l.value)));
+    };
+    const room = hasNull(roomLines) || scopeHasInvalid || part.mode === "incomplete" ? null : cleanSum(roomLines);
+    const ancillary = hasNull(ancillaryLines) || scopeHasInvalid || part.mode === "incomplete" ? null : cleanSum(ancillaryLines);
+    return { room, ancillary, total: null, roomLines, ancillaryLines, incomplete: true };
+  }
   const sumOf = (ls) => fromCents(sumCents(ls.map((l) => l.value)));
   const room = sumOf(roomLines);
   const ancillary = sumOf(ancillaryLines);

@@ -16,6 +16,7 @@ import {
   makeRunner,
   seedUser,
   scopeAll,
+  withFixedLengthStream,
 } from "./_worker-testkit.mjs";
 import { handleBulkImportRequest } from "../worker/bulk-import.js";
 import { clearMockStore, testR2Binding } from "./_r2-testkit.mjs";
@@ -53,6 +54,7 @@ function setupWorker() {
   return { db, env, stats, owner };
 }
 
+async function runAllChecks() {
 await run.check("Supersede lineage: corrected export replaces active bundle while preserving both raw archives", async () => {
   const { db, env, owner } = setupWorker();
   const propertyId = "P_A";
@@ -66,7 +68,7 @@ await run.check("Supersede lineage: corrected export replaces active bundle whil
 
   const upRaw1 = new Request("http://localhost/api/bulk-import/raw-upload", {
     method: "PUT",
-    headers: { "x-server-property-id": propertyId, "x-report-type": "occupancy", "x-raw-hash": v1RawHash, "x-archive-id": v1ArchiveId, "x-file-name": "august_v1.csv" },
+    headers: { "x-server-property-id": propertyId, "x-report-type": "occupancy", "x-raw-hash": v1RawHash, "x-archive-id": v1ArchiveId, "x-file-name": "august_v1.csv", "Content-Length": String(v1RawBytes.byteLength) },
     body: v1RawBytes,
   });
   const upRawRes1 = await handleBulkImportRequest(upRaw1, env, owner, new URL(upRaw1.url), ["api", "bulk-import", "raw-upload"]);
@@ -130,7 +132,7 @@ await run.check("Supersede lineage: corrected export replaces active bundle whil
 
   const upRaw2 = new Request("http://localhost/api/bulk-import/raw-upload", {
     method: "PUT",
-    headers: { "x-server-property-id": propertyId, "x-report-type": "occupancy", "x-raw-hash": v2RawHash, "x-archive-id": v2ArchiveId, "x-file-name": "august_v2_corrected.csv" },
+    headers: { "x-server-property-id": propertyId, "x-report-type": "occupancy", "x-raw-hash": v2RawHash, "x-archive-id": v2ArchiveId, "x-file-name": "august_v2_corrected.csv", "Content-Length": String(v2RawBytes.byteLength) },
     body: v2RawBytes,
   });
   const upRawRes2 = await handleBulkImportRequest(upRaw2, env, owner, new URL(upRaw2.url), ["api", "bulk-import", "raw-upload"]);
@@ -241,6 +243,11 @@ await run.check("Supersede lineage: corrected export replaces active bundle whil
   assertEqual(totalRev, 13200, "KPI revenue reflects corrected v2 numbers ($6,000 + $7,200 = $13,200, not old $11,000)");
 });
 
+}
+
+await withFixedLengthStream(async () => {
+  await runAllChecks();
+});
 run.done();
 if (process.exitCode) process.exit(1);
 console.log("PASSED: probe-bulk-import-supersede-lineage completed.");

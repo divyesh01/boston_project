@@ -990,3 +990,7 @@ Selected active property IDs now reach the Statistics headline, details, composi
 
 ### Action Center read acceptance (2026-10-07)
 Normal synthetic owner Refresh data refetched five current query families and advanced their timestamps; parent proof/oracle and missing-source-events negative control passed. Ten full native rows across nine entities stayed unchanged with zero mutation requests. Source/Expense/Payroll were empty; populated calculations, error/retry, action buckets and schedule expansion remain untested. Production was unchanged.
+
+## Source-map dependency audit correction — 2026-10-07
+
+The lockfile updates the transitive `source-map-js` package to 1.2.2 to resolve high-severity advisory GHSA-68fv-2mgg-jv7q. Only its version, tarball URL and integrity change; the manifest and all four existing parent dependency ranges stay the same. A clean isolated install, actual npm audit and the unchanged audit gate passed with zero vulnerabilities. The integrated project install also passed. The integrated project passed typecheck, lint, production build, Brain, repository map, V3 and the unchanged audit gate. The initial unit run passed 817 tests but failed four forks-worker startup handshakes; a subsequent full, unchanged npm test passed all 913 tests across 103 files. The 213-suite verification sweep returned 197 PASS, 16 SKIP and one partial PASS, with no failing suites. The original startup failure is preserved and its cause remains unproven. The new remote CI must still run before accepting the new commit.
